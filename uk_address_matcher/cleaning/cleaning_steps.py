@@ -8,10 +8,10 @@ from .regexes import (
     remove_apostrophes,
     remove_commas_periods,
     remove_multiple_spaces,
-    remove_repeated_tokens,
+    # remove_repeated_tokens, # TODO: Restore functionality if needed
     replace_fwd_slash_with_dash,
     separate_letter_num,
-    standarise_num_dash_num,
+    # standarise_num_dash_num, # TODO: Restore functionality if needed
     standarise_num_letter,
     trim,
 )
@@ -100,11 +100,11 @@ def clean_address_string_first_pass(
             remove_apostrophes,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
-            standarise_num_dash_num,
+            # standarise_num_dash_num,
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
-            remove_repeated_tokens,
+            # remove_repeated_tokens,
             trim,
         ],
     )
