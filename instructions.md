@@ -19,9 +19,9 @@ Note that you can run this testing script as we proceed with
 uv run try_new_pipeline.py
 
 trim_whitespace_address_and_postcode [DONE]
-canonicalise_postcode,
-upper_case_address_and_postcode,
-clean_address_string_first_pass,
+canonicalise_postcode [DONE]
+upper_case_address_and_postcode [DONE]
+clean_address_string_first_pass [DONE]
 remove_duplicate_end_tokens,
 derive_original_address_concat,
 parse_out_flat_position_and_letter,
