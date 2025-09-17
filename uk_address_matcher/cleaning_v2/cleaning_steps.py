@@ -152,68 +152,96 @@ def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods()
     Returns:
         DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
     """
-    sql = """
-    WITH tokens AS (
-        SELECT
-            ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
-            list_filter(
-                regexp_split_to_array(address_concat, '\\s+'),
-                x -> not list_contains(__tokens_to_remove, x)
-            )
-                AS __tokens,
-            row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
-            *
-        FROM {input}
-    ),
-    with_neighbors AS (
-        SELECT
-            lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
-            lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
-            *
-        FROM tokens
-    ),
-    with_suffix_lengths AS (
-        SELECT
-            len(__tokens) AS __token_count,
-            -- Calculate common suffix length with previous address
-            CASE WHEN __prev_tokens IS NOT NULL THEN
-                (SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
-                    list_slice(list_reverse(__prev_tokens), 1, i+1))
-            ELSE 0 END AS prev_common_suffix,
-            -- Calculate common suffix length with next address
-            CASE WHEN __next_tokens IS NOT NULL THEN
-                (SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
-                    list_slice(list_reverse(__next_tokens), 1, i+1))
-            ELSE 0 END AS next_common_suffix,
-            *
-        FROM with_neighbors
-    ),
-    with_unique_parts AS (
-        SELECT
-            *,
-            -- Find the maximum common suffix length
-            greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
-            -- Use list_filter with index to keep only the unique part at the beginning
-            list_filter(__tokens, (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)) AS unique_tokens,
-            -- Use list_filter with index to keep only the common part at the end
-            list_filter(__tokens, (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)) AS common_tokens
-        FROM with_suffix_lengths
-    )
+    tokens_sql = """
     SELECT
-        * EXCLUDE (__tokens, __prev_tokens, __next_tokens, __token_count, __tokens_to_remove, max_common_suffix, next_common_suffix, prev_common_suffix, row_order, common_tokens,unique_tokens),
-        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
-        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens,
-    FROM
-    with_unique_parts
+        ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
+        list_filter(
+            regexp_split_to_array(address_concat, '\\s+'),
+            x -> NOT list_contains(__tokens_to_remove, x)
+        ) AS __tokens,
+        row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
+        *
+    FROM {input}
     """
-    step = CTEStep("1", sql)
+
+    neighbors_sql = """
+    SELECT
+        lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
+        lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
+        *
+    FROM {tokens}
+    """
+
+    suffix_lengths_sql = """
+    SELECT
+        len(__tokens) AS __token_count,
+        CASE WHEN __prev_tokens IS NOT NULL THEN
+            (
+                SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
+                    list_slice(list_reverse(__prev_tokens), 1, i + 1)
+            )
+        ELSE 0 END AS prev_common_suffix,
+        CASE WHEN __next_tokens IS NOT NULL THEN
+            (
+                SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
+                    list_slice(list_reverse(__next_tokens), 1, i + 1)
+            )
+        ELSE 0 END AS next_common_suffix,
+        *
+    FROM {with_neighbors}
+    """
+
+    unique_parts_sql = """
+    SELECT
+        *,
+        greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
+        list_filter(
+            __tokens,
+            (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)
+        ) AS unique_tokens,
+        list_filter(
+            __tokens,
+            (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
+        ) AS common_tokens
+    FROM {with_suffix_lengths}
+    """
+
+    final_sql = """
+    SELECT
+        * EXCLUDE (
+            __tokens,
+            __prev_tokens,
+            __next_tokens,
+            __token_count,
+            __tokens_to_remove,
+            max_common_suffix,
+            next_common_suffix,
+            prev_common_suffix,
+            row_order,
+            common_tokens,
+            unique_tokens
+        ),
+        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
+        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens
+    FROM {with_unique_parts}
+    """
+
+    steps = [
+        CTEStep("tokens", tokens_sql),
+        CTEStep("with_neighbors", neighbors_sql),
+        CTEStep("with_suffix_lengths", suffix_lengths_sql),
+        CTEStep("with_unique_parts", unique_parts_sql),
+        CTEStep("final", final_sql),
+    ]
+
     return Stage(
         name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
-        steps=[step],
+        steps=steps,
+        output="final",
     )
 
 
