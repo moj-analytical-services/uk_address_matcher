@@ -1,4 +1,3 @@
-# try_this_out.py
 from __future__ import annotations
 
 import random
@@ -21,13 +20,16 @@ def _slug(s: str) -> str:
 
 
 def _pretty_sql(sql: str) -> str:
+    # Hook for pretty printers if desired
     return sql
 
 
 class CTEPipeline:
     def __init__(self):
+        # queue holds tuples of (sql, output_alias)
         self.queue: List[Tuple[str, str]] = []
         self.spent = False  # one-shot guard
+        # records (sql_text, materialised_temp_table_name) for checkpoints
         self._materialised_sql_blocks: List[Tuple[str, str]] = []
 
     def enqueue_sql(self, sql: str, output_table_name: str) -> None:
@@ -35,19 +37,25 @@ class CTEPipeline:
             raise ValueError("This pipeline has already been used (spent=True).")
         self.queue.append((sql, output_table_name))
 
+    def _compose_with_sql_from(self, items: List[Tuple[str, str]]) -> str:
+        """
+        Compose a WITH chain from the given CTE items, returning:
+        WITH a AS (...), b AS (...), ...
+        SELECT * FROM <last_alias>
+        """
+        if not items:
+            raise ValueError("Cannot compose SQL from an empty CTE list.")
+        with_ctes_str = ",\n\n".join(
+            f"{alias} AS (\n{sql}\n)" for (sql, alias) in items
+        )
+        return f"WITH\n{with_ctes_str}\n\nSELECT * FROM {items[-1][1]}"
+
     def generate_cte_pipeline_sql(self, *, mark_spent: bool = True) -> str:
         if mark_spent:
             self.spent = True
         if not self.queue:
             raise ValueError("Empty pipeline.")
-
-        # include ALL CTEs in the WITH
-        ctes_str = ",\n\n".join(
-            f"{output_table_name} AS (\n{sql}\n)"
-            for sql, output_table_name in self.queue
-        )
-        sql = f"WITH\n{ctes_str}\n\nSELECT * FROM {self.queue[-1][1]}"
-        return sql
+        return self._compose_with_sql_from(self.queue)
 
     @property
     def output_table_name(self) -> str:
@@ -98,7 +106,7 @@ def render_step_to_ctes(
 
 
 # ---------------------------
-# duckdb-oriented runner with checkpoints
+# duckdb-oriented runner with checkpoints and debug mode
 # ---------------------------
 class DuckDBPipeline(CTEPipeline):
     def __init__(
@@ -134,6 +142,7 @@ class DuckDBPipeline(CTEPipeline):
             self._materialise_checkpoint()
 
     def _materialise_checkpoint(self) -> None:
+        # Compose without marking spent
         sql = self.generate_cte_pipeline_sql(mark_spent=False)
         tmp = f"__seg_{_uid()}"
         self._materialised_sql_blocks.append((sql, tmp))
@@ -144,7 +153,47 @@ class DuckDBPipeline(CTEPipeline):
         self.enqueue_sql(f"SELECT * FROM {tmp}", seed)
         self._current_output_alias = seed
 
-    def run(self, *, pretty_print_sql: bool = True):
+    def debug(self, *, show_sql: bool = False, max_rows: Optional[int] = None) -> None:
+        """
+        Execute and display the result of each CTE in order, using a partial WITH chain
+        up to that CTE. Does NOT mark the pipeline as spent.
+
+        Note: if checkpoints have been used, this shows intermediates only for the
+        current segment (after the last checkpoint).
+        """
+        if not self.queue:
+            print("No CTEs enqueued.")
+            return
+
+        total = len(self.queue)
+        for i in range(1, total + 1):
+            subset = self.queue[:i]
+            alias = subset[-1][1]
+            sql = self._compose_with_sql_from(subset)
+
+            print(f"\n=== DEBUG STEP {i}/{total} — alias `{alias}` ===\n")
+            if show_sql:
+                print(_pretty_sql(sql))
+                print("\n--------------------------------------------\n")
+
+            rel = self.con.sql(sql)
+            if max_rows is not None:
+                rel.show(max_rows=max_rows)
+            else:
+                rel.show()
+
+    def run(
+        self,
+        *,
+        pretty_print_sql: bool = True,
+        debug_mode: bool = False,
+        debug_show_sql: bool = False,
+        debug_max_rows: Optional[int] = None,
+    ):
+        # Optional debug pass over all intermediates before final execution
+        if debug_mode:
+            self.debug(show_sql=debug_show_sql, max_rows=debug_max_rows)
+
         final_sql = self.generate_cte_pipeline_sql()
         if pretty_print_sql:
             final_alias = self.output_table_name
