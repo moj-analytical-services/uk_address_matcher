@@ -1,6 +1,8 @@
 import importlib.resources as pkg_resources
 
-from uk_address_matcher.cleaning.cleaning_steps import GENERALISED_TOKEN_ALIASES_CASE_STATEMENT
+from uk_address_matcher.cleaning.cleaning_steps import (
+    GENERALISED_TOKEN_ALIASES_CASE_STATEMENT,
+)
 from uk_address_matcher.cleaning.regexes import (
     construct_nested_call,
     move_flat_to_front,
@@ -18,20 +20,6 @@ from uk_address_matcher.cleaning_v2.pipeline import (
     CTEStep,
     Stage,
 )
-
-
-def _register_common_end_tokens(con):
-    with pkg_resources.path(
-        "uk_address_matcher.data", "common_end_tokens.csv"
-    ) as csv_path:
-        rel = con.sql(
-            f"""
-            select array_agg(token) as end_tokens_to_remove
-            from read_csv_auto('{csv_path}')
-            where token_count > 3000
-            """
-        )
-    con.register("common_end_tokens", rel)
 
 
 def trim_whitespace_address_and_postcode() -> Stage:
@@ -155,7 +143,9 @@ def derive_original_address_concat() -> Stage:
     return Stage(name="derive_original_address_concat", steps=[step])
 
 
-def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods() -> Stage:
+def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods() -> (
+    Stage
+):
     """
     Identifies common suffixes between addresses and separates them into unique and common parts.
     This function analyzes each address in relation to its neighbors (previous and next addresses
@@ -462,7 +452,9 @@ def add_term_frequencies_to_address_tokens() -> Stage:
         CTEStep("final", final_sql),
     ]
 
-    return Stage(name="add_term_frequencies_to_address_tokens", steps=steps, output="final")
+    return Stage(
+        name="add_term_frequencies_to_address_tokens", steps=steps, output="final"
+    )
 
 
 def generalised_token_aliases() -> Stage:
@@ -523,10 +515,19 @@ def move_common_end_tokens_to_field() -> Stage:
     SELECT * FROM {input}
     """
 
+    with pkg_resources.path(
+        "uk_address_matcher.data", "common_end_tokens.csv"
+    ) as csv_path:
+        common_end_tokens_sql = f"""
+            select array_agg(token) as end_tokens_to_remove
+            from read_csv_auto('{csv_path}')
+            where token_count > 3000
+            """
+
     joined_sql = """
     SELECT *
     FROM {base}
-    CROSS JOIN common_end_tokens
+    CROSS JOIN {common_end_tokens}
     """
 
     end_tokens_included_sql = """
@@ -558,6 +559,7 @@ def move_common_end_tokens_to_field() -> Stage:
 
     steps = [
         CTEStep("base", base_sql),
+        CTEStep("common_end_tokens", common_end_tokens_sql),
         CTEStep("joined", joined_sql),
         CTEStep("end_tokens_included", end_tokens_included_sql),
         CTEStep("final", final_sql),
@@ -567,5 +569,4 @@ def move_common_end_tokens_to_field() -> Stage:
         name="move_common_end_tokens_to_field",
         steps=steps,
         output="final",
-        preludes=[_register_common_end_tokens],
     )
