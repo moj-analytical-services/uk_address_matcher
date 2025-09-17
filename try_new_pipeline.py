@@ -14,9 +14,39 @@ from uk_address_matcher.cleaning_v2.cleaning_steps import (
     trim_whitespace_address_and_postcode,
     upper_case_address_and_postcode,
 )
+
+from uk_address_matcher.cleaning.cleaning_steps import (
+    canonicalise_postcode as canonicalise_postcode_v1,
+    clean_address_string_first_pass as clean_address_string_first_pass_v1,
+    clean_address_string_second_pass as clean_address_string_second_pass_v1,
+    derive_original_address_concat as derive_original_address_concat_v1,
+    parse_out_flat_position_and_letter as parse_out_flat_position_and_letter_v1,
+    parse_out_numbers as parse_out_numbers_v1,
+    split_numeric_tokens_to_cols as split_numeric_tokens_to_cols_v1,
+    tokenise_address_without_numbers as tokenise_address_without_numbers_v1,
+    trim_whitespace_address_and_postcode as trim_whitespace_address_and_postcode_v1,
+    upper_case_address_and_postcode as upper_case_address_and_postcode_v1,
+    remove_duplicate_end_tokens as remove_duplicate_end_tokens_v1,
+)
+from uk_address_matcher.cleaning.run_pipeline import run_pipeline
+
 import duckdb
 import time
 
+
+queue = [
+    (trim_whitespace_address_and_postcode, trim_whitespace_address_and_postcode_v1),
+    (canonicalise_postcode, canonicalise_postcode_v1),
+    (upper_case_address_and_postcode, upper_case_address_and_postcode_v1),
+    (clean_address_string_first_pass, clean_address_string_first_pass_v1),
+    (remove_duplicate_end_tokens, remove_duplicate_end_tokens_v1),
+    (derive_original_address_concat, derive_original_address_concat_v1),
+    (parse_out_flat_position_and_letter, parse_out_flat_position_and_letter_v1),
+    (parse_out_numbers, parse_out_numbers_v1),
+    (clean_address_string_second_pass, clean_address_string_second_pass_v1),
+    (split_numeric_tokens_to_cols, split_numeric_tokens_to_cols_v1),
+    (tokenise_address_without_numbers, tokenise_address_without_numbers_v1),
+]
 
 con = duckdb.connect()
 
@@ -42,23 +72,22 @@ start_time = time.time()
 
 pipe = DuckDBPipeline(con, os_df)
 
-pipe.add_step(trim_whitespace_address_and_postcode())
-pipe.add_step(canonicalise_postcode())
-pipe.add_step(upper_case_address_and_postcode())
-pipe.add_step(clean_address_string_first_pass())
-pipe.add_step(remove_duplicate_end_tokens())
-pipe.add_step(derive_original_address_concat())
-pipe.add_step(parse_out_flat_position_and_letter())
-pipe.add_step(parse_out_numbers())
-pipe.add_step(clean_address_string_second_pass())
-pipe.add_step(split_numeric_tokens_to_cols())
-pipe.add_step(tokenise_address_without_numbers())
+for v2, v1 in queue:
+    pipe.add_step(v2())
 
-out = pipe.run(pretty_print_sql=False)
-print("Result:")
-out.df()
+
+clean_v2 = pipe.run(pretty_print_sql=False)
+
+clean_v2.show()
 
 end_time = time.time()
 print(f"Time taken: {end_time - start_time:.2f} seconds")
 
-# TODO: Before continuing migration, add test that checks result is identical to old pipeline
+queue_v2 = [v[1] for v in queue]
+clean_v1 = run_pipeline(
+    os_df,
+    con=con,
+    cleaning_queue=queue_v2,
+    print_intermediate=False,
+)
+clean_v1.show()
