@@ -1,8 +1,6 @@
 import importlib.resources as pkg_resources
 
-from uk_address_matcher.cleaning.cleaning_steps import (
-    GENERALISED_TOKEN_ALIASES_CASE_STATEMENT,
-)
+
 from uk_address_matcher.cleaning.regexes import (
     construct_nested_call,
     move_flat_to_front,
@@ -517,6 +515,17 @@ def add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
         steps=steps,
         output="final",
     )
+
+
+GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
+    CASE
+        WHEN token in ('FIRST', 'SECOND', 'THIRD', 'TOP') THEN ['UPPERFLOOR', 'LEVEL']
+        WHEN token in ('GARDEN', 'GROUND') THEN ['GROUNDFLOOR', 'LEVEL']
+        WHEN token in ('BASEMENT') THEN ['LEVEL']
+        ELSE [TOKEN]
+    END
+
+"""
 
 
 def generalised_token_aliases() -> Stage:
