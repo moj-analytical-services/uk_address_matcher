@@ -118,10 +118,11 @@ def derive_original_address_concat() -> Stage:
 
 
 def parse_out_flat_position_and_letter() -> Stage:
-    floor_positions = r"\\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\\b"
-    flat_letter = r"\\b\\d{0,4}([A-Za-z])\\b"
-    leading_letter = r"^\\s*\\d+([A-Za-z])\\b"
-    flat_number = r"\\b(FLAT|UNIT|APARTMENT)\\s+(\\S*\\d\\S*)\\s+\\S*\\d\\S*\\b"
+    floor_positions = r"\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\b"
+    flat_letter = r"\b\d{0,4}([A-Za-z])\b"
+    leading_letter = r"^\s*\d+([A-Za-z])\b"
+
+    flat_number = r"\b(FLAT|UNIT|APARTMENT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
     sql = f"""
     WITH step1 AS (
         SELECT
@@ -151,9 +152,10 @@ def parse_out_flat_position_and_letter() -> Stage:
 
 def parse_out_numbers() -> Stage:
     regex_pattern = (
-        r"\\b"
-        r"(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)"
-        r"\\b"
+        r"\b"  # Word boundary
+        # Prioritize matching number ranges first
+        r"(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)"
+        r"\b"  # Word boundary
     )
     sql = f"""
     SELECT

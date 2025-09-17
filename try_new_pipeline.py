@@ -32,7 +32,7 @@ from uk_address_matcher.cleaning.run_pipeline import run_pipeline
 
 import duckdb
 from time import perf_counter
-
+from pandas.testing import assert_frame_equal
 
 queue = [
     (trim_whitespace_address_and_postcode, trim_whitespace_address_and_postcode_v1),
@@ -76,11 +76,9 @@ for v2, v1 in queue:
 
 t0 = perf_counter()
 clean_v2 = pipe.run(pretty_print_sql=False)
-clean_v1_df = clean_v2.df()
+clean_v2_df = clean_v2.df()
 end_time = perf_counter()
 print(f"Time taken: {end_time - t0:.2f} seconds")
-
-clean_v2.show()
 
 
 queue_v2 = [v[1] for v in queue]
@@ -90,7 +88,18 @@ clean_v1 = run_pipeline(
     con=con,
     cleaning_queue=queue_v2,
 )
-clean_v2_df = clean_v1.df()
+clean_v1_df = clean_v1.df()
 
 end_time = perf_counter()
 print(f"Time taken: {end_time - start_time:.2f} seconds")
+clean_v1_df
+
+
+assert_frame_equal(
+    clean_v2_df,
+    clean_v1_df,
+    check_dtype=False,
+    check_exact=False,
+    rtol=1e-8,
+    atol=1e-12,
+)
