@@ -79,7 +79,7 @@ def _run_stage_queue(
     pipeline = DuckDBPipeline(con, input_rel)
     for stage_fn in stage_factories:
         pipeline.add_step(stage_fn())
-    return pipeline.run(pretty_print_sql=False)
+    return pipeline.run(pretty_print_sql=True)
 
 
 QUEUE_PRE_TF = [

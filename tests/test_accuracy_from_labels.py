@@ -75,7 +75,7 @@ def test_address_matching_workflow_runs():
     )
 
     df_predict = linker.inference.predict(
-        threshold_match_weight=-20, experimental_optimisation=True
+        threshold_match_weight=-20
     )
     df_predict_rel = df_predict.as_duckdbpyrelation()
 

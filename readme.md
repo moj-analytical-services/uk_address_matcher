@@ -65,7 +65,7 @@ linker = get_linker(
 
 # First pass - standard probabilistic linkage
 df_predict = linker.inference.predict(
-    threshold_match_weight=-50, experimental_optimisation=True
+    threshold_match_weight=-50
 )
 df_predict_ddb = df_predict.as_duckdbpyrelation()
 

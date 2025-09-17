@@ -86,9 +86,7 @@ linker = get_linker(
     settings=settings,
 )
 
-df_predict = linker.inference.predict(
-    threshold_match_weight=-20, experimental_optimisation=True
-)
+df_predict = linker.inference.predict(threshold_match_weight=-20)
 df_predict_rel = df_predict.as_duckdbpyrelation()
 
 df_predict_improved_rel = improve_predictions_using_distinguishing_tokens(

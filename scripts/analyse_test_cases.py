@@ -46,7 +46,6 @@ linker._settings_obj._blocking_rules_to_generate_predictions = [
 # Predict matches (first pass)
 predicted_matches = linker.inference.predict(
     threshold_match_weight=MATCH_WEIGHT_THRESHOLD_PREDICT,
-    experimental_optimisation=True,
 ).as_duckdbpyrelation()
 
 

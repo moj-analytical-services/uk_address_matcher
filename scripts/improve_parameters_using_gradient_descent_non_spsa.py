@@ -375,9 +375,7 @@ def black_box(
 
     start_time = datetime.now()
 
-    df_predict = linker.inference.predict(
-        threshold_match_weight=-20, experimental_optimisation=True
-    )
+    df_predict = linker.inference.predict(threshold_match_weight=-20)
     df_predict_ddb = df_predict.as_duckdbpyrelation()
 
     end_time = datetime.now()

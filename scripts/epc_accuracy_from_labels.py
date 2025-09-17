@@ -109,9 +109,7 @@ linker = get_linker(
 )
 
 
-df_predict = linker.inference.predict(
-    threshold_match_weight=-50, experimental_optimisation=True
-)
+df_predict = linker.inference.predict(threshold_match_weight=-50)
 df_predict_ddb = df_predict.as_duckdbpyrelation()
 
 display(linker.visualisations.match_weights_chart())

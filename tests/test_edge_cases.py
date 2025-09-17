@@ -52,7 +52,6 @@ def run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con=None):
     # Predict matches (first pass)
     predicted_matches = linker.inference.predict(
         threshold_match_weight=MATCH_WEIGHT_THRESHOLD_PREDICT,
-        experimental_optimisation=True,
     ).as_duckdbpyrelation()
 
     # Improve predictions (second pass)

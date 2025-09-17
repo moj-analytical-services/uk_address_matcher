@@ -52,11 +52,11 @@ if os.path.exists(model_path):
 m = linker.misc.save_model_to_json("uk_address_matcher/data/splink_model.json")
 
 # linker.training.estimate_u_using_random_sampling(
-#     max_pairs=1e8, experimental_optimisation=True
+#     max_pairs=1e8
 # )
 
 # linker.training.estimate_parameters_using_expectation_maximisation(
-#     block_on("postcode"), experimental_optimisation=True
+#     block_on("postcode")
 # )
 
 
