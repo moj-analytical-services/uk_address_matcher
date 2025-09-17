@@ -5,9 +5,9 @@ The core logic was to run a loop where each function took a DuckDBPyRelation as 
 for i, cleaning_function in enumerate(cleaning_queue):
         ddb_pyrel = cleaning_function(ddb_pyrel, con)
 
-I am refactoring this to generate a CTE pipeline using SQL strings using the code in [pipeline v2](uk_address_matcher/cleaning_v2/pipeline.py)
+I am refactoring this to generate a CTE pipeline using SQL strings using the code in [pipeline v2](uk_address_matcher/cleaning/pipeline.py)
 
-I have set up one function so far in [cleaning_steps V2](uk_address_matcher/cleaning_v2/cleaning_steps.py)
+I have set up one function so far in [cleaning_steps V2](uk_address_matcher/cleaning/cleaning_steps.py)
 
 I want to move all of these functions over one at a time.
 

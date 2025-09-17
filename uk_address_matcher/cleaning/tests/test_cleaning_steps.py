@@ -1,131 +1,127 @@
 import duckdb
+
 from uk_address_matcher.cleaning.cleaning_steps import (
     parse_out_flat_position_and_letter,
     remove_duplicate_end_tokens,
 )
+from uk_address_matcher.cleaning.pipeline import DuckDBPipeline
 
 
-def run_tests(test_cases):
-    duckdb_connection = duckdb.connect()
-
-    # Prepare the test data as a DuckDB table
-    test_data = "SELECT * FROM (VALUES\n"
-    test_data += ",\n".join(f"('{case['input']}')" for case in test_cases)
-    test_data += ") AS t(address_concat)"
-
-    input_relation = duckdb_connection.sql(test_data)
-
-    # Run the actual function
-    result = parse_out_flat_position_and_letter(input_relation, duckdb_connection)
-    results = result.fetchall()
-
-    # Assert that the results match the expected output
-    for actual_row, case in zip(results, test_cases):
-        expected_flat_pos = case["expected_flat_positional"]
-        expected_flat_letter = case["expected_flat_letter"]
-        assert actual_row[-2] == expected_flat_pos, (
-            f"For address '{case['input']}', expected positional {expected_flat_pos} but got {actual_row[-2]}"
-        )
-        assert actual_row[-1] == expected_flat_letter, (
-            f"For address '{case['input']}', expected letter {expected_flat_letter} but got {actual_row[-1]}"
-        )
+def _run_single_stage(stage_factory, input_relation, connection):
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(stage_factory())
+    return pipeline.run(pretty_print_sql=False)
 
 
 def test_parse_out_flat_positional():
+    connection = duckdb.connect()
     test_cases = [
-        {
-            "input": "11A SPITFIRE COURT 243 BIRMINGHAM",
-            "expected_flat_positional": None,
-            "expected_flat_letter": "A",
-        },
-        {
-            "input": "FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "expected_flat_positional": None,
-            "expected_flat_letter": "A",
-        },
-        {
-            "input": "BASEMENT FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "expected_flat_positional": "BASEMENT",
-            "expected_flat_letter": "A",
-        },
-        {
-            "input": "BASEMENT FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "expected_flat_positional": "BASEMENT",
-            "expected_flat_letter": None,
-        },
-        {
-            "input": "GARDEN FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "expected_flat_positional": "GARDEN",
-            "expected_flat_letter": None,
-        },
-        {
-            "input": "TOP FLOOR FLAT 12A HIGH STREET",
-            "expected_flat_positional": "TOP FLOOR",
-            "expected_flat_letter": "A",
-        },
-        {
-            "input": "GROUND FLOOR FLAT B 25 MAIN ROAD",
-            "expected_flat_positional": "GROUND FLOOR",
-            "expected_flat_letter": "B",
-        },
-        {
-            "input": "FIRST FLOOR 15B LONDON ROAD",
-            "expected_flat_positional": "FIRST FLOOR",
-            "expected_flat_letter": "B",
-        },
-        {
-            "input": "UNIT C MY HOUSE 120 MY ROAD",
-            "expected_flat_positional": None,
-            "expected_flat_letter": "C",
-        },
+        (
+            "11A SPITFIRE COURT 243 BIRMINGHAM",
+            None,
+            "A",
+        ),
+        (
+            "FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
+            None,
+            "A",
+        ),
+        (
+            "BASEMENT FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
+            "BASEMENT",
+            "A",
+        ),
+        (
+            "BASEMENT FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
+            "BASEMENT",
+            None,
+        ),
+        (
+            "GARDEN FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
+            "GARDEN",
+            None,
+        ),
+        (
+            "TOP FLOOR FLAT 12A HIGH STREET",
+            "TOP FLOOR",
+            "A",
+        ),
+        (
+            "GROUND FLOOR FLAT B 25 MAIN ROAD",
+            "GROUND FLOOR",
+            "B",
+        ),
+        (
+            "FIRST FLOOR 15B LONDON ROAD",
+            "FIRST FLOOR",
+            "B",
+        ),
+        (
+            "UNIT C MY HOUSE 120 MY ROAD",
+            None,
+            "C",
+        ),
     ]
-    run_tests(test_cases)
+
+    input_relation = connection.sql(
+        "SELECT * FROM (VALUES "
+        + ",".join(f"('{address}')" for address, _, _ in test_cases)
+        + ") AS t(address_concat)"
+    )
+
+    result = _run_single_stage(
+        parse_out_flat_position_and_letter, input_relation, connection
+    )
+    rows = result.fetchall()
+
+    for (address, expected_pos, expected_letter), row in zip(test_cases, rows):
+        assert row[-2] == expected_pos, (
+            f"Address '{address}' expected positional '{expected_pos}' but got '{row[-2]}'"
+        )
+        assert row[-1] == expected_letter, (
+            f"Address '{address}' expected letter '{expected_letter}' but got '{row[-1]}'"
+        )
 
 
 def test_remove_duplicate_end_tokens():
+    connection = duckdb.connect()
     test_cases = [
-        {
-            "input": "9A SOUTHVIEW ROAD SOUTHWICK LONDON LONDON",
-            "expected": "9A SOUTHVIEW ROAD SOUTHWICK LONDON",
-        },
-        {
-            "input": "1 HIGH STREET ST ALBANS ST ALBANS",
-            "expected": "1 HIGH STREET ST ALBANS",
-        },
-        {
-            "input": "2 CORINATION ROAD KINGS LANGLEY HERTFORDSHIRE HERTFORDSHIRE",
-            "expected": "2 CORINATION ROAD KINGS LANGLEY HERTFORDSHIRE",
-        },
-        {
-            "input": "FLAT 2 8 ORCHARD WAY MILTON KEYNES MILTON KEYNES",
-            "expected": "FLAT 2 8 ORCHARD WAY MILTON KEYNES",
-        },
-        {
-            "input": "9 SOUTHVIEW ROAD SOUTHWICK LONDON",
-            "expected": "9 SOUTHVIEW ROAD SOUTHWICK LONDON",
-        },
-        {
-            "input": "1 LONDON ROAD LONDON",
-            "expected": "1 LONDON ROAD LONDON",
-        },
+        (
+            "9A SOUTHVIEW ROAD SOUTHWICK LONDON LONDON",
+            "9A SOUTHVIEW ROAD SOUTHWICK LONDON",
+        ),
+        (
+            "1 HIGH STREET ST ALBANS ST ALBANS",
+            "1 HIGH STREET ST ALBANS",
+        ),
+        (
+            "2 CORINATION ROAD KINGS LANGLEY HERTFORDSHIRE HERTFORDSHIRE",
+            "2 CORINATION ROAD KINGS LANGLEY HERTFORDSHIRE",
+        ),
+        (
+            "FLAT 2 8 ORCHARD WAY MILTON KEYNES MILTON KEYNES",
+            "FLAT 2 8 ORCHARD WAY MILTON KEYNES",
+        ),
+        (
+            "9 SOUTHVIEW ROAD SOUTHWICK LONDON",
+            "9 SOUTHVIEW ROAD SOUTHWICK LONDON",
+        ),
+        (
+            "1 LONDON ROAD LONDON",
+            "1 LONDON ROAD LONDON",
+        ),
     ]
 
-    duckdb_connection = duckdb.connect()
+    input_relation = connection.sql(
+        "SELECT * FROM (VALUES "
+        + ",".join(f"('{address}')" for address, _ in test_cases)
+        + ") AS t(address_concat)"
+    )
 
-    # Prepare test data
-    test_data = "SELECT * FROM (VALUES\n"
-    test_data += ",\n".join(f"('{case['input']}')" for case in test_cases)
-    test_data += ") AS t(address_concat)"
+    result = _run_single_stage(remove_duplicate_end_tokens, input_relation, connection)
+    rows = result.fetchall()
 
-    input_relation = duckdb_connection.sql(test_data)
-
-    # Run the function
-    result = remove_duplicate_end_tokens(input_relation, duckdb_connection)
-    results = result.fetchall()
-
-    # Assert results
-    for actual_row, case in zip(results, test_cases):
-        assert actual_row[0] == case["expected"], (
-            f"For address '{case['input']}', "
-            f"expected '{case['expected']}' but got '{actual_row[0]}'"
+    for (address, expected), row in zip(test_cases, rows):
+        assert row[0] == expected, (
+            f"Address '{address}' expected '{expected}' but got '{row[0]}'"
         )
