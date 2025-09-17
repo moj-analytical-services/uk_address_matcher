@@ -1,3 +1,5 @@
+import importlib.resources as pkg_resources
+
 from uk_address_matcher.cleaning.cleaning_steps import GENERALISED_TOKEN_ALIASES_CASE_STATEMENT
 from uk_address_matcher.cleaning.regexes import (
     construct_nested_call,
@@ -16,6 +18,20 @@ from uk_address_matcher.cleaning_v2.pipeline import (
     CTEStep,
     Stage,
 )
+
+
+def _register_common_end_tokens(con):
+    with pkg_resources.path(
+        "uk_address_matcher.data", "common_end_tokens.csv"
+    ) as csv_path:
+        rel = con.sql(
+            f"""
+            select array_agg(token) as end_tokens_to_remove
+            from read_csv_auto('{csv_path}')
+            where token_count > 3000
+            """
+        )
+    con.register("common_end_tokens", rel)
 
 
 def trim_whitespace_address_and_postcode() -> Stage:
@@ -378,6 +394,77 @@ def tokenise_address_without_numbers() -> Stage:
     return Stage(name="tokenise_address_without_numbers", steps=[step])
 
 
+def add_term_frequencies_to_address_tokens() -> Stage:
+    """Compute token-level relative frequencies and attach them to each record."""
+
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    rel_tok_freq_cte_sql = """
+    SELECT
+        token,
+        count(*) / sum(count(*)) OVER () AS rel_freq
+    FROM (
+        SELECT
+            unnest(address_without_numbers_tokenised) AS token
+        FROM {base}
+    )
+    GROUP BY token
+    """
+
+    addresses_exploded_sql = """
+    SELECT
+        unique_id,
+        unnest(address_without_numbers_tokenised) AS token,
+        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
+    FROM {base}
+    """
+
+    address_groups_sql = """
+    SELECT
+        {addresses_exploded}.*,
+        COALESCE({rel_tok_freq_cte}.rel_freq, 5e-5) AS rel_freq
+    FROM {addresses_exploded}
+    LEFT JOIN {rel_tok_freq_cte}
+        ON {addresses_exploded}.token = {rel_tok_freq_cte}.token
+    """
+
+    token_freq_lookup_sql = """
+    SELECT
+        unique_id,
+        list_transform(
+            list_zip(
+                array_agg(token ORDER BY unique_id, token_order ASC),
+                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+            ),
+            x -> struct_pack(tok := x[1], rel_freq := x[2])
+        ) AS token_rel_freq_arr
+    FROM {address_groups}
+    GROUP BY unique_id
+    """
+
+    final_sql = """
+    SELECT
+        base.* EXCLUDE (address_without_numbers_tokenised),
+        lookup.token_rel_freq_arr
+    FROM {base} AS base
+    INNER JOIN {token_freq_lookup} AS lookup
+        ON base.unique_id = lookup.unique_id
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
+        CTEStep("addresses_exploded", addresses_exploded_sql),
+        CTEStep("address_groups", address_groups_sql),
+        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(name="add_term_frequencies_to_address_tokens", steps=steps, output="final")
+
+
 def generalised_token_aliases() -> Stage:
     """
     Maps specific tokens to more general categories to create a generalised representation
@@ -424,3 +511,61 @@ def generalised_token_aliases() -> Stage:
     """
     step = CTEStep("1", sql)
     return Stage(name="generalised_token_aliases", steps=[step])
+
+
+def move_common_end_tokens_to_field() -> Stage:
+    """
+    Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and
+    remove them from the token frequency array so missing endings aren't over-penalised.
+    """
+
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    joined_sql = """
+    SELECT *
+    FROM {base}
+    CROSS JOIN common_end_tokens
+    """
+
+    end_tokens_included_sql = """
+    SELECT
+        * EXCLUDE (end_tokens_to_remove),
+        list_filter(
+            token_rel_freq_arr[-3:],
+            x -> list_contains(end_tokens_to_remove, x.tok)
+        ) AS common_end_tokens
+    FROM {joined}
+    """
+
+    remove_end_tokens_expr = """
+    list_filter(
+        token_rel_freq_arr,
+        (x, i) -> NOT (
+            i > len(token_rel_freq_arr) - 2
+            AND list_contains(list_transform(common_end_tokens, x -> x.tok), x.tok)
+        )
+    )
+    """
+
+    final_sql = f"""
+    SELECT
+        * EXCLUDE (token_rel_freq_arr),
+        {remove_end_tokens_expr} AS token_rel_freq_arr
+    FROM {{end_tokens_included}}
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("joined", joined_sql),
+        CTEStep("end_tokens_included", end_tokens_included_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="move_common_end_tokens_to_field",
+        steps=steps,
+        output="final",
+        preludes=[_register_common_end_tokens],
+    )

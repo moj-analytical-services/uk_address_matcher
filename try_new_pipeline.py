@@ -2,11 +2,13 @@ from uk_address_matcher.cleaning_v2.pipeline import (
     DuckDBPipeline,
 )
 from uk_address_matcher.cleaning_v2.cleaning_steps import (
+    add_term_frequencies_to_address_tokens,
     canonicalise_postcode,
     clean_address_string_first_pass,
     clean_address_string_second_pass,
     derive_original_address_concat,
     generalised_token_aliases,
+    move_common_end_tokens_to_field,
     parse_out_flat_position_and_letter,
     parse_out_numbers,
     remove_duplicate_end_tokens,
@@ -18,11 +20,13 @@ from uk_address_matcher.cleaning_v2.cleaning_steps import (
 )
 
 from uk_address_matcher.cleaning.cleaning_steps import (
+    add_term_frequencies_to_address_tokens as add_term_frequencies_to_address_tokens_v1,
     canonicalise_postcode as canonicalise_postcode_v1,
     clean_address_string_first_pass as clean_address_string_first_pass_v1,
     clean_address_string_second_pass as clean_address_string_second_pass_v1,
     derive_original_address_concat as derive_original_address_concat_v1,
     generalised_token_aliases as generalised_token_aliases_v1,
+    move_common_end_tokens_to_field as move_common_end_tokens_to_field_v1,
     parse_out_flat_position_and_letter as parse_out_flat_position_and_letter_v1,
     parse_out_numbers as parse_out_numbers_v1,
     split_numeric_tokens_to_cols as split_numeric_tokens_to_cols_v1,
@@ -55,6 +59,11 @@ queue = [
     (clean_address_string_second_pass, clean_address_string_second_pass_v1),
     (split_numeric_tokens_to_cols, split_numeric_tokens_to_cols_v1),
     (tokenise_address_without_numbers, tokenise_address_without_numbers_v1),
+    (
+        add_term_frequencies_to_address_tokens,
+        add_term_frequencies_to_address_tokens_v1,
+    ),
+    (move_common_end_tokens_to_field, move_common_end_tokens_to_field_v1),
 ]
 
 con = duckdb.connect()
@@ -71,7 +80,7 @@ select
    latitude as lat,
    longitude as lng
 from read_parquet('{full_os_path}')
-limit 5000
+limit 10000
 
 """
 con.execute(sql)
@@ -84,7 +93,7 @@ for v2, v1 in queue:
     pipe.add_step(v2())
 
 t0 = perf_counter()
-clean_v2 = pipe.run(pretty_print_sql=False)
+clean_v2 = pipe.run(pretty_print_sql=False).sort("unique_id")
 clean_v2_df = clean_v2.df()
 end_time = perf_counter()
 print(f"Time taken: {end_time - t0:.2f} seconds")
@@ -96,13 +105,15 @@ clean_v1 = run_pipeline(
     os_df,
     con=con,
     cleaning_queue=queue_v2,
-)
+).sort("unique_id")
 clean_v1_df = clean_v1.df()
 
 end_time = perf_counter()
 print(f"Time taken: {end_time - start_time:.2f} seconds")
 clean_v1_df
 
+clean_v2.limit(10).show(max_width=100000)
+clean_v1.limit(10).show(max_width=100000)
 
 assert_frame_equal(
     clean_v2_df,
