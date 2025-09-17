@@ -25,8 +25,8 @@ upper_case_address_and_postcode [DONE]
 clean_address_string_first_pass [DONE]
 remove_duplicate_end_tokens [DONE]
 derive_original_address_concat [DONE]
-separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods,
-generalised_token_aliases,
+separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods [DONE]
+generalised_token_aliases [DONE]
 parse_out_flat_position_and_letter [DONE]
 parse_out_numbers [DONE]
 clean_address_string_second_pass [DONE]

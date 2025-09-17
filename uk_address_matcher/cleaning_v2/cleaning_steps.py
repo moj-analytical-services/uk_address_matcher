@@ -262,31 +262,41 @@ def parse_out_flat_position_and_letter() -> Stage:
     leading_letter = r"^\s*\d+([A-Za-z])\b"
 
     flat_number = r"\b(FLAT|UNIT|APARTMENT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
-    sql = f"""
-    WITH step1 AS (
-        SELECT
-            *,
-            regexp_extract(address_concat, '{floor_positions}', 1) as floor_pos,
-            regexp_extract(address_concat, '{flat_letter}', 1) as flat_letter,
-            regexp_extract(address_concat, '{leading_letter}', 1) as leading_letter,
-            regexp_extract(address_concat, '{flat_number}', 1) as flat_number
-        FROM {{input}}
-    )
+
+    extract_sql = f"""
+    SELECT
+        *,
+        regexp_extract(address_concat, '{floor_positions}', 1) as floor_pos,
+        regexp_extract(address_concat, '{flat_letter}', 1) as flat_letter,
+        regexp_extract(address_concat, '{leading_letter}', 1) as leading_letter,
+        regexp_extract(address_concat, '{flat_number}', 1) as flat_number
+    FROM {{input}}
+    """
+
+    final_sql = """
     SELECT
         * EXCLUDE (floor_pos, flat_letter, leading_letter, flat_number),
         NULLIF(floor_pos, '') as flat_positional,
-        NULLIF(COALESCE(
+        NULLIF(
+            COALESCE(
                 NULLIF(flat_letter, ''),
                 NULLIF(leading_letter, ''),
                 CASE
                     WHEN LENGTH(flat_number) <= 4 THEN flat_number
                     ELSE NULL
                 END
-            ), '') as flat_letter
-    FROM step1
+            ),
+            ''
+        ) as flat_letter
+    FROM {extract_step}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="parse_out_flat_position_and_letter", steps=[step])
+
+    steps = [
+        CTEStep("extract_step", extract_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(name="parse_out_flat_position_and_letter", steps=steps, output="final")
 
 
 def parse_out_numbers() -> Stage:
