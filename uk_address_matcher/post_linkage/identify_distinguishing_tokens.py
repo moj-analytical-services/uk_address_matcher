@@ -57,10 +57,12 @@ def improve_predictions_using_distinguishing_tokens(
 
     # Step 3: Create remove_common_end_tokens CTE
     sql_remove_common_end_tokens = """
+    with intermediate as (
+        select *, map_keys(common_end_tokens_hist_r) as common_end_tokens_r,
+        from top_n_matches
+    )
     SELECT
         * EXCLUDE (original_address_concat_r, original_address_concat_l),
-        map_keys(common_end_tokens_hist_r) as common_end_tokens_r,
-
         original_address_concat_l
             .trim()
             .upper()
@@ -83,7 +85,8 @@ def improve_predictions_using_distinguishing_tokens(
             .array_to_string(' ')
             as original_address_concat_r
 
-    FROM top_n_matches
+    FROM intermediate
+
     """
     remove_common_end_tokens = con.sql(sql_remove_common_end_tokens)
 

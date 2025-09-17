@@ -1,8 +1,7 @@
 import importlib.resources as pkg_resources
 
-from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-from .regexes import (
+from uk_address_matcher.cleaning.regexes import (
     construct_nested_call,
     move_flat_to_front,
     remove_apostrophes,
@@ -15,52 +14,28 @@ from .regexes import (
     standarise_num_letter,
     trim,
 )
+from uk_address_matcher.cleaning.pipeline import (
+    CTEStep,
+    Stage,
+)
 
 
-def upper_case_address_and_postcode(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
-    select
-        * exclude (address_concat, postcode),
-        upper(address_concat) as address_concat,
-        upper(postcode) as postcode
-    from ddb_pyrel
-    """
-
-    return con.sql(sql)
-
-
-def derive_original_address_concat(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
-    SELECT
-        *,
-        address_concat AS original_address_concat
-    FROM ddb_pyrel
-    """
-
-    return con.sql(sql)
-
-
-def trim_whitespace_address_and_postcode(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def trim_whitespace_address_and_postcode() -> Stage:
     sql = """
     select
         * exclude (address_concat, postcode),
         trim(address_concat) as address_concat,
         trim(postcode) as postcode
-    from ddb_pyrel
+    from {input}
     """
+    step = CTEStep("1", sql)
+    return Stage(
+        name="trim_whitespace_address_and_postcode",
+        steps=[step],
+    )
 
-    return con.sql(sql)
 
-
-def canonicalise_postcode(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def canonicalise_postcode() -> Stage:
     """
     Ensures that any postcode matching the UK format has a single space
     separating the outward and inward codes. It assumes the postcode has
@@ -74,25 +49,34 @@ def canonicalise_postcode(
     Returns:
         DuckDBPyRelation: Relation with the 'postcode' column canonicalised.
     """
-
     uk_postcode_regex = r"^([A-Z]{1,2}\d[A-Z\d]?|GIR)\s*(\d[A-Z]{2})$"
-
     sql = f"""
-    SELECT
-        * EXCLUDE (postcode),
+    select
+        * exclude (postcode),
         regexp_replace(
             postcode,
             '{uk_postcode_regex}',
-            '\\1 \\2'  -- Insert space between captured groups
-        ) AS postcode
-    FROM ddb_pyrel
+            '\\1 \\2'
+        ) as postcode
+    from {{input}}
     """
-    return con.sql(sql)
+    step = CTEStep("1", sql)
+    return Stage(name="canonicalise_postcode", steps=[step])
 
 
-def clean_address_string_first_pass(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def upper_case_address_and_postcode() -> Stage:
+    sql = """
+    select
+        * exclude (address_concat, postcode),
+        upper(address_concat) as address_concat,
+        upper(postcode) as postcode
+    from {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="upper_case_address_and_postcode", steps=[step])
+
+
+def clean_address_string_first_pass() -> Stage:
     fn_call = construct_nested_call(
         "address_concat",
         [
@@ -111,67 +95,215 @@ def clean_address_string_first_pass(
     sql = f"""
     select
         * exclude (address_concat),
-        {fn_call} as address_concat,
+        {fn_call} as address_concat
+    from {{input}}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="clean_address_string_first_pass", steps=[step])
 
-    from ddb_pyrel
+
+def remove_duplicate_end_tokens() -> Stage:
+    """
+    Removes duplicated tokens at the end of the address.
+    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
+    """
+    sql = """
+    with tokenised as (
+    select *, string_split(address_concat, ' ') as cleaned_tokenised
+    from {input}
+    )
+    SELECT
+        * EXCLUDE (cleaned_tokenised, address_concat),
+        CASE
+            WHEN array_length(cleaned_tokenised) >= 2
+                AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
+                THEN array_to_string(cleaned_tokenised[:-2], ' ')
+            WHEN array_length(cleaned_tokenised) >= 4
+                AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
+                AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
+                THEN array_to_string(cleaned_tokenised[:-3], ' ')
+            ELSE address_concat
+        END AS address_concat
+    FROM tokenised
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="remove_duplicate_end_tokens", steps=[step])
+
+
+def derive_original_address_concat() -> Stage:
+    sql = """
+    SELECT
+        *,
+        address_concat AS original_address_concat
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="derive_original_address_concat", steps=[step])
+
+
+def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods() -> (
+    Stage
+):
+    """
+    Identifies common suffixes between addresses and separates them into unique and common parts.
+    This function analyzes each address in relation to its neighbors (previous and next addresses
+    when sorted by unique_id) to find common suffix patterns. It then splits each address into:
+    - unique_tokens: The tokens that are unique to this address (typically the beginning part)
+    - common_tokens: The tokens that are shared with neighboring addresses (typically the end part)
+    Args:
+        ddb_pyrel (DuckDBPyRelation): The input relation
+        con (DuckDBPyConnection): The DuckDB connection
+    Returns:
+        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
+    """
+    tokens_sql = """
+    SELECT
+        ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
+        list_filter(
+            regexp_split_to_array(address_concat, '\\s+'),
+            x -> NOT list_contains(__tokens_to_remove, x)
+        ) AS __tokens,
+        row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
+        *
+    FROM {input}
     """
 
-    return con.sql(sql)
+    neighbors_sql = """
+    SELECT
+        lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
+        lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
+        *
+    FROM {tokens}
+    """
+
+    suffix_lengths_sql = """
+    SELECT
+        len(__tokens) AS __token_count,
+        CASE WHEN __prev_tokens IS NOT NULL THEN
+            (
+                SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
+                    list_slice(list_reverse(__prev_tokens), 1, i + 1)
+            )
+        ELSE 0 END AS prev_common_suffix,
+        CASE WHEN __next_tokens IS NOT NULL THEN
+            (
+                SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
+                    list_slice(list_reverse(__next_tokens), 1, i + 1)
+            )
+        ELSE 0 END AS next_common_suffix,
+        *
+    FROM {with_neighbors}
+    """
+
+    unique_parts_sql = """
+    SELECT
+        *,
+        greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
+        list_filter(
+            __tokens,
+            (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)
+        ) AS unique_tokens,
+        list_filter(
+            __tokens,
+            (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
+        ) AS common_tokens
+    FROM {with_suffix_lengths}
+    """
+
+    final_sql = """
+    SELECT
+        * EXCLUDE (
+            __tokens,
+            __prev_tokens,
+            __next_tokens,
+            __token_count,
+            __tokens_to_remove,
+            max_common_suffix,
+            next_common_suffix,
+            prev_common_suffix,
+            row_order,
+            common_tokens,
+            unique_tokens
+        ),
+        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
+        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens
+    FROM {with_unique_parts}
+    """
+
+    steps = [
+        CTEStep("tokens", tokens_sql),
+        CTEStep("with_neighbors", neighbors_sql),
+        CTEStep("with_suffix_lengths", suffix_lengths_sql),
+        CTEStep("with_unique_parts", unique_parts_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
+        steps=steps,
+        output="final",
+    )
 
 
-def parse_out_flat_position_and_letter(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def parse_out_flat_position_and_letter() -> Stage:
     """
     Extracts flat positions and letters from address strings into separate columns.
 
 
     Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation
-        con (DuckDBPyConnection): The DuckDB connection
+        ddb_pyrel: The input relation
+        con: The DuckDB connection
 
     Returns:
         DuckDBPyRelation: The modified table with flat_positional and flat_letter fields
     """
-    # Define regex patterns
     floor_positions = r"\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\b"
     flat_letter = r"\b\d{0,4}([A-Za-z])\b"
     leading_letter = r"^\s*\d+([A-Za-z])\b"
 
     flat_number = r"\b(FLAT|UNIT|APARTMENT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
 
-    sql = f"""
-    WITH step1 AS (
-        SELECT
-            *,
-            -- Get floor position if present
-            regexp_extract(address_concat, '{floor_positions}', 1) as floor_pos,
-            -- Get letter after FLAT/UNIT/etc if present
-            regexp_extract(address_concat, '{flat_letter}', 1) as flat_letter,
-            -- Get just the letter part of leading number+letter combination
-            regexp_extract(address_concat, '{leading_letter}', 1) as leading_letter,
-            regexp_extract(address_concat, '{flat_number}', 1) as flat_number
-        FROM ddb_pyrel
-    )
+    extract_sql = f"""
+    SELECT
+        *,
+        regexp_extract(address_concat, '{floor_positions}', 1) as floor_pos,
+        regexp_extract(address_concat, '{flat_letter}', 1) as flat_letter,
+        regexp_extract(address_concat, '{leading_letter}', 1) as leading_letter,
+        regexp_extract(address_concat, '{flat_number}', 1) as flat_number
+    FROM {{input}}
+    """
+
+    final_sql = """
     SELECT
         * EXCLUDE (floor_pos, flat_letter, leading_letter, flat_number),
         NULLIF(floor_pos, '') as flat_positional,
-        NULLIF(COALESCE(
+        NULLIF(
+            COALESCE(
                 NULLIF(flat_letter, ''),
                 NULLIF(leading_letter, ''),
                 CASE
                     WHEN LENGTH(flat_number) <= 4 THEN flat_number
                     ELSE NULL
                 END
-            ), '') as flat_letter
-    FROM step1
+            ),
+            ''
+        ) as flat_letter
+    FROM {extract_step}
     """
-    return con.sql(sql)
+
+    steps = [
+        CTEStep("extract_step", extract_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(name="parse_out_flat_position_and_letter", steps=steps, output="final")
 
 
-def parse_out_numbers(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def parse_out_numbers() -> Stage:
     """
     Extracts and processes numeric tokens from address strings, ensuring the max length
     of the number+letter is 6 with no more than 1 letter which can be at the start or end.
@@ -199,21 +331,18 @@ def parse_out_numbers(
         * EXCLUDE (address_concat),
         regexp_replace(address_concat, '{regex_pattern}', '', 'g') AS address_without_numbers,
         CASE
-            WHEN flat_letter IS NOT NULL AND flat_letter ~ '^\d+$' THEN
-                -- If flat_letter is numeric, ignore the first number token
-                -- Use list_filter with index to skip the first element
+            WHEN flat_letter IS NOT NULL AND flat_letter ~ '^\\d+$' THEN
             regexp_extract_all(address_concat, '{regex_pattern}')[2:]
             ELSE
                 regexp_extract_all(address_concat, '{regex_pattern}')
         END AS numeric_tokens
-    FROM ddb_pyrel
+    FROM {{input}}
     """
-    return con.sql(sql)
+    step = CTEStep("1", sql)
+    return Stage(name="parse_out_numbers", steps=[step])
 
 
-def clean_address_string_second_pass(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def clean_address_string_second_pass() -> Stage:
     fn_call = construct_nested_call(
         "address_without_numbers",
         [remove_multiple_spaces, trim],
@@ -221,445 +350,173 @@ def clean_address_string_second_pass(
     sql = f"""
     select
         * exclude (address_without_numbers),
-        {fn_call} as address_without_numbers,
-    from ddb_pyrel
+        {fn_call} as address_without_numbers
+    from {{input}}
     """
+    step = CTEStep("1", sql)
+    return Stage(name="clean_address_string_second_pass", steps=[step])
 
-    return con.sql(sql)
 
-
-def split_numeric_tokens_to_cols(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def split_numeric_tokens_to_cols() -> Stage:
     sql = """
     SELECT
         * EXCLUDE (numeric_tokens),
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[1] as numeric_token_1,
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[2] as numeric_token_2,
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3
-    FROM ddb_pyrel
+    FROM {input}
     """
+    step = CTEStep("1", sql)
+    return Stage(name="split_numeric_tokens_to_cols", steps=[step])
 
-    return con.sql(sql)
 
-
-def tokenise_address_without_numbers(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def tokenise_address_without_numbers() -> Stage:
     sql = """
     select
         * exclude (address_without_numbers),
         regexp_split_to_array(trim(address_without_numbers), '\\s+')
             AS address_without_numbers_tokenised
-    from ddb_pyrel
+    from {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="tokenise_address_without_numbers", steps=[step])
+
+
+def add_term_frequencies_to_address_tokens() -> Stage:
+    """Compute token-level relative frequencies and attach them to each record."""
+
+    base_sql = """
+    SELECT * FROM {input}
     """
 
-    return con.sql(sql)
-
-
-def remove_duplicate_end_tokens(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    """
-    Removes duplicated tokens at the end of the address.
-    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
-    """
-    sql = """
-    with tokenised as (
-    select *, string_split(address_concat, ' ') as cleaned_tokenised
-    from ddb_pyrel
-    )
+    rel_tok_freq_cte_sql = """
     SELECT
-        * EXCLUDE (cleaned_tokenised, address_concat),
-        CASE
-            WHEN array_length(cleaned_tokenised) >= 2
-                AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
-                THEN array_to_string(cleaned_tokenised[:-2], ' ')
-            WHEN array_length(cleaned_tokenised) >= 4
-                AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
-                AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
-                THEN array_to_string(cleaned_tokenised[:-3], ' ')
-            ELSE address_concat
-        END AS address_concat
-    FROM tokenised
-    """
-    return con.sql(sql)
-
-
-def get_token_frequeny_table(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
-    WITH concatenated_tokens AS (
+        token,
+        count(*) / sum(count(*)) OVER () AS rel_freq
+    FROM (
         SELECT
-            unique_id,
-            list_concat(
-                array_filter(
-                    [numeric_token_1, numeric_token_2, numeric_token_3],
-                    x -> x IS NOT NULL
-                ),
-                address_without_numbers_tokenised
-            ) AS all_tokens
-        FROM ddb_pyrel
-    ),
-    unnested as (
-    SELECT
-            unnest(all_tokens) AS token
-            FROM concatenated_tokens
-    ),
-    token_counts AS (
-        SELECT
-            token,
-            count(*) AS count,
-             count(*)  / (select count(*) from unnested) rel_freq
-        from unnested
-        GROUP BY token
+            unnest(address_without_numbers_tokenised) AS token
+        FROM {base}
     )
+    GROUP BY token
+    """
+
+    addresses_exploded_sql = """
     SELECT
-        token, rel_freq
-    FROM token_counts
-    ORDER BY count DESC
-    """
-    return con.sql(sql)
-
-
-def _tokens_with_freq_sql(
-    ddb_pyrel_name: str, rel_tok_freq_name: str = "rel_tok_freq"
-) -> str:
-    return f"""
-     addresses_exploded AS (
-        SELECT
-            unique_id,
-            unnest(address_without_numbers_tokenised) as token,
-            generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
-        FROM ddb_pyrel_alias
-    ),
-    address_groups AS (
-        SELECT addresses_exploded.*,
-        COALESCE({rel_tok_freq_name}.rel_freq, 5e-5) AS rel_freq
-        FROM addresses_exploded
-        LEFT JOIN {rel_tok_freq_name}
-        ON addresses_exploded.token = {rel_tok_freq_name}.token
-    ),
-    token_freq_lookup AS (
-        SELECT
-            unique_id,
-            -- This guarantees preservation of token order vs.
-            -- list(struct_pack(token := token, rel_freq := rel_freq))
-            list_transform(
-                list_zip(
-                    array_agg(token order by unique_id, token_order asc),
-                    array_agg(rel_freq order by unique_id, token_order asc)
-                    ),
-                x-> struct_pack(tok:= x[1], rel_freq:= x[2])
-            )
-            as token_rel_freq_arr
-        FROM address_groups
-        GROUP BY unique_id
-    )
-    SELECT
-        d.* EXCLUDE (address_without_numbers_tokenised),
-        r.token_rel_freq_arr
-    FROM
-        ddb_pyrel_alias as d
-    INNER JOIN token_freq_lookup as r
-    ON d.unique_id = r.unique_id
-    """
-
-
-def add_term_frequencies_to_address_tokens(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    # Compute relative term frequencies amongst the tokens
-    # TODO - if we're removing numbers we should also remove flat positionals
-    con.register("ddb_pyrel_alias", ddb_pyrel)
-    sql = f"""
-    WITH rel_tok_freq_cte AS (
-        SELECT
-            token,
-            count(*)  / sum(count(*)) OVER() as rel_freq
-        FROM (
-            SELECT
-                unnest(address_without_numbers_tokenised) as token
-            FROM ddb_pyrel_alias
-        )
-        GROUP BY token
-    ),
-    {_tokens_with_freq_sql("ddb_pyrel", rel_tok_freq_name="rel_tok_freq_cte")}
-    """
-
-    return con.sql(sql)
-
-
-def add_term_frequencies_to_address_tokens_using_registered_df(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    # For some reason this is necessary to avoid a
-    # BinderException: Binder Error: Max expression depth limit of 1000 exceeded.
-
-    con.register("ddb_pyrel_alias", ddb_pyrel)
-    sql = f"""
-    WITH
-
-    {_tokens_with_freq_sql("ddb_pyrel_name")}
-
-    """
-
-    return con.sql(sql)
-
-
-def first_unusual_token(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    # Get first below freq
-    first_token = (
-        "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
-    )
-
-    sql = f"""
-    select
-    {first_token} as first_unusual_token,
-    *
-    from ddb_pyrel
-    """
-    return con.sql(sql)
-
-
-def use_first_unusual_token_if_no_numeric_token(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
-    select
-        * exclude (numeric_token_1, token_rel_freq_arr, first_unusual_token),
-        case
-            when numeric_token_1 is null then first_unusual_token.tok
-            else numeric_token_1
-            end as numeric_token_1,
-
-    case
-        when numeric_token_1 is null
-        then list_filter(token_rel_freq_arr, x -> coalesce(x.tok != first_unusual_token.tok, true))
-        else token_rel_freq_arr
-    end
-    as token_rel_freq_arr
-    from ddb_pyrel
-    """
-
-    return con.sql(sql)
-
-
-def final_column_order(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
-    select
         unique_id,
-        numeric_token_1,
-        numeric_token_2,
-        numeric_token_3,
-        -- token_rel_freq_arr,
-
-        list_aggregate(token_rel_freq_arr, 'histogram') as token_rel_freq_arr_hist,
-        list_aggregate(common_end_tokens,'histogram') AS common_end_tokens_hist,
-
-        --common_end_tokens,
-        postcode,
-
-        * exclude (
-            unique_id,
-            numeric_token_1,
-            numeric_token_2,
-            numeric_token_3,
-            token_rel_freq_arr,
-            common_end_tokens,
-            postcode
-                )
-
-    from ddb_pyrel
+        unnest(address_without_numbers_tokenised) AS token,
+        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
+    FROM {base}
     """
 
-    return con.sql(sql)
-
-
-def move_common_end_tokens_to_field(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    # Want to put common tokens towards the end of the address
-    # into their own field.  These tokens (e.g. SOMERSET or LONDON)
-    # are often ommitted from so 'punishing' lack of agreement is probably
-    # not necessary
-
-    # For some reason this is necessary to avoid a
-    # BinderException: Binder Error: Max expression depth limit of 1000 exceeded.
-    con.register("ddb_pyrel_alias2", ddb_pyrel)
-    with pkg_resources.path(
-        "uk_address_matcher.data", "common_end_tokens.csv"
-    ) as csv_path:
-        sql = f"""
-        select array_agg(token) as end_tokens_to_remove
-        from read_csv_auto("{csv_path}")
-        where token_count > 3000
-        """
-    common_end_tokens = con.sql(sql)
-
-    # Not sure why this is needed
-    con.register("common_end_tokens", common_end_tokens)
-
-    end_tokens_as_array = """
-    list_transform(common_end_tokens, x -> x.tok)
-    """
-
-    remove_end_tokens = f"""
-    list_filter(token_rel_freq_arr,
-        (x,i) ->
-            not
-            (
-            i > len(token_rel_freq_arr) - 2
-            and
-            list_contains({end_tokens_as_array}, x.tok)
-            )
-    )
-    """
-
-    sql = f"""
-    with
-
-    joined as (
-        select *
-    from ddb_pyrel_alias2
-    cross join common_end_tokens
-    ),
-
-    end_tokens_included as (
-    select
-    * exclude (end_tokens_to_remove),
-    list_filter(token_rel_freq_arr[-3:],
-        x ->  list_contains(end_tokens_to_remove, x.tok)
-    )
-    as common_end_tokens
-    from joined
-    )
-
-    select
-        * exclude (token_rel_freq_arr),
-        {remove_end_tokens} as token_rel_freq_arr
-    from end_tokens_included
-
-    """
-
-    return con.sql(sql)
-
-
-def separate_unusual_tokens(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    sql = """
+    address_groups_sql = """
     SELECT
-        *,
-        list_transform(list_filter(
-            list_select(
-                token_rel_freq_arr,
-                list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
-            ),
-            x -> x.rel_freq < 1e-4 and x.rel_freq >= 5e-5
-        ), x-> x.tok) AS unusual_tokens_arr,
-        list_transform(list_filter(
-            list_select(
-                token_rel_freq_arr,
-                list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
-            ),
-            x -> x.rel_freq < 5e-5 and x.rel_freq >= 1e-7
-        ), x-> x.tok) AS very_unusual_tokens_arr,
-        list_transform(list_filter(
-            list_select(
-                token_rel_freq_arr,
-                list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
-            ),
-            x -> x.rel_freq < 1e-7
-        ), x-> x.tok) AS extremely_unusual_tokens_arr
-    FROM ddb_pyrel
+        {addresses_exploded}.*,
+        COALESCE({rel_tok_freq_cte}.rel_freq, 5e-5) AS rel_freq
+    FROM {addresses_exploded}
+    LEFT JOIN {rel_tok_freq_cte}
+        ON {addresses_exploded}.token = {rel_tok_freq_cte}.token
     """
-    return con.sql(sql)
 
-
-def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
-    """
-    Identifies common suffixes between addresses and separates them into unique and common parts.
-    This function analyzes each address in relation to its neighbors (previous and next addresses
-    when sorted by unique_id) to find common suffix patterns. It then splits each address into:
-    - unique_tokens: The tokens that are unique to this address (typically the beginning part)
-    - common_tokens: The tokens that are shared with neighboring addresses (typically the end part)
-    Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation
-        con (DuckDBPyConnection): The DuckDB connection
-    Returns:
-        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
-    """
-    sql = """
-    WITH tokens AS (
-        SELECT
-            ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
-            list_filter(
-                regexp_split_to_array(address_concat, '\\s+'),
-                x -> not list_contains(__tokens_to_remove, x)
-            )
-                AS __tokens,
-            row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
-            *
-        FROM ddb_pyrel
-    ),
-    with_neighbors AS (
-        SELECT
-            lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
-            lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
-            *
-        FROM tokens
-    ),
-    with_suffix_lengths AS (
-        SELECT
-            len(__tokens) AS __token_count,
-            -- Calculate common suffix length with previous address
-            CASE WHEN __prev_tokens IS NOT NULL THEN
-                (SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
-                    list_slice(list_reverse(__prev_tokens), 1, i+1))
-            ELSE 0 END AS prev_common_suffix,
-            -- Calculate common suffix length with next address
-            CASE WHEN __next_tokens IS NOT NULL THEN
-                (SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
-                    list_slice(list_reverse(__next_tokens), 1, i+1))
-            ELSE 0 END AS next_common_suffix,
-            *
-        FROM with_neighbors
-    ),
-    with_unique_parts AS (
-        SELECT
-            *,
-            -- Find the maximum common suffix length
-            greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
-            -- Use list_filter with index to keep only the unique part at the beginning
-            list_filter(__tokens, (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)) AS unique_tokens,
-            -- Use list_filter with index to keep only the common part at the end
-            list_filter(__tokens, (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)) AS common_tokens
-        FROM with_suffix_lengths
-    )
+    token_freq_lookup_sql = """
     SELECT
-        * EXCLUDE (__tokens, __prev_tokens, __next_tokens, __token_count, __tokens_to_remove, max_common_suffix, next_common_suffix, prev_common_suffix, row_order, common_tokens,unique_tokens),
-        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
-        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens,
-    FROM
-    with_unique_parts
+        unique_id,
+        list_transform(
+            list_zip(
+                array_agg(token ORDER BY unique_id, token_order ASC),
+                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+            ),
+            x -> struct_pack(tok := x[1], rel_freq := x[2])
+        ) AS token_rel_freq_arr
+    FROM {address_groups}
+    GROUP BY unique_id
     """
 
-    return con.sql(sql)
+    final_sql = """
+    SELECT
+        base.* EXCLUDE (address_without_numbers_tokenised),
+        lookup.token_rel_freq_arr
+    FROM {base} AS base
+    INNER JOIN {token_freq_lookup} AS lookup
+        ON base.unique_id = lookup.unique_id
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
+        CTEStep("addresses_exploded", addresses_exploded_sql),
+        CTEStep("address_groups", address_groups_sql),
+        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="add_term_frequencies_to_address_tokens", steps=steps, output="final"
+    )
 
 
-# Located here because this is reused in comparisons
+def add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
+    """Attach precomputed token frequencies registered as rel_tok_freq."""
+
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    addresses_exploded_sql = """
+    SELECT
+        unique_id,
+        unnest(address_without_numbers_tokenised) AS token,
+        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
+    FROM {base}
+    """
+
+    address_groups_sql = """
+    SELECT
+        {addresses_exploded}.*,
+        COALESCE(rel_tok_freq.rel_freq, 5e-5) AS rel_freq
+    FROM {addresses_exploded}
+    LEFT JOIN rel_tok_freq
+        ON {addresses_exploded}.token = rel_tok_freq.token
+    """
+
+    token_freq_lookup_sql = """
+    SELECT
+        unique_id,
+        list_transform(
+            list_zip(
+                array_agg(token ORDER BY unique_id, token_order ASC),
+                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+            ),
+            x -> struct_pack(tok := x[1], rel_freq := x[2])
+        ) AS token_rel_freq_arr
+    FROM {address_groups}
+    GROUP BY unique_id
+    """
+
+    final_sql = """
+    SELECT
+        base.* EXCLUDE (address_without_numbers_tokenised),
+        lookup.token_rel_freq_arr
+    FROM {base} AS base
+    INNER JOIN {token_freq_lookup} AS lookup
+        ON base.unique_id = lookup.unique_id
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("addresses_exploded", addresses_exploded_sql),
+        CTEStep("address_groups", address_groups_sql),
+        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="add_term_frequencies_to_address_tokens_using_registered_df",
+        steps=steps,
+        output="final",
+    )
+
+
 GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
     CASE
         WHEN token in ('FIRST', 'SECOND', 'THIRD', 'TOP') THEN ['UPPERFLOOR', 'LEVEL']
@@ -671,9 +528,7 @@ GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
 """
 
 
-def generalised_token_aliases(
-    ddb_pyrel: DuckDBPyRelation, con: DuckDBPyConnection
-) -> DuckDBPyRelation:
+def generalised_token_aliases() -> Stage:
     """
     Maps specific tokens to more general categories to create a generalised representation
     of the unique tokens in an address.
@@ -715,7 +570,230 @@ def generalised_token_aliases(
                {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
             )
         ) AS distinguishing_adj_token_aliases
-    FROM ddb_pyrel
+    FROM {{input}}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="generalised_token_aliases", steps=[step])
+
+
+def move_common_end_tokens_to_field() -> Stage:
+    """
+    Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and
+    remove them from the token frequency array so missing endings aren't over-penalised.
     """
 
-    return con.sql(sql)
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    with pkg_resources.path(
+        "uk_address_matcher.data", "common_end_tokens.csv"
+    ) as csv_path:
+        common_end_tokens_sql = f"""
+            select array_agg(token) as end_tokens_to_remove
+            from read_csv_auto('{csv_path}')
+            where token_count > 3000
+            """
+
+    joined_sql = """
+    SELECT *
+    FROM {base}
+    CROSS JOIN {common_end_tokens}
+    """
+
+    end_tokens_included_sql = """
+    SELECT
+        * EXCLUDE (end_tokens_to_remove),
+        list_filter(
+            token_rel_freq_arr[-3:],
+            x -> list_contains(end_tokens_to_remove, x.tok)
+        ) AS common_end_tokens
+    FROM {joined}
+    """
+
+    remove_end_tokens_expr = """
+    list_filter(
+        token_rel_freq_arr,
+        (x, i) -> NOT (
+            i > len(token_rel_freq_arr) - 2
+            AND list_contains(list_transform(common_end_tokens, x -> x.tok), x.tok)
+        )
+    )
+    """
+
+    final_sql = f"""
+    SELECT
+        * EXCLUDE (token_rel_freq_arr),
+        {remove_end_tokens_expr} AS token_rel_freq_arr
+    FROM {{end_tokens_included}}
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("common_end_tokens", common_end_tokens_sql),
+        CTEStep("joined", joined_sql),
+        CTEStep("end_tokens_included", end_tokens_included_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="move_common_end_tokens_to_field",
+        steps=steps,
+        output="final",
+    )
+
+
+def first_unusual_token() -> Stage:
+    """Attach the first token below the frequency threshold (0.001) if present."""
+
+    first_token_expr = (
+        "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
+    )
+
+    sql = f"""
+    SELECT
+        {first_token_expr} AS first_unusual_token,
+        *
+    FROM {{input}}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="first_unusual_token", steps=[step])
+
+
+def use_first_unusual_token_if_no_numeric_token() -> Stage:
+    """Fallback to the unusual token when numeric_token_1 is missing."""
+
+    sql = """
+    SELECT
+        * EXCLUDE (numeric_token_1, token_rel_freq_arr, first_unusual_token),
+        CASE
+            WHEN numeric_token_1 IS NULL THEN first_unusual_token.tok
+            ELSE numeric_token_1
+        END AS numeric_token_1,
+        CASE
+            WHEN numeric_token_1 IS NULL THEN
+                list_filter(
+                    token_rel_freq_arr,
+                    x -> coalesce(x.tok != first_unusual_token.tok, TRUE)
+                )
+            ELSE token_rel_freq_arr
+        END AS token_rel_freq_arr
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(
+        name="use_first_unusual_token_if_no_numeric_token",
+        steps=[step],
+    )
+
+
+def separate_unusual_tokens() -> Stage:
+    """Split token list into frequency bands for matching heuristics."""
+
+    sql = """
+    SELECT
+        *,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
+            ),
+            x -> x.tok
+        ) AS unusual_tokens_arr,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 5e-5 AND x.rel_freq >= 1e-7
+            ),
+            x -> x.tok
+        ) AS very_unusual_tokens_arr,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 1e-7
+            ),
+            x -> x.tok
+        ) AS extremely_unusual_tokens_arr
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="separate_unusual_tokens", steps=[step])
+
+
+def final_column_order() -> Stage:
+    """Reorder and aggregate columns to match the legacy final layout."""
+
+    sql = """
+    SELECT
+        unique_id,
+        numeric_token_1,
+        numeric_token_2,
+        numeric_token_3,
+        list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
+        list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist,
+        postcode,
+        * EXCLUDE (
+            unique_id,
+            numeric_token_1,
+            numeric_token_2,
+            numeric_token_3,
+            token_rel_freq_arr,
+            common_end_tokens,
+            postcode
+        )
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="final_column_order", steps=[step])
+
+
+def get_token_frequeny_table() -> Stage:
+    sql = """
+    SELECT
+        token_counts.token,
+        token_counts.rel_freq
+    FROM (
+        SELECT
+            token,
+            COUNT(*) AS count,
+            COUNT(*) / (SELECT COUNT(*) FROM {unnested}) AS rel_freq
+        FROM {unnested}
+        GROUP BY token
+    ) AS token_counts
+    ORDER BY count DESC
+    """
+
+    concatenated_sql = """
+    SELECT
+        unique_id,
+        list_concat(
+            array_filter(
+                [numeric_token_1, numeric_token_2, numeric_token_3],
+                x -> x IS NOT NULL
+            ),
+            address_without_numbers_tokenised
+        ) AS all_tokens
+    FROM {input}
+    """
+
+    unnested_sql = """
+    SELECT unnest(all_tokens) AS token
+    FROM {concatenated_tokens}
+    """
+
+    steps = [
+        CTEStep("concatenated_tokens", concatenated_sql),
+        CTEStep("unnested", unnested_sql),
+        CTEStep("final", sql),
+    ]
+
+    return Stage(name="get_token_frequeny_table", steps=steps, output="final")
