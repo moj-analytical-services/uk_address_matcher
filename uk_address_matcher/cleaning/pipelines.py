@@ -5,30 +5,30 @@ from typing import Iterable, Callable
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-from uk_address_matcher.cleaning.cleaning_steps import (
-    add_term_frequencies_to_address_tokens,
-    add_term_frequencies_to_address_tokens_using_registered_df,
-    canonicalise_postcode,
-    clean_address_string_first_pass,
-    clean_address_string_second_pass,
-    derive_original_address_concat,
-    final_column_order,
-    first_unusual_token,
-    generalised_token_aliases,
-    get_token_frequeny_table,
-    move_common_end_tokens_to_field,
-    parse_out_flat_position_and_letter,
-    parse_out_numbers,
-    remove_duplicate_end_tokens,
-    separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods,
-    separate_unusual_tokens,
-    split_numeric_tokens_to_cols,
-    tokenise_address_without_numbers,
-    trim_whitespace_address_and_postcode,
-    upper_case_address_and_postcode,
-    use_first_unusual_token_if_no_numeric_token,
+from uk_address_matcher.cleaning.steps import (
+    _add_term_frequencies_to_address_tokens,
+    _add_term_frequencies_to_address_tokens_using_registered_df,
+    _canonicalise_postcode,
+    _clean_address_string_first_pass,
+    _clean_address_string_second_pass,
+    _derive_original_address_concat,
+    _final_column_order,
+    _first_unusual_token,
+    _generalised_token_aliases,
+    _get_token_frequeny_table,
+    _move_common_end_tokens_to_field,
+    _parse_out_flat_position_and_letter,
+    _parse_out_numbers,
+    _remove_duplicate_end_tokens,
+    _separate_unusual_tokens,
+    _split_numeric_tokens_to_cols,
+    _tokenise_address_without_numbers,
+    _trim_whitespace_address_and_postcode,
+    _upper_case_address_and_postcode,
+    _use_first_unusual_token_if_no_numeric_token,
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
-from uk_address_matcher.cleaning.pipeline import DuckDBPipeline, Stage
+from uk_address_matcher.core.sql_pipeline import DuckDBPipeline, Stage
 
 
 StageFactory = Callable[[], Stage]
@@ -83,32 +83,32 @@ def _run_stage_queue(
 
 
 QUEUE_PRE_TF = [
-    trim_whitespace_address_and_postcode,
-    canonicalise_postcode,
-    upper_case_address_and_postcode,
-    clean_address_string_first_pass,
-    remove_duplicate_end_tokens,
-    derive_original_address_concat,
-    parse_out_flat_position_and_letter,
-    parse_out_numbers,
-    clean_address_string_second_pass,
-    split_numeric_tokens_to_cols,
-    tokenise_address_without_numbers,
+    _trim_whitespace_address_and_postcode,
+    _canonicalise_postcode,
+    _upper_case_address_and_postcode,
+    _clean_address_string_first_pass,
+    _remove_duplicate_end_tokens,
+    _derive_original_address_concat,
+    _parse_out_flat_position_and_letter,
+    _parse_out_numbers,
+    _clean_address_string_second_pass,
+    _split_numeric_tokens_to_cols,
+    _tokenise_address_without_numbers,
 ]
 
 QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
-    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(derive_original_address_concat) + 1],
-    separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods,
-    generalised_token_aliases,
-    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(derive_original_address_concat) + 1 :],
+    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_derive_original_address_concat) + 1],
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+    _generalised_token_aliases,
+    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_derive_original_address_concat) + 1 :],
 ]
 
 QUEUE_POST_TF = [
-    move_common_end_tokens_to_field,
-    first_unusual_token,
-    use_first_unusual_token_if_no_numeric_token,
-    separate_unusual_tokens,
-    final_column_order,
+    _move_common_end_tokens_to_field,
+    _first_unusual_token,
+    _use_first_unusual_token_if_no_numeric_token,
+    _separate_unusual_tokens,
+    _final_column_order,
 ]
 
 
@@ -117,7 +117,7 @@ def clean_data_on_the_fly(
     con: DuckDBPyConnection,
 ) -> DuckDBPyRelation:
     stage_queue = (
-        QUEUE_PRE_TF + [add_term_frequencies_to_address_tokens] + QUEUE_POST_TF
+        QUEUE_PRE_TF + [_add_term_frequencies_to_address_tokens] + QUEUE_POST_TF
     )
 
     input_table, uid = _materialise_input_table(con, address_table)
@@ -149,7 +149,7 @@ def clean_data_using_precomputed_rel_tok_freq(
 
     stage_queue = (
         pre_queue
-        + [add_term_frequencies_to_address_tokens_using_registered_df]
+        + [_add_term_frequencies_to_address_tokens_using_registered_df]
         + QUEUE_POST_TF
     )
 
@@ -163,11 +163,11 @@ def get_numeric_term_frequencies_from_address_table(
     con: DuckDBPyConnection,
 ) -> DuckDBPyRelation:
     stage_queue = [
-        trim_whitespace_address_and_postcode,
-        upper_case_address_and_postcode,
-        clean_address_string_first_pass,
-        parse_out_flat_position_and_letter,
-        parse_out_numbers,
+        _trim_whitespace_address_and_postcode,
+        _upper_case_address_and_postcode,
+        _clean_address_string_first_pass,
+        _parse_out_flat_position_and_letter,
+        _parse_out_numbers,
     ]
 
     numeric_tokens_rel = _run_stage_queue(
@@ -198,15 +198,15 @@ def get_address_token_frequencies_from_address_table(
     con: DuckDBPyConnection,
 ) -> DuckDBPyRelation:
     stage_queue = [
-        trim_whitespace_address_and_postcode,
-        upper_case_address_and_postcode,
-        clean_address_string_first_pass,
-        parse_out_flat_position_and_letter,
-        parse_out_numbers,
-        clean_address_string_second_pass,
-        split_numeric_tokens_to_cols,
-        tokenise_address_without_numbers,
-        get_token_frequeny_table,
+        _trim_whitespace_address_and_postcode,
+        _upper_case_address_and_postcode,
+        _clean_address_string_first_pass,
+        _parse_out_flat_position_and_letter,
+        _parse_out_numbers,
+        _clean_address_string_second_pass,
+        _split_numeric_tokens_to_cols,
+        _tokenise_address_without_numbers,
+        _get_token_frequeny_table,
     ]
 
     return _run_stage_queue(con, df_address_table, stage_queue)
