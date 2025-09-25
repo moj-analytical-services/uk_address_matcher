@@ -138,4 +138,3 @@ def test_materialise_debug_parity(duck_con, base_rel):
     pipe2.add_step(name_tuple_stage())
     run_vals = pipe2.run().df().sort_values("id").val.tolist()
     assert debug_vals == run_vals
-    assert debug_vals == run_vals
