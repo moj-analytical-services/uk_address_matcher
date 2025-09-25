@@ -1,7 +1,7 @@
-from importlib import resources
 import random
 import string
-from typing import Iterable, Callable
+from importlib import resources
+from typing import Iterable
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
@@ -20,18 +20,15 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _remove_duplicate_end_tokens,
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
     _split_numeric_tokens_to_cols,
     _tokenise_address_without_numbers,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
     _use_first_unusual_token_if_no_numeric_token,
-    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
-from uk_address_matcher.core.sql_pipeline import DuckDBPipeline, Stage
-
-
-StageFactory = Callable[[], Stage]
+from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline, StageFactory
 
 
 def _generate_random_identifier(length: int = 8) -> str:

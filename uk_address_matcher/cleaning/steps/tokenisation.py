@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uk_address_matcher.core.sql_pipeline import CTEStep, Stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage
 
 
 def _split_numeric_tokens_to_cols() -> Stage:

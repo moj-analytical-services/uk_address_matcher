@@ -4,7 +4,7 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_flat_position_and_letter,
     _remove_duplicate_end_tokens,
 )
-from uk_address_matcher.core.sql_pipeline import DuckDBPipeline
+from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline
 
 
 def _run_single_stage(stage_factory, input_relation, connection):

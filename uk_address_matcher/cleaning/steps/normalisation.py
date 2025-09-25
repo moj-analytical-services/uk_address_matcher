@@ -13,10 +13,11 @@ from uk_address_matcher.cleaning.steps.regexes import (
     standarise_num_letter,
     trim,
 )
-from uk_address_matcher.core.sql_pipeline import Stage, single_cte_stage
+from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
-def _trim_whitespace_address_and_postcode() -> Stage:
+@pipeline_stage(name="trim_whitespace_address_and_postcode")
+def _trim_whitespace_address_and_postcode() -> str:
     sql = r"""
     SELECT
         * EXCLUDE (address_concat, postcode),
@@ -24,10 +25,11 @@ def _trim_whitespace_address_and_postcode() -> Stage:
         TRIM(postcode)       AS postcode
     FROM {input}
     """
-    return single_cte_stage("trim_whitespace_address_and_postcode", sql)
+    return sql
 
 
-def _canonicalise_postcode() -> Stage:
+@pipeline_stage(name="canonicalise_postcode")
+def _canonicalise_postcode() -> str:
     """
     Ensures that any postcode matching the UK format has a single space
     separating the outward and inward codes. Assumes 'postcode' is trimmed and uppercased.
@@ -43,10 +45,11 @@ def _canonicalise_postcode() -> Stage:
         ) AS postcode
     FROM {{input}}
     """
-    return single_cte_stage("canonicalise_postcode", sql)
+    return sql
 
 
-def _upper_case_address_and_postcode() -> Stage:
+@pipeline_stage(name="upper_case_address_and_postcode")
+def _upper_case_address_and_postcode() -> str:
     sql = r"""
     SELECT
         * EXCLUDE (address_concat, postcode),
@@ -54,10 +57,11 @@ def _upper_case_address_and_postcode() -> Stage:
         UPPER(postcode)       AS postcode
     FROM {input}
     """
-    return single_cte_stage("upper_case_address_and_postcode", sql)
+    return sql
 
 
-def _clean_address_string_first_pass() -> Stage:
+@pipeline_stage(name="clean_address_string_first_pass")
+def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "address_concat",
         [
@@ -79,10 +83,11 @@ def _clean_address_string_first_pass() -> Stage:
         {fn_call} AS address_concat
     FROM {{input}}
     """
-    return single_cte_stage("clean_address_string_first_pass", sql)
+    return sql
 
 
-def _remove_duplicate_end_tokens() -> Stage:
+@pipeline_stage(name="remove_duplicate_end_tokens")
+def _remove_duplicate_end_tokens() -> str:
     """
     Removes duplicated tokens at the end of the address.
     E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
@@ -106,20 +111,22 @@ def _remove_duplicate_end_tokens() -> Stage:
         END AS address_concat
     FROM tokenised
     """
-    return single_cte_stage("remove_duplicate_end_tokens", sql)
+    return sql
 
 
-def _derive_original_address_concat() -> Stage:
+@pipeline_stage(name="derive_original_address_concat")
+def _derive_original_address_concat() -> str:
     sql = r"""
     SELECT
         *,
         address_concat AS original_address_concat
     FROM {input}
     """
-    return single_cte_stage("derive_original_address_concat", sql)
+    return sql
 
 
-def _clean_address_string_second_pass() -> Stage:
+@pipeline_stage(name="clean_address_string_second_pass")
+def _clean_address_string_second_pass() -> str:
     fn_call = construct_nested_call(
         "address_without_numbers",
         [remove_multiple_spaces, trim],
@@ -130,4 +137,4 @@ def _clean_address_string_second_pass() -> Stage:
         {fn_call} AS address_without_numbers
     FROM {{input}}
     """
-    return single_cte_stage("clean_address_string_second_pass", sql)
+    return sql

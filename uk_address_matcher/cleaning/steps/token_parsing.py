@@ -1,12 +1,11 @@
+from __future__ import annotations
+
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
     remove_multiple_spaces,
     trim,
 )
-from uk_address_matcher.core.sql_pipeline import (
-    CTEStep,
-    Stage,
-)
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage
 
 
 def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records() -> (

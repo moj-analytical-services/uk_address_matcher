@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import List
-
 import importlib.resources as pkg_resources
-from uk_address_matcher.core.sql_pipeline import CTEStep, Stage
+
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage
 
 
 def _add_term_frequencies_to_address_tokens() -> Stage:
