@@ -16,7 +16,11 @@ from uk_address_matcher.cleaning.steps.regexes import (
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
-@pipeline_stage(name="trim_whitespace_address_and_postcode")
+@pipeline_stage(
+    name="trim_whitespace_address_and_postcode",
+    description="Remove leading and trailing whitespace from address and postcode fields",
+    tags=["normalisation", "cleaning"],
+)
 def _trim_whitespace_address_and_postcode() -> str:
     sql = r"""
     SELECT
@@ -28,7 +32,11 @@ def _trim_whitespace_address_and_postcode() -> str:
     return sql
 
 
-@pipeline_stage(name="canonicalise_postcode")
+@pipeline_stage(
+    name="canonicalise_postcode",
+    description="Standardise UK postcodes by ensuring single space between outward and inward codes",
+    tags=["normalisation", "cleaning"],
+)
 def _canonicalise_postcode() -> str:
     """
     Ensures that any postcode matching the UK format has a single space
@@ -48,7 +56,11 @@ def _canonicalise_postcode() -> str:
     return sql
 
 
-@pipeline_stage(name="upper_case_address_and_postcode")
+@pipeline_stage(
+    name="upper_case_address_and_postcode",
+    description="Convert address and postcode fields to uppercase for consistent formatting",
+    tags=["normalisation", "formatting"],
+)
 def _upper_case_address_and_postcode() -> str:
     sql = r"""
     SELECT
@@ -60,7 +72,11 @@ def _upper_case_address_and_postcode() -> str:
     return sql
 
 
-@pipeline_stage(name="clean_address_string_first_pass")
+@pipeline_stage(
+    name="clean_address_string_first_pass",
+    description="Apply initial address cleaning operations: remove punctuation, standardise separators, and normalise formatting",
+    tags=["cleaning", "normalisation"],
+)
 def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "address_concat",
@@ -86,7 +102,11 @@ def _clean_address_string_first_pass() -> str:
     return sql
 
 
-@pipeline_stage(name="remove_duplicate_end_tokens")
+@pipeline_stage(
+    name="remove_duplicate_end_tokens",
+    description="Remove duplicated tokens at the end of addresses (e.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS')",
+    tags=["cleaning"],
+)
 def _remove_duplicate_end_tokens() -> str:
     """
     Removes duplicated tokens at the end of the address.
@@ -114,7 +134,11 @@ def _remove_duplicate_end_tokens() -> str:
     return sql
 
 
-@pipeline_stage(name="derive_original_address_concat")
+@pipeline_stage(
+    name="derive_original_address_concat",
+    description="Create a backup copy of the cleaned address before further processing",
+    tags=["data_preparation", "cleaning"],
+)
 def _derive_original_address_concat() -> str:
     sql = r"""
     SELECT
@@ -125,7 +149,11 @@ def _derive_original_address_concat() -> str:
     return sql
 
 
-@pipeline_stage(name="clean_address_string_second_pass")
+@pipeline_stage(
+    name="clean_address_string_second_pass",
+    description="Apply final cleaning operations to address without numbers: remove extra spaces and trim",
+    tags=["cleaning"],
+)
 def _clean_address_string_second_pass() -> str:
     fn_call = construct_nested_call(
         "address_without_numbers",

@@ -5,12 +5,15 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_multiple_spaces,
     trim,
 )
-from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage, pipeline_stage
 
 
-def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records() -> (
-    Stage
-):
+@pipeline_stage(
+    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
+    description="Identify common suffixes between addresses and separate them into unique and common token parts",
+    tags=["token_analysis", "address_comparison"],
+)
+def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records():
     """
     Identifies common suffixes between addresses and separates them into unique and common parts.
     This function analyzes each address in relation to its neighbors (previous and next addresses
@@ -109,14 +112,15 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         CTEStep("final", final_sql),
     ]
 
-    return Stage(
-        name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
-        steps=steps,
-        output="final",
-    )
+    return steps
 
 
-def _parse_out_flat_position_and_letter() -> Stage:
+@pipeline_stage(
+    name="parse_out_flat_position_and_letter",
+    description="Extract flat positions and letters from address strings into separate columns",
+    tags=["token_extraction", "flat_parsing"],
+)
+def _parse_out_flat_position_and_letter():
     """
     Extracts flat positions and letters from address strings into separate columns.
 
@@ -167,10 +171,15 @@ def _parse_out_flat_position_and_letter() -> Stage:
         CTEStep("final", final_sql),
     ]
 
-    return Stage(name="parse_out_flat_position_and_letter", steps=steps, output="final")
+    return steps
 
 
-def _parse_out_numbers() -> Stage:
+@pipeline_stage(
+    name="parse_out_numbers",
+    description="Extract and process numeric tokens from addresses, handling ranges and alphanumeric patterns",
+    tags="token_extraction",
+)
+def _parse_out_numbers():
     """
     Extracts and processes numeric tokens from address strings, ensuring the max length
     of the number+letter is 6 with no more than 1 letter which can be at the start or end.
@@ -205,11 +214,15 @@ def _parse_out_numbers() -> Stage:
         END AS numeric_tokens
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="parse_out_numbers", steps=[step])
+    return sql
 
 
-def _clean_address_string_second_pass() -> Stage:
+@pipeline_stage(
+    name="clean_address_string_second_pass",
+    description="Apply final cleaning to address without numbers: remove multiple spaces and trim",
+    tags="cleaning",
+)
+def _clean_address_string_second_pass():
     fn_call = construct_nested_call(
         "address_without_numbers",
         [remove_multiple_spaces, trim],
@@ -220,11 +233,15 @@ def _clean_address_string_second_pass() -> Stage:
         {fn_call} as address_without_numbers
     from {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="clean_address_string_second_pass", steps=[step])
+    return sql
 
 
-def _split_numeric_tokens_to_cols() -> Stage:
+@pipeline_stage(
+    name="split_numeric_tokens_to_cols",
+    description="Split numeric tokens array into separate columns (numeric_token_1, numeric_token_2, numeric_token_3)",
+    tags="token_transformation",
+)
+def _split_numeric_tokens_to_cols():
     sql = """
     SELECT
         * EXCLUDE (numeric_tokens),
@@ -233,11 +250,15 @@ def _split_numeric_tokens_to_cols() -> Stage:
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="split_numeric_tokens_to_cols", steps=[step])
+    return sql
 
 
-def _tokenise_address_without_numbers() -> Stage:
+@pipeline_stage(
+    name="tokenise_address_without_numbers",
+    description="Split the address_without_numbers field into an array of tokens",
+    tags="tokenisation",
+)
+def _tokenise_address_without_numbers():
     sql = """
     select
         * exclude (address_without_numbers),
@@ -245,8 +266,7 @@ def _tokenise_address_without_numbers() -> Stage:
             AS address_without_numbers_tokenised
     from {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="tokenise_address_without_numbers", steps=[step])
+    return sql
 
 
 GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
@@ -260,7 +280,12 @@ GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
 """
 
 
-def _generalised_token_aliases() -> Stage:
+@pipeline_stage(
+    name="generalised_token_aliases",
+    description="Map specific tokens to more general categories for better matching heuristics",
+    tags="token_transformation",
+)
+def _generalised_token_aliases():
     """
     Maps specific tokens to more general categories to create a generalised representation
     of the unique tokens in an address.
@@ -304,8 +329,7 @@ def _generalised_token_aliases() -> Stage:
         ) AS distinguishing_adj_token_aliases
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="generalised_token_aliases", steps=[step])
+    return sql
 
 
 def _get_token_frequeny_table() -> Stage:
