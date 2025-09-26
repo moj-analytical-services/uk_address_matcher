@@ -158,9 +158,29 @@ def _normalise_sql_step(spec: SQLSpec) -> List[CTEStep]:
         and all(isinstance(x, str) for x in spec)
     ):
         return [CTEStep(spec[0], spec[1])]
+
+    if spec is None:
+        raise TypeError("Stage callable returned None; expected SQL specification.")
+
     out: List[CTEStep] = []
-    for i, item in enumerate(spec or []):
-        out.append(item if isinstance(item, CTEStep) else CTEStep(item[0], item[1]))
+    for i, item in enumerate(spec):
+        if isinstance(item, CTEStep):
+            out.append(item)
+        elif (
+            isinstance(item, tuple)
+            and len(item) == 2
+            and all(isinstance(x, str) for x in item)
+        ):
+            out.append(CTEStep(item[0], item[1]))
+        else:
+            raise TypeError(
+                "Stage return iterable items must be CTEStep or (name, sql) tuple; "
+                f"got {item!r} at index {i}"
+            )
+
+    if not out:
+        raise ValueError("Stage returned an empty iterable of steps")
+
     # basic duplicate check
     names = [s.name for s in out]
     if len(names) != len(set(names)):
