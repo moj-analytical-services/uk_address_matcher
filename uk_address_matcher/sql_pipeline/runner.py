@@ -210,7 +210,7 @@ class DuckDBPipeline(CTEPipeline):
                 lines.append(f"    {rl}")
             if idx < len(self._stages):
                 lines.append("")
-        return "\n".join(lines)
+        return _emit_debug("\n".join(lines))
 
     def add_step(self, step: Stage) -> None:
         # run any preludes / registers
