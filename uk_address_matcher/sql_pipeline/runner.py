@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from uk_address_matcher.sql_pipeline.helpers import (
     _duckdb_table_exists,
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uk_address_matcher")
 
 StageFactory = Callable[[], Stage]
+StageLike = Union[Stage, StageFactory]
 
 
 class CTEPipeline:
@@ -158,12 +159,14 @@ class DuckDBPipeline(CTEPipeline):
         # Keep an ordered list of stages as they are added (excluding seed)
         self._stages: List[Stage] = []
 
-    def show_pipeline_plan(self) -> str:
+    def show_plan(self) -> str:
         """Return a human-friendly multi-line description of the pipeline.
 
         Format example:
-            My Pipeline
-            ==========
+            ┌──────────────────────────────┐
+            │ 🔧 Pipeline Plan (11 stages) │
+            │ My pipeline's name           │
+            └──────────────────────────────┘
 
             A description of the pipeline.
             -----------------------------
@@ -201,7 +204,6 @@ class DuckDBPipeline(CTEPipeline):
             lines.append("")
         if not self._stages:
             lines.append("(no stages added)")
-            return "\n".join(lines)
         for idx, stage in enumerate(self._stages, start=1):
             block = stage.format_plan_block()
             first_line, *rest = block.splitlines()
@@ -210,7 +212,9 @@ class DuckDBPipeline(CTEPipeline):
                 lines.append(f"    {rl}")
             if idx < len(self._stages):
                 lines.append("")
-        return _emit_debug("\n".join(lines))
+        plan_text = "\n".join(lines)
+        _emit_debug(plan_text)
+        return plan_text
 
     def add_step(self, step: Stage) -> None:
         # run any preludes / registers
@@ -309,8 +313,47 @@ class DuckDBPipeline(CTEPipeline):
             return self.con.table(work_items[-1][1])
         return None
 
-    def run_with_options(self, options: RunOptions):
-        """Preferred entry: run pipeline using the given RunOptions."""
+    def run(
+        self,
+        options: Optional[RunOptions] = None,
+        **legacy_kwargs,
+    ) -> duckdb.DuckDBPyRelation:
+        """Run the pipeline using the provided options (or defaults)."""
+
+        allowed_legacy_keys = {
+            "pretty_print_sql",
+            "debug_mode",
+            "debug_show_sql",
+            "debug_max_rows",
+            "debug_incremental",
+        }
+
+        if legacy_kwargs:
+            invalid = set(legacy_kwargs) - allowed_legacy_keys
+            if invalid:
+                raise TypeError(
+                    "Unsupported keyword arguments for DuckDBPipeline.run: "
+                    + ", ".join(sorted(invalid))
+                )
+            if options is not None:
+                raise TypeError(
+                    "Cannot provide both RunOptions instance and legacy keyword overrides."
+                )
+            base = self._default_run_options
+            overrides = {
+                key: legacy_kwargs.get(key, getattr(base, key))
+                for key in allowed_legacy_keys
+            }
+            options = replace(base, **overrides)
+
+        if options is None:
+            options = self._default_run_options
+        elif not isinstance(options, RunOptions):
+            raise TypeError(
+                "options must be a RunOptions instance when provided; "
+                f"got {type(options)!r}."
+            )
+
         # Incremental/materialising path
         if options.debug_incremental:
             return self.debug(
@@ -349,44 +392,45 @@ class DuckDBPipeline(CTEPipeline):
                 _emit_debug("\n===============================\n")
         return self.con.sql(final_sql)
 
-    def run(
-        self,
-        *,
-        pretty_print_sql: Optional[bool] = None,
-        debug_mode: Optional[bool] = None,
-        debug_show_sql: Optional[bool] = None,
-        debug_max_rows: Optional[int] = None,
-        debug_incremental: Optional[bool] = None,
-    ):
-        """
-        Backwards-compatible wrapper that builds RunOptions from args merged
-        with environment-derived defaults. Prefer run_with_options.
-        """
-        opts = RunOptions(
-            pretty_print_sql=(
-                pretty_print_sql
-                if pretty_print_sql is not None
-                else self._default_run_options.pretty_print_sql
-            ),
-            debug_mode=(
-                debug_mode
-                if debug_mode is not None
-                else self._default_run_options.debug_mode
-            ),
-            debug_show_sql=(
-                debug_show_sql
-                if debug_show_sql is not None
-                else self._default_run_options.debug_show_sql
-            ),
-            debug_max_rows=(
-                debug_max_rows
-                if debug_max_rows is not None
-                else self._default_run_options.debug_max_rows
-            ),
-            debug_incremental=(
-                debug_incremental
-                if debug_incremental is not None
-                else self._default_run_options.debug_incremental
-            ),
+
+def _ensure_stage(stage_like: StageLike) -> Stage:
+    """Normalise a stage reference into a concrete `Stage` instance."""
+    if isinstance(stage_like, Stage):
+        return stage_like
+
+    if callable(stage_like):
+        candidate = stage_like()
+        if isinstance(candidate, Stage):
+            return candidate
+        raise TypeError(
+            "Stage factory callable must return a `Stage` instance; "
+            f"got {type(candidate)!r}."
         )
-        return self.run_with_options(opts)
+
+    raise TypeError(
+        "Stages must be provided as `Stage` instances or zero-argument factories that "
+        "return a `Stage`."
+    )
+
+
+def create_sql_pipeline(
+    con: duckdb.DuckDBPyConnection,
+    input_rel: duckdb.DuckDBPyRelation,
+    stage_specs: Iterable[StageLike],
+    *,
+    pipeline_name: str | None = None,
+    pipeline_description: str | None = None,
+) -> DuckDBPipeline:
+    """Construct a `DuckDBPipeline` from the provided stage specifications."""
+
+    pipeline = DuckDBPipeline(
+        con,
+        input_rel,
+        name=pipeline_name,
+        description=pipeline_description or "",
+    )
+
+    for stage_like in stage_specs:
+        pipeline.add_step(_ensure_stage(stage_like))
+
+    return pipeline
