@@ -4,13 +4,13 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_flat_position_and_letter,
     _remove_duplicate_end_tokens,
 )
-from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline
+from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline, RunOptions
 
 
 def _run_single_stage(stage_factory, input_relation, connection):
     pipeline = DuckDBPipeline(connection, input_relation)
     pipeline.add_step(stage_factory())
-    return pipeline.run(pretty_print_sql=False)
+    return pipeline.run(RunOptions(pretty_print_sql=False))
 
 
 def test_parse_out_flat_positional():
@@ -75,12 +75,12 @@ def test_parse_out_flat_positional():
     rows = result.fetchall()
 
     for (address, expected_pos, expected_letter), row in zip(test_cases, rows):
-        assert (
-            row[-2] == expected_pos
-        ), f"Address '{address}' expected positional '{expected_pos}' but got '{row[-2]}'"
-        assert (
-            row[-1] == expected_letter
-        ), f"Address '{address}' expected letter '{expected_letter}' but got '{row[-1]}'"
+        assert row[-2] == expected_pos, (
+            f"Address '{address}' expected positional '{expected_pos}' but got '{row[-2]}'"
+        )
+        assert row[-1] == expected_letter, (
+            f"Address '{address}' expected letter '{expected_letter}' but got '{row[-1]}'"
+        )
 
 
 def test_remove_duplicate_end_tokens():
@@ -122,6 +122,6 @@ def test_remove_duplicate_end_tokens():
     rows = result.fetchall()
 
     for (address, expected), row in zip(test_cases, rows):
-        assert (
-            row[0] == expected
-        ), f"Address '{address}' expected '{expected}' but got '{row[0]}'"
+        assert row[0] == expected, (
+            f"Address '{address}' expected '{expected}' but got '{row[0]}'"
+        )
