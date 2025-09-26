@@ -96,6 +96,39 @@ class Stage:
     def __hash__(self) -> int:
         return hash((self.name, self.steps, self.output, self.checkpoint))
 
+    def format_plan_block(self, max_name: int = 60, dep_width: int = 60) -> str:
+        """Render a formatted multi-line summary block for this stage.
+
+        This is used by the pipeline plan view to present each queued SQL stage
+        in a human-friendly way.
+
+        For example, a `Stage` titled "tokenise_addresses" might render as:
+        tokenise_addresses [cleaning]
+        ↳ Split address into tokens
+        │ depends on: load_raw
+        │ (checkpoint)
+        """
+        meta = self.stage_metadata or StageMeta()
+        display_name = (
+            self.name
+            if len(self.name) <= max_name
+            else self.name[: max_name - 3] + "..."
+        )
+        lines: List[str] = []
+        group_part = f" [{meta.group}]" if meta.group else ""
+        lines.append(f"{display_name}{group_part}")
+        if meta.description:
+            lines.append(f"↳ {meta.description}")
+        # (input/output columns intentionally omitted for now)
+        if meta.depends_on:
+            deps = ", ".join(meta.depends_on)
+            if len(deps) > dep_width:
+                deps = deps[: dep_width - 3] + "..."
+            lines.append(f"│ depends on: {deps}")
+        if self.checkpoint:
+            lines.append("│ (checkpoint)")
+        return "\n".join(lines)
+
 
 SQLSpec = Union[str, Iterable[Tuple[str, str]], Iterable[CTEStep]]
 
