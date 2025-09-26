@@ -74,8 +74,21 @@ class CTEStep:
 @dataclass
 class StageMeta:
     description: Optional[str] = None
-    group: Optional[str] = None
+    tags: Optional[List[str]] = None
     depends_on: Optional[List[str]] = None
+
+    def __post_init__(self):
+        # Coerce tags/depends_on into lists of strings for consistency
+        if isinstance(self.tags, str):
+            self.tags = [self.tags]
+        elif self.tags is not None and not isinstance(self.tags, list):
+            # Accept tuples/sets or any iterable of strings
+            self.tags = list(self.tags)
+
+        if isinstance(self.depends_on, str):
+            self.depends_on = [self.depends_on]
+        elif self.depends_on is not None and not isinstance(self.depends_on, list):
+            self.depends_on = list(self.depends_on)
 
 
 @dataclass
@@ -115,8 +128,8 @@ class Stage:
             else self.name[: max_name - 3] + "..."
         )
         lines: List[str] = []
-        group_part = f" [{meta.group}]" if meta.group else ""
-        lines.append(f"{display_name}{group_part}")
+        tags_part = f" [{', '.join(meta.tags)}]" if meta.tags else ""
+        lines.append(f"{display_name}{tags_part}")
         if meta.description:
             lines.append(f"↳ {meta.description}")
         # (input/output columns intentionally omitted for now)
@@ -159,8 +172,8 @@ def pipeline_stage(
     *,
     name: Optional[str] = None,
     description: str = "",
-    group: Optional[str] = None,
-    depends_on: Optional[list[str]] = None,
+    tags: Optional[Union[str, Iterable[str]]] = None,
+    depends_on: Optional[Union[str, Iterable[str]]] = None,
     checkpoint: bool = False,
     stage_output: Optional[str] = None,
     stage_registers: Optional[dict] = None,
@@ -168,7 +181,17 @@ def pipeline_stage(
 ) -> Callable[[Callable[P, SQLSpec]], Callable[P, "Stage"]]:
     def deco(fn: Callable[P, SQLSpec]) -> Callable[P, "Stage"]:
         stage_name = name or fn.__name__
-        deps = tuple(depends_on or ())
+
+        # normalise depends_on/tags to lists of strings
+        def _norm_list(v: Optional[Union[str, Iterable[str]]]) -> Optional[List[str]]:
+            if v is None:
+                return None
+            if isinstance(v, str):
+                return [v]
+            return list(v)
+
+        deps_list = _norm_list(depends_on) or []
+        tags_list = _norm_list(tags)
 
         @wraps(fn)
         def factory(*args: P.args, **kwargs: P.kwargs) -> "Stage":
@@ -178,7 +201,9 @@ def pipeline_stage(
                 name=stage_name,
                 steps=steps,
                 stage_metadata=StageMeta(
-                    description=description, group=group, depends_on=deps
+                    description=description,
+                    tags=tags_list,
+                    depends_on=deps_list,
                 ),
                 output=stage_output,
                 registers=dict(stage_registers) if stage_registers else None,
