@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import importlib.resources as pkg_resources
 
-from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
-def _add_term_frequencies_to_address_tokens() -> Stage:
+@pipeline_stage(
+    name="add_term_frequencies_to_address_tokens",
+    description="Compute token-level relative frequencies and attach them to each record",
+    tags="term_frequency_analysis",
+)
+def _add_term_frequencies_to_address_tokens():
     """Compute token-level relative frequencies and attach them to each record."""
 
     base_sql = """
@@ -73,12 +78,15 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
         CTEStep("final", final_sql),
     ]
 
-    return Stage(
-        name="add_term_frequencies_to_address_tokens", steps=steps, output="final"
-    )
+    return steps
 
 
-def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
+@pipeline_stage(
+    name="add_term_frequencies_to_address_tokens_using_registered_df",
+    description="Attach precomputed token frequencies from registered DataFrame rel_tok_freq",
+    tags="term_frequency_analysis",
+)
+def _add_term_frequencies_to_address_tokens_using_registered_df():
     """Attach precomputed token frequencies registered as rel_tok_freq."""
 
     base_sql = """
@@ -133,14 +141,15 @@ def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
         CTEStep("final", final_sql),
     ]
 
-    return Stage(
-        name="add_term_frequencies_to_address_tokens_using_registered_df",
-        steps=steps,
-        output="final",
-    )
+    return steps
 
 
-def _move_common_end_tokens_to_field() -> Stage:
+@pipeline_stage(
+    name="move_common_end_tokens_to_field",
+    description="Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and remove from token frequency array",
+    tags="term_frequency_analysis",
+)
+def _move_common_end_tokens_to_field():
     """
     Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and
     remove them from the token frequency array so missing endings aren't over-penalised.
@@ -200,14 +209,15 @@ def _move_common_end_tokens_to_field() -> Stage:
         CTEStep("final", final_sql),
     ]
 
-    return Stage(
-        name="move_common_end_tokens_to_field",
-        steps=steps,
-        output="final",
-    )
+    return steps
 
 
-def _first_unusual_token() -> Stage:
+@pipeline_stage(
+    name="first_unusual_token",
+    description="Attach the first token below the frequency threshold (0.001) if present",
+    tags="term_frequency_analysis",
+)
+def _first_unusual_token():
     """Attach the first token below the frequency threshold (0.001) if present."""
 
     first_token_expr = (
@@ -220,11 +230,15 @@ def _first_unusual_token() -> Stage:
         *
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="first_unusual_token", steps=[step])
+    return sql
 
 
-def _use_first_unusual_token_if_no_numeric_token() -> Stage:
+@pipeline_stage(
+    name="use_first_unusual_token_if_no_numeric_token",
+    description="Fallback to the unusual token when numeric_token_1 is missing",
+    tags="term_frequency_analysis",
+)
+def _use_first_unusual_token_if_no_numeric_token():
     """Fallback to the unusual token when numeric_token_1 is missing."""
 
     sql = """
@@ -244,14 +258,15 @@ def _use_first_unusual_token_if_no_numeric_token() -> Stage:
         END AS token_rel_freq_arr
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(
-        name="use_first_unusual_token_if_no_numeric_token",
-        steps=[step],
-    )
+    return sql
 
 
-def _separate_unusual_tokens() -> Stage:
+@pipeline_stage(
+    name="separate_unusual_tokens",
+    description="Split token list into frequency bands for matching heuristics",
+    tags="term_frequency_analysis",
+)
+def _separate_unusual_tokens():
     """Split token list into frequency bands for matching heuristics."""
 
     sql = """
@@ -289,11 +304,15 @@ def _separate_unusual_tokens() -> Stage:
         ) AS extremely_unusual_tokens_arr
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="separate_unusual_tokens", steps=[step])
+    return sql
 
 
-def _generalised_token_aliases() -> Stage:
+@pipeline_stage(
+    name="generalised_token_aliases",
+    description="Apply token aliasing/normalisation over distinguishing tokens",
+    tags="token_transformation",
+)
+def _generalised_token_aliases():
     """Apply token aliasing/normalisation over distinguishing tokens."""
 
     GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
@@ -315,11 +334,15 @@ def _generalised_token_aliases() -> Stage:
         ) AS distinguishing_adj_token_aliases
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="generalised_token_aliases", steps=[step])
+    return sql
 
 
-def _final_column_order() -> Stage:
+@pipeline_stage(
+    name="final_column_order",
+    description="Reorder and aggregate columns to match the legacy final layout",
+    tags="data_preparation",
+)
+def _final_column_order():
     """Reorder and aggregate columns to match the legacy final layout."""
 
     sql = """
@@ -342,11 +365,15 @@ def _final_column_order() -> Stage:
         )
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="final_column_order", steps=[step])
+    return sql
 
 
-def get_token_frequeny_table() -> Stage:
+@pipeline_stage(
+    name="get_token_frequeny_table",
+    description="Build a token frequency table from numeric and non-numeric tokens",
+    tags="term_frequency_analysis",
+)
+def get_token_frequeny_table():
     """Build a token frequency table from numeric and non-numeric tokens."""
 
     sql = """
@@ -388,4 +415,4 @@ def get_token_frequeny_table() -> Stage:
         CTEStep("final", sql),
     ]
 
-    return Stage(name="get_token_frequeny_table", steps=steps, output="final")
+    return steps
