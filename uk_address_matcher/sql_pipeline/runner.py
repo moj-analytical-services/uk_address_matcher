@@ -153,8 +153,64 @@ class DuckDBPipeline(CTEPipeline):
         self._step_counter = 0
         # Defaults for run options (read from environment by default)
         self._default_run_options = RunOptions.from_env()
+        self.name = name or f"pipeline_{_uid()}"
+        self.description = description
+        # Keep an ordered list of stages as they are added (excluding seed)
+        self._stages: List[Stage] = []
 
-    def log_pipeline(self) -> None: ...
+    def show_pipeline_plan(self) -> str:
+        """Return a human-friendly multi-line description of the pipeline.
+
+        Format example:
+            My Pipeline
+            ==========
+
+            A description of the pipeline.
+            -----------------------------
+
+             1. stage_one [group]
+                ↳ <Description>
+                │ depends on: other_stage
+                | other metadata...
+        """
+        lines: List[str] = []
+
+        stage_count = len(self._stages)
+        title = (
+            f"🔧 Pipeline Plan ({stage_count} stage{'s' if stage_count != 1 else ''})"
+        )
+        name_line = self.name
+        # Construct the header box with proper padding
+        content_width = max(len(title), len(name_line))
+        top_bottom = "─" * (content_width + 3)  # +3 for side padding spaces
+        lines.append(f"┌{top_bottom}┐")
+        lines.append(f"│ {title.ljust(content_width)} │")
+        # Only show pipeline name line if distinct from title wording
+        if name_line and name_line != title:
+            lines.append(f"│ {name_line.ljust(content_width + 1)} │")
+        lines.append(f"└{top_bottom}┘")
+        lines.append("")
+
+        # Show description only if it exists and isn't just the name repeated
+        if (
+            self.description
+            and self.description.strip().lower() != self.name.strip().lower()
+        ):
+            lines.append(self.description)
+            lines.append("-" * len(self.description))
+            lines.append("")
+        if not self._stages:
+            lines.append("(no stages added)")
+            return "\n".join(lines)
+        for idx, stage in enumerate(self._stages, start=1):
+            block = stage.format_plan_block()
+            first_line, *rest = block.splitlines()
+            lines.append(f"{idx:2d}. {first_line}")
+            for rl in rest:
+                lines.append(f"    {rl}")
+            if idx < len(self._stages):
+                lines.append("")
+        return "\n".join(lines)
 
     def add_step(self, step: Stage) -> None:
         # run any preludes / registers
@@ -175,6 +231,8 @@ class DuckDBPipeline(CTEPipeline):
 
         if step.checkpoint:
             self._materialise_checkpoint()
+        # Record the stage for plan display
+        self._stages.append(step)
 
     def _materialise_checkpoint(self) -> None:
         # Compose without marking spent
