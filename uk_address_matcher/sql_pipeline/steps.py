@@ -109,17 +109,28 @@ class Stage:
     def __hash__(self) -> int:
         return hash((self.name, self.steps, self.output, self.checkpoint))
 
+    def _format_cte_steps(self) -> List[str]:
+        """Return formatted plan lines detailing the queued CTE fragments."""
+
+        if len(self.steps) <= 1:
+            return []
+
+        return [step.name for step in self.steps]
+
     def format_plan_block(self, max_name: int = 60, dep_width: int = 60) -> str:
         """Render a formatted multi-line summary block for this stage.
 
         This is used by the pipeline plan view to present each queued SQL stage
         in a human-friendly way.
 
-        For example, a `Stage` titled "tokenise_addresses" might render as:
-        tokenise_addresses [cleaning]
-        ↳ Split address into tokens
-        │ depends on: load_raw
-        │ (checkpoint)
+        For example, a `Stage` titled "build_trie" might render as:
+        1. build_trie [trie]
+            ↳ Test building a trie
+            ├─ depends on:
+            │  • test1
+            └─ CTEs:
+                • distinct_postcodes_fuzzy
+                • filtered_canonical
         """
         meta = self.stage_metadata or StageMeta()
         display_name = (
@@ -130,16 +141,36 @@ class Stage:
         lines: List[str] = []
         tags_part = f" [{', '.join(meta.tags)}]" if meta.tags else ""
         lines.append(f"{display_name}{tags_part}")
+
+        entries: List[Tuple[str, List[str]]] = []
         if meta.description:
             lines.append(f"↳ {meta.description}")
-        # (input/output columns intentionally omitted for now)
+
         if meta.depends_on:
-            deps = ", ".join(meta.depends_on)
-            if len(deps) > dep_width:
-                deps = deps[: dep_width - 3] + "..."
-            lines.append(f"│ depends on: {deps}")
+            deps_list = []
+            for dep in meta.depends_on:
+                deps_list.append(
+                    dep if len(dep) <= dep_width else dep[: dep_width - 3] + "..."
+                )
+            entries.append(("depends on", deps_list))
+
+        step_summaries = self._format_cte_steps()
+        if step_summaries:
+            entries.append(("CTEs", step_summaries))
+
         if self.checkpoint:
-            lines.append("│ (checkpoint)")
+            entries.append(("checkpoint", ["enabled"]))
+
+        for idx, (label, values) in enumerate(entries):
+            is_last = idx == len(entries) - 1
+            branch = "└─" if is_last else "├─"
+            if values:
+                lines.append(f"{branch} {label}:")
+                continuation = "   " if is_last else "│  "
+                for item in values:
+                    lines.append(f"{continuation}• {item}")
+            else:
+                lines.append(f"{branch} {label}")
         return "\n".join(lines)
 
 
@@ -158,9 +189,29 @@ def _normalise_sql_step(spec: SQLSpec) -> List[CTEStep]:
         and all(isinstance(x, str) for x in spec)
     ):
         return [CTEStep(spec[0], spec[1])]
+
+    if spec is None:
+        raise TypeError("Stage callable returned None; expected SQL specification.")
+
     out: List[CTEStep] = []
-    for i, item in enumerate(spec or []):
-        out.append(item if isinstance(item, CTEStep) else CTEStep(item[0], item[1]))
+    for i, item in enumerate(spec):
+        if isinstance(item, CTEStep):
+            out.append(item)
+        elif (
+            isinstance(item, tuple)
+            and len(item) == 2
+            and all(isinstance(x, str) for x in item)
+        ):
+            out.append(CTEStep(item[0], item[1]))
+        else:
+            raise TypeError(
+                "Stage return iterable items must be CTEStep or (name, sql) tuple; "
+                f"got {item!r} at index {i}"
+            )
+
+    if not out:
+        raise ValueError("Stage returned an empty iterable of steps")
+
     # basic duplicate check
     names = [s.name for s in out]
     if len(names) != len(set(names)):
