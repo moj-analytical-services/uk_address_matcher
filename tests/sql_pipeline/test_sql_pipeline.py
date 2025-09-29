@@ -1,4 +1,3 @@
-import duckdb
 import pytest
 
 from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline
@@ -6,13 +5,6 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 # ---------- Helpers ----------
-@pytest.fixture
-def duck_con():
-    con = duckdb.connect(database=":memory:")
-    yield con
-    con.close()
-
-
 @pytest.fixture
 def base_rel(duck_con):
     duck_con.execute("CREATE TABLE base (id INTEGER, val INTEGER)")

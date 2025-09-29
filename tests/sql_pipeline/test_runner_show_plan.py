@@ -31,10 +31,9 @@ def _capture_plan_output(pipeline, monkeypatch):
 
     monkeypatch.setattr("uk_address_matcher.sql_pipeline.runner._emit_debug", fake_emit)
 
-    result = pipeline.show_plan()
+    pipeline.show_plan()
     assert captured, "show_plan should emit formatted output"
-    assert result == captured[0]
-    return result
+    return captured[0]
 
 
 def test_show_plan_renders_stage_metadata(monkeypatch):
@@ -70,8 +69,8 @@ def test_show_plan_renders_stage_metadata(monkeypatch):
     assert "stage_one [alpha]" in output
     assert "↳ First stage" in output
     assert "stage_two [beta, gamma]" in output
-    assert "depends on: stage_one" in output
-    assert "(checkpoint)" in output
+    assert "depends on:" in output and "• stage_one" in output
+    assert "checkpoint" in output
 
 
 def test_show_plan_handles_empty_pipeline(monkeypatch):
