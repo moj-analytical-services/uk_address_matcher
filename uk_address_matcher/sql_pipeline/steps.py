@@ -109,6 +109,17 @@ class Stage:
     def __hash__(self) -> int:
         return hash((self.name, self.steps, self.output, self.checkpoint))
 
+    def _format_cte_steps(self) -> List[str]:
+        """Return formatted plan lines detailing the queued CTE fragments."""
+
+        if len(self.steps) <= 1:
+            return []
+
+        lines = ["│ CTE Steps:"]
+        for step in self.steps:
+            lines.append(f"│  • {step.name}")
+        return lines
+
     def format_plan_block(self, max_name: int = 60, dep_width: int = 60) -> str:
         """Render a formatted multi-line summary block for this stage.
 
@@ -138,6 +149,9 @@ class Stage:
             if len(deps) > dep_width:
                 deps = deps[: dep_width - 3] + "..."
             lines.append(f"│ depends on: {deps}")
+        step_summaries = self._format_cte_steps()
+        if step_summaries:
+            lines.extend(step_summaries)
         if self.checkpoint:
             lines.append("│ (checkpoint)")
         return "\n".join(lines)

@@ -3,7 +3,21 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from types import MappingProxyType
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+
+import duckdb
 
 from uk_address_matcher.sql_pipeline.helpers import (
     _duckdb_table_exists,
@@ -14,14 +28,54 @@ from uk_address_matcher.sql_pipeline.helpers import (
 )
 from uk_address_matcher.sql_pipeline.steps import Stage
 
-if TYPE_CHECKING:
-    import duckdb
-
-
 logger = logging.getLogger("uk_address_matcher")
 
 StageFactory = Callable[[], Stage]
 StageLike = Union[Stage, StageFactory]
+
+
+class InputBinding(NamedTuple):
+    placeholder: str
+    relation: duckdb.DuckDBPyRelation
+
+    def normalised_placeholder(self) -> str:
+        name = _slug(self.placeholder)
+        if not name:
+            raise ValueError(
+                "InputBinding placeholder must be a non-empty, slug-compatible string"
+            )
+        if name[0].isdigit():
+            name = f"t_{name}"
+        return name
+
+    def register(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        registered_aliases: set[str],
+    ) -> str:
+        alias_candidate = getattr(self.relation, "alias", None) or self.placeholder
+        alias_candidate = _slug(alias_candidate) or self.normalised_placeholder()
+        if alias_candidate[0].isdigit():
+            alias_candidate = f"t_{alias_candidate}"
+
+        alias = alias_candidate
+        while alias in registered_aliases:
+            alias = f"{alias_candidate}_{_uid(4)}"
+
+        if not _duckdb_table_exists(con, alias):
+            con.register(alias, self.relation)
+
+        registered_aliases.add(alias)
+        return alias
+
+    def __str__(self) -> str:
+        # TODO(ThomasHepworth): improve representation at some point
+        return (
+            f"InputBinding(placeholder={self.placeholder!r},\n"
+            f"  relation=\n{self.relation.limit(5)})"
+        )
+
+    __repr__ = __str__
 
 
 class CTEPipeline:
@@ -65,21 +119,24 @@ class CTEPipeline:
 
 
 def render_step_to_ctes(
-    step: Stage, step_idx: int, prev_alias: str
+    step: Stage,
+    step_idx: int,
+    prev_alias: str,
+    alias_map: Dict[str, str],
 ) -> Tuple[List[Tuple[str, str]], str]:
     """Instantiate templated fragments into concrete, namespaced CTEs."""
+
     ctes: List[Tuple[str, str]] = []
     frag_aliases: Dict[str, str] = {}
-    mapping = {"input": prev_alias}
+    base_mapping = {"input": prev_alias, **alias_map}
 
     for frag in step.steps:
         alias = f"s{step_idx}_{_slug(step.name)}__{_slug(frag.name)}"
+        replacements = {**base_mapping, **frag_aliases}
 
-        # apply placeholders
-        sql = frag.sql.replace("{input}", mapping["input"])
-        # then any prior fragment references
-        for k, v in frag_aliases.items():
-            sql = sql.replace(f"{{{k}}}", v)
+        sql = frag.sql
+        for key, target in replacements.items():
+            sql = sql.replace(f"{{{key}}}", target)
 
         ctes.append((sql, alias))
         frag_aliases[frag.name] = alias
@@ -137,17 +194,28 @@ class DuckDBPipeline(CTEPipeline):
     def __init__(
         self,
         con: duckdb.DuckDBPyConnection,
-        input_rel: duckdb.DuckDBPyRelation,
+        input_rel: Union[
+            duckdb.DuckDBPyRelation,
+            Sequence[InputBinding],
+        ],
         *,
         name: Optional[str] = None,
         description: str = "",
     ):
         super().__init__()
         self.con = con
-        self._src_name = input_rel.alias or f"src_{_uid()}"
-        if not _duckdb_table_exists(self.con, self._src_name):
-            self.con.register(self._src_name, input_rel)
 
+        bindings = self._normalise_inputs(input_rel)
+        if not bindings:
+            raise ValueError("input_rel must contain at least one DuckDB relation.")
+
+        self._registered_relation_aliases: set[str] = set()
+        self._input_alias_map: Dict[str, str] = {}
+        self._input_alias_map_view: Mapping[str, str]
+
+        self._bootstrap_inputs(bindings)
+
+        self._src_name = self._root_alias
         seed = f"seed_{_uid()}"
         self.enqueue_sql(f"SELECT * FROM {self._src_name}", seed)
         self._current_output_alias = seed
@@ -159,7 +227,84 @@ class DuckDBPipeline(CTEPipeline):
         # Keep an ordered list of stages as they are added (excluding seed)
         self._stages: List[Stage] = []
 
-    def show_plan(self) -> str:
+    def _normalise_inputs(
+        self,
+        input_rel: Union[
+            duckdb.DuckDBPyRelation,
+            Sequence[InputBinding],
+        ],
+    ) -> List[InputBinding]:
+        if isinstance(input_rel, duckdb.DuckDBPyRelation):
+            return [InputBinding("root", input_rel)]
+        if isinstance(input_rel, Sequence) and not isinstance(input_rel, (str, bytes)):
+            if not input_rel:
+                raise ValueError("input_rel sequence must not be empty.")
+            bindings: List[InputBinding] = []
+            for idx, item in enumerate(input_rel):
+                if not isinstance(item, InputBinding):
+                    raise TypeError(
+                        "Sequences of inputs must contain InputBinding instances; "
+                        f"got {type(item)!r} at index {idx}."
+                    )
+                bindings.append(item)
+            if len(bindings) == 1:
+                if not bindings[0].placeholder:
+                    raise ValueError(
+                        "Single InputBinding must define a placeholder or provide a standalone relation."
+                    )
+                return bindings
+
+            for binding in bindings:
+                if not binding.placeholder:
+                    raise ValueError(
+                        "All InputBinding entries must have an explicit placeholder when providing multiple inputs."
+                    )
+            return bindings
+        else:
+            raise TypeError(
+                "input_rel must be a DuckDBPyRelation or a sequence of InputBinding entries."
+            )
+
+    def _bootstrap_inputs(self, bindings: Sequence[InputBinding]) -> None:
+        alias_map: Dict[str, str] = {}
+        seen_placeholders: set[str] = set()
+
+        for binding in bindings:
+            key = binding.normalised_placeholder()
+            if key == "input":
+                raise ValueError(
+                    "The placeholder name 'input' is reserved; please choose a different alias."
+                )
+            if key in seen_placeholders:
+                raise ValueError(f"Duplicate input placeholder detected: {key}")
+            seen_placeholders.add(key)
+
+            alias = binding.register(self.con, self._registered_relation_aliases)
+            alias_map[key] = alias
+
+        first_key = next(iter(alias_map))
+        root_alias = alias_map[first_key]
+
+        alias_map.setdefault("root", root_alias)
+
+        self._input_bindings: Tuple[InputBinding, ...] = tuple(bindings)
+        self._input_alias_map = alias_map
+        self._root_alias = root_alias
+        self._input_alias_map_view = MappingProxyType(self._input_alias_map)
+
+    @property
+    def input_alias_map(self) -> Mapping[str, str]:
+        return self._input_alias_map_view
+
+    @property
+    def root_alias(self) -> str:
+        return self._root_alias
+
+    @property
+    def input_bindings(self) -> Tuple[InputBinding, ...]:
+        return self._input_bindings
+
+    def show_plan(self) -> None:
         """Return a human-friendly multi-line description of the pipeline.
 
         Format example:
@@ -214,7 +359,6 @@ class DuckDBPipeline(CTEPipeline):
                 lines.append("")
         plan_text = "\n".join(lines)
         _emit_debug(plan_text)
-        return plan_text
 
     def add_step(self, step: Stage) -> None:
         # run any preludes / registers
@@ -227,7 +371,12 @@ class DuckDBPipeline(CTEPipeline):
 
         prev_alias = self.output_table_name
         step_idx = self._step_counter
-        ctes, out_alias = render_step_to_ctes(step, step_idx, prev_alias)
+        ctes, out_alias = render_step_to_ctes(
+            step,
+            step_idx,
+            prev_alias,
+            self._input_alias_map,
+        )
         for sql, alias in ctes:
             self.enqueue_sql(sql, alias)
         self._current_output_alias = out_alias
@@ -415,13 +564,26 @@ def _ensure_stage(stage_like: StageLike) -> Stage:
 
 def create_sql_pipeline(
     con: duckdb.DuckDBPyConnection,
-    input_rel: duckdb.DuckDBPyRelation,
+    input_rel: Union[duckdb.DuckDBPyRelation, Sequence[InputBinding]],
     stage_specs: Iterable[StageLike],
     *,
     pipeline_name: str | None = None,
     pipeline_description: str | None = None,
 ) -> DuckDBPipeline:
-    """Construct a `DuckDBPipeline` from the provided stage specifications."""
+    """Construct a `DuckDBPipeline` from the provided stage specifications.
+
+    Parameters
+    ----------
+    con:
+        Active DuckDB connection used for executing SQL.
+    input_rel:
+        Either a single `DuckDBPyRelation` (for simple pipelines) or a sequence
+        of `InputBinding` objects when multiple named inputs are required.
+    stage_specs:
+        Iterable of stages or stage factories to add to the pipeline in order.
+    pipeline_name / pipeline_description:
+        Optional metadata used when rendering plans or debug output.
+    """
 
     pipeline = DuckDBPipeline(
         con,
