@@ -9,13 +9,6 @@ from uk_address_matcher.sql_pipeline.runner import (
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
-@pytest.fixture
-def duck_con():
-    con = duckdb.connect(database=":memory:")
-    yield con
-    con.close()
-
-
 @pipeline_stage()
 def join_lookup_stage():
     return """
