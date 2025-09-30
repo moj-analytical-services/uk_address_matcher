@@ -226,6 +226,20 @@ class DuckDBPipeline(CTEPipeline):
         self.description = description
         # Keep an ordered list of stages as they are added (excluding seed)
         self._stages: List[Stage] = []
+        # Track stage signatures to guard against duplicates
+        self._stage_signatures: set[tuple] = set()
+
+    @staticmethod
+    def _stage_signature(stage: Stage) -> tuple:
+        """Generate a hashable signature representing the stage's logical contents."""
+
+        step_fingerprints = tuple((step.name, step.sql) for step in stage.steps)
+        return (
+            stage.name,
+            step_fingerprints,
+            stage.output,
+            stage.checkpoint,
+        )
 
     def _normalise_inputs(
         self,
@@ -361,6 +375,12 @@ class DuckDBPipeline(CTEPipeline):
         _emit_debug(plan_text)
 
     def add_step(self, step: Stage) -> None:
+        signature = self._stage_signature(step)
+        if signature in self._stage_signatures:
+            raise ValueError(
+                "Duplicate stage detected: "
+                f"stage '{step.name}' has already been added to pipeline '{self.name}'."
+            )
         # run any preludes / registers
         if step.registers:
             for k, rel in step.registers.items():
@@ -386,6 +406,7 @@ class DuckDBPipeline(CTEPipeline):
             self._materialise_checkpoint()
         # Record the stage for plan display
         self._stages.append(step)
+        self._stage_signatures.add(signature)
 
     def _materialise_checkpoint(self) -> None:
         # Compose without marking spent
