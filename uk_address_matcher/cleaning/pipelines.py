@@ -17,7 +17,6 @@ from uk_address_matcher.cleaning.steps import (
     _move_common_end_tokens_to_field,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
-    _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
     _split_numeric_tokens_to_cols,
@@ -26,20 +25,23 @@ from uk_address_matcher.cleaning.steps import (
     _upper_case_address_and_postcode,
     _use_first_unusual_token_if_no_numeric_token,
 )
+from uk_address_matcher.cleaning.steps.tokenisation import (
+    _create_tokenised_address_concat,
+)
 from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import RunOptions, create_sql_pipeline
 
 QUEUE_PRE_TF = [
     _trim_whitespace_address_and_postcode,
-    _canonicalise_postcode,
     _upper_case_address_and_postcode,
+    _canonicalise_postcode,
     _clean_address_string_first_pass,
-    _remove_duplicate_end_tokens,
     _derive_original_address_concat,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _clean_address_string_second_pass,
     _split_numeric_tokens_to_cols,
+    _create_tokenised_address_concat,
     _tokenise_address_without_numbers,
 ]
 
@@ -73,6 +75,23 @@ def _materialise_output_table(
         """
     )
     return con.table(materialised_name)
+
+
+def clean_data_with_minimal_steps(
+    address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    *,
+    run_options: Optional[RunOptions] = None,
+) -> DuckDBPyRelation:
+    pipeline = create_sql_pipeline(
+        con,
+        address_table,
+        QUEUE_PRE_TF,
+        pipeline_name="Clean data with minimal steps",
+        pipeline_description="A minimal cleaning pipeline without term frequencies",
+    )
+    table_rel = pipeline.run(run_options)
+    return _materialise_output_table(con, table_rel, _uid())
 
 
 def clean_data_on_the_fly(
