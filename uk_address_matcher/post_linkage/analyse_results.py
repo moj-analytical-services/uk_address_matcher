@@ -1,5 +1,52 @@
-from duckdb import DuckDBPyConnection, DuckDBPyRelation
 import warnings
+from typing import Literal
+
+from duckdb import DuckDBPyConnection, DuckDBPyRelation
+
+
+def calculate_exact_match_metrics(
+    exact_match_results: DuckDBPyRelation,
+    *,
+    order: Literal["descending", "ascending"] = "descending",
+) -> DuckDBPyRelation:
+    """Summarise deterministic match counts grouped by ``match_method``.
+
+    Args:
+        exact_match_results: Relation produced by the deterministic match pass
+            containing a ``match_method`` column.
+        order: Sort direction for the returned ``match_count`` column. Defaults
+            to "descending".
+
+    Returns:
+        DuckDBPyRelation with ``match_method``, ``match_count``, and
+        ``match_percentage`` columns sorted per ``order``.
+    """
+
+    if order not in {"ascending", "descending"}:
+        raise ValueError("order must be either 'ascending' or 'descending'.")
+
+    if "match_method" not in exact_match_results.columns:
+        raise ValueError(
+            "Expected column 'match_method' to be present in relation; "
+            f"available columns are {exact_match_results.columns}."
+        )
+
+    aggregation_query = """
+        match_method,
+        COUNT(*) AS match_count,
+        printf('%.2f%%', 100*match_count/sum(match_count) over()) as match_percentage
+    """
+
+    order_keyword = "DESC" if order == "descending" else "ASC"
+
+    return (
+        exact_match_results.filter("match_method IS NOT NULL")
+        .aggregate(
+            aggregation_query,
+            group_expr="match_method",
+        )
+        .order(f"match_count {order_keyword}, match_method")
+    )
 
 
 def best_matches_with_distinguishability(
