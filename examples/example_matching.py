@@ -1,17 +1,20 @@
+import os
+import time
+
 import duckdb
 import pandas as pd
-import os
 from IPython.display import display
 
-from uk_address_matcher.post_linkage.analyse_results import (
+from uk_address_matcher import (
     best_matches_summary,
     best_matches_with_distinguishability,
-)
-from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
+    calculate_exact_match_metrics,
+    clean_data_using_precomputed_rel_tok_freq,
+    get_linker,
     improve_predictions_using_distinguishing_tokens,
+    run_deterministic_match_pass,
 )
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq, get_linker
-import time
+from uk_address_matcher.sql_pipeline.runner import RunOptions
 
 pd.options.display.max_colwidth = 1000
 
@@ -37,7 +40,16 @@ pd.options.display.max_colwidth = 1000
 p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
 p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
 
-con = duckdb.connect(database=":memory:")
+con = duckdb.connect(
+    database=":memory:",
+    config={
+        "allow_unsigned_extensions": "true",
+        "allow_community_extensions": "true",
+    },
+)
+
+con.execute("FORCE INSTALL splink_udfs FROM community;")
+con.execute("LOAD splink_udfs;")
 
 df_ch = con.read_parquet(p_ch).order("postcode")
 df_fhrs = con.read_parquet(p_fhrs).order("postcode")
@@ -50,9 +62,26 @@ if os.getenv("TEST_LIMIT"):
 # -----------------------------------------------------------------------------
 # Step 2: Clean the data/feature engineering to prepare for matching model
 # -----------------------------------------------------------------------------
+run_options = RunOptions(
+    pretty_print_sql=True, debug_mode=True, debug_show_sql=True, debug_incremental=True
+)
 
 df_ch_clean = clean_data_using_precomputed_rel_tok_freq(df_ch, con=con)
 df_fhrs_clean = clean_data_using_precomputed_rel_tok_freq(df_fhrs, con=con)
+
+# -----------------------------------------------------------------------------
+# Step 2.5: Run exact matching to reduce the number of records to consider
+# -----------------------------------------------------------------------------
+
+exact_match_results = run_deterministic_match_pass(
+    con=con,
+    df_addresses_to_match=df_fhrs_clean,
+    df_addresses_to_search_within=df_ch_clean,
+)
+
+exact_match_summary = calculate_exact_match_metrics(exact_match_results)
+print("\nExact match results summary:")
+print(exact_match_summary)
 
 # -----------------------------------------------------------------------------
 # Step 3: First pass - Link the data using Splink
