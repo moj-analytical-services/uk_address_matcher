@@ -4,7 +4,7 @@ from typing import Literal
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 
-def calculate_exact_match_metrics(
+def calculate_match_metrics(
     exact_match_results: DuckDBPyRelation,
     *,
     order: Literal["descending", "ascending"] = "descending",

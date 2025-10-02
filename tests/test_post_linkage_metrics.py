@@ -2,7 +2,7 @@ import duckdb
 import pytest
 
 from uk_address_matcher.post_linkage.analyse_results import (
-    calculate_exact_match_metrics,
+    calculate_match_metrics,
 )
 
 
@@ -19,7 +19,7 @@ def test_calculate_exact_match_metrics_basic_counts():
         """
     )
 
-    result_df = calculate_exact_match_metrics(relation).df()
+    result_df = calculate_match_metrics(relation).df()
 
     assert set(result_df.columns) == {
         "match_method",
@@ -31,8 +31,8 @@ def test_calculate_exact_match_metrics_basic_counts():
     assert counts == {"method_b": 2, "method_a": 1}
 
     percentages = dict(zip(result_df["match_method"], result_df["match_percentage"]))
-    assert pytest.approx(percentages["method_b"], rel=1e-6) == 66.67
-    assert pytest.approx(percentages["method_a"], rel=1e-6) == 33.33
+    assert pytest.approx(percentages["method_b"], rel=1e-6) == "66.67%"
+    assert pytest.approx(percentages["method_a"], rel=1e-6) == "33.33%"
 
 
 def test_calculate_exact_match_metrics_drops_null_methods():
@@ -47,7 +47,7 @@ def test_calculate_exact_match_metrics_drops_null_methods():
         """
     )
 
-    result_df = calculate_exact_match_metrics(relation).df()
+    result_df = calculate_match_metrics(relation).df()
 
     assert result_df["match_method"].isnull().sum() == 0
     assert dict(zip(result_df["match_method"], result_df["match_count"])) == {
@@ -68,7 +68,7 @@ def test_calculate_exact_match_metrics_supports_ascending_order():
         """
     )
 
-    result_df = calculate_exact_match_metrics(relation, order="ascending").df()
+    result_df = calculate_match_metrics(relation, order="ascending").df()
 
     assert list(result_df["match_method"]) == ["method_a", "method_b"]
 
@@ -78,4 +78,4 @@ def test_calculate_exact_match_metrics_requires_column():
     relation = con.sql("SELECT 1 AS different_column")
 
     with pytest.raises(ValueError):
-        calculate_exact_match_metrics(relation)
+        calculate_match_metrics(relation)

@@ -8,7 +8,7 @@ from IPython.display import display
 from uk_address_matcher import (
     best_matches_summary,
     best_matches_with_distinguishability,
-    calculate_exact_match_metrics,
+    calculate_match_metrics,
     clean_data_using_precomputed_rel_tok_freq,
     get_linker,
     improve_predictions_using_distinguishing_tokens,
@@ -40,16 +40,9 @@ pd.options.display.max_colwidth = 1000
 p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
 p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
 
-con = duckdb.connect(
-    database=":memory:",
-    config={
-        "allow_unsigned_extensions": "true",
-        "allow_community_extensions": "true",
-    },
-)
+con = duckdb.connect(database=":memory:")
 
-con.execute("FORCE INSTALL splink_udfs FROM community;")
-con.execute("LOAD splink_udfs;")
+con.execute("INSTALL splink_udfs FROM community; LOAD splink_udfs;")
 
 df_ch = con.read_parquet(p_ch).order("postcode")
 df_fhrs = con.read_parquet(p_fhrs).order("postcode")
@@ -79,7 +72,7 @@ exact_match_results = run_deterministic_match_pass(
     df_addresses_to_search_within=df_ch_clean,
 )
 
-exact_match_summary = calculate_exact_match_metrics(exact_match_results)
+exact_match_summary = calculate_match_metrics(exact_match_results)
 print("\nExact match results summary:")
 print(exact_match_summary)
 
