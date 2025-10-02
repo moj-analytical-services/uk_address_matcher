@@ -15,7 +15,7 @@ from uk_address_matcher.post_linkage.accuracy_from_labels import (
 from uk_address_matcher.post_linkage.analyse_results import (
     best_matches_summary,
     best_matches_with_distinguishability,
-    calculate_exact_match_metrics,
+    calculate_match_metrics,
 )
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
@@ -27,7 +27,7 @@ __all__ = [
     "clean_data_using_precomputed_rel_tok_freq",
     "get_numeric_term_frequencies_from_address_table",
     "get_address_token_frequencies_from_address_table",
-    "calculate_exact_match_metrics",
+    "calculate_match_metrics",
     "run_deterministic_match_pass",
     "improve_predictions_using_distinguishing_tokens",
     "best_matches_with_distinguishability",
