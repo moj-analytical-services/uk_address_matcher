@@ -233,13 +233,7 @@ class DuckDBPipeline(CTEPipeline):
     def _stage_signature(stage: Stage) -> tuple:
         """Generate a hashable signature representing the stage's logical contents."""
 
-        step_fingerprints = tuple((step.name, step.sql) for step in stage.steps)
-        return (
-            stage.name,
-            step_fingerprints,
-            stage.output,
-            stage.checkpoint,
-        )
+        return stage.fingerprint
 
     def _normalise_inputs(
         self,
