@@ -4,13 +4,13 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_flat_position_and_letter,
     _remove_duplicate_end_tokens,
 )
-from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline, RunOptions
+from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
 
 def _run_single_stage(stage_factory, input_relation, connection):
     pipeline = DuckDBPipeline(connection, input_relation)
     pipeline.add_step(stage_factory())
-    return pipeline.run(RunOptions(pretty_print_sql=False))
+    return pipeline.run(DebugOptions(pretty_print_sql=False))
 
 
 def test_parse_out_flat_positional():
