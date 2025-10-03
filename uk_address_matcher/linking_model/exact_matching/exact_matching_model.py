@@ -1,9 +1,5 @@
-from typing import TYPE_CHECKING
-
+from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
-
-if TYPE_CHECKING:
-    pass
 
 
 @pipeline_stage(
@@ -13,111 +9,139 @@ if TYPE_CHECKING:
         "original_address_concat + postcode"
     ),
     tags=["phase_1", "exact_matching"],
+    # Overwrite the input to be the annotated output
+    stage_output="fuzzy_addresses",
 )
 def _annotate_exact_matches() -> list[CTEStep]:
-    annotated_sql = """
+    # TODO(ThomasHepworth): Review whether we want to deduplicate canonical addresses here
+    # (we probably do, to avoid multiple matches to the same fuzzy address)
+
+    # Input tables should be named: `fuzzy_addresses` and `canonical_addresses`
+
+    exact_value = MatchReason.EXACT.value
+    enum_values = str(MatchReason.enum_values())
+    unique_canonical_addresses_sql = """
         SELECT
-            f.*,
-            c.unique_id AS exact_match_canonical_id,
-            TRY_CAST(c.unique_id AS BIGINT) AS exact_match_canonical_id_bigint,
-            (c.unique_id IS NOT NULL) AS exact_match,
-            CASE
-                WHEN c.unique_id IS NOT NULL THEN 'exact'
-                ELSE 'unmatched'
-            END AS match_method,
-            (c.unique_id IS NOT NULL) AS has_match
-        FROM {input} AS f
-        LEFT JOIN {canonical_addresses} AS c
-          ON f.original_address_concat = c.original_address_concat
-         AND f.postcode = c.postcode
+            canon.original_address_concat,
+            canon.postcode,
+            canon.unique_id
+        FROM {canonical_addresses} AS canon
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY canon.original_address_concat, canon.postcode
+            ORDER BY canon.unique_id
+        ) = 1
     """
-    return annotated_sql
+    annotated_sql = f"""
+        SELECT
+            fuzzy.unique_id AS unique_id,
+            canon.unique_id AS resolved_canonical_id,
+            fuzzy.* EXCLUDE (match_reason, unique_id, resolved_canonical_id),
+            CASE
+                WHEN canon.unique_id IS NOT NULL THEN '{exact_value}'::ENUM {enum_values}
+                ELSE fuzzy.match_reason
+            END AS match_reason
+        FROM {{fuzzy_addresses}} AS fuzzy
+        LEFT JOIN {{canonical_exact_matches}} AS canon
+          ON fuzzy.original_address_concat = canon.original_address_concat
+         AND fuzzy.postcode = canon.postcode
+    """
+    return [
+        CTEStep("canonical_exact_matches", unique_canonical_addresses_sql),
+        CTEStep("annotated_exact_matches", annotated_sql),
+    ]
 
 
+@pipeline_stage(
+    name="filter_unmatched_matches",
+    description="Filter records that haven't been matched yet",
+    tags=["phase_1", "exact_matching"],
+    stage_output="unmatched_records",
+)
+def _filter_unmatched_exact_matches() -> list[CTEStep]:
+    unmatched_value = MatchReason.UNMATCHED.value
+    return f"""
+        SELECT
+            f.*
+        FROM {{input}} AS f
+        WHERE f.match_reason = '{unmatched_value}'
+    """
+
+
+# Depends on filter_unmatched_matches, which creates the 'unmatched_records' CTE
 @pipeline_stage(
     name="resolve_with_trie",
     description="Build tries for unmatched canonical addresses and resolve remaining fuzzy rows",
     tags=["phase_1", "trie", "exact_matching"],
-    depends_on="annotate_exact_matches",
+    # Recommended to be run after `annotate_exact_matches`
+    depends_on=["filter_unmatched_matches"],
 )
 def _resolve_with_trie() -> list[CTEStep]:
-    unmatched_fuzzy_sql = """
-        SELECT
-            f.*
-        FROM {input} AS f
-        WHERE NOT f.exact_match
-    """
-
-    matched_canonical_ids_sql = """
-        SELECT DISTINCT exact_match_canonical_id AS canonical_unique_id
-        FROM {input}
-        WHERE exact_match_canonical_id IS NOT NULL
-    """
-
     filtered_canonical_sql = """
         SELECT
-            TRY_CAST(c.unique_id AS BIGINT) AS canonical_unique_id_bigint,
             c.unique_id AS canonical_unique_id,
             c.postcode,
             LEFT(c.postcode, LENGTH(c.postcode) - 1) AS postcode_group,
             c.address_tokens
         FROM {canonical_addresses} AS c
-        WHERE TRY_CAST(c.unique_id AS BIGINT) IS NOT NULL
-          AND c.unique_id NOT IN (
-              SELECT canonical_unique_id FROM {canonical_ids_from_exact_matches}
-          )
+        WHERE c.unique_id IS NOT NULL
           AND c.postcode IN (
               SELECT DISTINCT postcode
-              FROM {fuzzy_without_exact_matches}
+              FROM {unmatched_records}
           )
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY c.original_address_concat, c.postcode
+            ORDER BY c.unique_id
+        ) = 1
     """
 
     tries_sql = """
         SELECT
             postcode_group,
-            build_suffix_trie(canonical_unique_id_bigint, address_tokens) AS trie
+            build_suffix_trie(canonical_unique_id, address_tokens) AS trie
         FROM {canonical_candidates_for_trie}
         GROUP BY postcode_group
     """
 
-    trie_matches_sql = """
+    raw_trie_matches_sql = """
         SELECT
-            f.unique_id AS fuzzy_unique_id,
-            find_address(f.address_tokens, t.trie) AS trie_match_unique_id
-        FROM {fuzzy_without_exact_matches} AS f
-        JOIN {postcode_group_tries} AS t
-          ON LEFT(f.postcode, LENGTH(f.postcode) - 1) = t.postcode_group
+            fuzzy.unique_id,
+            find_address(fuzzy.address_tokens, tries.trie) AS trie_match_canonical_id
+        FROM {input} AS fuzzy
+        JOIN {postcode_group_tries} AS tries
+          ON LEFT(fuzzy.postcode, LENGTH(fuzzy.postcode) - 1) = tries.postcode_group
     """
 
-    combined_results_sql = """
+    trie_matches_sql = """
         SELECT
-            f.* EXCLUDE (match_method, has_match),
-            m.trie_match_unique_id AS trie_match_unique_id_bigint,
-            CAST(m.trie_match_unique_id AS VARCHAR) AS trie_match_unique_id,
+            candidates.unique_id,
+            candidates.trie_match_canonical_id
+        FROM {raw_trie_matches} AS candidates
+        WHERE candidates.trie_match_canonical_id IS NOT NULL
+    """
+
+    trie_value = MatchReason.TRIE.value
+    enum_values = str(MatchReason.enum_values())
+    combined_results_sql = f"""
+        SELECT
+            a.unique_id,
             COALESCE(
-                f.exact_match_canonical_id_bigint,
-                m.trie_match_unique_id
-            ) AS resolved_canonical_unique_id_bigint,
-            COALESCE(
-                f.exact_match_canonical_id,
-                CAST(m.trie_match_unique_id AS VARCHAR)
-            ) AS resolved_canonical_unique_id,
+                m.trie_match_canonical_id,
+                a.resolved_canonical_id
+            ) AS resolved_canonical_id,
+            a.* EXCLUDE (unique_id, resolved_canonical_id, match_reason),
             CASE
-                WHEN f.exact_match THEN 'exact'
-                WHEN m.trie_match_unique_id IS NOT NULL THEN 'trie_match'
-                ELSE 'unmatched'
-            END AS match_method,
-            (f.has_match OR m.trie_match_unique_id IS NOT NULL) AS has_match
-        FROM {input} AS f
-        LEFT JOIN {trie_match_candidates} AS m
-          ON f.unique_id = m.fuzzy_unique_id
+                WHEN m.trie_match_canonical_id IS NOT NULL THEN '{trie_value}'::ENUM {enum_values}
+                ELSE a.match_reason
+            END AS match_reason
+        FROM {{fuzzy_addresses}} AS a
+        LEFT JOIN {{trie_match_candidates}} AS m
+          ON a.unique_id = m.unique_id
     """
 
     return [
-        CTEStep("fuzzy_without_exact_matches", unmatched_fuzzy_sql),
-        CTEStep("canonical_ids_from_exact_matches", matched_canonical_ids_sql),
         CTEStep("canonical_candidates_for_trie", filtered_canonical_sql),
         CTEStep("postcode_group_tries", tries_sql),
+        CTEStep("raw_trie_matches", raw_trie_matches_sql),
         CTEStep("trie_match_candidates", trie_matches_sql),
         CTEStep("fuzzy_with_resolved_matches", combined_results_sql),
     ]

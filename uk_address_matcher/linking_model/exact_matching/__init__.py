@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.linking_model.exact_matching.exact_matching_model import (
     _annotate_exact_matches,
+    _filter_unmatched_exact_matches,
     _resolve_with_trie,
 )
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
@@ -46,7 +47,7 @@ def run_deterministic_match_pass(
     two_phase_pipeline = create_sql_pipeline(
         con,
         input_bindings,
-        [_annotate_exact_matches, _resolve_with_trie],
+        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
         pipeline_name="Exact + Trie",
         pipeline_description="Exact matches followed by trie resolution",
     )
