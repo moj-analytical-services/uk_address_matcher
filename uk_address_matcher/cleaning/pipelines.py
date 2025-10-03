@@ -65,7 +65,6 @@ QUEUE_POST_TF = [
 
 ADDRESS_TABLE_REQUIRED_SCHEMA: list[ColumnSpec] = [
     ColumnSpec("unique_id", "BIGINT"),
-    ColumnSpec("source_dataset", "VARCHAR"),
     ColumnSpec("address_concat", "VARCHAR"),
     ColumnSpec("postcode", "VARCHAR"),
 ]
