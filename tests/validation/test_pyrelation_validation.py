@@ -56,7 +56,7 @@ def test_validate_table_reports_missing_and_type_mismatch(duck_con, required_sch
     assert "[input_table] column 'unique_id': expected BIGINT, found VARCHAR" in errors
 
 
-def test_validate_table_reports_length_qualified_varchar(duck_con, required_schema):
+def test_validate_table_accepts_length_qualified_varchar(duck_con, required_schema):
     relation = duck_con.sql(
         """
         SELECT
@@ -72,10 +72,7 @@ def test_validate_table_reports_length_qualified_varchar(duck_con, required_sche
         required_schema,
         raise_on_error=False,
     )
-    assert (
-        "[input_table] column 'source_dataset': expected VARCHAR, found VARCHAR(50)"
-        in errors
-    )
+    assert errors == []
 
 
 def test_validate_tables_returns_errors_per_relation(
