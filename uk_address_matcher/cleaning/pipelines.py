@@ -31,6 +31,7 @@ from uk_address_matcher.cleaning.steps.tokenisation import (
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import RunOptions, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_table
 
 QUEUE_PRE_TF = [
     _add_match_reason_enum_field,
@@ -62,6 +63,21 @@ QUEUE_POST_TF = [
     _final_column_order,
 ]
 
+ADDRESS_TABLE_REQUIRED_SCHEMA: list[ColumnSpec] = [
+    ColumnSpec("unique_id", "BIGINT"),
+    ColumnSpec("source_dataset", "VARCHAR"),
+    ColumnSpec("address_concat", "VARCHAR"),
+    ColumnSpec("postcode", "VARCHAR"),
+]
+
+
+def _validate_address_input(address_table: DuckDBPyRelation, *, label: str) -> None:
+    validate_table(
+        address_table,
+        required=ADDRESS_TABLE_REQUIRED_SCHEMA,
+        label=label,
+    )
+
 
 def _materialise_output_table(
     con: DuckDBPyConnection, rel: DuckDBPyRelation, uid: str
@@ -85,6 +101,8 @@ def clean_data_with_minimal_steps(
     *,
     run_options: Optional[RunOptions] = None,
 ) -> DuckDBPyRelation:
+    _validate_address_input(address_table, label="clean_data_with_minimal_steps")
+
     pipeline = create_sql_pipeline(
         con,
         address_table,
@@ -102,6 +120,8 @@ def clean_data_on_the_fly(
     *,
     run_options: Optional[RunOptions] = None,
 ) -> DuckDBPyRelation:
+    _validate_address_input(address_table, label="clean_data_on_the_fly")
+
     stage_queue = (
         QUEUE_PRE_TF + [_add_term_frequencies_to_address_tokens] + QUEUE_POST_TF
     )
@@ -128,6 +148,11 @@ def clean_data_using_precomputed_rel_tok_freq(
     *,
     run_options: Optional[RunOptions] = None,
 ) -> DuckDBPyRelation:
+    _validate_address_input(
+        address_table,
+        label="clean_data_using_precomputed_rel_tok_freq",
+    )
+
     if rel_tok_freq_table is None:
         default_tf_path = (
             resources.files("uk_address_matcher")
@@ -169,6 +194,11 @@ def get_numeric_term_frequencies_from_address_table(
     *,
     run_options: Optional[RunOptions] = None,
 ) -> DuckDBPyRelation:
+    _validate_address_input(
+        df_address_table,
+        label="get_numeric_term_frequencies_from_address_table",
+    )
+
     stage_queue = [
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
@@ -211,6 +241,11 @@ def get_address_token_frequencies_from_address_table(
     *,
     run_options: Optional[RunOptions] = None,
 ) -> DuckDBPyRelation:
+    _validate_address_input(
+        df_address_table,
+        label="get_address_token_frequencies_from_address_table",
+    )
+
     stage_queue = [
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
