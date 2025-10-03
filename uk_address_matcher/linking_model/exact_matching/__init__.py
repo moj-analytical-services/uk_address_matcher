@@ -8,11 +8,17 @@ from uk_address_matcher.linking_model.exact_matching.exact_matching_model import
     _resolve_with_trie,
 )
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_table
 
 if TYPE_CHECKING:
     import duckdb
 
     from uk_address_matcher.sql_pipeline.runner import RunOptions
+
+
+# TODO(ThomasHepworth): move this upstream to cleaning once we have agreed a
+# standard schema for input addresses.
+CANONICAL_TABLE_REQUIRED_SCHEMA: list[ColumnSpec] = [ColumnSpec("unique_id", "BIGINT")]
 
 
 def run_deterministic_match_pass(
@@ -43,6 +49,12 @@ def run_deterministic_match_pass(
         InputBinding("fuzzy_addresses", df_addresses_to_match),
         InputBinding("canonical_addresses", df_addresses_to_search_within),
     ]
+
+    validate_table(
+        df_addresses_to_search_within,
+        required=CANONICAL_TABLE_REQUIRED_SCHEMA,
+        label="Canonical addresses",
+    )
 
     two_phase_pipeline = create_sql_pipeline(
         con,
