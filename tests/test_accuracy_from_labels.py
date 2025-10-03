@@ -50,11 +50,13 @@ def test_address_matching_workflow_runs():
     messy_data_rel = messy_addresses_raw
 
     df_messy_data_clean_rel = clean_data_using_precomputed_rel_tok_freq(
-        messy_data_rel.project("unique_id, address_concat, postcode"), con=duckdb_con
+        messy_data_rel.project("unique_id, source_dataset, address_concat, postcode"),
+        con=duckdb_con,
     )
 
     df_os_clean_rel = clean_data_using_precomputed_rel_tok_freq(
-        df_os_rel.project("unique_id, address_concat, postcode"), con=duckdb_con
+        df_os_rel.project("unique_id, source_dataset, address_concat, postcode"),
+        con=duckdb_con,
     )
 
     settings = get_settings_for_training()
