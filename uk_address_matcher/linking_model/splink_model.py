@@ -2,7 +2,6 @@ import importlib.resources as pkg_resources
 import json
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
-
 from splink import DuckDBAPI, Linker, SettingsCreator
 
 
@@ -78,6 +77,12 @@ def get_linker(
     settings = SettingsCreator.from_path_or_dict(settings_as_dict)
 
     db_api = DuckDBAPI(connection=con)
+
+    # Skim off any matches that we have already labelled as exact matches
+    # Neither match_reason or resolved_canonical_id are needed for Splink processing
+    df_addresses_to_match = df_addresses_to_match.filter(
+        "resolved_canonical_id is NULL"
+    ).select("* EXCLUDE(match_reason, resolved_canonical_id)")
 
     con.register("df_addresses_to_match_fix", df_addresses_to_match)
     con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
