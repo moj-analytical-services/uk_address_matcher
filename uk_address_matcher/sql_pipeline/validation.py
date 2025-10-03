@@ -89,6 +89,8 @@ def _make_normaliser():
         t = re.sub(r"\s+", " ", t)
         if pattern:
             t = pattern.sub(lambda m: aliases[m.group(1).upper()], t)
+        if "(" in t:
+            t = t.split("(", 1)[0].strip()
         return t
 
     return normalise
