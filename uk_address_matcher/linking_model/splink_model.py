@@ -78,11 +78,25 @@ def get_linker(
 
     db_api = DuckDBAPI(connection=con)
 
+    unresolved_records = df_addresses_to_match.filter("resolved_canonical_id IS NULL")
+    unresolved_count = unresolved_records.count("*").fetchall()[0][0]
+    if unresolved_count == 0:
+        raise ValueError(
+            "No unresolved records remain after deterministic matching. Either "
+            "skip Splink or provide rows with unresolved matches."
+        )
+
+    canonical_count = df_addresses_to_search_within.count("*").fetchall()[0][0]
+    if canonical_count == 0:
+        raise ValueError(
+            "Canonical relation is empty - Splink requires at least one search record."
+        )
+
     # Skim off any matches that we have already labelled as exact matches
     # Neither match_reason or resolved_canonical_id are needed for Splink processing
-    df_addresses_to_match = df_addresses_to_match.filter(
-        "resolved_canonical_id is NULL"
-    ).select("* EXCLUDE(match_reason, resolved_canonical_id)")
+    df_addresses_to_match = unresolved_records.select(
+        "* EXCLUDE(match_reason, resolved_canonical_id)"
+    )
 
     con.register("df_addresses_to_match_fix", df_addresses_to_match)
     con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
