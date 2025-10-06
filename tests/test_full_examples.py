@@ -1,5 +1,7 @@
-import subprocess
 import os
+import subprocess
+
+import pytest
 
 
 def test_full_example():
@@ -24,12 +26,18 @@ def test_full_example():
     )
 
 
-def test_match_one():
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/test_data/one_clean_row_downing_street.parquet",
+        "tests/test_data/one_clean_exact_matching_row_downing_street.parquet",
+    ],
+    ids=["splink_pass", "exact_match"],
+)
+def test_match_one(path):
     env = os.environ.copy()
     # We need to provide a way to override the hardcoded path in match_one.py
-    env["OS_CLEAN_PATH"] = (
-        f"read_parquet('{os.path.abspath('tests/test_data/one_clean_row_downing_street.parquet')}')"
-    )
+    env["OS_CLEAN_PATH"] = f"read_parquet('{os.path.abspath(path)}')"
 
     result = subprocess.run(
         ["python", "examples/match_one.py"],
