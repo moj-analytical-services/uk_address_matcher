@@ -91,16 +91,15 @@ def _combine_exact_and_splink_matches(
     final_sql = f"""
         SELECT
             em.unique_id,
+            COALESCE(st.resolved_canonical_id, em.resolved_canonical_id) AS resolved_canonical_id,
             em.original_address_concat,
             canon.original_address_concat_canonical,
             em.postcode,
-            canon.postcode_canonical,
             COALESCE(
                 st.match_reason,
                 em.match_reason,
                 '{unmatched_label}'::ENUM({enum_literal})
             ) AS match_reason,
-            COALESCE(st.resolved_canonical_id, em.resolved_canonical_id) AS resolved_canonical_id,
             st.match_weight,
             st.distinguishability
         FROM {{exact_matches}} AS em
