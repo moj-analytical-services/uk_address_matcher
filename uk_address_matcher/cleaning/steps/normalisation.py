@@ -13,6 +13,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     standarise_num_letter,
     trim,
 )
+from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
@@ -166,3 +167,20 @@ def _clean_address_string_second_pass() -> str:
     FROM {{input}}
     """
     return sql
+
+
+# TODO(ThomasHepworth): We only want to apply this logic to the fuzzy addresses,
+# not the canonical addresses. At some point, adjust the pipeline queues or
+# create a separate table to hold matches.
+@pipeline_stage(
+    name="add_match_reason_enum_field",
+    description="Add a `match_reason` field with ENUM type to categorise match outcomes",
+    tags=["data_preparation", "match_logic"],
+)
+def _add_match_reason_enum_field() -> str:
+    return f"""
+    select *,
+    '{MatchReason.UNMATCHED.value}'::ENUM {str(MatchReason.enum_values())} as match_reason,
+    NULL::BIGINT as resolved_canonical_id
+    from {{input}}
+    """

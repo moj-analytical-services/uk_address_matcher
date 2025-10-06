@@ -4,14 +4,21 @@ from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.linking_model.exact_matching.exact_matching_model import (
     _annotate_exact_matches,
+    _filter_unmatched_exact_matches,
     _resolve_with_trie,
 )
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_table
 
 if TYPE_CHECKING:
     import duckdb
 
-    from uk_address_matcher.sql_pipeline.runner import RunOptions
+    from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+# TODO(ThomasHepworth): move this upstream to cleaning once we have agreed a
+# standard schema for input addresses.
+CANONICAL_TABLE_REQUIRED_SCHEMA: list[ColumnSpec] = [ColumnSpec("unique_id", "BIGINT")]
 
 
 def run_deterministic_match_pass(
@@ -19,7 +26,7 @@ def run_deterministic_match_pass(
     df_addresses_to_match: duckdb.DuckDBPyRelation,
     df_addresses_to_search_within: duckdb.DuckDBPyRelation,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> duckdb.DuckDBPyRelation:
     """
     Run the exact matching pipeline stages to annotate fuzzy addresses with exact matches
@@ -43,15 +50,21 @@ def run_deterministic_match_pass(
         InputBinding("canonical_addresses", df_addresses_to_search_within),
     ]
 
+    validate_table(
+        df_addresses_to_search_within,
+        required=CANONICAL_TABLE_REQUIRED_SCHEMA,
+        label="Canonical addresses",
+    )
+
     two_phase_pipeline = create_sql_pipeline(
         con,
         input_bindings,
-        [_annotate_exact_matches, _resolve_with_trie],
+        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
         pipeline_name="Exact + Trie",
         pipeline_description="Exact matches followed by trie resolution",
     )
-    if run_options is not None:
-        if run_options.debug_mode:
+    if debug_options is not None:
+        if debug_options.debug_mode:
             two_phase_pipeline.show_plan()
     exact_match_results = two_phase_pipeline.run(options=run_options)
 

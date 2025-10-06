@@ -1,6 +1,8 @@
-import time
 import os
+import time
+
 import duckdb
+
 from uk_address_matcher import (
     clean_data_using_precomputed_rel_tok_freq,
     get_linker,
@@ -47,7 +49,7 @@ con.execute(sql)
 sql = f"""
 create or replace table os as
 select
-   uprn as unique_id,
+    try_cast(uprn AS BIGINT) as unique_id,
    regexp_replace(fulladdress, ',[^,]*$', '') AS address_concat,
    postcode
 from {full_os_path}

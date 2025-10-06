@@ -25,14 +25,14 @@ def calculate_match_metrics(
     if order not in {"ascending", "descending"}:
         raise ValueError("order must be either 'ascending' or 'descending'.")
 
-    if "match_method" not in exact_match_results.columns:
+    if "match_reason" not in exact_match_results.columns:
         raise ValueError(
             "Expected column 'match_method' to be present in relation; "
             f"available columns are {exact_match_results.columns}."
         )
 
     aggregation_query = """
-        match_method,
+        match_reason,
         COUNT(*) AS match_count,
         printf('%.2f%%', 100*match_count/sum(match_count) over()) as match_percentage
     """
@@ -40,12 +40,12 @@ def calculate_match_metrics(
     order_keyword = "DESC" if order == "descending" else "ASC"
 
     return (
-        exact_match_results.filter("match_method IS NOT NULL")
+        exact_match_results.filter("match_reason IS NOT NULL")
         .aggregate(
             aggregation_query,
-            group_expr="match_method",
+            group_expr="match_reason",
         )
-        .order(f"match_count {order_keyword}, match_method")
+        .order(f"match_count {order_keyword}, match_reason")
     )
 
 

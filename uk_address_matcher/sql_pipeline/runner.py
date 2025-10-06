@@ -151,7 +151,7 @@ def render_step_to_ctes(
 
 
 @dataclass
-class RunOptions:
+class DebugOptions:
     pretty_print_sql: bool = False
     debug_mode: bool = False
     debug_show_sql: bool = False
@@ -176,7 +176,7 @@ class RunOptions:
             return default
 
     @classmethod
-    def from_env(cls) -> "RunOptions":
+    def from_env(cls) -> DebugOptions:
         return cls(
             pretty_print_sql=cls._getenv_bool("UKAM_PRETTY_PRINT_SQL", False),
             debug_mode=cls._getenv_bool("UKAM_DEBUG_MODE", False),
@@ -226,7 +226,7 @@ class DuckDBPipeline(CTEPipeline):
         self._current_output_alias = seed
         self._step_counter = 0
         # Defaults for run options (read from environment by default)
-        self._default_run_options = RunOptions.from_env()
+        self._default_debug_options = DebugOptions.from_env()
         self.name = name or f"pipeline_{_uid()}"
         self.description = description
         # Keep an ordered list of stages as they are added (excluding seed)
@@ -495,7 +495,7 @@ class DuckDBPipeline(CTEPipeline):
 
     def run(
         self,
-        options: Optional[RunOptions] = None,
+        options: Optional[DebugOptions] = None,
         **legacy_kwargs,
     ) -> duckdb.DuckDBPyRelation:
         """Run the pipeline using the provided options (or defaults)."""
@@ -519,7 +519,7 @@ class DuckDBPipeline(CTEPipeline):
                 raise TypeError(
                     "Cannot provide both RunOptions instance and legacy keyword overrides."
                 )
-            base = self._default_run_options
+            base = self._default_debug_options
             overrides = {
                 key: legacy_kwargs.get(key, getattr(base, key))
                 for key in allowed_legacy_keys
@@ -527,8 +527,8 @@ class DuckDBPipeline(CTEPipeline):
             options = replace(base, **overrides)
 
         if options is None:
-            options = self._default_run_options
-        elif not isinstance(options, RunOptions):
+            options = self._default_debug_options
+        elif not isinstance(options, DebugOptions):
             raise TypeError(
                 "options must be a RunOptions instance when provided; "
                 f"got {type(options)!r}."

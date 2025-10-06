@@ -4,6 +4,7 @@ from typing import Optional
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
+    _add_match_reason_enum_field,
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _canonicalise_postcode,
@@ -29,9 +30,10 @@ from uk_address_matcher.cleaning.steps.tokenisation import (
     _create_tokenised_address_concat,
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid
-from uk_address_matcher.sql_pipeline.runner import RunOptions, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
 
 QUEUE_PRE_TF = [
+    _add_match_reason_enum_field,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
     _canonicalise_postcode,
@@ -81,7 +83,7 @@ def clean_data_with_minimal_steps(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     pipeline = create_sql_pipeline(
         con,
@@ -90,7 +92,7 @@ def clean_data_with_minimal_steps(
         pipeline_name="Clean data with minimal steps",
         pipeline_description="A minimal cleaning pipeline without term frequencies",
     )
-    table_rel = pipeline.run(run_options)
+    table_rel = pipeline.run(debug_options)
     return _materialise_output_table(con, table_rel, _uid())
 
 
@@ -98,7 +100,7 @@ def clean_data_on_the_fly(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     stage_queue = (
         QUEUE_PRE_TF + [_add_term_frequencies_to_address_tokens] + QUEUE_POST_TF
@@ -114,7 +116,7 @@ def clean_data_on_the_fly(
             "on the fly from the input data"
         ),
     )
-    table_rel = pipeline.run(run_options)
+    table_rel = pipeline.run(debug_options)
     return _materialise_output_table(con, table_rel, _uid())
 
 
@@ -124,7 +126,7 @@ def clean_data_using_precomputed_rel_tok_freq(
     rel_tok_freq_table: DuckDBPyRelation | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     if rel_tok_freq_table is None:
         default_tf_path = (
@@ -157,7 +159,7 @@ def clean_data_using_precomputed_rel_tok_freq(
             "Clean address data using a supplied table of relative token frequencies"
         ),
     )
-    result_rel = pipeline.run(run_options)
+    result_rel = pipeline.run(debug_options)
     return _materialise_output_table(con, result_rel, _uid())
 
 
@@ -165,7 +167,7 @@ def get_numeric_term_frequencies_from_address_table(
     df_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _trim_whitespace_address_and_postcode,
@@ -184,7 +186,7 @@ def get_numeric_term_frequencies_from_address_table(
             "Derive numeric tokens and compute frequency distribution"
         ),
     )
-    numeric_tokens_rel = pipeline.run(run_options)
+    numeric_tokens_rel = pipeline.run(debug_options)
     numeric_tokens_rel.show()
     con.register("numeric_tokens_df", numeric_tokens_rel)
 
@@ -207,7 +209,7 @@ def get_address_token_frequencies_from_address_table(
     df_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    run_options: Optional[RunOptions] = None,
+    debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _trim_whitespace_address_and_postcode,
@@ -228,4 +230,4 @@ def get_address_token_frequencies_from_address_table(
         pipeline_name="Get address token frequencies",
         pipeline_description=("Tokenise addresses and compute frequency distribution"),
     )
-    return pipeline.run(run_options)
+    return pipeline.run(debug_options)
