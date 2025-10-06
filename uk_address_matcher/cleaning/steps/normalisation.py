@@ -169,6 +169,9 @@ def _clean_address_string_second_pass() -> str:
     return sql
 
 
+# TODO(ThomasHepworth): We only want to apply this logic to the fuzzy addresses,
+# not the canonical addresses. At some point, adjust the pipeline queues or
+# create a separate table to hold matches.
 @pipeline_stage(
     name="add_match_reason_enum_field",
     description="Add a `match_reason` field with ENUM type to categorise match outcomes",
