@@ -66,7 +66,7 @@ def run_deterministic_match_pass(
     if debug_options is not None:
         if debug_options.debug_mode:
             two_phase_pipeline.show_plan()
-    exact_match_results = two_phase_pipeline.run(options=run_options)
+    exact_match_results = two_phase_pipeline.run(options=debug_options)
 
     return exact_match_results
 
