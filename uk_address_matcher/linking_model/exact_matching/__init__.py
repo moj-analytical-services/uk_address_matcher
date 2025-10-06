@@ -54,7 +54,6 @@ def run_deterministic_match_pass(
         if run_options.debug_mode:
             two_phase_pipeline.show_plan()
     exact_match_results = two_phase_pipeline.run(options=run_options)
-    exact_match_results.create("fhrs_os_two_phase_results")
 
     return exact_match_results
 
