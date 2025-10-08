@@ -119,6 +119,11 @@ def _resolve_with_trie() -> list[CTEStep]:
         WHERE candidates.trie_match_canonical_id IS NOT NULL
     """
 
+    # Simplified: previous ROW_NUMBER dedupe redundant after join fix; keep alias for compatibility
+    deduped_trie_matches_sql = """
+        SELECT * FROM {trie_match_candidates}
+    """
+
     trie_value = MatchReason.TRIE.value
     enum_values = str(MatchReason.enum_values())
     combined_results_sql = f"""
@@ -134,8 +139,9 @@ def _resolve_with_trie() -> list[CTEStep]:
                 ELSE a.match_reason
             END AS match_reason
         FROM {{fuzzy_addresses}} AS a
-        LEFT JOIN {{trie_match_candidates}} AS m
+        LEFT JOIN {{deduped_trie_matches}} AS m
           ON a.unique_id = m.unique_id
+        WHERE COALESCE(m.trie_match_canonical_id, a.resolved_canonical_id) IS NOT NULL
     """
 
     return [
@@ -143,5 +149,6 @@ def _resolve_with_trie() -> list[CTEStep]:
         CTEStep("postcode_group_tries", tries_sql),
         CTEStep("raw_trie_matches", raw_trie_matches_sql),
         CTEStep("trie_match_candidates", trie_matches_sql),
+        CTEStep("deduped_trie_matches", deduped_trie_matches_sql),
         CTEStep("fuzzy_with_resolved_matches", combined_results_sql),
     ]
