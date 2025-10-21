@@ -14,6 +14,9 @@ from uk_address_matcher import (
     improve_predictions_using_distinguishing_tokens,
     run_deterministic_match_pass,
 )
+from uk_address_matcher.post_linkage.match_candidate_selection import (
+    select_top_match_candidates,
+)
 
 pd.options.display.max_colwidth = 1000
 
@@ -125,8 +128,6 @@ dsum_2 = best_matches_summary(
     df_predict=df_predict_improved, df_addresses_to_match=df_fhrs, con=con
 )
 dsum_2.show(max_width=500, max_rows=20)
-
-
 # -----------------------------------------------------------------------------
 # Step 7: Inspect the Splink result
 # -----------------------------------------------------------------------------
@@ -242,3 +243,42 @@ display(
         waterfall_data.df().to_dict(orient="records"), filter_nulls=False
     )
 )
+
+# -----------------------------------------------------------------------------
+# Step 8: Combine deterministic and Splink match candidates
+# -----------------------------------------------------------------------------
+
+match_candidates = select_top_match_candidates(
+    con=con,
+    df_exact_matches=df_fhrs_exact_matches,
+    df_splink_matches=best_matches,
+    df_canonical=df_ch_clean,
+    match_weight_threshold=15,
+    distinguishability_threshold=None,
+)
+
+print("\nCombined match candidates summary:")
+match_candidate_summary = calculate_match_metrics(match_candidates)
+match_candidate_summary.show(max_width=500, max_rows=20)
+
+# -----------------------------------------------------------------------------
+# Step 9: Inspect top records for each non-unmatched match reason
+# -----------------------------------------------------------------------------
+
+non_unmatched_match_candidates = match_candidates.filter("match_reason != 'unmatched'")
+match_reasons = [
+    row[0]
+    for row in non_unmatched_match_candidates.project("match_reason")
+    .distinct()
+    .fetchall()
+]
+
+for match_reason_value in match_reasons:
+    if match_reason_value is None:
+        continue
+
+    match_reason_sql_value = str(match_reason_value).replace("'", "''")
+    print(f"\n=== Show 10 records in match_reason '{match_reason_value}' ===")
+    non_unmatched_match_candidates.filter(
+        f"match_reason = '{match_reason_sql_value}'"
+    ).limit(10).show(max_width=500, max_rows=10)
