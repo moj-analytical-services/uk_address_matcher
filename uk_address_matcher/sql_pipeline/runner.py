@@ -35,11 +35,11 @@ StageLike = Union[Stage, StageFactory]
 
 
 class InputBinding(NamedTuple):
-    placeholder: str
+    name: str
     relation: duckdb.DuckDBPyRelation
 
     def normalised_placeholder(self) -> str:
-        name = _slug(self.placeholder)
+        name = _slug(self.name)
         if not name:
             raise ValueError(
                 "InputBinding placeholder must be a non-empty, slug-compatible string"
@@ -53,7 +53,7 @@ class InputBinding(NamedTuple):
         con: duckdb.DuckDBPyConnection,
         registered_aliases: set[str],
     ) -> str:
-        alias_candidate = getattr(self.relation, "alias", None) or self.placeholder
+        alias_candidate = getattr(self.relation, "alias", None) or self.name
         alias_candidate = _slug(alias_candidate) or self.normalised_placeholder()
         if alias_candidate[0].isdigit():
             alias_candidate = f"t_{alias_candidate}"
@@ -71,7 +71,7 @@ class InputBinding(NamedTuple):
     def __str__(self) -> str:
         # TODO(ThomasHepworth): improve representation at some point
         return (
-            f"InputBinding(placeholder={self.placeholder!r},\n"
+            f"InputBinding(placeholder={self.name!r},\n"
             f"  relation=\n{self.relation.limit(5)})"
         )
 
@@ -261,14 +261,14 @@ class DuckDBPipeline(CTEPipeline):
                     )
                 bindings.append(item)
             if len(bindings) == 1:
-                if not bindings[0].placeholder:
+                if not bindings[0].name:
                     raise ValueError(
                         "Single InputBinding must define a placeholder or provide a standalone relation."
                     )
                 return bindings
 
             for binding in bindings:
-                if not binding.placeholder:
+                if not binding.name:
                     raise ValueError(
                         "All InputBinding entries must have an explicit placeholder when providing multiple inputs."
                     )
@@ -489,7 +489,7 @@ class DuckDBPipeline(CTEPipeline):
             else:
                 rel.show()
 
-            _emit_debug(f"Total rows: {rel.count('*')}")
+            rel.count("*").show()
 
         if return_last:
             return self.con.table(work_items[-1][1])
