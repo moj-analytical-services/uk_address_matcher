@@ -245,8 +245,8 @@ def pipeline_stage(
     stage_output: Optional[str] = None,
     stage_registers: Optional[dict] = None,
     preludes: Optional[list] = None,
-) -> Callable[[Callable[P, SQLSpec]], Callable[P, "Stage"]]:
-    def deco(fn: Callable[P, SQLSpec]) -> Callable[P, "Stage"]:
+) -> Callable[[Callable[P, SQLSpec]], Callable[P, Stage]]:
+    def deco(fn: Callable[P, SQLSpec]) -> Callable[P, Stage]:
         stage_name = name or fn.__name__
 
         # normalise depends_on/tags to lists of strings
