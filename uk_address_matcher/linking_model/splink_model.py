@@ -46,9 +46,12 @@ def get_linker(
 
     # Skim off any matches that we have already labelled as exact matches
     # Neither match_reason or resolved_canonical_id are needed for Splink processing
-    df_addresses_to_match = df_addresses_to_match.filter(
-        "resolved_canonical_id IS NULL"
-    ).select("* EXCLUDE(match_reason, resolved_canonical_id)")
+    if "resolved_canonical_id" in df_addresses_to_match.columns:
+        df_addresses_to_match = df_addresses_to_match.filter(
+            "resolved_canonical_id IS NULL"
+        ).select(
+            "* EXCLUDE(match_reason, resolved_canonical_id, canonical_ukam_address_id)"
+        )
     unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
     if unresolved_count == 0:
         raise ValueError(
