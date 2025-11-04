@@ -1,5 +1,10 @@
+import logging
+
 import duckdb
 import pytest
+
+# Disable Splink warnings in tests
+logging.getLogger("splink").setLevel(logging.ERROR)
 
 
 @pytest.fixture

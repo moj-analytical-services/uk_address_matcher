@@ -6,7 +6,11 @@ from uk_address_matcher.cleaning.pipelines import (
     get_address_token_frequencies_from_address_table,
     get_numeric_term_frequencies_from_address_table,
 )
-from uk_address_matcher.linking_model.exact_matching import run_deterministic_match_pass
+from uk_address_matcher.linking_model.exact_matching import (
+    StageName,
+    available_deterministic_stages,
+    run_deterministic_match_pass,
+)
 from uk_address_matcher.linking_model.splink_model import get_linker
 from uk_address_matcher.post_linkage.accuracy_from_labels import (
     evaluate_predictions_against_labels,
@@ -28,10 +32,13 @@ __all__ = [
     "get_numeric_term_frequencies_from_address_table",
     "get_address_token_frequencies_from_address_table",
     "calculate_match_metrics",
-    "run_deterministic_match_pass",
     "improve_predictions_using_distinguishing_tokens",
     "best_matches_with_distinguishability",
     "best_matches_summary",
     "inspect_match_results_vs_labels",
     "evaluate_predictions_against_labels",
+    # Exact matching
+    "run_deterministic_match_pass",
+    "StageName",
+    "available_deterministic_stages",
 ]

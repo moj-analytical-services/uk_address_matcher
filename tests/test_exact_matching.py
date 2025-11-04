@@ -117,7 +117,7 @@ def test_unmatched_records_retain_original_unique_id(duck_con, test_data):
         duck_con,
         df_fuzzy,
         df_canonical,
-        enabled_stage_names=["resolve_with_trie"],
+        enabled_stage_names=["trie"],
     )
 
     columns = set(results.columns)
@@ -155,7 +155,7 @@ def test_unmatched_records_retain_original_unique_id(duck_con, test_data):
 @pytest.mark.parametrize(
     "enabled_stages",
     [
-        ["resolve_with_trie"],  # Exact + trie
+        ["trie"],  # Exact + trie
         None,  # Exact only
     ],
 )
