@@ -1,6 +1,6 @@
-import yaml
-import pyarrow as pa
 import duckdb
+import pyarrow as pa
+import yaml
 
 
 def load_test_cases(yaml_path):
@@ -44,6 +44,7 @@ def prepare_combined_test_data(yaml_path, con=None):
                 "postcode": messy_address[1],
                 "test_block": test_block_id,
                 "true_match_id": true_match_id,  # Add the true match ID as a column
+                "ukam_address_id": test_block_id,
             }
         )
 
@@ -59,6 +60,7 @@ def prepare_combined_test_data(yaml_path, con=None):
                     "postcode": addr[1],
                     "test_block": test_block_id,
                     "true_match_id": None,
+                    "ukam_address_id": test_block_id + (i * 1000),
                 }
             )
 

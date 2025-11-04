@@ -40,32 +40,23 @@ def _annotate_exact_matches(
     enum_values = str(MatchReason.enum_values())
     annotated_sql = f"""
         SELECT
-            fuzzy.unique_id AS unique_id,
-            COALESCE(
-                canon.canonical_unique_id,
-                fuzzy.resolved_canonical_id
-            ) AS resolved_canonical_id,
-            fuzzy.* EXCLUDE (match_reason, unique_id, resolved_canonical_id),
-            CASE
-                WHEN canon.canonical_unique_id IS NOT NULL THEN '{exact_value}'::ENUM {enum_values}
-                ELSE fuzzy.match_reason
-            END AS match_reason
+            fuzzy.ukam_address_id AS ukam_address_id,
+            matched_canon.ukam_address_id AS canonical_ukam_address_id,
+            matched_canon.canonical_unique_id AS resolved_canonical_id,
+            '{exact_value}'::ENUM {enum_values} as match_reason
         FROM {{{fuzzy_input_name}}} AS fuzzy
-        LEFT JOIN (
-            SELECT *
-            FROM (
-                SELECT c.*,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY original_address_concat, postcode
-                           ORDER BY canonical_unique_id
-                       ) AS rn
-                FROM {{canonical_addresses_restricted}} AS c
-            ) d
-            WHERE rn = 1
-        ) AS canon
-          ON
-            {match_condition}
+        INNER JOIN LATERAL (
+            SELECT
+                canon.ukam_address_id as ukam_address_id,
+                canon.canonical_unique_id as canonical_unique_id
+            FROM {{canonical_addresses_restricted}} AS canon
+            WHERE {match_condition}
+            -- If we get multiple matches, we just take the first one
+            -- Usually an indication that the canonical dataset has duplicates
+            LIMIT 1
+        ) AS matched_canon ON true
     """
+
     return [
         CTEStep("annotated_exact_matches", annotated_sql),
     ]

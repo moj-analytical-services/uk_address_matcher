@@ -43,43 +43,25 @@ def _resolve_with_trie(
           ON LEFT(fuzzy.postcode, LENGTH(fuzzy.postcode) - 1) = tries.postcode_group
     """
 
-    # Join back to canonical to get the canonical_unique_id for matched addresses
-    trie_matches_sql = """
-        SELECT
-            candidates.fuzzy_ukam_address_id,
-            candidates.canonical_ukam_address_id,
-            canon.canonical_unique_id
-        FROM {raw_trie_matches} AS candidates
-        JOIN {canonical_addresses_restricted} AS canon
-          ON candidates.canonical_ukam_address_id = canon.ukam_address_id
-        WHERE candidates.canonical_ukam_address_id IS NOT NULL
-    """
-
-    # Annotate the fuzzy input with trie match results
+    # Join back to canonical to get the canonical_unique_id and create final output
     trie_value = MatchReason.TRIE.value
     enum_values = str(MatchReason.enum_values())
-    combined_results_sql = f"""
+    trie_matches_sql = f"""
         SELECT
-            a.unique_id,
-            COALESCE(
-                m.canonical_unique_id,
-                a.resolved_canonical_id
-            ) AS resolved_canonical_id,
-            a.* EXCLUDE (unique_id, resolved_canonical_id, match_reason),
-            CASE
-                WHEN m.canonical_unique_id IS NOT NULL THEN '{trie_value}'::ENUM {enum_values}
-                ELSE a.match_reason
-            END AS match_reason
-        FROM {{{fuzzy_input_name}}} AS a
-        LEFT JOIN {{trie_match_candidates}} AS m
-          ON a.ukam_address_id = m.fuzzy_ukam_address_id
+            candidates.fuzzy_ukam_address_id AS ukam_address_id,
+            candidates.canonical_ukam_address_id AS canonical_ukam_address_id,
+            canon.canonical_unique_id AS resolved_canonical_id,
+            '{trie_value}'::ENUM {enum_values} AS match_reason
+        FROM {{raw_trie_matches}} AS candidates
+        JOIN {{canonical_addresses_restricted}} AS canon
+          ON candidates.canonical_ukam_address_id = canon.ukam_address_id
+        WHERE candidates.canonical_ukam_address_id IS NOT NULL
     """
 
     return [
         CTEStep("postcode_group_tries", tries_sql),
         CTEStep("raw_trie_matches", raw_trie_matches_sql),
-        CTEStep("trie_match_candidates", trie_matches_sql),
-        CTEStep("fuzzy_with_resolved_matches", combined_results_sql),
+        CTEStep("trie_matches", trie_matches_sql),
     ]
 
 

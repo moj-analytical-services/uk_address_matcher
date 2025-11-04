@@ -16,12 +16,12 @@ def canonical_addresses_small(duck_con):
         SELECT *
         FROM (
             VALUES
-                (100, '10 DOWNING STREET', 'SW1A 2AA'),
-                (101, '10 DOWNING STREET ANNEX', 'SW1A 2AA'),
-                (102, '11 DOWNING STREET', 'SW1A 2AA'),
-                (103, '12 DOWNING STREET', 'SW1A 2AA'),
-                (104, '13 DOWNING STREET', 'SW1A 2AA')
-        ) AS t(unique_id, original_address_concat, postcode)
+                (100, 1100, '10 DOWNING STREET', 'SW1A 2AA'),
+                (101, 1101, '10 DOWNING STREET ANNEX', 'SW1A 2AA'),
+                (102, 1102, '11 DOWNING STREET', 'SW1A 2AA'),
+                (103, 1103, '12 DOWNING STREET', 'SW1A 2AA'),
+                (104, 1104, '13 DOWNING STREET', 'SW1A 2AA')
+        ) AS t(unique_id, ukam_address_id, original_address_concat, postcode)
         """
     )
 
@@ -29,22 +29,26 @@ def canonical_addresses_small(duck_con):
 @pytest.fixture
 def exact_matches_with_duplicates(duck_con):
     exact_reason = MatchReason.EXACT.value
-    unmatched_reason = MatchReason.UNMATCHED.value
     return duck_con.sql(
         f"""
         SELECT *
         FROM (
             VALUES
-                (1, '10 Downing St', 'SW1A 2AA', '{exact_reason}', 100),
-                (2, '11 Downing St', 'SW1A 2AA', '{exact_reason}', 102),
-                (3, '12 Downing St', 'SW1A 2AA', '{exact_reason}', 103),
-                (4, '14 Downing St', 'SW1A 2AA', '{unmatched_reason}', NULL)
+                (1, 1, '10 Downing St', 'SW1A 2AA', '{exact_reason}', 100, 1100),
+                (2, 2, '11 Downing St', 'SW1A 2AA', '{exact_reason}', 102, 1102),
+                (3, 3, '12 Downing St', 'SW1A 2AA', '{exact_reason}', 103, 1103),
+                -- This record should be overwritten by a Splink match
+                (4, 4, '14 Downing St', 'SW1A 2AA', NULL, NULL, NULL),
+                -- This record should only appear is we request unmatched inclusion
+                (5, 5, '15 Downing St', 'SW1A 2AA', NULL, NULL, NULL)
         ) AS t(
             unique_id,
+            ukam_address_id,
             original_address_concat,
             postcode,
             match_reason,
-            resolved_canonical_id
+            resolved_canonical_id,
+            canonical_ukam_address_id
         )
         """
     )
@@ -59,15 +63,25 @@ def splink_candidates_with_duplicates(duck_con):
         SELECT *
         FROM (
             VALUES
-                (101, 1, 0.82, 9.5),
-                (100, 1, 0.85, 5.0),
-                (102, 2, 0.91, 4.0),
-                (104, 2, 0.87, 7.5),
-                (103, 3, 0.92, 3.0),
-                (101, 3, 0.91, 8.0),
-                (104, 4, 0.94, 6.5),
-                (101, 4, 0.80, 2.0)
-        ) AS t(unique_id_l, unique_id_r, match_weight, distinguishability)
+                (101, 1, 1001, 1, '10 Downing St Variant', 'SW1A 2AA', 0.82, 9.5, '02: Distinguishability > 5'),
+                (100, 1, 1000, 1, '10 Downing St Variant', 'SW1A 2AA', 0.85, 5.0, '03: Distinguishability > 1'),
+                (102, 2, 1002, 2, '11 Downing St Variant', 'SW1A 2AA', 0.91, 4.0, '03: Distinguishability > 1'),
+                (104, 2, 1004, 2, '11 Downing St Variant', 'SW1A 2AA', 0.87, 7.5, '02: Distinguishability > 5'),
+                (103, 3, 1003, 3, '12 Downing St Variant', 'SW1A 2AA', 0.92, 3.0, '03: Distinguishability > 1'),
+                (101, 3, 1001, 3, '12 Downing St Variant', 'SW1A 2AA', 0.91, 8.0, '02: Distinguishability > 5'),
+                (104, 4, 1004, 4, '14 Downing St Variant', 'SW1A 2AA', 0.94, 6.5, '02: Distinguishability > 5'),
+                (101, 4, 1001, 4, '14 Downing St Variant', 'SW1A 2AA', 0.80, 2.0, '03: Distinguishability > 1')
+        ) AS t(
+            unique_id_l,
+            unique_id_r,
+            ukam_address_id_l,
+            ukam_address_id_r,
+            address_concat_r,
+            postcode_r,
+            match_weight,
+            distinguishability,
+            distinguishability_category
+        )
         """
     )
 
@@ -80,13 +94,15 @@ def exact_match_only_relation(duck_con):
         SELECT *
         FROM (
             VALUES
-                (999, '99 Downing St', 'SW1A 2AA', '{exact_reason}', 103)
+                (999, 2999, '99 Downing St', 'SW1A 2AA', '{exact_reason}', 103, 1103)
         ) AS t(
             unique_id,
+            ukam_address_id,
             original_address_concat,
             postcode,
             match_reason,
-            resolved_canonical_id
+            resolved_canonical_id,
+            canonical_ukam_address_id
         )
         """
     )
@@ -99,10 +115,15 @@ def empty_splink_matches(duck_con):
         SELECT *
         FROM (
             SELECT
-                CAST(NULL AS BIGINT) AS unique_id_r,
                 CAST(NULL AS BIGINT) AS unique_id_l,
+                CAST(NULL AS BIGINT) AS unique_id_r,
+                CAST(NULL AS BIGINT) AS ukam_address_id_l,
+                CAST(NULL AS BIGINT) AS ukam_address_id_r,
+                CAST(NULL AS VARCHAR) AS address_concat_r,
+                CAST(NULL AS VARCHAR) AS postcode_r,
                 CAST(NULL AS DOUBLE) AS match_weight,
-                CAST(NULL AS DOUBLE) AS distinguishability
+                CAST(NULL AS DOUBLE) AS distinguishability,
+                CAST(NULL AS VARCHAR) AS distinguishability_category
         )
         WHERE 1 = 0
         """
@@ -113,11 +134,6 @@ def test_prepare_splink_candidates_returns_top_results(
     duck_con,
     splink_candidates_with_duplicates,
 ):
-
-    enum_values = MatchReason.enum_values()
-    enum_literal = ", ".join(f"'{value}'" for value in enum_values)
-    splink_label = MatchReason.SPLINK.value.replace("'", "''")
-
     result = create_sql_pipeline(
         con=duck_con,
         input_rel=[InputBinding("splink_matches", splink_candidates_with_duplicates)],
@@ -125,8 +141,6 @@ def test_prepare_splink_candidates_returns_top_results(
             _prepare_splink_candidates(
                 match_weight_threshold=-100.0,
                 distinguishability_threshold=None,
-                enum_literal=enum_literal,
-                splink_label=splink_label,
             ),
         ],
     ).run()
@@ -153,11 +167,21 @@ def test_prepare_splink_candidates_returns_top_results(
 
 
 # Confirms that we prioritise exact matches over Splink matches
+@pytest.mark.parametrize(
+    "include_unmatched,expected_ids,unmatched_id_present",
+    [
+        (False, [1, 2, 3, 4], False),  # Exclude unmatched: ID 5 not present
+        (True, [1, 2, 3, 4, 5], True),  # Include unmatched: ID 5 present
+    ],
+)
 def test_select_top_match_candidates_prioritises_exact_matches(
     duck_con,
     canonical_addresses_small,
     exact_matches_with_duplicates,
     splink_candidates_with_duplicates,
+    include_unmatched,
+    expected_ids,
+    unmatched_id_present,
 ):
     result = select_top_match_candidates(
         con=duck_con,
@@ -166,12 +190,15 @@ def test_select_top_match_candidates_prioritises_exact_matches(
         df_canonical=canonical_addresses_small,
         match_weight_threshold=-100.0,
         distinguishability_threshold=None,
+        include_unmatched=include_unmatched,
     )
 
     df = result.order("unique_id").to_df().set_index("unique_id")
 
-    assert list(df.index) == [1, 2, 3, 4]
+    # Check that the expected IDs are present (no duplicates)
+    assert list(df.index) == expected_ids
 
+    # Check exact matches (IDs 1, 2, 3)
     exact_expectations = {
         1: 100,
         2: 102,
@@ -184,11 +211,20 @@ def test_select_top_match_candidates_prioritises_exact_matches(
         assert pd.isna(row["match_weight"])
         assert pd.isna(row["distinguishability"])
 
+    # Check Splink match (ID 4 had no exact match but has Splink match)
     splink_row = df.loc[4]
     assert splink_row["resolved_canonical_id"] == 104
     assert splink_row["match_reason"] == MatchReason.SPLINK.value
     assert splink_row["match_weight"] == 0.94
     assert splink_row["distinguishability"] == 6.5
+
+    # Check unmatched record if present (ID 5 has no match anywhere)
+    if unmatched_id_present:
+        unmatched_row = df.loc[5]
+        assert pd.isna(unmatched_row["resolved_canonical_id"])
+        assert pd.isna(unmatched_row["match_reason"])
+        assert pd.isna(unmatched_row["match_weight"])
+        assert pd.isna(unmatched_row["distinguishability"])
 
 
 def test_select_top_match_candidates_handles_empty_splink_relation(

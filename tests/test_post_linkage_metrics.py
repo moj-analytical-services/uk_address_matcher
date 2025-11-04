@@ -35,26 +35,6 @@ def test_calculate_exact_match_metrics_basic_counts():
     assert pytest.approx(percentages["method_a"], rel=1e-6) == "33.33%"
 
 
-def test_calculate_exact_match_metrics_drops_null_methods():
-    con = duckdb.connect(database=":memory:")
-    relation = con.sql(
-        """
-        SELECT *
-        FROM (VALUES
-            ('method_a'),
-            (NULL)
-        ) AS t(match_reason)
-        """
-    )
-
-    result_df = calculate_match_metrics(relation).df()
-
-    assert result_df["match_reason"].isnull().sum() == 0
-    assert dict(zip(result_df["match_reason"], result_df["match_count"])) == {
-        "method_a": 1
-    }
-
-
 def test_calculate_exact_match_metrics_supports_ascending_order():
     con = duckdb.connect(database=":memory:")
     relation = con.sql(

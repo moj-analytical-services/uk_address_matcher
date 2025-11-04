@@ -1,24 +1,14 @@
 import pytest
 
-from uk_address_matcher.linking_model.exact_matching.exact_matching_model import (
-    _annotate_exact_matches,
-    _filter_unmatched_exact_matches,
-    _resolve_with_trie,
-)
+from uk_address_matcher.linking_model.exact_matching import run_deterministic_match_pass
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
-from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 
 
 @pytest.fixture
-def enum_values() -> str:
-    return str(MatchReason.enum_values())
-
-
-@pytest.fixture
-def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
-    duck_con.execute(
-        f"""
-        CREATE OR REPLACE TABLE fuzzy_addresses AS
+def test_data(duck_con):
+    """Set up test data as DuckDB PyRelations for exact matching tests."""
+    df_fuzzy = duck_con.sql(
+        """
         SELECT *
         FROM (
             VALUES
@@ -26,89 +16,70 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
                     1,
                     '4 Sample Street',
                     'CC3 3CC',
-                    NULL::BIGINT,
                     ARRAY['4', 'sample', 'street'],
-                    'unmatched'::ENUM {enum_values},
                     1::BIGINT
                 ),
                 (
                     10,
                     '4 Sample Street',
                     'CC3 3CC',
-                    NULL::BIGINT,
                     ARRAY['4', 'sample', 'street'],
-                    'unmatched'::ENUM {enum_values},
                     2::BIGINT
                 ),
                 (
                     2,
                     '5 Demo Rd',
                     'DD4 4DD',
-                    NULL::BIGINT,
                     ARRAY['5', 'demo', 'rd'],
-                    'unmatched'::ENUM {enum_values},
                     3::BIGINT
                 ),
                 (
                     2,
                     '5 Demo Rd',
                     'DD4 4DD',
-                    NULL::BIGINT,
                     ARRAY['5', 'demo', 'rd'],
-                    'unmatched'::ENUM {enum_values},
                     4::BIGINT
                 ),
                 (
                     2,
                     '5 Demo Road',
                     'DD4 4DD',
-                    NULL::BIGINT,
                     ARRAY['5', 'demo', 'road'],
-                    'unmatched'::ENUM {enum_values},
                     5::BIGINT
                 ),
                 (
                     2,
                     '5 Demo Road',
                     'DD4 4DD',
-                    NULL::BIGINT,
                     ARRAY['5', 'demo', 'road'],
-                    'unmatched'::ENUM {enum_values},
                     6::BIGINT
                 ),
                 (
                     2,
                     '4 Sample St',
                     'CC3 3CC',
-                    NULL::BIGINT,
                     ARRAY['4', 'sample', 'st'],
-                    'unmatched'::ENUM {enum_values},
                     7::BIGINT
                 ),
                 (
                     3,
                     '999 Mystery Lane',
                     'EE5 5EE',
-                    NULL::BIGINT,
                     ARRAY['999', 'mystery', 'lane'],
-                    'unmatched'::ENUM {enum_values},
                     8::BIGINT
                 )
         ) AS t(
             unique_id,
             original_address_concat,
             postcode,
-            resolved_canonical_id,
             address_tokens,
-            match_reason,
             ukam_address_id
         )
         """
     )
 
-    duck_con.execute(
+    df_canonical = duck_con.sql(
         """
-        CREATE OR REPLACE TABLE canonical_addresses AS
         SELECT *
         FROM (
             VALUES
@@ -136,20 +107,18 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
         """
     )
 
-    return [
-        InputBinding("fuzzy_addresses", duck_con.table("fuzzy_addresses")),
-        InputBinding("canonical_addresses", duck_con.table("canonical_addresses")),
-    ]
+    return df_fuzzy, df_canonical
 
 
-def test_unmatched_records_retain_original_unique_id(duck_con, trie_input_bindings):
-    pipeline = create_sql_pipeline(
+def test_unmatched_records_retain_original_unique_id(duck_con, test_data):
+    df_fuzzy, df_canonical = test_data
+
+    results = run_deterministic_match_pass(
         duck_con,
-        trie_input_bindings,
-        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
+        df_fuzzy,
+        df_canonical,
+        enabled_stage_names=["resolve_with_trie"],
     )
-
-    results = pipeline.run()
 
     columns = set(results.columns)
     assert "unique_id" in columns
@@ -174,7 +143,7 @@ def test_unmatched_records_retain_original_unique_id(duck_con, trie_input_bindin
         (2, 2000, MatchReason.TRIE.value, 5),
         (2, 2000, MatchReason.TRIE.value, 6),
         (2, 1000, MatchReason.TRIE.value, 7),
-        (3, None, MatchReason.UNMATCHED.value, 8),
+        (3, None, None, 8),
     ]
 
 
@@ -184,33 +153,29 @@ def test_unmatched_records_retain_original_unique_id(duck_con, trie_input_bindin
 # We've resolved this issue by implementing a ukam_address_id surrogate key
 # to guarantee uniqueness of the input records.
 @pytest.mark.parametrize(
-    "stages",
+    "enabled_stages",
     [
-        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
-        [_filter_unmatched_exact_matches, _resolve_with_trie],
+        ["resolve_with_trie"],  # Exact + trie
+        None,  # Exact only
     ],
 )
-def test_trie_stage_does_not_inflate_row_count(duck_con, trie_input_bindings, stages):
-    pipeline = create_sql_pipeline(
+def test_trie_stage_does_not_inflate_row_count(duck_con, enabled_stages, test_data):
+    df_fuzzy, df_canonical = test_data
+
+    results = run_deterministic_match_pass(
         duck_con,
-        trie_input_bindings,
-        stages,
+        df_fuzzy,
+        df_canonical,
+        enabled_stage_names=enabled_stages,
     )
 
-    results = pipeline.run()
-
-    input_row_count = duck_con.table("fuzzy_addresses").count("*").fetchone()[0]
+    input_row_count = df_fuzzy.count("*").fetchone()[0]
     total_rows = results.count("*").fetchone()[0]
     output_ids = results.order("ukam_address_id").project("ukam_address_id").fetchall()
-    input_ids = (
-        duck_con.table("fuzzy_addresses")
-        .order("ukam_address_id")
-        .project("ukam_address_id")
-        .fetchall()
-    )
+    input_ids = df_fuzzy.order("ukam_address_id").project("ukam_address_id").fetchall()
 
     assert total_rows == input_row_count, (
-        "Trie pipeline should not increase row count; "
+        "Deterministic pipeline should not change row count; "
         f"expected {input_row_count}, got {total_rows}"
     )
     assert output_ids == input_ids, "Pipeline must preserve ukam_address_id coverage"
