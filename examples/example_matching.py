@@ -12,6 +12,10 @@ from uk_address_matcher import (
     clean_data_using_precomputed_rel_tok_freq,
     get_linker,
     improve_predictions_using_distinguishing_tokens,
+)
+from uk_address_matcher.linking_model.exact_matching import (
+    StageName,
+    available_deterministic_stages,
     run_deterministic_match_pass,
 )
 from uk_address_matcher.post_linkage.match_candidate_selection import (
@@ -63,16 +67,22 @@ df_fhrs_clean = clean_data_using_precomputed_rel_tok_freq(df_fhrs, con=con)
 # Step 3: Run exact matching to reduce the number of records to consider
 # -----------------------------------------------------------------------------
 
+# Discover available matching stages (EXACT_MATCHES is always enabled)
+print("\nAvailable deterministic matching stages (optional):")
+for stage in available_deterministic_stages():
+    print(f"  - {stage.value} (StageName.{stage.name})")
+
+# Enable additional stages beyond the always-on EXACT_MATCHES
 df_fhrs_exact_matches = run_deterministic_match_pass(
     con=con,
     df_addresses_to_match=df_fhrs_clean,
     df_addresses_to_search_within=df_ch_clean,
-    enabled_stage_names=["resolve_with_trie"],
+    enabled_stage_names=[StageName.TRIE],
+    # Alternative: enabled_stage_names=["trie"]  # Using string also works
 )
 
 exact_match_summary = calculate_match_metrics(df_fhrs_exact_matches)
-print("\nExact match results summary:")
-print(exact_match_summary)
+print(f"\nExact match results summary:\n{exact_match_summary}")
 
 # -----------------------------------------------------------------------------
 # Step 4: Link the data using Splink - First pass
