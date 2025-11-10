@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarking.datasets.base import DatasetInfo
+from benchmarking.datasets.registry import DatasetInfo
 from benchmarking.datasets.lambeth_council import (
     LAMBETH_COUNCIL_INFO,
     get_lambeth_council_data,

@@ -12,7 +12,7 @@ from uk_address_matcher.cleaning.pipelines import (
 )
 
 if TYPE_CHECKING:
-    from benchmarking.datasets.base import DatasetInfo
+    from benchmarking.datasets.registry import DatasetInfo
 
 # Type aliases for dataset cleaning and loader functions
 CleaningFunction = Callable[
