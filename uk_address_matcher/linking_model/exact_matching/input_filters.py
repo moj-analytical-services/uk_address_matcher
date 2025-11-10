@@ -38,19 +38,9 @@ def _filter_unmatched_exact_matches() -> list[CTEStep]:
     stage_output="canonical_addresses_restricted",
 )
 def _restrict_canonical_to_fuzzy_postcodes(
-    postcode_strategy: PostcodeStrategy,
-    fuzzy_input_name: str = "fuzzy_addresses",
+    postcode_strategy: PostcodeStrategy
 ) -> list[CTEStep]:
     """Filter canonical addresses to those matching fuzzy input postcodes.
-
-    Parameters
-    ----------
-    postcode_strategy:
-        'exact' returns canonical records with matching full postcodes.
-        'drop_last_char' returns canonical records with matching postcode prefixes
-        (minus the last character) and includes postcode_group for downstream trie matching.
-    fuzzy_input_name:
-        The placeholder name for the fuzzy input table. Defaults to 'fuzzy_addresses'.
     """
     if postcode_strategy not in POSTCODE_STRATEGIES:
         valid_strategies = ", ".join(f"'{s}'" for s in POSTCODE_STRATEGIES)
@@ -89,7 +79,7 @@ def _restrict_canonical_to_fuzzy_postcodes(
     fuzzy_subquery = f"""
         SELECT DISTINCT
             {fuzzy_key_expr} AS postcode_key
-        FROM {{{fuzzy_input_name}}}
+        FROM {{fuzzy_addresses}}
         WHERE {fuzzy_key_expr} IS NOT NULL
     """
 
