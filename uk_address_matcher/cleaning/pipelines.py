@@ -64,11 +64,18 @@ QUEUE_POST_TF = [
 
 
 def _materialise_output_table(
-    con: DuckDBPyConnection, rel: DuckDBPyRelation, uid: str
+    con: DuckDBPyConnection,
+    rel: DuckDBPyRelation,
+    uid: str,
+    exclude_source_dataset_name: bool = True,
 ) -> DuckDBPyRelation:
     con.register("__address_table_res", rel)
     has_source_dataset = "source_dataset" in rel.columns
-    exclude_clause = "EXCLUDE (source_dataset)" if has_source_dataset else ""
+    exclude_clause = (
+        "EXCLUDE (source_dataset)"
+        if has_source_dataset and exclude_source_dataset_name
+        else ""
+    )
     materialised_name = f"__address_table_cleaned_{uid}"
     con.execute(
         f"""
@@ -93,7 +100,9 @@ def clean_data_with_minimal_steps(
         pipeline_description="A minimal cleaning pipeline without term frequencies",
     )
     table_rel = pipeline.run(debug_options)
-    return _materialise_output_table(con, table_rel, _uid())
+    return _materialise_output_table(
+        con, table_rel, _uid(), exclude_source_dataset_name=False
+    )
 
 
 def clean_data_on_the_fly(
