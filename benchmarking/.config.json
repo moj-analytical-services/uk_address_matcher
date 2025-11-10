@@ -1,0 +1,5 @@
+{
+	"UKAM_S3_BASE_PREFIX": "s3://dummy-bucket",
+	"UKAM_LAMBETH_DATA_PATH": "placeholder/path/for/lambeth/",
+	"UKAM_OS_CANONICAL_PATH": "/path/to/local/os/canonical.parquet"
+}
