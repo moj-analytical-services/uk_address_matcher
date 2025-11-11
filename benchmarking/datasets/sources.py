@@ -41,18 +41,42 @@ class SourceConfig:
     s3_key: str
     unique_id_column: str
     postcode_column: str
-    address_columns: list[str]
+    address_columns: list[str] | str
     # Returns unique_id by default
     unique_id_formatter: UniqueIdFormatter = lambda x: x
+    prune_postcode_from_address: bool = False
 
     def select_statement(self, base_path: str) -> str:
-        """Generate SQL SELECT statement to read and transform this source."""
-        cols = ", ".join(quote_identifier(col) for col in self.address_columns)
-        address_expr = (
-            "regexp_replace(trim(concat_ws(' ', {cols})), '\\s+', ' ')".format(
-                cols=cols
+        """Generate SQL SELECT statement to read and transform this source.
+
+        Handles both single address columns and multi-column addresses.
+        If prune_postcode_from_address is True, removes the postcode value
+        from the address string (case-insensitive).
+        """
+        # Build the address expression
+        if isinstance(self.address_columns, str):
+            # Single column: just trim and optionally prune postcode
+            address_expr = f"trim({quote_identifier(self.address_columns)})"
+        else:
+            # Multiple columns: concatenate, trim, and normalise spaces
+            cols = ", ".join(
+                quote_identifier(col) for col in self.address_columns
             )
-        )
+            address_expr = (
+                "regexp_replace(trim(concat_ws(' ', {cols})), '\\s+', ' ')".format(
+                    cols=cols
+                )
+            )
+
+        # Apply postcode pruning if requested
+        if self.prune_postcode_from_address:
+            postcode_col = quote_identifier(self.postcode_column)
+            # Case-insensitive removal: handle any casing of the postcode value
+            address_expr = (
+                f"trim(regexp_replace({address_expr}, "
+                f"concat('(^|\\s)', regexp_escape({postcode_col}), '($|\\s)'), ' ', 'i'))"
+            )
+
         unique_id_expr = self.unique_id_formatter(
             f"cast({quote_identifier(self.unique_id_column)} as varchar)"
         )
@@ -63,6 +87,8 @@ class SourceConfig:
                 {quote_identifier(self.postcode_column)} AS postcode,
                 '{self.name}' AS dataset_name
             FROM read_parquet('{base_path}{self.s3_key}')
+            WHERE address_concat IS NOT NULL
+                AND postcode IS NOT NULL
         """
 
 

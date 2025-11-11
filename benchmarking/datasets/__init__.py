@@ -20,6 +20,10 @@ from benchmarking.datasets.sources import (
     SourceConfig,
     load_canonical_data,
 )
+from uk_address_matcher.cleaning.pipelines import (
+    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_minimal_steps,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -33,6 +37,7 @@ def load_benchmark_data(
     dataset_name: str,
     os_data_path: Path | None = None,
     include_term_frequencies: bool = False,
+    sample_mode: bool = False,
 ) -> tuple[duckdb.DuckDBPyRelation, duckdb.DuckDBPyRelation]:
     """Load a benchmark dataset with messy and canonical data.
 
@@ -47,6 +52,11 @@ def load_benchmark_data(
         Name of the registered dataset to load.
     os_data_path:
         Optional path to canonical OS data. If None, uses default location.
+    include_term_frequencies:
+        Whether to include term frequency information in the output.
+    sample_mode:
+        If True, load 100k canonical records and 10k messy records (deterministically).
+        If False, load all records.
 
     Returns
     -------
@@ -56,6 +66,23 @@ def load_benchmark_data(
     print(f"Available datasets: {', '.join(list_datasets())}")
     print(f"Loading dataset: {dataset_name}\n")
 
+    # Load raw messy data
+    df_messy = load_dataset(dataset_name, con)
+
+    # Apply deterministic sampling if requested (before cleaning for efficiency)
+    if sample_mode:
+        df_messy = con.sql(
+            "SELECT * FROM df_messy ORDER BY unique_id LIMIT 10000"
+        )
+
+    # Apply cleaning logic
+    if include_term_frequencies:
+        cleaning_function = clean_data_using_precomputed_rel_tok_freq
+    else:
+        cleaning_function = clean_data_with_minimal_steps
+
+    df_messy = cleaning_function(df_messy, con)
+
     # Load canonical data once
     canonical_config = (
         CanonicalConfig(local_path=os_data_path)
@@ -64,10 +91,11 @@ def load_benchmark_data(
     )
     df_canonical = load_canonical_data(con, canonical_config)
 
-    # Load messy data for the requested dataset
-    df_messy = load_dataset(
-        dataset_name, con, include_term_frequencies=include_term_frequencies
-    )
+    # Apply deterministic sampling if requested
+    if sample_mode:
+        df_canonical = con.sql(
+            "SELECT * FROM df_canonical ORDER BY ukam_address_id LIMIT 1_000_000"
+        )
 
     # Show dataset info
     info = get_dataset_info(dataset_name)
