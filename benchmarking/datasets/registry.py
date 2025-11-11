@@ -6,20 +6,12 @@ from typing import TYPE_CHECKING, Callable
 
 import duckdb
 
-from uk_address_matcher.cleaning.pipelines import (
-    clean_data_using_precomputed_rel_tok_freq,
-    clean_data_with_minimal_steps,
-)
-
 if TYPE_CHECKING:
     from benchmarking.datasets.registry import DatasetInfo
 
 # Type aliases for dataset cleaning and loader functions
-CleaningFunction = Callable[
-    [duckdb.DuckDBPyRelation, duckdb.DuckDBPyConnection], duckdb.DuckDBPyRelation
-]
 DatasetLoader = Callable[
-    [duckdb.DuckDBPyConnection, CleaningFunction], duckdb.DuckDBPyRelation
+    [duckdb.DuckDBPyConnection], duckdb.DuckDBPyRelation
 ]
 
 
@@ -75,21 +67,22 @@ def get_dataset_info(name: str) -> DatasetInfo:
 
 @lru_cache(maxsize=None)
 def load_dataset(
-    name: str, con: duckdb.DuckDBPyConnection, *, include_term_frequencies: bool
+    name: str, con: duckdb.DuckDBPyConnection
 ) -> duckdb.DuckDBPyRelation:
+    """Load raw dataset without cleaning applied.
+
+    Cleaning should be applied separately via clean_data_with_minimal_steps
+    or clean_data_using_precomputed_rel_tok_freq as needed.
+    """
     if name not in _DATASET_REGISTRY:
         available = ", ".join(_DATASET_REGISTRY.keys())
         raise ValueError(
             f"Unknown dataset: {name}. Available datasets: {available or 'none'}"
         )
-    if include_term_frequencies:
-        cleaning_function = clean_data_using_precomputed_rel_tok_freq
-    else:
-        cleaning_function = clean_data_with_minimal_steps
 
     registered = _DATASET_REGISTRY[name]
     print(f"Loading {registered.info.name}...")
-    return registered.loader(con, cleaning_function)
+    return registered.loader(con)
 
 
 def list_datasets() -> list[str]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from benchmarking.datasets.registry import DatasetInfo
 from benchmarking.datasets.sources import SourceConfig
@@ -60,6 +60,14 @@ _LAMBETH_SOURCES = (
         ],
         unique_id_formatter=_strip_decimal_suffix,
     ),
+    SourceConfig(
+        name="local_land_and_property_gazetteer",
+        s3_key="llpg.parquet",
+        unique_id_column="UPRN_BLPU",
+        postcode_column="Postcode_LPI",
+        address_columns=["Address_LPI"],
+        prune_postcode_from_address=True,
+    ),
 )
 
 
@@ -78,7 +86,7 @@ LAMBETH_COUNCIL_INFO = DatasetInfo(
 
 @lru_cache(maxsize=None)
 def get_lambeth_council_data(
-    con: duckdb.DuckDBPyConnection, cleaning_function: Callable
+    con: duckdb.DuckDBPyConnection,
 ) -> duckdb.DuckDBPyRelation:
     # Ensure httpfs extension is loaded for S3 access
     load_duckdb_httpfs(con)
@@ -90,6 +98,4 @@ def get_lambeth_council_data(
     )
     df_messy_raw = con.sql(union_sql).filter("unique_id IS NOT NULL")
 
-    cleaner_name = getattr(cleaning_function, "__name__", repr(cleaning_function))
-    print(f"Cleaning messy input using '{cleaner_name}'...")
-    return cleaning_function(df_messy_raw, con=con)
+    return df_messy_raw
