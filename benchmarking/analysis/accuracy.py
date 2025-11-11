@@ -50,23 +50,42 @@ def calculate_accuracy_metrics(
             CASE WHEN unique_id = resolved_canonical_id THEN 1 ELSE 0 END AS is_correct
         FROM matches
         WHERE match_reason IS NOT NULL
+    ),
+    aggregated AS (
+        SELECT
+            CASE WHEN GROUPING(dataset_name) = 1 THEN 'ALL_DATASETS' ELSE dataset_name END AS dataset_name,
+            CASE WHEN GROUPING(match_reason) = 1 THEN 'OVERALL' ELSE match_reason END AS match_reason,
+            COUNT(*) AS total_matched,
+            SUM(is_correct) AS correct_matches,
+            COUNT(*) - SUM(is_correct) AS incorrect_matches,
+            ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0), 2) AS accuracy_pct,
+            GROUPING(dataset_name) AS dataset_grouping,
+            GROUPING(match_reason) AS reason_grouping
+        FROM matched_records
+        GROUP BY GROUPING SETS ((dataset_name, match_reason), (dataset_name), ())
     )
     SELECT
-        CASE WHEN GROUPING(dataset_name) = 1 THEN 'ALL_DATASETS' ELSE dataset_name END AS dataset_name,
-        CASE WHEN GROUPING(match_reason) = 1 THEN 'OVERALL' ELSE match_reason END AS match_reason,
-        COUNT(*) AS total_matched,
-        SUM(is_correct) AS correct_matches,
-        COUNT(*) - SUM(is_correct) AS incorrect_matches,
-        ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0), 2) AS accuracy_pct
-    FROM matched_records
-    GROUP BY GROUPING SETS ((dataset_name, match_reason), (dataset_name), ())
+        dataset_name,
+        match_reason,
+        total_matched,
+        correct_matches,
+        incorrect_matches,
+        accuracy_pct
+    FROM aggregated
     ORDER BY
         CASE
-            WHEN GROUPING(dataset_name) = 1 THEN 0
-            WHEN GROUPING(match_reason) = 1 THEN 1
-            ELSE 2
+            WHEN dataset_grouping = 1 THEN 0
+            ELSE 1
+        END,
+        CASE
+            WHEN dataset_name = 'ALL_DATASETS' THEN 0
+            ELSE 1
         END,
         dataset_name,
+        CASE
+            WHEN reason_grouping = 1 THEN 0
+            ELSE 1
+        END,
         total_matched DESC
     """
 
