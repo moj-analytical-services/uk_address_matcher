@@ -43,6 +43,7 @@ class SourceConfig:
     postcode_column: str
     address_columns: list[str] | str
     # Returns unique_id by default
+    optional_filter: str | None = None
     unique_id_formatter: UniqueIdFormatter = lambda x: x
     prune_postcode_from_address: bool = False
 
@@ -89,6 +90,7 @@ class SourceConfig:
             FROM read_parquet('{base_path}{self.s3_key}')
             WHERE address_concat IS NOT NULL
                 AND postcode IS NOT NULL
+                {f'AND {self.optional_filter}' if self.optional_filter else ''}
         """
 
 

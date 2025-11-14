@@ -46,6 +46,7 @@ _LAMBETH_SOURCES = (
         postcode_column="POSTCODE",
         address_columns=["ADDR1", "ADDR2", "ADDR3", "ADDR4"],
         unique_id_formatter=_strip_decimal_suffix,
+        optional_filter="uprn != '10090204019'",
     ),
     SourceConfig(
         name="electoral_register",
