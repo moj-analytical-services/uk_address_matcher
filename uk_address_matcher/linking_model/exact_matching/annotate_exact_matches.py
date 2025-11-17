@@ -12,7 +12,7 @@ FuzzyInputName = Literal["fuzzy_addresses", "unmatched_records"]
     name="annotate_exact_matches",
     description=(
         "Annotate fuzzy addresses with exact hash-join matches on "
-        "original_address_concat + postcode"
+        "clean_full_address + postcode"
     ),
     tags=["phase_1", "exact_matching"],
     depends_on=["restrict_canonical_to_fuzzy_postcodes"],
@@ -29,7 +29,7 @@ def _annotate_exact_matches(
         the initial pass. Can be set to "unmatched_records" when running after filtering.
     """
     match_condition = """
-        fuzzy.original_address_concat = canon.original_address_concat
+        fuzzy.clean_full_address = canon.clean_full_address
         AND fuzzy.postcode = canon.postcode
     """
 

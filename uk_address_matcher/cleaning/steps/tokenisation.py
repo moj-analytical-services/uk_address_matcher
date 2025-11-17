@@ -13,7 +13,7 @@ def _create_tokenised_address_concat():
     sql = """
     SELECT
         *,
-       string_split(original_address_concat, ' ') AS address_tokens
+       string_split(clean_full_address, ' ') AS address_tokens
     FROM {input}
     """
     return sql

@@ -26,14 +26,16 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     Returns:
         DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
     """
+    # We will only ever have FLAT in the code by this point, as APARTMENT and UNIT
+    # have already been removed in earlier cleaning steps
     tokens_sql = """
     SELECT
-        ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
+        ['FLAT'] AS __tokens_to_remove,
         list_filter(
-            regexp_split_to_array(address_concat, '\\s+'),
+            regexp_split_to_array(clean_full_address, '\\s+'),
             x -> NOT list_contains(__tokens_to_remove, x)
         ) AS __tokens,
-        row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
+        row_number() OVER (ORDER BY reverse(clean_full_address)) AS row_order,
         *
     FROM {input}
     """
@@ -136,15 +138,16 @@ def _parse_out_flat_position_and_letter():
     flat_letter = r"\b\d{0,4}([A-Za-z])\b"
     leading_letter = r"^\s*\d+([A-Za-z])\b"
 
-    flat_number = r"\b(FLAT|UNIT|APARTMENT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
+    # Any variation of 'FLAT' is now transformed to 'FLAT' in earlier cleaning steps
+    flat_number = r"\b(FLAT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
 
     extract_sql = f"""
     SELECT
         *,
-        regexp_extract(address_concat, '{floor_positions}', 1) as floor_pos,
-        regexp_extract(address_concat, '{flat_letter}', 1) as flat_letter,
-        regexp_extract(address_concat, '{leading_letter}', 1) as leading_letter,
-        regexp_extract(address_concat, '{flat_number}', 1) as flat_number
+        regexp_extract(clean_full_address, '{floor_positions}', 1) as floor_pos,
+        regexp_extract(clean_full_address, '{flat_letter}', 1) as flat_letter,
+        regexp_extract(clean_full_address, '{leading_letter}', 1) as leading_letter,
+        regexp_extract(clean_full_address, '{flat_number}', 1) as flat_number
     FROM {{input}}
     """
 
@@ -204,13 +207,13 @@ def _parse_out_numbers():
     )
     sql = f"""
     SELECT
-        * EXCLUDE (address_concat),
-        regexp_replace(address_concat, '{regex_pattern}', '', 'g') AS address_without_numbers,
+        *,
+        regexp_replace(clean_full_address, '{regex_pattern}', '', 'g') AS address_without_numbers,
         CASE
             WHEN flat_letter IS NOT NULL AND flat_letter ~ '^\\d+$' THEN
-            regexp_extract_all(address_concat, '{regex_pattern}')[2:]
+            regexp_extract_all(clean_full_address, '{regex_pattern}')[2:]
             ELSE
-                regexp_extract_all(address_concat, '{regex_pattern}')
+                regexp_extract_all(clean_full_address, '{regex_pattern}')
         END AS numeric_tokens
     FROM {{input}}
     """

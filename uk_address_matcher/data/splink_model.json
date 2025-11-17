@@ -89,18 +89,18 @@
     ],
     "comparisons": [
         {
-            "output_column_name": "original_address_concat",
+            "output_column_name": "clean_full_address",
             "comparison_levels": [
                 {
-                    "sql_condition": "\"original_address_concat_l\" IS NULL OR \"original_address_concat_r\" IS NULL",
-                    "label_for_charts": "original_address_concat is NULL",
+                    "sql_condition": "\"clean_full_address_l\" IS NULL OR \"clean_full_address_r\" IS NULL",
+                    "label_for_charts": "clean_full_address is NULL",
                     "fix_m_probability": false,
                     "fix_u_probability": false,
                     "is_null_level": true
                 },
                 {
-                    "sql_condition": "\"original_address_concat_l\" = \"original_address_concat_r\"",
-                    "label_for_charts": "Exact match on original_address_concat",
+                    "sql_condition": "\"clean_full_address_l\" = \"clean_full_address_r\"",
+                    "label_for_charts": "Exact match on clean_full_address",
                     "m_probability": 15,
                     "u_probability": 1,
                     "fix_m_probability": false,

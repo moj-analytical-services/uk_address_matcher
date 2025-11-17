@@ -1,7 +1,12 @@
 import os
 import subprocess
 
+import duckdb
 import pytest
+
+from uk_address_matcher.cleaning.pipelines import (
+    clean_data_using_precomputed_rel_tok_freq,
+)
 
 
 def test_full_example():
@@ -27,15 +32,34 @@ def test_full_example():
 
 
 @pytest.mark.parametrize(
-    "path",
+    "path, postcode",
     [
-        "tests/test_data/one_clean_row_downing_street.parquet",
-        "tests/test_data/one_clean_exact_matching_row_downing_street.parquet",
+        ("tests/test_data/one_clean_row_downing_street.parquet", "SW1A 2AA"),
+        (
+            "tests/test_data/one_clean_exact_matching_row_downing_street.parquet",
+            "SW1A 3BC",
+        ),
     ],
     ids=["splink_pass", "exact_match"],
 )
-def test_match_one(path):
+def test_match_one(path, postcode):
     env = os.environ.copy()
+
+    # If we don't run this every time, any changes to cleaning will not be picked up
+    con = duckdb.connect(":memory:")
+    canon_data = con.sql(
+        f"""
+    select
+        '1' as unique_id,
+        '10 downing street westminster london' as address_concat,
+        '{postcode}' as postcode
+    """
+    )
+    canon_data = clean_data_using_precomputed_rel_tok_freq(canon_data, con=con)
+    con.sql(
+        f"COPY ({canon_data.sql_query()}) TO '{os.path.abspath(path)}' (FORMAT 'parquet')"
+    )
+
     # We need to provide a way to override the hardcoded path in match_one.py
     env["OS_CLEAN_PATH"] = f"read_parquet('{os.path.abspath(path)}')"
 

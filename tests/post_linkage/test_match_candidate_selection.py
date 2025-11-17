@@ -136,7 +136,9 @@ def test_prepare_splink_candidates_returns_top_results(
 ):
     result = create_sql_pipeline(
         con=duck_con,
-        input_rel=[InputBinding("splink_matches", splink_candidates_with_duplicates)],
+        input_rel=[
+            InputBinding("splink_matches__ukam", splink_candidates_with_duplicates)
+        ],
         stage_specs=[
             _prepare_splink_candidates(
                 match_weight_threshold=-100.0,

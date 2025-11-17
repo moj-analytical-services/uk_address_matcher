@@ -77,7 +77,10 @@ def get_linker(
     # Use ukam_address_id as unique_id column name (created as part of our cleaning process)
     settings_as_dict["unique_id_column_name"] = "ukam_address_id"
     # Also make sure we now retain unique_id from both datasets...
-    settings_as_dict["additional_columns_to_retain"] += ["unique_id"]
+    settings_as_dict["additional_columns_to_retain"] += [
+        "unique_id",
+        "original_address_concat",
+    ]
 
     settings_as_dict["retain_intermediate_calculation_columns"] = (
         retain_intermediate_calculation_columns

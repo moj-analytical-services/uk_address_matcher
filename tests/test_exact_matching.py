@@ -14,56 +14,64 @@ def test_data(duck_con):
             VALUES
                 (
                     1,
-                    '4 Sample Street',
+                    '4 SAMPLE STREET',
+                    '4 SAMPLE STREET',
                     'CC3 3CC',
                     ARRAY['4', 'sample', 'street'],
                     1::BIGINT
                 ),
                 (
                     10,
-                    '4 Sample Street',
+                    '4 SAMPLE STREET',
+                    '4 SAMPLE STREET',
                     'CC3 3CC',
                     ARRAY['4', 'sample', 'street'],
                     2::BIGINT
                 ),
                 (
                     2,
-                    '5 Demo Rd',
+                    '5 DEMO RD',
+                    '5 DEMO RD',
                     'DD4 4DD',
                     ARRAY['5', 'demo', 'rd'],
                     3::BIGINT
                 ),
                 (
                     2,
-                    '5 Demo Rd',
+                    '5 DEMO RD',
+                    '5 DEMO RD',
                     'DD4 4DD',
                     ARRAY['5', 'demo', 'rd'],
                     4::BIGINT
                 ),
                 (
                     2,
-                    '5 Demo Road',
+                    '5 DEMO ROAD',
+                    '5 DEMO ROAD',
                     'DD4 4DD',
                     ARRAY['5', 'demo', 'road'],
                     5::BIGINT
                 ),
                 (
                     2,
-                    '5 Demo Road',
+                    '5 DEMO ROAD',
+                    '5 DEMO ROAD',
                     'DD4 4DD',
                     ARRAY['5', 'demo', 'road'],
                     6::BIGINT
                 ),
                 (
                     2,
-                    '4 Sample St',
+                    '4 SAMPLE ST',
+                    '4 SAMPLE ST',
                     'CC3 3CC',
                     ARRAY['4', 'sample', 'st'],
                     7::BIGINT
                 ),
                 (
                     3,
-                    '999 Mystery Lane',
+                    '999 MYSTERY LANE',
+                    '999 MYSTERY LANE',
                     'EE5 5EE',
                     ARRAY['999', 'mystery', 'lane'],
                     8::BIGINT
@@ -71,6 +79,7 @@ def test_data(duck_con):
         ) AS t(
             unique_id,
             original_address_concat,
+            clean_full_address,
             postcode,
             address_tokens,
             ukam_address_id
@@ -85,14 +94,16 @@ def test_data(duck_con):
             VALUES
                 (
                     1000,
-                    '4 Sample Street',
+                    '4 SAMPLE STREET',
+                    '4 SAMPLE STREET',
                     'CC3 3CC',
                     ARRAY['4', 'sample', 'street'],
                     1
                 ),
                 (
                     2000,
-                    '5 Demo Rd',
+                    '5 DEMO RD',
+                    '5 DEMO RD',
                     'DD4 4DD',
                     ARRAY['5', 'demo', 'road'],
                     2
@@ -100,6 +111,7 @@ def test_data(duck_con):
         ) AS t(
             unique_id,
             original_address_concat,
+            clean_full_address,
             postcode,
             address_tokens,
             ukam_address_id

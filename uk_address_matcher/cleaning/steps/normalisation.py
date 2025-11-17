@@ -17,15 +17,18 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
-    name="assign_ukam_address_id",
-    description="Generate a surrogate identifier to guarantee uniqueness of UID",
+    name="rename_and_select_columns",
+    description="Rename and select key columns for downstream processing and assign ukam_address_id",
     tags=["data_preparation"],
 )
-def _assign_ukam_address_id() -> str:
+def _rename_and_select_columns() -> str:
     sql = r"""
     SELECT
-        *,
-       ROW_NUMBER() OVER () AS ukam_address_id
+        unique_id,
+        address_concat as original_address_concat,
+        postcode,
+        ROW_NUMBER() OVER () AS ukam_address_id,
+        * EXCLUDE (unique_id, address_concat, postcode)
     FROM {input}
     """
     return sql
@@ -39,8 +42,8 @@ def _assign_ukam_address_id() -> str:
 def _trim_whitespace_address_and_postcode() -> str:
     sql = r"""
     SELECT
-        * EXCLUDE (address_concat, postcode),
-        TRIM(address_concat) AS address_concat,
+        * EXCLUDE (original_address_concat, postcode),
+        TRIM(original_address_concat) AS original_address_concat,
         TRIM(postcode)       AS postcode
     FROM {input}
     """
@@ -79,14 +82,16 @@ def _canonicalise_postcode() -> str:
 def _upper_case_address_and_postcode() -> str:
     sql = r"""
     SELECT
-        * EXCLUDE (address_concat, postcode),
-        UPPER(address_concat) AS address_concat,
+        * EXCLUDE (original_address_concat, postcode),
+        UPPER(original_address_concat) AS original_address_concat,
         UPPER(postcode)       AS postcode
     FROM {input}
     """
     return sql
 
 
+# TODO(ThomasHepworth):  Do we want to return this normalisation step as `original_address_concat`
+# for a cleaner output for users?
 @pipeline_stage(
     name="clean_address_string_first_pass",
     description="Apply initial address cleaning operations: remove punctuation, standardise separators, and normalise formatting",
@@ -94,7 +99,7 @@ def _upper_case_address_and_postcode() -> str:
 )
 def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
-        "address_concat",
+        "original_address_concat",
         [
             remove_commas_periods,
             remove_apostrophes,
@@ -110,8 +115,8 @@ def _clean_address_string_first_pass() -> str:
     )
     sql = f"""
     SELECT
-        * EXCLUDE (address_concat),
-        {fn_call} AS address_concat
+        *,
+        {fn_call} AS clean_full_address
     FROM {{input}}
     """
     return sql
@@ -129,11 +134,11 @@ def _remove_duplicate_end_tokens() -> str:
     """
     sql = r"""
     WITH tokenised AS (
-        SELECT *, string_split(address_concat, ' ') AS cleaned_tokenised
+        SELECT *, string_split(clean_full_address, ' ') AS cleaned_tokenised
         FROM {input}
     )
     SELECT
-        * EXCLUDE (cleaned_tokenised, address_concat),
+        * EXCLUDE (cleaned_tokenised, clean_full_address),
         CASE
             WHEN array_length(cleaned_tokenised) >= 2
                  AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
@@ -142,24 +147,9 @@ def _remove_duplicate_end_tokens() -> str:
                  AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
                  AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
             THEN array_to_string(cleaned_tokenised[:-3], ' ')
-            ELSE address_concat
-        END AS address_concat
+            ELSE clean_full_address
+        END AS clean_full_address
     FROM tokenised
-    """
-    return sql
-
-
-@pipeline_stage(
-    name="derive_original_address_concat",
-    description="Create a backup copy of the cleaned address before further processing",
-    tags=["data_preparation", "cleaning"],
-)
-def _derive_original_address_concat() -> str:
-    sql = r"""
-    SELECT
-        *,
-        address_concat AS original_address_concat
-    FROM {input}
     """
     return sql
 
