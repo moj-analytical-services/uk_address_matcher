@@ -13,7 +13,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     standarise_num_letter,
     trim,
 )
-from uk_address_matcher.sql_pipeline.steps import pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
@@ -181,3 +181,54 @@ def _clean_address_string_second_pass() -> str:
     FROM {{input}}
     """
     return sql
+
+
+@pipeline_stage(
+    name="normalise_abbreviations_and_units",
+    description="Normalise address abbreviations (RD->ROAD) and unit types using a vectorised map lookup",
+    tags=["normalisation", "cleaning"],
+)
+def _normalise_abbreviations_and_units() -> list[CTEStep]:
+    """Normalise address abbreviations (RD->ROAD) and unit types using a vectorised map lookup
+
+    - 1. Load lookup (upper-case keys for case-insensitive match)
+    - 2. Build a single-row MAP (hashmap) using list aggregations
+    - 3. Vectorised transform over token list, then join back to a string
+    """
+
+    # 1) Load lookup (upper-case keys for case-insensitive match)
+    abbr_lookup_sql = """
+    SELECT
+      UPPER(TRIM(token))       AS token,
+      TRIM(replacement)        AS replacement
+    FROM read_json_auto('uk_address_matcher/data/address_abbreviations.json')
+    WHERE token IS NOT NULL AND replacement IS NOT NULL
+    """
+
+    # 2) Build a single-row MAP using list aggregations (works on DuckDB without map_agg)
+    abbr_map_sql = """
+    SELECT map(list(token), list(replacement)) AS abbr_map
+    FROM {abbr_lookup}
+    """
+
+    # 3) Vectorised transform over token list, then join back to a string
+    cleaned_sql = """
+    SELECT
+      address.* EXCLUDE (clean_full_address),
+      array_to_string(
+        list_transform(
+        string_split(COALESCE(address.clean_full_address, ''), ' '),
+        x -> COALESCE(map_extract(m.abbr_map, x)[1], x)
+        ),
+        ' '
+      ) AS clean_full_address
+    FROM {input} address
+    CROSS JOIN {abbr_map} m
+    """
+
+    steps = [
+        CTEStep("abbr_lookup", abbr_lookup_sql),
+        CTEStep("abbr_map", abbr_map_sql),
+        CTEStep("with_cleaned_address", cleaned_sql),
+    ]
+    return steps
