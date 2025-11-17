@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from uk_address_matcher.cleaning.steps.normalisation import (
-    _assign_ukam_address_id,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
-    _derive_original_address_concat,
     _normalise_abbreviations_and_units,
     _remove_duplicate_end_tokens,
+    _rename_and_select_columns,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
 )
@@ -46,8 +45,7 @@ __all__ = [
     "_upper_case_address_and_postcode",
     "_clean_address_string_first_pass",
     "_remove_duplicate_end_tokens",
-    "_derive_original_address_concat",
-    "_assign_ukam_address_id",
+    "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
     # tokenisation
     "_split_numeric_tokens_to_cols",

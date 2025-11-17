@@ -6,18 +6,18 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from uk_address_matcher.cleaning.steps import (
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
-    _assign_ukam_address_id,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
-    _derive_original_address_concat,
     _final_column_order,
     _first_unusual_token,
     _generalised_token_aliases,
     _get_token_frequeny_table,
     _move_common_end_tokens_to_field,
+    _normalise_abbreviations_and_units,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
+    _rename_and_select_columns,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
     _split_numeric_tokens_to_cols,
@@ -26,6 +26,7 @@ from uk_address_matcher.cleaning.steps import (
     _upper_case_address_and_postcode,
     _use_first_unusual_token_if_no_numeric_token,
 )
+from uk_address_matcher.cleaning.steps.normalisation import _remove_duplicate_end_tokens
 from uk_address_matcher.cleaning.steps.tokenisation import (
     _create_tokenised_address_concat,
 )
@@ -33,12 +34,13 @@ from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
 
 QUEUE_PRE_TF = [
-    _assign_ukam_address_id,
+    _rename_and_select_columns,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
-    _derive_original_address_concat,
+    _normalise_abbreviations_and_units,
+    _remove_duplicate_end_tokens,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _clean_address_string_second_pass,
@@ -48,10 +50,10 @@ QUEUE_PRE_TF = [
 ]
 
 QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
-    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_derive_original_address_concat) + 1],
+    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1],
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _generalised_token_aliases,
-    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_derive_original_address_concat) + 1 :],
+    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1 :],
 ]
 
 QUEUE_POST_TF = [

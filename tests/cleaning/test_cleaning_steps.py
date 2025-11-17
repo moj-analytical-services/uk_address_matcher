@@ -66,7 +66,7 @@ def test_parse_out_flat_positional():
     input_relation = connection.sql(
         "SELECT * FROM (VALUES "
         + ",".join(f"('{address}')" for address, _, _ in test_cases)
-        + ") AS t(address_concat)"
+        + ") AS t(clean_full_address)"
     )
 
     result = _run_single_stage(
@@ -115,7 +115,7 @@ def test_remove_duplicate_end_tokens():
     input_relation = connection.sql(
         "SELECT * FROM (VALUES "
         + ",".join(f"('{address}')" for address, _ in test_cases)
-        + ") AS t(address_concat)"
+        + ") AS t(clean_full_address)"
     )
 
     result = _run_single_stage(_remove_duplicate_end_tokens, input_relation, connection)

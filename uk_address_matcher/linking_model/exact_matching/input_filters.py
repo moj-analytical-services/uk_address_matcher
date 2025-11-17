@@ -1,5 +1,3 @@
-"""Pipeline stages for filtering and probing pipeline inputs."""
-
 from __future__ import annotations
 
 from typing import Literal
@@ -38,10 +36,9 @@ def _filter_unmatched_exact_matches() -> list[CTEStep]:
     stage_output="canonical_addresses_restricted",
 )
 def _restrict_canonical_to_fuzzy_postcodes(
-    postcode_strategy: PostcodeStrategy
+    postcode_strategy: PostcodeStrategy,
 ) -> list[CTEStep]:
-    """Filter canonical addresses to those matching fuzzy input postcodes.
-    """
+    """Filter canonical addresses to those matching fuzzy input postcodes."""
     if postcode_strategy not in POSTCODE_STRATEGIES:
         valid_strategies = ", ".join(f"'{s}'" for s in POSTCODE_STRATEGIES)
         raise ValueError(
@@ -55,7 +52,7 @@ def _restrict_canonical_to_fuzzy_postcodes(
         )
 
     canonical_select_fields = [
-        "canon.original_address_concat",
+        "canon.clean_full_address",
         "canon.postcode",
         "canon.unique_id AS canonical_unique_id",
         "canon.ukam_address_id AS ukam_address_id",
