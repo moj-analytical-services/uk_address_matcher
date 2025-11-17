@@ -17,7 +17,8 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
     name="prepare_splink_candidates",
     description="Filter Splink matches to the top-ranked candidate per fuzzy address.",
     tags=["post_linkage", "splink"],
-    stage_output="splink_top",
+    stage_output="splink_top__ukam",
+    checkpoint=True,
 )
 def _prepare_splink_candidates(
     *,
@@ -58,7 +59,7 @@ def _prepare_splink_candidates(
                     PARTITION BY unique_id_r
                     ORDER BY match_weight DESC, distinguishability DESC NULLS LAST, unique_id_l
                 ) AS match_rank
-            FROM {{splink_matches}}
+            FROM {{splink_matches__ukam}}
             WHERE match_weight >= {match_weight_threshold}
             {distinguishability_filter}
         ) AS ranked
@@ -82,7 +83,7 @@ def _combine_exact_and_splink_matches(*, include_unmatched: bool) -> list[CTESte
             ukam_address_id,
             original_address_concat AS original_address_concat_canonical,
             postcode AS postcode_canonical
-        FROM {canonical_addresses}
+        FROM {canonical_addresses__ukam}
     """
 
     common_fields = """
@@ -100,7 +101,8 @@ def _combine_exact_and_splink_matches(*, include_unmatched: bool) -> list[CTESte
     if include_unmatched:
         exact_filter = """
             WHERE match_reason IS NOT NULL
-            OR (match_reason IS NULL AND ukam_address_id NOT IN (SELECT ukam_address_id FROM {splink_top}))
+            OR (match_reason IS NULL AND ukam_address_id NOT IN
+                (SELECT ukam_address_id FROM {splink_top__ukam}))
         """
     else:
         exact_filter = "WHERE match_reason IS NOT NULL"
@@ -112,7 +114,7 @@ def _combine_exact_and_splink_matches(*, include_unmatched: bool) -> list[CTESte
             NULL AS match_weight,
             NULL AS distinguishability,
             NULL AS distinguishability_category
-        FROM {{exact_matches}}
+        FROM {{exact_matches__ukam}}
         {exact_filter}
 
         UNION ALL
@@ -122,10 +124,10 @@ def _combine_exact_and_splink_matches(*, include_unmatched: bool) -> list[CTESte
             match_weight,
             distinguishability,
             distinguishability_category
-        FROM {{splink_top}}
+        FROM {{splink_top__ukam}}
         -- Ensures we don't duplicate exact matches if they also appear in Splink
         WHERE ukam_address_id NOT IN (
-            SELECT ukam_address_id FROM {{exact_matches}} WHERE match_reason IS NOT NULL
+            SELECT ukam_address_id FROM {{exact_matches__ukam}} WHERE match_reason IS NOT NULL
         )
     """
 
@@ -144,16 +146,16 @@ def _combine_exact_and_splink_matches(*, include_unmatched: bool) -> list[CTESte
             combined.match_reason,
             combined.ukam_address_id,
             combined.canonical_ukam_address_id
-        FROM {combined_matches} AS combined
-        LEFT JOIN {canonical_projection} AS canon
+        FROM {combined_matches__ukam} AS combined
+        LEFT JOIN {canonical_projection__ukam} AS canon
             ON canon.ukam_address_id = combined.canonical_ukam_address_id
         ORDER BY combined.unique_id
     """
 
     return [
-        CTEStep("canonical_projection", canonical_sql),
-        CTEStep("combined_matches", union_sql),
-        CTEStep("match_candidates", final_sql),
+        CTEStep("canonical_projection__ukam", canonical_sql),
+        CTEStep("combined_matches__ukam", union_sql),
+        CTEStep("match_candidates__ukam", final_sql),
     ]
 
 
@@ -184,9 +186,9 @@ def select_top_match_candidates(
     pipeline = create_sql_pipeline(
         con,
         [
-            InputBinding("exact_matches", df_exact_matches),
-            InputBinding("splink_matches", df_splink_matches),
-            InputBinding("canonical_addresses", df_canonical),
+            InputBinding("exact_matches__ukam", df_exact_matches),
+            InputBinding("splink_matches__ukam", df_splink_matches),
+            InputBinding("canonical_addresses__ukam", df_canonical),
         ],
         [
             _prepare_splink_candidates(
