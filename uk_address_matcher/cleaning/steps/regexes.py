@@ -39,6 +39,7 @@ def standarise_num_dash_num(input: str):
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
 
+# TODO(ThomasHepworth): Do we want this...? For Scottish flats we actually want to keep the slash
 def replace_fwd_slash_with_dash(input: str):
     # Sometimes we see Unit 5/6 as opposed to unit 5-6
     return f"regexp_replace({input}, '/', '-', 'g')"

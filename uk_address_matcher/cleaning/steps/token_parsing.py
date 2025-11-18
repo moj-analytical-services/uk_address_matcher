@@ -124,56 +124,106 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 )
 def _parse_out_flat_position_and_letter():
     """
-    Extracts flat positions and letters from address strings into separate columns.
+    Robustly extracts flat positions, letters, and numbers from address strings.
 
-
-    Args:
-        ddb_pyrel: The input relation
-        con: The DuckDB connection
-
-    Returns:
-        DuckDBPyRelation: The modified table with flat_positional and flat_letter fields
+    Strategy (same as before, just composed more tightly):
+      - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B, Scottish FLAT 3/2)
+      - Prefer letter next to FLAT/number tokens; otherwise fall back to digit+letter anywhere
+      - Only emit flat_number when there's a flat signal or strong heuristic (e.g., leading '11A')
+      - Treat '2 69 GIPSY HILL' as flat_number=2 (two-number start heuristic)
     """
-    floor_positions = r"\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\b"
-    flat_letter = r"\b\d{0,4}([A-Za-z])\b"
-    leading_letter = r"^\s*\d+([A-Za-z])\b"
 
-    # Any variation of 'FLAT' is now transformed to 'FLAT' in earlier cleaning steps
-    flat_number = r"\b(FLAT)\s+(\S*\d\S*)\s+\S*\d\S*\b"
+    # Floor positions (extend in your normalizer as needed)
+    floor_positions = r"BASEMENT|GARDEN"
+    floors = [
+        "GROUND",
+        "FIRST",
+        "SECOND",
+        "THIRD",
+        "FOURTH",
+        "FIFTH",
+        "SXITH",
+        "SEVENTH",
+        "EIGHTH",
+        "NINTH",
+        "TOP FLOOR",
+    ]
+    floor_positions = r"BASEMENT|GARDEN|" + "|".join(
+        [f"{floor} FLOOR" for floor in floors]
+    )
 
-    extract_sql = f"""
+    # Core token patterns (RE2-compatible; avoid lookbehind)
+    num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
+    leading_num_letter = (
+        r"^\s*(\d{1,4})([A-Za-z])\b"  # e.g., 11A ... (number=grp1, letter=grp2)
+    )
+
+    flat_num_after_flat = r"\bFLAT\s+(\d{1,4})\b"  # FLAT 12
+    flat_letter_after_num_after_flat = (
+        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+    )
+    flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
+    flat_num_after_letter_immediate = r"\bFLAT\s+[A-Za-z]\s+(\d{1,4})\b"  # FLAT A 11
+
+    # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
+    scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
+
+    # Base step: compute final fields directly (no helper columns to drop)
+    final_base_sql = f"""
     SELECT
-        *,
-        regexp_extract(clean_full_address, '{floor_positions}', 1) as floor_pos,
-        regexp_extract(clean_full_address, '{flat_letter}', 1) as flat_letter,
-        regexp_extract(clean_full_address, '{leading_letter}', 1) as leading_letter,
-        regexp_extract(clean_full_address, '{flat_number}', 1) as flat_number
-    FROM {{input}}
+        i.*,
+
+        -- 1) Positional/floor signal
+        NULLIF(regexp_extract(i.clean_full_address, '{floor_positions}', 1), '') AS flat_positional,
+
+        -- 2) flat_letter (priority: FLAT 12A → A, FLAT A → A, 11A start → A, 15B anywhere → B)
+        COALESCE(
+            NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), ''),
+            NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1), ''),
+            NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 2), ''),
+            NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2), '')
+        ) AS flat_letter,
+
+        -- 3) flat_number (priority explained inline)
+        COALESCE(
+            -- FLAT 3/2 → 2
+            NULLIF(regexp_extract(i.original_address_concat, '{scottish_flat}', 2), ''),
+
+            -- FLAT 12 / FLAT 2 / FLAT 12A → take the number next to FLAT first
+            NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), ''),
+
+            -- FLAT A 11 → 11
+            NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_letter_immediate}', 1), ''),
+
+            -- 11A at start → 11 (leading_num_letter group 1)
+            NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 1), ''),
+
+            -- 15B anywhere → 15
+            NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1), ''),
+
+            -- Two-number start heuristic: "2 69 GIPSY HILL" → 2 (only if there is a second number)
+            CASE
+                WHEN NULLIF(regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1), '') IS NOT NULL
+                 AND NULLIF(regexp_extract(i.clean_full_address, '^\\s*\\d{{1,4}}\\D+.*?\\b(\\d{{1,4}})\\b', 1), '') IS NOT NULL
+                THEN regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1)
+            END
+        ) AS flat_number
+
+    FROM {{input}} i
     """
 
+    # Final step: boolean indicator (split out so we can refer to computed aliases)
     final_sql = """
     SELECT
-        * EXCLUDE (floor_pos, flat_letter, leading_letter, flat_number),
-        NULLIF(floor_pos, '') as flat_positional,
-        NULLIF(
-            COALESCE(
-                NULLIF(flat_letter, ''),
-                NULLIF(leading_letter, ''),
-                CASE
-                    WHEN LENGTH(flat_number) <= 4 THEN flat_number
-                    ELSE NULL
-                END
-            ),
-            ''
-        ) as flat_letter
-    FROM {extract_step}
+        *,
+        (flat_letter IS NOT NULL OR flat_number IS NOT NULL OR flat_positional IS NOT NULL) AS has_flat_indicator
+    FROM {final_base}
     """
 
     steps = [
-        CTEStep("extract_step", extract_sql),
+        CTEStep("final_base", final_base_sql),
         CTEStep("final", final_sql),
     ]
-
     return steps
 
 

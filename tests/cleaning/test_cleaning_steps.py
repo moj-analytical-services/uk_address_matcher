@@ -15,57 +15,41 @@ def _run_single_stage(stage_factory, input_relation, connection):
 
 def test_parse_out_flat_positional():
     connection = duckdb.connect()
+
+    # Format of test cases:
+    # (input_address, flat_positional, flat_letter, flat_number)
     test_cases = [
+        ("11A SPITFIRE COURT 243 BIRMINGHAM", None, "A", "11"),
+        ("FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM", None, "A", "11"),
+        ("BASEMENT FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM", "BASEMENT", "A", "11"),
+        ("BASEMENT FLAT 11 SPITFIRE COURT 243 BIRMINGHAM", "BASEMENT", None, "11"),
+        ("GARDEN FLAT 11 SPITFIRE COURT 243 BIRMINGHAM", "GARDEN", None, "11"),
+        ("TOP FLOOR FLAT 12A HIGH STREET", "TOP FLOOR", "A", "12"),
+        ("SECOND FLOOR FLAT 12 A HIGH STREET", "SECOND FLOOR", "A", "12"),
+        ("GROUND FLOOR FLAT B 25 MAIN ROAD", "GROUND FLOOR", "B", "25"),
+        ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", "15"),
+        ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
+        ("FLAT 2 69 GIPSY HILL", None, None, "2"),
+        ("2 69 GIPSY HILL", None, None, "2"),
+        ("69 GIPSY HILL", None, None, None),
+        ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
+        ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
+        ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
+        ("FLAT THE CROWN TESTING ROAD", None, None, None),
+        ("FLAT 12A HIGH STREET", None, "A", "12"),  # adjacent letter after FLAT number
+        ("15B LONDON ROAD", None, "B", "15"),  # digit+letter not at start
+        ("BASEMENT 15B LONDON ROAD", "BASEMENT", "B", "15"),  # floor + digit+letter
         (
-            "11A SPITFIRE COURT 243 BIRMINGHAM",
+            "FLAT A MY HOUSE 120-122 SOME ROAD",
             None,
             "A",
-        ),
-        (
-            "FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
             None,
-            "A",
-        ),
-        (
-            "BASEMENT FLAT A 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "BASEMENT",
-            "A",
-        ),
-        (
-            "BASEMENT FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "BASEMENT",
-            None,
-        ),
-        (
-            "GARDEN FLAT 11 SPITFIRE COURT 243 BIRMINGHAM",
-            "GARDEN",
-            None,
-        ),
-        (
-            "TOP FLOOR FLAT 12A HIGH STREET",
-            "TOP FLOOR",
-            "A",
-        ),
-        (
-            "GROUND FLOOR FLAT B 25 MAIN ROAD",
-            "GROUND FLOOR",
-            "B",
-        ),
-        (
-            "FIRST FLOOR 15B LONDON ROAD",
-            "FIRST FLOOR",
-            "B",
-        ),
-        (
-            "UNIT C MY HOUSE 120 MY ROAD",
-            None,
-            "C",
         ),
     ]
 
     input_relation = connection.sql(
         "SELECT * FROM (VALUES "
-        + ",".join(f"('{address}')" for address, _, _ in test_cases)
+        + ",".join(f"('{address}')" for address, _, _, _ in test_cases)
         + ") AS t(clean_full_address)"
     )
 
@@ -73,13 +57,29 @@ def test_parse_out_flat_positional():
         _parse_out_flat_position_and_letter, input_relation, connection
     )
     rows = result.fetchall()
+    columns = result.columns
+    positional_idx = columns.index("flat_positional")
+    letter_idx = columns.index("flat_letter")
+    number_idx = columns.index("flat_number")
+    indicator_idx = columns.index("has_flat_indicator")
 
-    for (address, expected_pos, expected_letter), row in zip(test_cases, rows):
-        assert row[-2] == expected_pos, (
-            f"Address '{address}' expected positional '{expected_pos}' but got '{row[-2]}'"
+    for (address, expected_pos, expected_letter, expected_number), row in zip(
+        test_cases, rows
+    ):
+        assert row[positional_idx] == expected_pos, (
+            f"Address '{address}' expected positional '{expected_pos}' but got '{row[positional_idx]}'"
         )
-        assert row[-1] == expected_letter, (
-            f"Address '{address}' expected letter '{expected_letter}' but got '{row[-1]}'"
+        assert row[letter_idx] == expected_letter, (
+            f"Address '{address}' expected letter '{expected_letter}' but got '{row[letter_idx]}'"
+        )
+        assert row[number_idx] == expected_number, (
+            f"Address '{address}' expected number '{expected_number}' but got '{row[number_idx]}'"
+        )
+        expected_indicator = any(
+            value is not None for value in (expected_letter, expected_number)
+        )
+        assert row[indicator_idx] == expected_indicator, (
+            f"Address '{address}' expected has_flat_indicator '{expected_indicator}' but got '{row[indicator_idx]}'"
         )
 
 
