@@ -181,6 +181,7 @@ def get_numeric_term_frequencies_from_address_table(
     debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
+        _rename_and_select_columns,
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
@@ -223,6 +224,7 @@ def get_address_token_frequencies_from_address_table(
     debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
+        _rename_and_select_columns,
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,

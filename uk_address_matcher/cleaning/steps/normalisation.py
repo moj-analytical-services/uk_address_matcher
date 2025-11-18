@@ -90,8 +90,6 @@ def _upper_case_address_and_postcode() -> str:
     return sql
 
 
-# TODO(ThomasHepworth):  Do we want to return this normalisation step as `original_address_concat`
-# for a cleaner output for users?
 @pipeline_stage(
     name="clean_address_string_first_pass",
     description="Apply initial address cleaning operations: remove punctuation, standardise separators, and normalise formatting",
@@ -114,10 +112,17 @@ def _clean_address_string_first_pass() -> str:
         ],
     )
     sql = f"""
+    WITH cleaned AS (
+        SELECT
+            *,
+            {fn_call} AS __clean_address
+        FROM {{input}}
+    )
     SELECT
-        *,
-        {fn_call} AS clean_full_address
-    FROM {{input}}
+        * EXCLUDE (__clean_address, original_address_concat),
+        __clean_address AS original_address_concat,
+        __clean_address AS clean_full_address
+    FROM cleaned
     """
     return sql
 
