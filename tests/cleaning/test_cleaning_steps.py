@@ -45,12 +45,14 @@ def test_parse_out_flat_positional():
             "A",
             None,
         ),
+        # Only one number - indicates that it's a house number, not flat number
+        ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
     ]
 
     input_relation = connection.sql(
         "SELECT * FROM (VALUES "
-        + ",".join(f"('{address}')" for address, _, _, _ in test_cases)
-        + ") AS t(clean_full_address)"
+        + ",".join(f"('{address}', '{address}')" for address, _, _, _ in test_cases)
+        + ") AS t(clean_full_address, original_address_concat)"
     )
 
     result = _run_single_stage(

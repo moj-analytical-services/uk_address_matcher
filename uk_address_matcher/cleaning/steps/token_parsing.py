@@ -136,6 +136,7 @@ def _parse_out_flat_position_and_letter():
     # Floor positions (extend in your normalizer as needed)
     floor_positions = r"BASEMENT|GARDEN"
     floors = [
+        "UPPER",
         "GROUND",
         "FIRST",
         "SECOND",
@@ -157,6 +158,7 @@ def _parse_out_flat_position_and_letter():
     leading_num_letter = (
         r"^\s*(\d{1,4})([A-Za-z])\b"  # e.g., 11A ... (number=grp1, letter=grp2)
     )
+    count_numbers = r"(?:^|\s)(\d{1,5})(?:\s|$)"  # Match numbers with space/boundary separation (not ranges)
 
     flat_num_after_flat = r"\bFLAT\s+(\d{1,4})\b"  # FLAT 12
     flat_letter_after_num_after_flat = (
@@ -185,29 +187,38 @@ def _parse_out_flat_position_and_letter():
         ) AS flat_letter,
 
         -- 3) flat_number (priority explained inline)
-        COALESCE(
-            -- FLAT 3/2 → 2
-            NULLIF(regexp_extract(i.original_address_concat, '{scottish_flat}', 2), ''),
+        -- Only accept flat_number if there are 2+ space-separated numbers (not ranges like 120-122)
+        -- OR if we have a leading/anywhere number+letter pattern (e.g., 11A or 15B)
+        CASE
+            WHEN (
+                array_length(regexp_extract_all(i.clean_full_address, '{count_numbers}')) >= 2
+                OR regexp_extract(i.clean_full_address, '{leading_num_letter}', 1) IS NOT NULL
+                OR regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1) IS NOT NULL
+            ) THEN COALESCE(
+                -- FLAT 3/2 → 2
+                NULLIF(regexp_extract(i.original_address_concat, '{scottish_flat}', 2), ''),
 
-            -- FLAT 12 / FLAT 2 / FLAT 12A → take the number next to FLAT first
-            NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), ''),
+                -- FLAT 12 / FLAT 2 / FLAT 12A → take the number next to FLAT first
+                NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), ''),
 
-            -- FLAT A 11 → 11
-            NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_letter_immediate}', 1), ''),
+                -- FLAT A 11 → 11
+                NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_letter_immediate}', 1), ''),
 
-            -- 11A at start → 11 (leading_num_letter group 1)
-            NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 1), ''),
+                -- 11A at start → 11 (leading_num_letter group 1)
+                NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 1), ''),
 
-            -- 15B anywhere → 15
-            NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1), ''),
+                -- 15B anywhere → 15
+                NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1), ''),
 
-            -- Two-number start heuristic: "2 69 GIPSY HILL" → 2 (only if there is a second number)
-            CASE
-                WHEN NULLIF(regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1), '') IS NOT NULL
-                 AND NULLIF(regexp_extract(i.clean_full_address, '^\\s*\\d{{1,4}}\\D+.*?\\b(\\d{{1,4}})\\b', 1), '') IS NOT NULL
-                THEN regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1)
-            END
-        ) AS flat_number
+                -- Two-number start heuristic: "2 69 GIPSY HILL" → 2 (only if there is a second number)
+                CASE
+                    WHEN NULLIF(regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1), '') IS NOT NULL
+                     AND NULLIF(regexp_extract(i.clean_full_address, '^\\s*\\d{{1,4}}\\D+.*?\\b(\\d{{1,4}})\\b', 1), '') IS NOT NULL
+                    THEN regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1)
+                END
+            )
+            ELSE NULL
+        END AS flat_number
 
     FROM {{input}} i
     """
