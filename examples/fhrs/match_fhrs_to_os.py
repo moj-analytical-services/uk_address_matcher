@@ -1,9 +1,12 @@
-import altair as alt
-import time
-import duckdb
 import os
+import time
+
+import altair as alt
+import duckdb
+from IPython.display import display
+
 from uk_address_matcher import (
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
     get_linker,
 )
 from uk_address_matcher.post_linkage.analyse_results import (
@@ -13,8 +16,6 @@ from uk_address_matcher.post_linkage.analyse_results import (
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
-
-from IPython.display import display
 
 # -----------------------------------------------------------------------------
 # Step 1: Load data
@@ -83,7 +84,7 @@ and description != 'Non Addressable Object'
 """
 con.execute(sql)
 df_os = con.table("os")
-df_os_clean = clean_data_using_precomputed_rel_tok_freq(df_os, con=con)
+df_os_clean = clean_data_with_term_frequencies(df_os, con=con)
 
 # -----------------------------------------------------------------------------
 # Step 2: Clean data
@@ -93,7 +94,7 @@ df_os_clean = clean_data_using_precomputed_rel_tok_freq(df_os, con=con)
 messy_count = df_messy.count("*").fetchall()[0][0]
 canonical_count = df_os_clean.count("*").fetchall()[0][0]
 
-df_messy_clean = clean_data_using_precomputed_rel_tok_freq(df_messy, con=con)
+df_messy_clean = clean_data_with_term_frequencies(df_messy, con=con)
 
 
 end_time = time.time()

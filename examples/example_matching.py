@@ -9,12 +9,11 @@ from uk_address_matcher import (
     best_matches_summary,
     best_matches_with_distinguishability,
     calculate_match_metrics,
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
     get_linker,
     improve_predictions_using_distinguishing_tokens,
 )
 from uk_address_matcher.linking_model.exact_matching import (
-    StageName,
     available_deterministic_stages,
     run_deterministic_match_pass,
 )
@@ -60,8 +59,8 @@ if os.getenv("TEST_LIMIT"):
 # -----------------------------------------------------------------------------
 # Step 2: Clean the data/feature engineering to prepare for matching model
 # -----------------------------------------------------------------------------
-df_ch_clean = clean_data_using_precomputed_rel_tok_freq(df_ch, con=con)
-df_fhrs_clean = clean_data_using_precomputed_rel_tok_freq(df_fhrs, con=con)
+df_ch_clean = clean_data_with_term_frequencies(df_ch, con=con)
+df_fhrs_clean = clean_data_with_term_frequencies(df_fhrs, con=con)
 
 # -----------------------------------------------------------------------------
 # Step 3: Run exact matching to reduce the number of records to consider
@@ -77,8 +76,6 @@ df_fhrs_exact_matches = run_deterministic_match_pass(
     con=con,
     df_addresses_to_match=df_fhrs_clean,
     df_addresses_to_search_within=df_ch_clean,
-    enabled_stage_names=[StageName.TRIE],
-    # Alternative: enabled_stage_names=["trie"]  # Using string also works
 )
 
 exact_match_summary = calculate_match_metrics(df_fhrs_exact_matches)

@@ -1,10 +1,12 @@
 # Pre-clean the full OS dataset so it doesn't need to be cleaned on the fly
 # in subsequent runs
 import time
+
 import duckdb
+
 from uk_address_matcher import (
     clean_data_on_the_fly,
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
 )
 
 overall_start_time = time.time()
@@ -32,7 +34,7 @@ df_os
 
 
 df_os_clean = clean_data_on_the_fly(df_os, con=con)
-df_os_clean = clean_data_using_precomputed_rel_tok_freq(df_os, con=con)
+df_os_clean = clean_data_with_term_frequencies(df_os, con=con)
 df_os_clean.write_parquet("secret_data/ord_surv/os_clean.parquet")
 df_os_clean_from_file = duckdb.read_parquet("secret_data/ord_surv/os_clean.parquet")
 df_os_clean_from_file.show(max_width=50000)

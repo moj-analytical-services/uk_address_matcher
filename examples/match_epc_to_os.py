@@ -4,7 +4,7 @@ import time
 import duckdb
 
 from uk_address_matcher import (
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
     get_linker,
 )
 from uk_address_matcher.post_linkage.analyse_results import (
@@ -75,8 +75,8 @@ canonical_count = df_os.count("*").fetchall()[0][0]
 # -----------------------------------------------------------------------------
 
 
-df_epc_data_clean = clean_data_using_precomputed_rel_tok_freq(df_epc_data, con=con)
-df_os_clean = clean_data_using_precomputed_rel_tok_freq(df_os, con=con)
+df_epc_data_clean = clean_data_with_term_frequencies(df_epc_data, con=con)
+df_os_clean = clean_data_with_term_frequencies(df_os, con=con)
 
 end_time = time.time()
 print(f"Time to load/clean: {end_time - overall_start_time} seconds")
