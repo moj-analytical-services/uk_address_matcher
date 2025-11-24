@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.pipelines import (
     _clean_data_using_precomputed_rel_tok_freq,
     _clean_data_with_minimal_steps,
-    _get_address_token_frequencies_from_address_table,
-    _get_numeric_term_frequencies_from_address_table,
-    clean_data_on_the_fly,
+    _create_term_frequency_tables,
+)
+from uk_address_matcher.cleaning.steps.term_frequencies import (
+    _attach_numeric_term_frequencies,
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid
-from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
-PipelineFactory = Callable[[DuckDBPyRelation], DuckDBPipeline]
+if TYPE_CHECKING:
+    from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
 
@@ -31,10 +32,30 @@ def _log_progress(total_records: int, processed_records: int, stage_type: str) -
 
 
 def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
+    if total_records <= 0:
+        raise ValueError(
+            "Supplied address table has no records. Please provide a non-empty table."
+        )
+
     # Ensure chunk size is reasonable: minimum 10k records per chunk
-    num_of_chunks = min(num_of_chunks, max(1, total_records // 10_000))
+    max_chunks = max(1, total_records // 10_000)
+    num_of_chunks = max(1, min(num_of_chunks, max_chunks))
     chunk_size = (total_records + num_of_chunks - 1) // num_of_chunks
-    return chunk_size
+    return max(1, chunk_size)
+
+
+def _should_use_data_specific_term_frequencies(
+    total_records: int,
+    use_data_specific_term_frequencies: bool | None,
+) -> bool:
+    if use_data_specific_term_frequencies is True:
+        return True
+    elif use_data_specific_term_frequencies is False:
+        return False
+    else:
+        # Auto-select TF strategy based on record count if not explicitly specified
+        # Use data-specific TFs for large datasets (>= 500k records)
+        return total_records >= 500_000
 
 
 def clean_data_with_minimal_steps(
@@ -104,14 +125,15 @@ def clean_data_with_minimal_steps(
 # 2. At the end of each chunk, accumulate token counts to compute global term frequencies
 # 3. Use computed term frequencies to populate term frequency fields in cleaned data and
 #   finally apply QUEUE_POST_TF
-def clean_data_using_precomputed_rel_tok_freq(
+def clean_data_with_term_frequencies(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     num_of_chunks: int = 10,
+    use_data_specific_term_frequencies: bool | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     debug_options: Optional[DebugOptions] = None,
-):
+) -> DuckDBPyRelation:
     """Clean address data using term frequencies computed from the input data.
 
     Computes relative token frequencies directly from the input address table
@@ -134,6 +156,11 @@ def clean_data_using_precomputed_rel_tok_freq(
         num_of_chunks: Number of chunks to split the data into. Term frequencies
             are computed upfront from the full dataset, then chunks are processed with
             precomputed frequencies applied.
+        use_data_specific_term_frequencies:
+            - True: Always compute TFs from input data
+            - False: Always use package's precomputed TFs
+            - None (default): Auto-select based on record count
+                (< 1M → precomputed; ≥ 1M → data-specific)
         derive_distinguishing_wrt_adjacent_records: Whether to derive distinguishing
             tokens relative to adjacent records.
         debug_options: Optional debug configuration for pipeline execution.
@@ -145,64 +172,48 @@ def clean_data_using_precomputed_rel_tok_freq(
         term frequency columns (tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3).
     """
     uid = _uid()
-    address_table.to_table(f"__ukam_input_addresses_{uid}")
 
     # Clean data in chunks (without term frequencies)
     cleaned_address_table = clean_data_with_minimal_steps(
-        address_table, con, num_of_chunks=num_of_chunks
+        address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
     )
     cleaned_address_table.to_table(f"__ukam_cleaned_addresses_{uid}")
 
-    # Compute term frequencies from the cleaned data
-    address_token_frequencies_rel = _get_address_token_frequencies_from_address_table(
-        cleaned_address_table, con, pre_cleaned_addresses=True
-    )
-    numeric_term_frequencies_rel = _get_numeric_term_frequencies_from_address_table(
-        cleaned_address_table, con, pre_cleaned_addresses=True
-    )
-    numeric_term_frequencies_rel.create(f"__ukam_numeric_term_frequencies_{uid}")
     total_rows = cleaned_address_table.count("*").fetchone()[0]
+    use_data_specific_tfs = _should_use_data_specific_term_frequencies(
+        total_rows, use_data_specific_term_frequencies
+    )
+    _create_term_frequency_tables(
+        cleaned_address_table,
+        con,
+        use_data_specific_term_frequencies=use_data_specific_tfs,
+    )
 
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
 
     # Apply term frequencies to cleaned chunks
     for chunk_index, offset in enumerate(range(0, total_rows, chunk_size)):
-        # Chunk from the CLEANED data, not the original
         chunk = con.sql(f"""
         SELECT *
             FROM __ukam_cleaned_addresses_{uid}
             LIMIT {chunk_size} OFFSET {offset}
         """)
 
+        # If using data-specific TFs, attach numeric TF columns
+        using_data_specific_tfs = use_data_specific_tfs
+        additional_stages = (
+            [_attach_numeric_term_frequencies()] if using_data_specific_tfs else []
+        )
         # If we are chunking, we want to precompute rel token freqs and then use them
         processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
             chunk,
             con=con,
-            rel_tok_freq_table=address_token_frequencies_rel,
             pre_cleaned_addresses=True,
             derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
+            additional_stages=additional_stages,
             debug_options=debug_options if chunk_index == 0 else None,
         )
-        processed_chunk.create_view("__ukam_cleaned_chunk")
 
-        # TODO(ThomasHepworth): really, this should be another stage...
-        # Optional staging for our pipeline runners?
-        chunk_with_tf = con.sql(
-            f"""
-            SELECT
-                df.*,
-                tf1.tf_numeric_token AS tf_numeric_token_1,
-                tf2.tf_numeric_token AS tf_numeric_token_2,
-                tf3.tf_numeric_token AS tf_numeric_token_3
-            FROM __ukam_cleaned_chunk AS df
-            LEFT JOIN __ukam_numeric_term_frequencies_{uid} AS tf1
-                ON df.numeric_token_1 = tf1.numeric_token
-            LEFT JOIN __ukam_numeric_term_frequencies_{uid} AS tf2
-                ON df.numeric_token_2 = tf2.numeric_token
-            LEFT JOIN __ukam_numeric_term_frequencies_{uid} AS tf3
-                ON df.numeric_token_3 = tf3.numeric_token
-            """
-        )
         _log_progress(
             total_rows,
             min(offset + chunk_size, total_rows),
@@ -211,15 +222,14 @@ def clean_data_using_precomputed_rel_tok_freq(
 
         if offset == 0:
             con.execute(f"DROP TABLE IF EXISTS __ukam_addresses_processed_{uid}")
-            chunk_with_tf.create(f"__ukam_addresses_processed_{uid}")
+            processed_chunk.create(f"__ukam_addresses_processed_{uid}")
         else:
-            chunk_with_tf.insert_into(f"__ukam_addresses_processed_{uid}")
+            processed_chunk.insert_into(f"__ukam_addresses_processed_{uid}")
 
     return con.table(f"__ukam_addresses_processed_{uid}")
 
 
 __all__ = [
     "clean_data_with_minimal_steps",
-    "clean_data_on_the_fly",
-    "clean_data_using_precomputed_rel_tok_freq",
+    "clean_data_with_term_frequencies",
 ]

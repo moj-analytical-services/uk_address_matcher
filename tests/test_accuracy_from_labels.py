@@ -7,7 +7,7 @@ from tests.utils import prepare_combined_test_data
 
 # Import necessary functions from the library
 from uk_address_matcher import (
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
     evaluate_predictions_against_labels,
     get_linker,
     inspect_match_results_vs_labels,
@@ -49,12 +49,12 @@ def test_address_matching_workflow_runs():
     df_os_rel = canonical_addresses_raw
     messy_data_rel = messy_addresses_raw
 
-    df_messy_data_clean_rel = clean_data_using_precomputed_rel_tok_freq(
+    df_messy_data_clean_rel = clean_data_with_term_frequencies(
         messy_data_rel.project("unique_id, source_dataset, address_concat, postcode"),
         con=duckdb_con,
     )
 
-    df_os_clean_rel = clean_data_using_precomputed_rel_tok_freq(
+    df_os_clean_rel = clean_data_with_term_frequencies(
         df_os_rel.project("unique_id, source_dataset, address_concat, postcode"),
         con=duckdb_con,
     )

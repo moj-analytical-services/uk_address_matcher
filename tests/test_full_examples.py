@@ -4,7 +4,7 @@ import subprocess
 import duckdb
 import pytest
 
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq
+from uk_address_matcher import clean_data_with_term_frequencies
 
 
 def clean_test_data_and_write(input_path: str):
@@ -17,7 +17,7 @@ def clean_test_data_and_write(input_path: str):
     }[file_ext]
 
     df = read_factory(input_path, header=True)
-    cleaned_df = clean_data_using_precomputed_rel_tok_freq(df, con=con)
+    cleaned_df = clean_data_with_term_frequencies(df, con=con)
     con.sql(
         f"COPY ({cleaned_df.sql_query()}) TO '{os.path.abspath(input_path)}' (FORMAT '{file_ext}')"
     )
@@ -73,7 +73,7 @@ def test_match_one(path, postcode):
         '{postcode}' as postcode
     """
     )
-    canon_data = clean_data_using_precomputed_rel_tok_freq(canon_data, con=con)
+    canon_data = clean_data_with_term_frequencies(canon_data, con=con)
     con.sql(
         f"COPY ({canon_data.sql_query()}) TO '{os.path.abspath(path)}' (FORMAT 'parquet')"
     )

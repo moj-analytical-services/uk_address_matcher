@@ -1,16 +1,10 @@
-"""Tests for chunking strategy in data cleaning pipelines.
-
-This module validates that chunked processing produces identical results
-to non-chunked processing, ensuring data integrity across different chunk sizes.
-"""
-
 from unittest.mock import patch
 
 import pytest
 
 from uk_address_matcher import clean_data_with_minimal_steps
 from uk_address_matcher.cleaning.chunking_strategies import (
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_with_term_frequencies,
 )
 
 
@@ -118,10 +112,10 @@ def test_chunking_yields_same_result_as_no_chunking(
 def test_clean_data_using_precomputed_rel_tok_freq(
     duck_con, fhrs_data, mock_chunk_size_1k
 ):
-    no_chunk_rel = clean_data_using_precomputed_rel_tok_freq(fhrs_data, con=duck_con)
+    no_chunk_rel = clean_data_with_term_frequencies(fhrs_data, con=duck_con)
     no_chunk_count = no_chunk_rel.count("*").fetchone()[0]
 
-    chunked_rel = clean_data_using_precomputed_rel_tok_freq(
+    chunked_rel = clean_data_with_term_frequencies(
         fhrs_data, con=duck_con, num_of_chunks=5
     )
     chunked_count = chunked_rel.count("*").fetchone()[0]
@@ -137,3 +131,76 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         f"only_in_no_chunk={set(no_chunk_rel.columns) - chunked_columns_excl_tf}, "
         f"only_in_chunked={chunked_columns_excl_tf - set(no_chunk_rel.columns)}"
     )
+
+
+@pytest.mark.parametrize("use_data_specific_tfs", [True, False])
+def test_token_rel_freq_arr_hist_consistent_across_chunks(
+    duck_con, fhrs_data, mock_chunk_size_1k, use_data_specific_tfs
+):
+    """Verify token_rel_freq_arr_hist is identical irrespective of chunking strategy."""
+    # Process without chunking (baseline)
+    no_chunk = clean_data_with_term_frequencies(
+        fhrs_data,
+        con=duck_con,
+        num_of_chunks=1,
+        use_data_specific_term_frequencies=use_data_specific_tfs,
+    )
+    no_chunk_hist = (
+        no_chunk.order("unique_id").select("token_rel_freq_arr_hist").fetchall()[:50]
+    )
+
+    # Process with 5 chunks
+    chunked = clean_data_with_term_frequencies(
+        fhrs_data,
+        con=duck_con,
+        num_of_chunks=5,
+        use_data_specific_term_frequencies=use_data_specific_tfs,
+    )
+    chunked_hist = (
+        chunked.order("unique_id").select("token_rel_freq_arr_hist").fetchall()[:50]
+    )
+
+    # First 50 records should have identical histograms
+    assert no_chunk_hist == chunked_hist, (
+        f"Token frequency histograms differ for use_data_specific_tfs={use_data_specific_tfs}"
+    )
+
+
+@pytest.mark.parametrize("use_data_specific_tfs", [True, False])
+def test_numeric_term_frequency_columns_present_when_using_precomputed_tfs(
+    duck_con, fhrs_data, use_data_specific_tfs
+):
+    """Verify numeric TF columns are present only when using precomputed TFs.
+
+    When using precomputed TFs (use_data_specific_tfs=False), the output should include
+    three numeric term frequency columns: tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3.
+
+    When using data-specific TFs (use_data_specific_tfs=True), these columns should not be present
+    since numeric TFs are computed from the input data itself.
+    """
+    result = clean_data_with_term_frequencies(
+        fhrs_data,
+        con=duck_con,
+        num_of_chunks=1,
+        use_data_specific_term_frequencies=use_data_specific_tfs,
+    )
+
+    columns = set(result.columns)
+    numeric_tf_columns = {
+        "tf_numeric_token_1",
+        "tf_numeric_token_2",
+        "tf_numeric_token_3",
+    }
+
+    if use_data_specific_tfs:
+        # Data-specific TFs should NOT have numeric TF columns
+        assert not numeric_tf_columns.issubset(columns), (
+            f"Expected numeric TF columns to be absent when using data-specific TFs, "
+            f"but found: {numeric_tf_columns & columns}"
+        )
+    else:
+        # Precomputed TFs SHOULD have numeric TF columns
+        assert numeric_tf_columns.issubset(columns), (
+            f"Expected numeric TF columns {numeric_tf_columns} when using precomputed TFs, "
+            f"but only found columns: {columns}"
+        )

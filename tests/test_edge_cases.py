@@ -1,12 +1,14 @@
-import duckdb
 from pathlib import Path
+
+import duckdb
 import pytest
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq, get_linker
+from splink import block_on
+
+from tests.utils import prepare_combined_test_data
+from uk_address_matcher import clean_data_with_term_frequencies, get_linker
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
-from tests.utils import prepare_combined_test_data
-from splink import block_on
 
 # Constants
 MATCH_WEIGHT_THRESHOLD_PREDICT = -50
@@ -29,10 +31,8 @@ def run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con=None):
         duckdb_con = duckdb.connect(database=":memory:")
 
     # Clean the input data
-    messy_clean = clean_data_using_precomputed_rel_tok_freq(
-        messy_addresses, con=duckdb_con
-    )
-    canonical_clean = clean_data_using_precomputed_rel_tok_freq(
+    messy_clean = clean_data_with_term_frequencies(messy_addresses, con=duckdb_con)
+    canonical_clean = clean_data_with_term_frequencies(
         canonical_addresses, con=duckdb_con
     )
 

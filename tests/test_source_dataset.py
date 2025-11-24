@@ -1,6 +1,7 @@
 import duckdb
 import pytest
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq, get_linker
+
+from uk_address_matcher import clean_data_with_term_frequencies, get_linker
 
 
 def test_source_dataset_is_ignored():
@@ -46,8 +47,8 @@ def test_source_dataset_is_ignored():
     )
 
     # Clean the data
-    messy_clean = clean_data_using_precomputed_rel_tok_freq(test_messy, con=con)
-    canonical_clean = clean_data_using_precomputed_rel_tok_freq(test_canonical, con=con)
+    messy_clean = clean_data_with_term_frequencies(test_messy, con=con)
+    canonical_clean = clean_data_with_term_frequencies(test_canonical, con=con)
 
     # Verify source_dataset column is excluded from cleaned data
     assert "source_dataset" not in messy_clean.columns, (
@@ -136,7 +137,7 @@ def test_get_linker_raises_error_with_source_dataset():
         )
 
     # Clean the data to remove source_dataset
-    test_data_clean = clean_data_using_precomputed_rel_tok_freq(test_data, con=con)
+    test_data_clean = clean_data_with_term_frequencies(test_data, con=con)
 
     # Verify this works without error
     get_linker(
