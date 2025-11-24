@@ -170,13 +170,12 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
 def test_numeric_term_frequency_columns_present_when_using_precomputed_tfs(
     duck_con, fhrs_data, use_data_specific_tfs
 ):
-    """Verify numeric TF columns are present only when using precomputed TFs.
+    """Verify numeric TF columns are present regardless of TF strategy.
 
-    When using precomputed TFs (use_data_specific_tfs=False), the output should include
-    three numeric term frequency columns: tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3.
-
-    When using data-specific TFs (use_data_specific_tfs=True), these columns should not be present
-    since numeric TFs are computed from the input data itself.
+    Both data-specific and precomputed TF strategies should include numeric term frequency
+    columns (tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3):
+    - When use_data_specific_tfs=True: numeric TFs are computed from input data
+    - When use_data_specific_tfs=False: numeric TFs are loaded from precomputed files
     """
     result = clean_data_with_term_frequencies(
         fhrs_data,
@@ -192,15 +191,8 @@ def test_numeric_term_frequency_columns_present_when_using_precomputed_tfs(
         "tf_numeric_token_3",
     }
 
-    if use_data_specific_tfs:
-        # Data-specific TFs should NOT have numeric TF columns
-        assert not numeric_tf_columns.issubset(columns), (
-            f"Expected numeric TF columns to be absent when using data-specific TFs, "
-            f"but found: {numeric_tf_columns & columns}"
-        )
-    else:
-        # Precomputed TFs SHOULD have numeric TF columns
-        assert numeric_tf_columns.issubset(columns), (
-            f"Expected numeric TF columns {numeric_tf_columns} when using precomputed TFs, "
-            f"but only found columns: {columns}"
-        )
+    # Both strategies should include numeric TF columns
+    assert numeric_tf_columns.issubset(columns), (
+        f"Expected numeric TF columns {numeric_tf_columns} for use_data_specific_tfs={use_data_specific_tfs}, "
+        f"but only found columns: {columns}"
+    )

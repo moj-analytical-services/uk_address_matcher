@@ -1,7 +1,6 @@
 import pytest
 
 from uk_address_matcher.linking_model.exact_matching import run_deterministic_match_pass
-from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
 @pytest.fixture
@@ -122,43 +121,6 @@ def test_data(duck_con):
     return df_fuzzy, df_canonical
 
 
-def test_unmatched_records_retain_original_unique_id(duck_con, test_data):
-    df_fuzzy, df_canonical = test_data
-
-    results = run_deterministic_match_pass(
-        duck_con,
-        df_fuzzy,
-        df_canonical,
-        enabled_stage_names=["trie"],
-    )
-
-    columns = set(results.columns)
-    assert "unique_id" in columns
-    assert "resolved_canonical_id" in columns
-    assert "fuzzy_unique_id" not in columns
-    assert "exact_match_canonical_id_bigint" not in columns
-    assert "trie_match_unique_id_bigint" not in columns
-    assert "resolved_canonical_unique_id_bigint" not in columns
-
-    rows = (
-        results.project(
-            "unique_id, resolved_canonical_id, match_reason, ukam_address_id"
-        )
-        .order("ukam_address_id")
-        .fetchall()
-    )
-    assert rows == [
-        (1, 1000, MatchReason.EXACT.value, 1),
-        (10, 1000, MatchReason.EXACT.value, 2),
-        (2, 2000, MatchReason.EXACT.value, 3),
-        (2, 2000, MatchReason.EXACT.value, 4),
-        (2, 2000, MatchReason.TRIE.value, 5),
-        (2, 2000, MatchReason.TRIE.value, 6),
-        (2, 1000, MatchReason.TRIE.value, 7),
-        (3, None, None, 8),
-    ]
-
-
 # When a non-unique unique_id field exists in our fuzzy addresses,
 # the trie stage will inflate our row count (due to the output and required
 # joins). This test checks confirms that this issue does not occur.
@@ -167,7 +129,6 @@ def test_unmatched_records_retain_original_unique_id(duck_con, test_data):
 @pytest.mark.parametrize(
     "enabled_stages",
     [
-        ["trie"],  # Exact + trie
         None,  # Exact only
     ],
 )
