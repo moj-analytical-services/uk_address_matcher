@@ -13,6 +13,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
 from uk_address_matcher.cleaning.steps.term_frequencies import (
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
+    _attach_numeric_term_frequencies,
     _create_histograms_from_token_frequencies,
     _first_unusual_token,
     _get_token_frequeny_table,
@@ -55,6 +56,7 @@ __all__ = [
     # term_frequencies
     "_add_term_frequencies_to_address_tokens",
     "_add_term_frequencies_to_address_tokens_using_registered_df",
+    "_attach_numeric_term_frequencies",
     "_move_common_end_tokens_to_field",
     "_first_unusual_token",
     "_use_first_unusual_token_if_no_numeric_token",

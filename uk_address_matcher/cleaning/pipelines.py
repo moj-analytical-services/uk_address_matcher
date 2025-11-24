@@ -4,7 +4,6 @@ from typing import Optional
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
-    _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _add_ukam_address_id,
     _canonicalise_postcode,
@@ -116,50 +115,15 @@ def _clean_data_with_minimal_steps(
     )
 
 
-# TODO(ThomasHepworth): add chunking support
-def clean_data_on_the_fly(
-    address_table: DuckDBPyRelation,
-    con: DuckDBPyConnection,
-    *,
-    debug_options: Optional[DebugOptions] = None,
-) -> DuckDBPyRelation:
-    stage_queue = (
-        QUEUE_PRE_TF + [_add_term_frequencies_to_address_tokens] + QUEUE_POST_TF
-    )
-
-    pipeline = create_sql_pipeline(
-        con,
-        address_table,
-        stage_queue,
-        pipeline_name="Clean data on the fly",
-        pipeline_description=(
-            "Clean address data using term frequencies computed "
-            "on the fly from the input data"
-        ),
-    )
-    table_rel = pipeline.run(debug_options)
-    return _materialise_output_table(con, table_rel, _uid())
-
-
 def _clean_data_using_precomputed_rel_tok_freq(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
-    rel_tok_freq_table: DuckDBPyRelation | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     pre_cleaned_addresses: bool = False,
+    additional_stages: list = [],
     debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
-    if rel_tok_freq_table is None:
-        default_tf_path = (
-            resources.files("uk_address_matcher")
-            / "data"
-            / "address_token_frequencies.parquet"
-        )
-        rel_tok_freq_table = con.read_parquet(str(default_tf_path))
-
-    con.register("rel_tok_freq", rel_tok_freq_table)
-
     pre_queue = (
         QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON
         if derive_distinguishing_wrt_adjacent_records
@@ -169,7 +133,11 @@ def _clean_data_using_precomputed_rel_tok_freq(
     tf_and_post = [
         _add_term_frequencies_to_address_tokens_using_registered_df
     ] + QUEUE_POST_TF
-    stage_queue = pre_queue + tf_and_post if not pre_cleaned_addresses else tf_and_post
+    stage_queue = (
+        pre_queue + tf_and_post + additional_stages
+        if not pre_cleaned_addresses
+        else tf_and_post + additional_stages
+    )
 
     pipeline = create_sql_pipeline(
         con,
@@ -184,7 +152,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
     return _materialise_output_table(con, result_rel, _uid())
 
 
-def _get_numeric_term_frequencies_from_address_table(
+def get_numeric_term_frequencies_from_address_table(
     df_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
@@ -230,7 +198,7 @@ def _get_numeric_term_frequencies_from_address_table(
     return con.sql(sql)
 
 
-def _get_address_token_frequencies_from_address_table(
+def get_address_token_frequencies_from_address_table(
     df_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
@@ -260,3 +228,49 @@ def _get_address_token_frequencies_from_address_table(
         pipeline_description=("Tokenise addresses and compute frequency distribution"),
     )
     return pipeline.run(debug_options)
+
+
+def _create_term_frequency_tables(
+    cleaned_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    # Default is to use precomputed term frequencies
+    use_data_specific_term_frequencies: bool | None = False,
+    *,
+    pre_cleaned_addresses: bool = True,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation, str]:
+    """Compute and register address and numeric term frequency tables."""
+    # Compute or load address token frequencies
+    if use_data_specific_term_frequencies:
+        address_token_frequencies_rel = (
+            get_address_token_frequencies_from_address_table(
+                cleaned_address_table, con, pre_cleaned_addresses=pre_cleaned_addresses
+            )
+        )
+
+        # Compute numeric term frequencies
+        numeric_term_frequencies_rel = get_numeric_term_frequencies_from_address_table(
+            cleaned_address_table, con, pre_cleaned_addresses=pre_cleaned_addresses
+        )
+        con.sql("DROP TABLE IF EXISTS __ukam_numeric_term_frequencies")
+        numeric_term_frequencies_rel.create("__ukam_numeric_term_frequencies")
+
+    else:
+        default_tf_path = (
+            resources.files("uk_address_matcher")
+            / "data"
+            / "address_token_frequencies.parquet"
+        )
+        address_token_frequencies_rel = con.read_parquet(str(default_tf_path))
+
+        # Load precomputed numeric term frequencies as well
+        default_numeric_tf_path = (
+            resources.files("uk_address_matcher")
+            / "data"
+            / "numeric_token_frequencies.parquet"
+        )
+        numeric_term_frequencies_rel = con.read_parquet(str(default_numeric_tf_path))
+        con.sql("DROP TABLE IF EXISTS __ukam_numeric_term_frequencies")
+        numeric_term_frequencies_rel.create("__ukam_numeric_term_frequencies")
+
+    con.register("rel_tok_freq", address_token_frequencies_rel)
+    return address_token_frequencies_rel

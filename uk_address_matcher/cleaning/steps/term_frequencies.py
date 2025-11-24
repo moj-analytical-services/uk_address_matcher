@@ -388,6 +388,34 @@ def _get_token_frequeny_table():
 
 
 @pipeline_stage(
+    name="attach_numeric_term_frequencies",
+    description="Attach numeric term frequencies from __ukam_numeric_term_frequencies table",
+    tags="term_frequency_analysis",
+)
+def _attach_numeric_term_frequencies(
+    numeric_tf_table: str = "__ukam_numeric_term_frequencies",
+):
+    """Attach numeric TF columns from precomputed __ukam_numeric_term_frequencies table."""
+
+    final_sql = f"""
+    SELECT
+        {{input}}.*,
+        tf1.tf_numeric_token AS tf_numeric_token_1,
+        tf2.tf_numeric_token AS tf_numeric_token_2,
+        tf3.tf_numeric_token AS tf_numeric_token_3
+    FROM {{input}}
+    LEFT JOIN {numeric_tf_table} AS tf1
+        ON {{input}}.numeric_token_1 = tf1.numeric_token
+    LEFT JOIN {numeric_tf_table} AS tf2
+        ON {{input}}.numeric_token_2 = tf2.numeric_token
+    LEFT JOIN {numeric_tf_table} AS tf3
+        ON {{input}}.numeric_token_3 = tf3.numeric_token
+    """
+
+    return final_sql
+
+
+@pipeline_stage(
     name="create_histograms_from_token_frequencies",
     description="Create histogram aggregates from token frequency arrays",
     tags="term_frequency_analysis",
@@ -397,14 +425,12 @@ def _create_histograms_from_token_frequencies():
 
     sql = """
     SELECT
-        unique_id,
-        list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
-        list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist,
         * EXCLUDE (
-            unique_id,
             token_rel_freq_arr,
-            common_end_tokens,
-        )
+            common_end_tokens
+        ),
+        list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
+        list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist
     FROM {input}
     """
     return sql
