@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from uk_address_matcher.cleaning.steps.normalisation import (
+    _add_ukam_address_id,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
@@ -12,7 +13,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
 from uk_address_matcher.cleaning.steps.term_frequencies import (
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
-    _final_column_order,
+    _create_histograms_from_token_frequencies,
     _first_unusual_token,
     _get_token_frequeny_table,
     _move_common_end_tokens_to_field,
@@ -47,6 +48,7 @@ __all__ = [
     "_remove_duplicate_end_tokens",
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
+    "_add_ukam_address_id",
     # tokenisation
     "_split_numeric_tokens_to_cols",
     "_tokenise_address_without_numbers",
@@ -57,5 +59,5 @@ __all__ = [
     "_first_unusual_token",
     "_use_first_unusual_token_if_no_numeric_token",
     "_separate_unusual_tokens",
-    "_final_column_order",
+    "_create_histograms_from_token_frequencies",
 ]

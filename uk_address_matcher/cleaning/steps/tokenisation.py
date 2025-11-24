@@ -27,7 +27,7 @@ def _create_tokenised_address_concat():
 def _split_numeric_tokens_to_cols():
     sql = """
     SELECT
-        * EXCLUDE (numeric_tokens),
+        *,
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[1] as numeric_token_1,
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[2] as numeric_token_2,
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3

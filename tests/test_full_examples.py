@@ -4,13 +4,31 @@ import subprocess
 import duckdb
 import pytest
 
-from uk_address_matcher.cleaning.pipelines import (
-    clean_data_using_precomputed_rel_tok_freq,
-)
+from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq
+
+
+def clean_test_data_and_write(input_path: str):
+    """Helper to clean test data and write to Parquet for use in other tests."""
+    con = duckdb.connect(":memory:")
+    file_ext = input_path.split(".")[-1].lower()
+    read_factory = {
+        "csv": con.read_csv,
+        "parquet": con.read_parquet,
+    }[file_ext]
+
+    df = read_factory(input_path, header=True)
+    cleaned_df = clean_data_using_precomputed_rel_tok_freq(df, con=con)
+    con.sql(
+        f"COPY ({cleaned_df.sql_query()}) TO '{os.path.abspath(input_path)}' (FORMAT '{file_ext}')"
+    )
 
 
 def test_full_example():
     env = os.environ.copy()
+
+    # for data in ["tests/test_data/os_fake.csv"]:
+    #     clean_test_data_and_write(data)
+
     env["EPC_PATH"] = (
         f"read_csv('{os.path.abspath('tests/test_data/epc_fake.csv')}', filename=true)"
     )
@@ -78,6 +96,9 @@ def test_match_one(path, postcode):
 
 def test_match_fhrs_to_os():
     env = os.environ.copy()
+    for data in ["tests/test_data/fhrs_fake.csv", "tests/test_data/os_fake.csv"]:
+        clean_test_data_and_write(data)
+
     # Override the hardcoded paths in match_fhrs_to_os.py
     env["FHRS_PATH"] = (
         f"read_csv('{os.path.abspath('tests/test_data/fhrs_fake.csv')}', filename=true)"

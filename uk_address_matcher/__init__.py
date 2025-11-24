@@ -1,10 +1,9 @@
 __version__ = "1.0.0.dev21"
 
-from uk_address_matcher.cleaning.pipelines import (
+from uk_address_matcher.cleaning.chunking_strategies import (
     clean_data_on_the_fly,
     clean_data_using_precomputed_rel_tok_freq,
-    get_address_token_frequencies_from_address_table,
-    get_numeric_term_frequencies_from_address_table,
+    clean_data_with_minimal_steps,
 )
 from uk_address_matcher.linking_model.exact_matching import (
     StageName,
@@ -29,8 +28,7 @@ __all__ = [
     "get_linker",
     "clean_data_on_the_fly",
     "clean_data_using_precomputed_rel_tok_freq",
-    "get_numeric_term_frequencies_from_address_table",
-    "get_address_token_frequencies_from_address_table",
+    "clean_data_with_minimal_steps",
     "calculate_match_metrics",
     "improve_predictions_using_distinguishing_tokens",
     "best_matches_with_distinguishability",

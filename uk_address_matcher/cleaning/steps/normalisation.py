@@ -17,9 +17,23 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
+    name="ensure_ukam_address_id",
+    description="Ensure input addresses have deterministic stable ID based on unique_id and address_concat",
+    tags=["setup"],
+)
+def _add_ukam_address_id():
+    return """
+    SELECT
+        *,
+        MD5(CONCAT(unique_id, address_concat)) AS ukam_address_id
+    FROM {input}
+    """
+
+
+@pipeline_stage(
     name="rename_and_select_columns",
     description="Rename and select key columns for downstream processing and assign ukam_address_id",
-    tags=["data_preparation"],
+    tags=["setup"],
 )
 def _rename_and_select_columns() -> str:
     sql = r"""
@@ -27,8 +41,8 @@ def _rename_and_select_columns() -> str:
         unique_id,
         address_concat as original_address_concat,
         postcode,
-        ROW_NUMBER() OVER () AS ukam_address_id,
-        * EXCLUDE (unique_id, address_concat, postcode)
+        ukam_address_id,
+        * EXCLUDE (unique_id, address_concat, postcode, ukam_address_id)
     FROM {input}
     """
     return sql
