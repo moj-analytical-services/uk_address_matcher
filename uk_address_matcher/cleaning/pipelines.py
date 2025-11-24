@@ -27,6 +27,7 @@ from uk_address_matcher.cleaning.steps import (
 )
 from uk_address_matcher.cleaning.steps.normalisation import _remove_duplicate_end_tokens
 from uk_address_matcher.cleaning.steps.term_frequencies import (
+    _attach_numeric_term_frequencies,
     _create_histograms_from_token_frequencies,
 )
 from uk_address_matcher.cleaning.steps.tokenisation import (
@@ -69,6 +70,7 @@ QUEUE_POST_TF = [
     _use_first_unusual_token_if_no_numeric_token,
     _separate_unusual_tokens,
     _create_histograms_from_token_frequencies,
+    _attach_numeric_term_frequencies,
 ]
 
 

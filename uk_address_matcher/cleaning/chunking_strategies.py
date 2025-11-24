@@ -10,9 +10,6 @@ from uk_address_matcher.cleaning.pipelines import (
     _clean_data_with_minimal_steps,
     _create_term_frequency_tables,
 )
-from uk_address_matcher.cleaning.steps.term_frequencies import (
-    _attach_numeric_term_frequencies,
-)
 from uk_address_matcher.sql_pipeline.helpers import _uid
 
 if TYPE_CHECKING:
@@ -199,18 +196,13 @@ def clean_data_with_term_frequencies(
             LIMIT {chunk_size} OFFSET {offset}
         """)
 
-        # If using data-specific TFs, attach numeric TF columns
-        using_data_specific_tfs = use_data_specific_tfs
-        additional_stages = (
-            [_attach_numeric_term_frequencies()] if using_data_specific_tfs else []
-        )
+        # Numeric TF columns should only be attached when using precomputed TFs
         # If we are chunking, we want to precompute rel token freqs and then use them
         processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
             chunk,
             con=con,
             pre_cleaned_addresses=True,
             derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
-            additional_stages=additional_stages,
             debug_options=debug_options if chunk_index == 0 else None,
         )
 
