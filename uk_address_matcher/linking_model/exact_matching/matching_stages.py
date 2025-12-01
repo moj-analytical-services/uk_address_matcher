@@ -13,6 +13,7 @@ from uk_address_matcher.linking_model.exact_matching.input_filters import (
 from uk_address_matcher.linking_model.exact_matching.resolve_with_trigrams import (
     _resolve_with_trigrams,
 )
+from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_tables
 
