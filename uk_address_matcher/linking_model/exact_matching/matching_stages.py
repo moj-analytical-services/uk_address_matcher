@@ -161,15 +161,22 @@ def _finalise_results(
 
 
 def _get_unmatched_subset(
+    con: duckdb.DuckDBPyConnection,
     df_addresses_to_match: duckdb.DuckDBPyRelation,
-    matches_union: Optional[duckdb.DuckDBPyRelation],
+    matches_table_name: str,
+    has_matches: bool,
 ) -> duckdb.DuckDBPyRelation:
-    """Filter to records not yet matched."""
-    if matches_union is None:
+    """Filter to records not yet matched using anti-join against materialised table."""
+    if not has_matches:
         return df_addresses_to_match
-    return df_addresses_to_match.join(
-        matches_union.select("ukam_address_id"), "ukam_address_id", how="anti"
-    )
+    # Use SQL anti-join against the materialised matches table for efficiency
+    return con.sql(f"""
+        SELECT f.*
+        FROM ({df_addresses_to_match.sql_query()}) AS f
+        WHERE f.ukam_address_id NOT IN (
+            SELECT ukam_address_id FROM {matches_table_name}
+        )
+    """)
 
 
 def _run_stage(
@@ -262,10 +269,16 @@ def run_deterministic_match_pass(
         if stage not in ordered:
             ordered.append(stage)
 
-    matches_union: Optional[duckdb.DuckDBPyRelation] = None
+    # Use a materialised table for accumulated matches to avoid lazy relation chains
+    # which cause exponential slowdown as stages are added
+    uid = _uid()
+    matches_table = f"__ukam_exact_matches_{uid}"
+    has_matches = False
 
-    for stage_name in ordered:
-        df_fuzzy_unmatched = _get_unmatched_subset(df_addresses_to_match, matches_union)
+    for stage_index, stage_name in enumerate(ordered):
+        df_fuzzy_unmatched = _get_unmatched_subset(
+            con, df_addresses_to_match, matches_table, has_matches
+        )
 
         # Early exit if nothing left to match
         if df_fuzzy_unmatched.count("*").fetchone()[0] == 0:
@@ -290,15 +303,27 @@ def run_deterministic_match_pass(
         if explain:
             continue
 
-        matches_union = (
-            stage_result if matches_union is None else matches_union.union(stage_result)
-        )
+        # Materialise results into the accumulator table
+        if stage_index == 0:
+            con.execute(f"DROP TABLE IF EXISTS {matches_table}")
+            stage_result.create(matches_table)
+        else:
+            stage_result.insert_into(matches_table)
+        has_matches = True
 
     if explain:
         return None
 
-    return (
-        df_addresses_to_match
-        if matches_union is None
-        else _finalise_results(df_addresses_to_match, matches_union)
-    )
+    if not has_matches:
+        return df_addresses_to_match
+
+    # Materialise the final result before cleaning up the temporary table
+    # This is necessary because DuckDB uses lazy evaluation
+    result = _finalise_results(df_addresses_to_match, con.table(matches_table))
+    result.to_table(f"__ukam_final_matches_{uid}")
+    final_result = con.table(f"__ukam_final_matches_{uid}")
+
+    # Clean up temporary tables
+    con.execute(f"DROP TABLE IF EXISTS {matches_table}")
+
+    return final_result
