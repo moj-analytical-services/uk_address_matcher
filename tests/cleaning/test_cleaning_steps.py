@@ -59,6 +59,13 @@ def test_parse_out_flat_positional():
         ),
         # Only one number - indicates that it's a house number, not flat number
         ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
+        # LOWER GROUND variants
+        ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "LOWER GROUND", None, None),
+        ("LOWER GROUND FLAT 35 ATOP THE HILL LONDON", "LOWER GROUND", None, None),
+        ("LOWER GROUND 35 ATOP THE HILL LONDON", "LOWER GROUND", None, None),
+        ("LOWER FLOOR FLAT 10 TEST ROAD", "LOWER FLOOR", None, None),
+        # UPPER GROUND variant
+        ("UPPER GROUND FLAT 20 EXAMPLE STREET", "UPPER GROUND", None, None),
     ]
 
     input_relation = connection.sql(
@@ -89,9 +96,14 @@ def test_parse_out_flat_positional():
         assert row[number_idx] == expected_number, (
             f"Address '{address}' expected number '{expected_number}' but got '{row[number_idx]}'"
         )
-        expected_indicator = any(
-            value is not None
-            for value in (expected_pos, expected_letter, expected_number)
+        # has_flat_indicator is True if any of the three fields are set,
+        # OR if the word FLAT appears in the address
+        expected_indicator = (
+            any(
+                value is not None
+                for value in (expected_pos, expected_letter, expected_number)
+            )
+            or "FLAT" in address
         )
         assert row[indicator_idx] == expected_indicator, (
             f"Address '{address}' expected has_flat_indicator '{expected_indicator}' but got '{row[indicator_idx]}'"

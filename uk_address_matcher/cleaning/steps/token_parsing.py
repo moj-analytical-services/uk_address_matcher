@@ -133,9 +133,10 @@ def _parse_out_flat_position_and_letter():
       - Treat '2 69 GIPSY HILL' as flat_number=2 (two-number start heuristic)
     """
 
-    # Floor positions: BASEMENT and GARDEN are standalone, others paired with FLOOR
+    # Floor positions: BASEMENT and GARDEN are standalone, others paired with FLOOR/GROUND
     standalone_floors = ["BASEMENT", "GARDEN"]
     floor_with_suffix = [
+        "LOWER",
         "UPPER",
         "GROUND",
         "FIRST",
@@ -149,9 +150,14 @@ def _parse_out_flat_position_and_letter():
         "NINTH",
         "TOP",
     ]
+    # Build regex: standalone floors OR (prefix + FLOOR) OR (prefix + GROUND for LOWER/UPPER)
     floor_positions = (
         r"\b("
-        + "|".join(standalone_floors + [f"{f} FLOOR" for f in floor_with_suffix])
+        + "|".join(
+            standalone_floors
+            + [f"{f} FLOOR" for f in floor_with_suffix]
+            + [f"{f} GROUND" for f in ["LOWER", "UPPER"]]
+        )
         + r")\b"
     )
 
@@ -220,10 +226,16 @@ def _parse_out_flat_position_and_letter():
     """
 
     # Final step: boolean indicator (split out so we can refer to computed aliases)
-    final_sql = """
+    # Also check for the word FLAT itself as a flat signal
+    final_sql = r"""
     SELECT
         *,
-        (flat_letter IS NOT NULL OR flat_number IS NOT NULL OR flat_positional IS NOT NULL) AS has_flat_indicator
+        (
+            flat_letter IS NOT NULL
+            OR flat_number IS NOT NULL
+            OR flat_positional IS NOT NULL
+            OR regexp_matches(clean_full_address, '\bFLAT\b')
+        ) AS has_flat_indicator
     FROM {final_base}
     """
 
