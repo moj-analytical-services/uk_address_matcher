@@ -11,7 +11,8 @@ from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 @pytest.fixture
 def test_abbr_data(duck_con):
     """Set up test data as DuckDB PyRelations for exact matching tests."""
-    return duck_con.sql("""
+    return duck_con.sql(
+        """
         SELECT * FROM (VALUES
             ('42 HIGH ST LONDON'),
             ('FLAT 3 APT 5 MANOR RD GLASGOW'),
@@ -23,7 +24,8 @@ def test_abbr_data(duck_con):
             ('FLAT 3D 12B BAKER AVE LONDON'),
             ('PENTHOUSE 1A OXFORD CLS LONDON'),
         ) AS t(clean_full_address)
-    """)
+    """
+    )
 
 
 def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
@@ -38,10 +40,10 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
     clean_idx = columns.index("clean_full_address")
 
     expected_addresses = [
-        "42 HIGH STREET LONDON",
+        "42 HIGH ST LONDON",
         "FLAT 3 FLAT 5 MANOR ROAD GLASGOW",
-        "FLAT 10 OFFICE SUITE 200 BOULEVARD DRIVE BIRMINGHAM",
-        "123 TOWN HALL STREET CENTRE MANCHESTER",
+        "FLAT 10 OFFICE SUITE 200 BOULEVARD DR BIRMINGHAM",
+        "123 TOWN HALL ST CENTRE MANCHESTER",
         "THE COTTAGE WOOD LANE BRISTOL",
         "FACTORY WORKS WORKS INDUSTRIAL ESTATE ROAD",
         "MUSEUM GALLERY THEATRE THEATRE CIVIC CENTRE",

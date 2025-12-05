@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.resources as pkg_resources
 from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
@@ -205,14 +206,17 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
     - 3. Vectorised transform over token list, then join back to a string
     """
 
-    # 1) Load lookup (upper-case keys for case-insensitive match)
-    abbr_lookup_sql = """
-    SELECT
-      UPPER(TRIM(token))       AS token,
-      TRIM(replacement)        AS replacement
-    FROM read_json_auto('uk_address_matcher/data/address_abbreviations.json')
-    WHERE token IS NOT NULL AND replacement IS NOT NULL
-    """
+    with pkg_resources.path(
+        "uk_address_matcher.data", "address_abbreviations.json"
+    ) as json_path:
+        # 1) Load lookup (upper-case keys for case-insensitive match)
+        abbr_lookup_sql = f"""
+        SELECT
+          UPPER(TRIM(token))       AS token,
+          TRIM(replacement)        AS replacement
+        FROM read_json_auto('{json_path}')
+        WHERE token IS NOT NULL AND replacement IS NOT NULL
+        """
 
     # 2) Build a single-row MAP using list aggregations (works on DuckDB without map_agg)
     abbr_map_sql = """
