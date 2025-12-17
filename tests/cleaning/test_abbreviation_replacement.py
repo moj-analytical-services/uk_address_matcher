@@ -46,7 +46,7 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
         "FACTORY WORKS WORKS INDUSTRIAL ESTATE ROAD",
         "MUSEUM GALLERY THEATRE THEATRE CIVIC CENTRE",
         "FLAT 3D 12B BAKER AVENUE LONDON",
-        "FLAT 1A OXFORD CLOSE LONDON",
+        "TOP FLOOR FLAT 1A OXFORD CLOSE LONDON",
     ]
     for row, expected in zip(rows, expected_addresses):
         assert row[clean_idx] == expected
