@@ -51,11 +51,30 @@ def _resolve_with_trigrams(
         ", supporting_trigram_texts" if include_trigram_text else ""
     )
 
+    # Flat and business unit indicator fields to carry through the pipeline for filtering.
+    # We require exact matches on these to reduce false positives (e.g. matching
+    # "12 ALLEN ROAD" to "FIRST FLOOR FLAT 12 ALLEN ROAD" or
+    # "UNIT C 32 PARKHALL" to "UNIT F 32 PARKHALL").
+    # We also include non_traditional_address_type to ensure we only match
+    # addresses of the same classification (e.g. bus shelters to bus shelters).
+    unit_fields = """
+        has_flat_indicator,
+        flat_positional,
+        flat_letter,
+        flat_number,
+        has_business_unit,
+        business_unit_type,
+        business_unit_id,
+        non_traditional_address_type
+    """
+
     canonical_trigrams_sql = f"""
         SELECT
             canon.ukam_address_id as canonical_ukam_address_id,
             canon.canonical_unique_id,
             canon.postcode,
+            canon.numeric_tokens,
+            canon.{unit_fields.replace(chr(10), " ")},
             {_ngram_expression("canon.address_tokens", ngram_size)} AS ngrams
         FROM {{canonical_addresses_restricted}} AS canon
         WHERE length(canon.address_tokens) >= {ngram_size}
@@ -66,20 +85,45 @@ def _resolve_with_trigrams(
             trigram.canonical_ukam_address_id,
             trigram.canonical_unique_id,
             trigram.postcode,
+            trigram.numeric_tokens,
+            trigram.{unit_fields.replace(chr(10), " ")},
             {_trigram_hash_expression()} AS trigram_hash
         FROM {{canonical_trigrams}} AS trigram,
         UNNEST(trigram.ngrams) AS u(tri)
         WHERE tri IS NOT NULL
     """
 
+    # Group by flat and business unit indicators so uniqueness is scoped to
+    # records with matching unit characteristics. This reduces ambiguity
+    # significantly (e.g. prevents UNIT C matching UNIT F at same address).
     unique_trigram_index_sql = """
         SELECT
             postcode,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            non_traditional_address_type,
             trigram_hash,
             MIN(canonical_ukam_address_id) AS canonical_ukam_address_id,
             MIN(canonical_unique_id) AS canonical_unique_id
         FROM {canonical_trigrams_exploded}
-        GROUP BY postcode, trigram_hash
+        GROUP BY
+            postcode,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            non_traditional_address_type,
+            trigram_hash
         HAVING COUNT(DISTINCT canonical_ukam_address_id) = 1
     """
 
@@ -87,8 +131,10 @@ def _resolve_with_trigrams(
         SELECT
             f.ukam_address_id AS fuzzy_ukam_address_id,
             f.postcode,
+            f.numeric_tokens,
+            f.{unit_fields.replace(chr(10), " ")},
             {_ngram_expression("f.address_tokens", ngram_size)} AS ngrams
-    FROM {{fuzzy_addresses}} AS f
+        FROM {{fuzzy_addresses}} AS f
         WHERE length(f.address_tokens) >= {ngram_size}
     """
 
@@ -96,6 +142,8 @@ def _resolve_with_trigrams(
         SELECT DISTINCT
             fuzzy_trigrams.fuzzy_ukam_address_id,
             fuzzy_trigrams.postcode,
+            fuzzy_trigrams.numeric_tokens,
+            fuzzy_trigrams.{unit_fields.replace(chr(10), " ")},
             {_trigram_hash_expression()} AS trigram_hash
             {trigram_text_projection}
         FROM {{fuzzy_trigrams}} AS fuzzy_trigrams,
@@ -103,6 +151,14 @@ def _resolve_with_trigrams(
         WHERE tri IS NOT NULL
     """
 
+    # Join on all flat and business unit indicators using IS NOT DISTINCT FROM
+    # for NULL-safe equality. This ensures:
+    # - Both have flat indicator OR both don't
+    # - Flat positional matches (or both NULL)
+    # - Flat letter matches (or both NULL)
+    # - Flat number matches (or both NULL)
+    # - Business unit type matches (or both NULL)
+    # - Business unit ID matches (or both NULL)
     trigram_candidate_links_sql = f"""
         SELECT
             fuzzy.fuzzy_ukam_address_id,
@@ -113,7 +169,17 @@ def _resolve_with_trigrams(
             {candidate_text_projection}
         FROM {{fuzzy_trigrams_exploded}} AS fuzzy
         JOIN {{unique_trigram_index}} AS unique_index
-          USING (postcode, trigram_hash)
+            ON fuzzy.postcode = unique_index.postcode
+            AND fuzzy.numeric_tokens = unique_index.numeric_tokens
+            AND fuzzy.trigram_hash = unique_index.trigram_hash
+            AND fuzzy.has_flat_indicator IS NOT DISTINCT FROM unique_index.has_flat_indicator
+            AND fuzzy.flat_positional IS NOT DISTINCT FROM unique_index.flat_positional
+            AND fuzzy.flat_letter IS NOT DISTINCT FROM unique_index.flat_letter
+            AND fuzzy.flat_number IS NOT DISTINCT FROM unique_index.flat_number
+            AND fuzzy.has_business_unit IS NOT DISTINCT FROM unique_index.has_business_unit
+            AND fuzzy.business_unit_type IS NOT DISTINCT FROM unique_index.business_unit_type
+            AND fuzzy.business_unit_id IS NOT DISTINCT FROM unique_index.business_unit_id
+            AND fuzzy.non_traditional_address_type IS NOT DISTINCT FROM unique_index.non_traditional_address_type
     """
 
     # TODO(ThomasHepworth): Realistically, we don't need the count check if
