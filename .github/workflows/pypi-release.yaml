@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Build package
+      - name: Build and validate package
         run: |
-          uv build --no-sources
+          ./shell/test_release_locally.sh
 
       - name: Publish to PyPI
         env:
