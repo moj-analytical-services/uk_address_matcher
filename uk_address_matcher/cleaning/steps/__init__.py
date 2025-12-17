@@ -3,6 +3,7 @@ from __future__ import annotations
 from uk_address_matcher.cleaning.steps.normalisation import (
     _add_ukam_address_id,
     _canonicalise_postcode,
+    _classify_non_traditional_address,
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
     _remove_duplicate_end_tokens,
@@ -24,6 +25,7 @@ from uk_address_matcher.cleaning.steps.term_frequencies import (
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _clean_address_string_second_pass,
     _generalised_token_aliases,
+    _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
@@ -36,6 +38,7 @@ from uk_address_matcher.cleaning.steps.tokenisation import (
 __all__ = [
     # token_parsing
     "_parse_out_flat_position_and_letter",
+    "_parse_out_business_unit",
     "_parse_out_numbers",
     "_clean_address_string_second_pass",
     "_generalised_token_aliases",
@@ -50,6 +53,8 @@ __all__ = [
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
     "_add_ukam_address_id",
+    # TODO(ThomasHepworth): this may be better extracted directly from the OS data?
+    "_classify_non_traditional_address",
     # tokenisation
     "_split_numeric_tokens_to_cols",
     "_tokenise_address_without_numbers",

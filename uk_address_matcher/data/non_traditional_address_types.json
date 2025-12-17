@@ -1,0 +1,146 @@
+{
+  "ADVERTISING": [
+    "ADVERTISING RIGHT",
+    "ADVERTISING RIGHTS",
+    "ADVERTISING HOARDING"
+  ],
+  "BUS_INFRASTRUCTURE": [
+    "BUS SHELTER",
+    "BUS SHELTERS",
+    "BUS STOP",
+    "BUS STOPS",
+    "BUS STATION"
+  ],
+  "TELEPHONE": [
+    "TELEPHONE BOX",
+    "TELEPHONE BOXES",
+    "TELEPHONE KIOSK",
+    "TELEPHONE KIOSKS",
+    "PHONE BOX",
+    "PHONE BOXES",
+    "PHONE KIOSK",
+    "PHONE KIOSKS"
+  ],
+  "POST": [
+    "POST BOX",
+    "POST BOXES",
+    "POST OFFICE",
+    "POSTBOX",
+    "POSTBOXES"
+  ],
+  "TOILET": [
+    "PUBLIC TOILET",
+    "PUBLIC TOILETS",
+    "PUBLIC CONVENIENCE",
+    "PUBLIC CONVENIENCES"
+  ],
+  "NOTICE_BOARD": [
+    "NOTICE BOARD",
+    "NOTICE BOARDS",
+    "INFORMATION BOARD",
+    "INFORMATION BOARDS"
+  ],
+  "ELECTRICITY": [
+    "ELECTRICITY SUBSTATION",
+    "ELECTRICITY SUB STATION",
+    "ELECTRIC SUBSTATION",
+    "ELECTRICAL SUBSTATION",
+    "TRANSFORMER STATION",
+    "POWER SUBSTATION"
+  ],
+  "GAS": [
+    "GAS GOVERNOR",
+    "GAS GOVERNORS",
+    "GAS METER",
+    "GAS METERS"
+  ],
+  "WATER": [
+    "PUMPING STATION",
+    "PUMP STATION",
+    "SEWAGE WORKS",
+    "SEWAGE STATION",
+    "WATER TOWER",
+    "WATER TREATMENT"
+  ],
+  "TELECOM": [
+    "TELECOMMUNICATIONS MAST",
+    "TELECOM MAST",
+    "RADIO MAST",
+    "MOBILE MAST",
+    "PHONE MAST",
+    "COMMUNICATIONS MAST",
+    "MAST SITE"
+  ],
+  "PARKING": [
+    "CAR PARK",
+    "CAR PARKS",
+    "PARKING SPACE",
+    "PARKING SPACES",
+    "PARKING BAY",
+    "PARKING BAYS",
+    "MULTI STOREY CAR PARK"
+  ],
+  "RAILWAY": [
+    "RAILWAY STATION",
+    "RAIL STATION",
+    "TRAIN STATION"
+  ],
+  "ATM": [
+    "ATM SITE",
+    "CASH MACHINE",
+    "CASH POINT",
+    "CASHPOINT"
+  ],
+  "CCTV": [
+    "CCTV COLUMN",
+    "CCTV SITE",
+    "CCTV CAMERA"
+  ],
+  "LIGHTING": [
+    "STREET LIGHT",
+    "STREET LIGHTS",
+    "LAMP POST",
+    "LAMP POSTS",
+    "LIGHTING COLUMN"
+  ],
+  "BILLBOARD": [
+    "BILLBOARD SITE",
+    "HOARDING SITE",
+    "POSTER SITE"
+  ],
+  "BENCH": [
+    "PUBLIC BENCH",
+    "STREET BENCH"
+  ],
+  "BIN": [
+    "LITTER BIN",
+    "LITTER BINS",
+    "WASTE BIN",
+    "RECYCLING BIN"
+  ],
+  "LAND": [
+    "LAND AT",
+    "LAND ADJACENT",
+    "LAND ADJOINING",
+    "LAND REAR OF",
+    "PLOT OF LAND"
+  ],
+  "GARAGE": [
+    "GARAGE SITE",
+    "GARAGE BLOCK",
+    "LOCK UP GARAGE",
+    "LOCK UP GARAGES"
+  ],
+  "SHOP": [
+    "SHOP"
+  ],
+  "MOORING": [
+    "MOORING",
+    "MOORINGS",
+    "MOORING SITE",
+    "BOAT MOORING",
+    "HOUSEBOAT MOORING",
+    "BOATHOUSE",
+    "BOAT HOUSE"
+  ]
+}
