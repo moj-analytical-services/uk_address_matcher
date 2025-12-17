@@ -56,7 +56,16 @@ def _restrict_canonical_to_fuzzy_postcodes(
         "canon.postcode",
         "canon.unique_id AS canonical_unique_id",
         "canon.ukam_address_id AS ukam_address_id",
-        "address_tokens",
+        "canon.address_tokens",
+        "canon.numeric_tokens",
+        "canon.has_flat_indicator",
+        "canon.flat_positional",
+        "canon.flat_letter",
+        "canon.flat_number",
+        "canon.has_business_unit",
+        "canon.business_unit_type",
+        "canon.business_unit_id",
+        "canon.non_traditional_address_type",
     ]
 
     if postcode_strategy == "exact":
