@@ -133,8 +133,9 @@ def _parse_out_flat_position_and_letter():
       - Treat '2 69 GIPSY HILL' as flat_number=2 (two-number start heuristic)
     """
 
-    # Floor positions: BASEMENT and GARDEN are standalone, others paired with FLOOR/GROUND
-    standalone_floors = ["BASEMENT", "GARDEN"]
+    # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone, others paired with FLOOR/GROUND
+    # BLOCK indicates a flat block (e.g., "BLOCK B STANNARD HALL")
+    standalone_floors = ["BASEMENT", "GARDEN", "BLOCK"]
     floor_with_suffix = [
         "LOWER",
         "UPPER",
@@ -151,6 +152,10 @@ def _parse_out_flat_position_and_letter():
         "TOP",
     ]
     # Build regex: standalone floors OR (prefix + FLOOR) OR (prefix + GROUND for LOWER/UPPER)
+    # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
+    # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
+    # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
+    multi_floor_pattern = r"(?:(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TOP),? ?|AND )*(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TOP) FLOORS"
     floor_positions = (
         r"\b("
         + "|".join(
@@ -158,6 +163,8 @@ def _parse_out_flat_position_and_letter():
             + [f"{f} FLOOR" for f in floor_with_suffix]
             + [f"{f} GROUND" for f in ["LOWER", "UPPER"]]
         )
+        + r"|"
+        + multi_floor_pattern
         + r")\b"
     )
 
@@ -174,6 +181,7 @@ def _parse_out_flat_position_and_letter():
         r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
     )
     flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
+    block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
     scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
@@ -185,40 +193,47 @@ def _parse_out_flat_position_and_letter():
         -- 1) Positional/floor signal
         NULLIF(regexp_extract(i.clean_full_address, '{floor_positions}', 1), '') AS flat_positional,
 
-        -- 2) flat_letter (priority: FLAT 12A → A, FLAT A → A, 11A start → A, 15B anywhere → B)
+        -- 2) flat_letter (priority: FLAT 12A → A, FLAT A → A, BLOCK A → A, 11A start → A, 15B anywhere → B)
         COALESCE(
             NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), ''),
             NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1), ''),
+            NULLIF(regexp_extract(i.clean_full_address, '{block_letter}', 1), ''),
             NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 2), ''),
             NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2), '')
         ) AS flat_letter,
 
         -- 3) flat_number (priority explained inline)
         -- Accept flat_number if we have:
-        -- A) Explicit FLAT + number AND 2+ total numbers, OR
-        -- B) Multiple numbers AND no number+letter pattern
+        -- A) Explicit FLAT + number (but NOT if followed by a letter like "FLAT 12A" or "FLAT 12 A"),
+        --    AND either multiple numbers exist OR a BLOCK letter pattern is present, OR
+        -- B) Multiple numbers AND no number+letter pattern (heuristic for "2 69 GIPSY HILL")
+        -- Note: DuckDB regexp_extract returns '' not NULL for no match, so we use NULLIF(..., '')
         CASE
-            WHEN (
-                regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1) IS NOT NULL
-                AND COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
-            ) OR (
-                COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
-                AND regexp_extract(i.clean_full_address, '{leading_num_letter}', 1) IS NULL
-                AND regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1) IS NULL
-            ) THEN COALESCE(
-                -- FLAT 3/2 → 2
+            -- Case A: Explicit "FLAT X" - extract ONLY if no letter follows AND (multiple numbers OR BLOCK pattern)
+            WHEN NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '') IS NOT NULL
+                 AND NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), '') IS NULL
+                 AND (
+                     COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
+                     OR NULLIF(regexp_extract(i.clean_full_address, '{block_letter}', 1), '') IS NOT NULL
+                 )
+            THEN COALESCE(
+                -- FLAT 3/2 → 2 (Scottish style)
                 NULLIF(regexp_extract(i.original_address_concat, '{scottish_flat}', 2), ''),
-
-                -- FLAT 12 → 12: take the number next to FLAT first
-                NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), ''),
-
-                -- Two-number start heuristic: "2 69 GIPSY HILL" → 2 (only if there is a second number)
+                -- FLAT 12 → 12
+                NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '')
+            )
+            -- Case B: Multiple numbers AND no number+letter pattern
+            WHEN (
+                COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
+                AND NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 1), '') IS NULL
+                AND NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1), '') IS NULL
+            ) THEN
+                -- Two-number start heuristic: "2 69 GIPSY HILL" → 2
                 CASE
                     WHEN NULLIF(regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1), '') IS NOT NULL
                      AND NULLIF(regexp_extract(i.clean_full_address, '^\\s*\\d{{1,4}}\\D+.*?\\b(\\d{{1,4}})\\b', 1), '') IS NOT NULL
                     THEN regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1)
                 END
-            )
             ELSE NULL
         END AS flat_number
 
@@ -244,6 +259,75 @@ def _parse_out_flat_position_and_letter():
         CTEStep("final", final_sql),
     ]
     return steps
+
+
+@pipeline_stage(
+    name="parse_out_business_unit",
+    description="Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses",
+    tags=["token_extraction", "business_parsing"],
+)
+def _parse_out_business_unit():
+    """
+    Extracts business unit identifiers from address strings.
+
+    Business addresses often have unit identifiers that distinguish different
+    tenants within the same building, e.g.:
+      - "UNIT C 32 PARKHALL BUSINESS CENTRE"
+      - "UNIT F 32 PARKHALL BUSINESS CENTRE"
+
+    These are distinct from residential flat indicators as they typically appear
+    in commercial/industrial contexts. Common patterns:
+      - UNIT A, UNIT 5, UNIT 5A, UNITS 1-3
+      - SUITE 100, SUITE A
+      - OFFICE 5, OFFICE A
+      - WORKSHOP 3, WORKSHOP A
+      - WAREHOUSE A, WAREHOUSE 5
+
+    We capture:
+      - business_unit_type: The type keyword (UNIT, SUITE, OFFICE, etc.)
+      - business_unit_id: The identifier (letter, number, or alphanumeric)
+      - has_business_unit: Boolean indicator
+    """
+    # Business unit keywords - these indicate commercial/industrial premises
+    # Note: UNIT is normalised FROM residential APARTMENT in earlier cleaning,
+    # but raw UNIT in business contexts (UNIT C, UNIT 5) remains
+    business_keywords = ["UNIT", "SUITE", "OFFICE", "WORKSHOP", "WAREHOUSE", "STUDIO"]
+
+    # Build pattern: (UNIT|SUITE|...) followed by identifier
+    # Identifier can be: letter (A-Z), number (1-999), or alphanumeric (5A, A5)
+    # Also handle plural forms like "UNITS 1-3" or "UNITS A AND B"
+    keywords_pattern = "|".join(business_keywords)
+
+    # Pattern for singular: UNIT A, UNIT 5, UNIT 5A, UNIT A5
+    singular_pattern = (
+        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
+    )
+
+    sql = f"""
+    SELECT
+        i.*,
+
+        -- Extract the business unit type (UNIT, SUITE, OFFICE, etc.)
+        NULLIF(
+            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 1)),
+            ''
+        ) AS business_unit_type,
+
+        -- Extract the business unit identifier (A, 5, 5A, etc.)
+        NULLIF(
+            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 2)),
+            ''
+        ) AS business_unit_id,
+
+        -- Boolean indicator for having a business unit
+        regexp_matches(
+            i.clean_full_address,
+            '\\b({keywords_pattern})S?\\s+([A-Za-z]?\\d{{1,4}}[A-Za-z]?|[A-Za-z])\\b'
+        ) AS has_business_unit
+
+    FROM {{input}} i
+    """
+    return sql
 
 
 @pipeline_stage(
