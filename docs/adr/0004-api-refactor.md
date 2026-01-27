@@ -37,7 +37,7 @@ for new users to get started quickly.
 ## Pipeline stage notes
 
 Our pipelines currently consist of three main stages:
-1. Data cleaning and preparation
+1. Data cleaning and preparation, broken down into standard cleaning and tokenisation 
 2. Deterministic exact matching
 3. Probabilistic matching via Splink
 
