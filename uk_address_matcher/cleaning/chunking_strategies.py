@@ -163,6 +163,88 @@ def clean_data_with_minimal_steps(
     return con.table(f"__ukam_chunked_addresses_{uid}")
 
 
+def clean_data_with_term_frequencies_pt_1(
+    address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    num_of_chunks: int = 10,
+    *,
+    debug_options: Optional[DebugOptions] = None,
+) -> DuckDBPyRelation:
+    """Run pre-TF cleaning and materialise the result for later TF processing."""
+    uid = _uid()
+
+    cleaned_address_table = clean_data_with_minimal_steps(
+        address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
+    )
+
+    cleaned_address_table.to_table(f"__ukam_cleaned_addresses_{uid}")
+    return con.table(f"__ukam_cleaned_addresses_{uid}")
+
+
+def clean_data_with_term_frequencies_pt_2(
+    cleaned_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    num_of_chunks: int = 10,
+    use_data_specific_term_frequencies: bool | None = None,
+    derive_distinguishing_wrt_adjacent_records: bool = False,
+    *,
+    debug_options: Optional[DebugOptions] = None,
+) -> DuckDBPyRelation:
+    """Apply term frequencies to pre-cleaned data."""
+    uid = _uid()
+    input_name = f"__ukam_cleaned_addresses_{uid}"
+    con.register(input_name, cleaned_address_table)
+
+    total_rows = cleaned_address_table.count("*").fetchone()[0]
+    use_data_specific_tfs = _should_use_data_specific_term_frequencies(
+        total_rows, use_data_specific_term_frequencies
+    )
+    _create_term_frequency_tables(
+        cleaned_address_table,
+        con,
+        use_data_specific_term_frequencies=use_data_specific_tfs,
+    )
+
+    chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
+    total_chunks = (total_rows + chunk_size - 1) // chunk_size
+
+    # Apply term frequencies to cleaned chunks
+    for chunk_index in range(total_chunks):
+        chunk_started_at = time.perf_counter()
+        chunk = con.sql(f"""
+        SELECT *
+            FROM {input_name}
+            WHERE (abs(hash(original_address_concat)) % {total_chunks}) = {chunk_index}
+        """)
+
+        # Numeric TF columns should only be attached when using precomputed TFs
+        # If we are chunking, we want to precompute rel token freqs and then use them
+        processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
+            chunk,
+            con=con,
+            pre_cleaned_addresses=True,
+            derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
+            debug_options=debug_options if chunk_index == 0 else None,
+        )
+
+        if chunk_index == 0:
+            con.execute(f"DROP TABLE IF EXISTS __ukam_addresses_processed_{uid}")
+            processed_chunk.create(f"__ukam_addresses_processed_{uid}")
+        else:
+            processed_chunk.insert_into(f"__ukam_addresses_processed_{uid}")
+
+        _log_progress(
+            total_rows,
+            min((chunk_index + 1) * chunk_size, total_rows),
+            stage_type="Applied term frequencies: ",
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
+        )
+
+    return con.table(f"__ukam_addresses_processed_{uid}")
+
+
 # Chunking this requires a three phase approach:
 # 1. Clean data in chunks without term frequencies
 # 2. At the end of each chunk, accumulate token counts to compute global term frequencies
@@ -214,66 +296,22 @@ def clean_data_with_term_frequencies(
         Cleaned address data with computed term frequencies, including numeric
         term frequency columns (tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3).
     """
-    uid = _uid()
-
-    # Clean data in chunks (without term frequencies)
-    cleaned_address_table = clean_data_with_minimal_steps(
+    cleaned_address_table = clean_data_with_term_frequencies_pt_1(
         address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
     )
-
-    cleaned_address_table.to_table(f"__ukam_cleaned_addresses_{uid}")
-
-    total_rows = cleaned_address_table.count("*").fetchone()[0]
-    use_data_specific_tfs = _should_use_data_specific_term_frequencies(
-        total_rows, use_data_specific_term_frequencies
-    )
-    _create_term_frequency_tables(
+    return clean_data_with_term_frequencies_pt_2(
         cleaned_address_table,
         con,
-        use_data_specific_term_frequencies=use_data_specific_tfs,
+        num_of_chunks=num_of_chunks,
+        use_data_specific_term_frequencies=use_data_specific_term_frequencies,
+        derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
+        debug_options=debug_options,
     )
-
-    chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
-    total_chunks = (total_rows + chunk_size - 1) // chunk_size
-
-    # Apply term frequencies to cleaned chunks
-    for chunk_index in range(total_chunks):
-        chunk_started_at = time.perf_counter()
-        chunk = con.sql(f"""
-        SELECT *
-            FROM __ukam_cleaned_addresses_{uid}
-            WHERE (abs(hash(original_address_concat)) % {total_chunks}) = {chunk_index}
-        """)
-
-        # Numeric TF columns should only be attached when using precomputed TFs
-        # If we are chunking, we want to precompute rel token freqs and then use them
-        processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
-            chunk,
-            con=con,
-            pre_cleaned_addresses=True,
-            derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
-            debug_options=debug_options if chunk_index == 0 else None,
-        )
-
-        if chunk_index == 0:
-            con.execute(f"DROP TABLE IF EXISTS __ukam_addresses_processed_{uid}")
-            processed_chunk.create(f"__ukam_addresses_processed_{uid}")
-        else:
-            processed_chunk.insert_into(f"__ukam_addresses_processed_{uid}")
-
-        _log_progress(
-            total_rows,
-            min((chunk_index + 1) * chunk_size, total_rows),
-            stage_type="Applied term frequencies: ",
-            chunk_index=chunk_index,
-            total_chunks=total_chunks,
-            chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
-        )
-
-    return con.table(f"__ukam_addresses_processed_{uid}")
 
 
 __all__ = [
     "clean_data_with_minimal_steps",
+    "clean_data_with_term_frequencies_pt_1",
+    "clean_data_with_term_frequencies_pt_2",
     "clean_data_with_term_frequencies",
 ]

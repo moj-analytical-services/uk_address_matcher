@@ -70,12 +70,12 @@ QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
 ]
 
 QUEUE_POST_TF = [
-    _move_common_end_tokens_to_field,
-    _first_unusual_token,
-    _use_first_unusual_token_if_no_numeric_token,
-    _separate_unusual_tokens,
-    _create_histograms_from_token_frequencies,
-    _attach_numeric_term_frequencies,
+    # _move_common_end_tokens_to_field,
+    # _first_unusual_token,
+    # _use_first_unusual_token_if_no_numeric_token,
+    # _separate_unusual_tokens,
+    # _create_histograms_from_token_frequencies,
+    # _attach_numeric_term_frequencies,
 ]
 
 
@@ -153,7 +153,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
         if not pre_cleaned_addresses
         else tf_and_post + additional_stages
     )
-
+    print(stage_queue)
     pipeline = create_sql_pipeline(
         con,
         address_table,

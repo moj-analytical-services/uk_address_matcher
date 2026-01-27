@@ -675,7 +675,7 @@ class DuckDBPipeline(CTEPipeline):
                 label = _segment_label(idx, alias)
                 _explain_debug(self.con, sql)
             return None
-
+        # logger.info(final_sql)
         return self.con.sql(final_sql)
 
 

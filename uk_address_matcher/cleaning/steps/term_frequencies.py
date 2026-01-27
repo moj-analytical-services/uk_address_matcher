@@ -10,7 +10,11 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
     tags="term_frequency_analysis",
 )
 def _add_term_frequencies_to_address_tokens():
-    """Compute token-level relative frequencies and attach them to each record."""
+    """Compute token-level relative frequencies and attach them to each record.
+
+    Uses explode-join-reaggregate but only sorts/aggregates scalar rel_freq values,
+    then zips them back to the original token list to build structs at the end.
+    """
 
     base_sql = """
     SELECT * FROM {input}
@@ -19,7 +23,7 @@ def _add_term_frequencies_to_address_tokens():
     rel_tok_freq_cte_sql = """
     SELECT
         token,
-        count(*) / sum(count(*)) OVER () AS rel_freq
+        CAST(count(*) / sum(count(*)) OVER () AS REAL) AS rel_freq
     FROM (
         SELECT
             unnest(address_without_numbers_tokenised) AS token
@@ -28,52 +32,52 @@ def _add_term_frequencies_to_address_tokens():
     GROUP BY token
     """
 
-    addresses_exploded_sql = """
+    exploded_tokens_sql = """
     SELECT
-        ukam_address_id,
-        unnest(address_without_numbers_tokenised) AS token,
-        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
-    FROM {base}
+        b.ukam_address_id,
+        t.token,
+        t.ord AS token_idx
+    FROM {base} AS b
+    CROSS JOIN unnest(b.address_without_numbers_tokenised)
+        WITH ORDINALITY AS t(token, ord)
     """
 
-    address_groups_sql = """
+    joined_scalars_sql = """
     SELECT
-        {addresses_exploded}.*,
-        COALESCE({rel_tok_freq_cte}.rel_freq, 5e-5) AS rel_freq
-    FROM {addresses_exploded}
-    LEFT JOIN {rel_tok_freq_cte}
-        ON {addresses_exploded}.token = {rel_tok_freq_cte}.token
+        e.ukam_address_id,
+        e.token_idx,
+        COALESCE(CAST(f.rel_freq AS REAL), CAST(5e-5 AS REAL)) AS rel_freq
+    FROM {exploded_tokens} e
+    LEFT JOIN {rel_tok_freq_cte} f
+        ON e.token = f.token
     """
 
-    token_freq_lookup_sql = """
+    reaggregated_freqs_sql = """
     SELECT
         ukam_address_id,
-        list_transform(
-            list_zip(
-                array_agg(token ORDER BY ukam_address_id, token_order ASC),
-                array_agg(rel_freq ORDER BY ukam_address_id, token_order ASC)
-            ),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
-        ) AS token_rel_freq_arr
-    FROM {address_groups}
+        list(rel_freq ORDER BY token_idx ASC) AS freq_arr
+    FROM {joined_scalars}
     GROUP BY ukam_address_id
     """
 
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
-        lookup.token_rel_freq_arr
+        list_transform(
+            list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
+            x -> struct_pack(tok := x[1], rel_freq := CAST(x[2] AS REAL))
+        ) AS token_rel_freq_arr
     FROM {base} AS base
-    INNER JOIN {token_freq_lookup} AS lookup
-        ON base.ukam_address_id = lookup.ukam_address_id
+    INNER JOIN {reaggregated_freqs} AS agg
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
         CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
-        CTEStep("addresses_exploded", addresses_exploded_sql),
-        CTEStep("address_groups", address_groups_sql),
-        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("exploded_tokens", exploded_tokens_sql),
+        CTEStep("joined_scalars", joined_scalars_sql),
+        CTEStep("reaggregated_freqs", reaggregated_freqs_sql),
         CTEStep("final", final_sql),
     ]
 
@@ -86,57 +90,61 @@ def _add_term_frequencies_to_address_tokens():
     tags="term_frequency_analysis",
 )
 def _add_term_frequencies_to_address_tokens_using_registered_df():
-    """Attach precomputed token frequencies registered as rel_tok_freq."""
+    """Attach precomputed token frequencies registered as rel_tok_freq.
+
+    Uses explode-join-reaggregate but only sorts/aggregates scalar rel_freq values,
+    then zips them back to the original token list to build structs at the end.
+    """
 
     base_sql = """
     SELECT * FROM {input}
     """
 
-    addresses_exploded_sql = """
+    exploded_tokens_sql = """
     SELECT
-        ukam_address_id,
-        unnest(address_without_numbers_tokenised) AS token,
-        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
-    FROM {base}
+        b.ukam_address_id,
+        t.token,
+        t.ord AS token_idx
+    FROM {base} AS b
+    CROSS JOIN unnest(b.address_without_numbers_tokenised)
+        WITH ORDINALITY AS t(token, ord)
     """
 
-    address_groups_sql = """
+    joined_scalars_sql = """
     SELECT
-        {addresses_exploded}.*,
-        COALESCE(rel_tok_freq.rel_freq, 5e-5) AS rel_freq
-    FROM {addresses_exploded}
+        e.ukam_address_id,
+        e.token_idx,
+        COALESCE(CAST(rel_tok_freq.rel_freq AS REAL), CAST(5e-5 AS REAL)) AS rel_freq
+    FROM {exploded_tokens} e
     LEFT JOIN rel_tok_freq
-        ON {addresses_exploded}.token = rel_tok_freq.token
+        ON e.token = rel_tok_freq.token
     """
 
-    token_freq_lookup_sql = """
+    reaggregated_freqs_sql = """
     SELECT
         ukam_address_id,
-        list_transform(
-            list_zip(
-                array_agg(token ORDER BY ukam_address_id, token_order ASC),
-                array_agg(rel_freq ORDER BY ukam_address_id, token_order ASC)
-            ),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
-        ) AS token_rel_freq_arr
-    FROM {address_groups}
+        list(rel_freq ORDER BY token_idx ASC) AS freq_arr
+    FROM {joined_scalars}
     GROUP BY ukam_address_id
     """
 
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
-        lookup.token_rel_freq_arr
+        list_transform(
+            list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
+            x -> struct_pack(tok := x[1], rel_freq := CAST(x[2] AS REAL))
+        ) AS token_rel_freq_arr
     FROM {base} AS base
-    INNER JOIN {token_freq_lookup} AS lookup
-        ON base.ukam_address_id = lookup.ukam_address_id
+    INNER JOIN {reaggregated_freqs} AS agg
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
-        CTEStep("addresses_exploded", addresses_exploded_sql),
-        CTEStep("address_groups", address_groups_sql),
-        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("exploded_tokens", exploded_tokens_sql),
+        CTEStep("joined_scalars", joined_scalars_sql),
+        CTEStep("reaggregated_freqs", reaggregated_freqs_sql),
         CTEStep("final", final_sql),
     ]
 
@@ -352,7 +360,7 @@ def _get_token_frequeny_table():
         SELECT
             token,
             COUNT(*) AS count,
-            COUNT(*) / (SELECT COUNT(*) FROM {unnested}) AS rel_freq
+            CAST(COUNT(*) / (SELECT COUNT(*) FROM {unnested}) AS REAL) AS rel_freq
         FROM {unnested}
         GROUP BY token
     ) AS token_counts
