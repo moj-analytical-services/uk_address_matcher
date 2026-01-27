@@ -30,7 +30,7 @@ def _add_term_frequencies_to_address_tokens():
 
     addresses_exploded_sql = """
     SELECT
-        unique_id,
+        ukam_address_id,
         unnest(address_without_numbers_tokenised) AS token,
         generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
     FROM {base}
@@ -47,16 +47,16 @@ def _add_term_frequencies_to_address_tokens():
 
     token_freq_lookup_sql = """
     SELECT
-        unique_id,
+        ukam_address_id,
         list_transform(
             list_zip(
-                array_agg(token ORDER BY unique_id, token_order ASC),
-                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+                array_agg(token ORDER BY ukam_address_id, token_order ASC),
+                array_agg(rel_freq ORDER BY ukam_address_id, token_order ASC)
             ),
             x -> struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {address_groups}
-    GROUP BY unique_id
+    GROUP BY ukam_address_id
     """
 
     final_sql = """
@@ -65,7 +65,7 @@ def _add_term_frequencies_to_address_tokens():
         lookup.token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {token_freq_lookup} AS lookup
-        ON base.unique_id = lookup.unique_id
+        ON base.ukam_address_id = lookup.ukam_address_id
     """
 
     steps = [
@@ -94,7 +94,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
 
     addresses_exploded_sql = """
     SELECT
-        unique_id,
+        ukam_address_id,
         unnest(address_without_numbers_tokenised) AS token,
         generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
     FROM {base}
@@ -111,16 +111,16 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
 
     token_freq_lookup_sql = """
     SELECT
-        unique_id,
+        ukam_address_id,
         list_transform(
             list_zip(
-                array_agg(token ORDER BY unique_id, token_order ASC),
-                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+                array_agg(token ORDER BY ukam_address_id, token_order ASC),
+                array_agg(rel_freq ORDER BY ukam_address_id, token_order ASC)
             ),
             x -> struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {address_groups}
-    GROUP BY unique_id
+    GROUP BY ukam_address_id
     """
 
     final_sql = """
@@ -129,7 +129,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         lookup.token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {token_freq_lookup} AS lookup
-        ON base.unique_id = lookup.unique_id
+        ON base.ukam_address_id = lookup.ukam_address_id
     """
 
     steps = [
@@ -361,7 +361,6 @@ def _get_token_frequeny_table():
 
     concatenated_sql = """
     SELECT
-        unique_id,
         list_concat(
             array_filter(
                 [numeric_token_1, numeric_token_2, numeric_token_3],

@@ -242,7 +242,7 @@ def clean_data_with_term_frequencies(
         chunk = con.sql(f"""
         SELECT *
             FROM __ukam_cleaned_addresses_{uid}
-            WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
+            WHERE (abs(hash(original_address_concat)) % {total_chunks}) = {chunk_index}
         """)
 
         # Numeric TF columns should only be attached when using precomputed TFs
