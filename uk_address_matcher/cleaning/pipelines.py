@@ -1,7 +1,7 @@
 from typing import Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
-
+import time
 from uk_address_matcher.cleaning.steps import (
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _add_ukam_address_id,
@@ -41,33 +41,33 @@ import logging
 logger = logging.getLogger(__name__)
 QUEUE_PRE_TF = [
     _add_ukam_address_id,
-    # _rename_and_select_columns,
-    # _trim_whitespace_address_and_postcode,
-    # _upper_case_address_and_postcode,
-    # _canonicalise_postcode,
-    # _clean_address_string_first_pass,
-    # _normalise_abbreviations_and_units,
-    # _remove_duplicate_end_tokens,  # clean_full_address now completed
-    # _create_tokenised_address_concat,  # based on clean_full_address
-    # _parse_out_flat_position_and_letter,
-    # _parse_out_business_unit,
-    # _parse_out_numbers,
-    # _clean_address_string_second_pass,
-    # _split_numeric_tokens_to_cols,
-    # _tokenise_address_without_numbers,
+    _rename_and_select_columns,
+    _trim_whitespace_address_and_postcode,
+    _upper_case_address_and_postcode,
+    _canonicalise_postcode,
+    _clean_address_string_first_pass,
+    _normalise_abbreviations_and_units,
+    _remove_duplicate_end_tokens,  # clean_full_address now completed
+    _create_tokenised_address_concat,  # based on clean_full_address
+    _parse_out_flat_position_and_letter,
+    _parse_out_business_unit,
+    _parse_out_numbers,
+    _clean_address_string_second_pass,
+    _split_numeric_tokens_to_cols,
+    _tokenise_address_without_numbers,
     # _classify_non_traditional_address,
 ]
 
-# COMMON_AND_UNIQUE = [
-#     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-#     _generalised_token_aliases,
-#     *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1 :],
-# ]
+COMMON_AND_UNIQUE = [
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+    _generalised_token_aliases,
+    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1 :],
+]
 
-# QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
-#     *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1],
-#     *COMMON_AND_UNIQUE,
-# ]
+QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
+    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1],
+    *COMMON_AND_UNIQUE,
+]
 
 QUEUE_POST_TF = [
     _move_common_end_tokens_to_field,
@@ -94,12 +94,16 @@ def _materialise_output_table(
     )
     materialised_name = f"__address_table_cleaned_{uid}"
     logging.info(f"Materialising cleaned address table to {materialised_name}")
+
+    start_time = time.perf_counter()
     con.execute(
         f"""
         create or replace temporary table {materialised_name} as
         select * {exclude_clause} from __address_table_res
         """
     )
+    end_time = time.perf_counter()
+    logging.info(f"INNER: Time taken to materialise: {end_time - start_time} seconds")
     logging.info(f"Materialisation complete")
     return con.table(materialised_name)
 
