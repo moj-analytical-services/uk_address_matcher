@@ -53,7 +53,7 @@ QUEUE_PRE_TF = [
     _clean_address_string_second_pass,
     _split_numeric_tokens_to_cols,
     _tokenise_address_without_numbers,
-    _classify_non_traditional_address,
+    # _classify_non_traditional_address,
 ]
 
 COMMON_AND_UNIQUE = [

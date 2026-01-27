@@ -20,9 +20,10 @@ logger = logging.getLogger("uk_address_matcher")
 
 
 def _format_elapsed(elapsed_seconds: float) -> str:
-    total_seconds = int(round(max(0.0, elapsed_seconds)))
-    minutes, seconds = divmod(total_seconds, 60)
-    return f"{minutes}m {seconds:02d}s"
+    total_seconds = max(0.0, elapsed_seconds)
+    minutes = int(total_seconds // 60)
+    seconds = total_seconds - (minutes * 60)
+    return f"{minutes}m {seconds:05.2f}s"
 
 
 def _log_progress(
@@ -106,7 +107,8 @@ def clean_data_with_minimal_steps(
         Cleaned address data without term frequencies, materialised as a relation.
     """
     uid = _uid()
-    address_table.to_table(f"__ukam_input_addresses_{uid}")
+    input_name = f"__ukam_input_addresses_{uid}"
+    con.register(input_name, address_table)
     # For chunked processing, don't add ID yet - process chunks first
     total_rows = address_table.count("*").fetchone()[0]
 
@@ -116,12 +118,13 @@ def clean_data_with_minimal_steps(
     con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}")
 
     for chunk_index, offset in enumerate(range(0, total_rows, chunk_size)):
+        logger.info("starting chunk %d/%d", chunk_index + 1, total_chunks)
         chunk_started_at = time.perf_counter()
         # NB: using address_table.limit(n=chunk_size, offset=offset).execute()
         # causes the lazy eval to return the same rows each time
         chunk = con.sql(f"""
         SELECT *
-            FROM __ukam_input_addresses_{uid}
+            FROM {input_name}
             LIMIT {chunk_size} OFFSET {offset}
         """)
 
@@ -131,9 +134,21 @@ def clean_data_with_minimal_steps(
         )
 
         if chunk_index == 0:
+            table_op_started_at = time.perf_counter()
             processed_chunk.create(f"__ukam_chunked_addresses_{uid}")
+            logger.info(
+                "Created chunk table in %.2fs",
+                time.perf_counter() - table_op_started_at,
+            )
         else:
+            table_op_started_at = time.perf_counter()
             processed_chunk.insert_into(f"__ukam_chunked_addresses_{uid}")
+            logger.info(
+                "Inserted chunk into table in %s",
+                _format_elapsed(time.perf_counter() - table_op_started_at),
+            )
+
+        logger.info("finishing chunks %d/%d", chunk_index + 1, total_chunks)
 
         _log_progress(
             total_rows,
@@ -204,56 +219,58 @@ def clean_data_with_term_frequencies(
     cleaned_address_table = clean_data_with_minimal_steps(
         address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
     )
-    cleaned_address_table.to_table(f"__ukam_cleaned_addresses_{uid}")
+    return cleaned_address_table
 
-    total_rows = cleaned_address_table.count("*").fetchone()[0]
-    use_data_specific_tfs = _should_use_data_specific_term_frequencies(
-        total_rows, use_data_specific_term_frequencies
-    )
-    _create_term_frequency_tables(
-        cleaned_address_table,
-        con,
-        use_data_specific_term_frequencies=use_data_specific_tfs,
-    )
+    # cleaned_address_table.to_table(f"__ukam_cleaned_addresses_{uid}")
 
-    chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
-    total_chunks = (total_rows + chunk_size - 1) // chunk_size
+    # total_rows = cleaned_address_table.count("*").fetchone()[0]
+    # use_data_specific_tfs = _should_use_data_specific_term_frequencies(
+    #     total_rows, use_data_specific_term_frequencies
+    # )
+    # _create_term_frequency_tables(
+    #     cleaned_address_table,
+    #     con,
+    #     use_data_specific_term_frequencies=use_data_specific_tfs,
+    # )
 
-    # Apply term frequencies to cleaned chunks
-    for chunk_index, offset in enumerate(range(0, total_rows, chunk_size)):
-        chunk_started_at = time.perf_counter()
-        chunk = con.sql(f"""
-        SELECT *
-            FROM __ukam_cleaned_addresses_{uid}
-            LIMIT {chunk_size} OFFSET {offset}
-        """)
+    # chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
+    # total_chunks = (total_rows + chunk_size - 1) // chunk_size
 
-        # Numeric TF columns should only be attached when using precomputed TFs
-        # If we are chunking, we want to precompute rel token freqs and then use them
-        processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
-            chunk,
-            con=con,
-            pre_cleaned_addresses=True,
-            derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
-            debug_options=debug_options if chunk_index == 0 else None,
-        )
+    # # Apply term frequencies to cleaned chunks
+    # for chunk_index, offset in enumerate(range(0, total_rows, chunk_size)):
+    #     chunk_started_at = time.perf_counter()
+    #     chunk = con.sql(f"""
+    #     SELECT *
+    #         FROM __ukam_cleaned_addresses_{uid}
+    #         LIMIT {chunk_size} OFFSET {offset}
+    #     """)
 
-        if offset == 0:
-            con.execute(f"DROP TABLE IF EXISTS __ukam_addresses_processed_{uid}")
-            processed_chunk.create(f"__ukam_addresses_processed_{uid}")
-        else:
-            processed_chunk.insert_into(f"__ukam_addresses_processed_{uid}")
+    #     # Numeric TF columns should only be attached when using precomputed TFs
+    #     # If we are chunking, we want to precompute rel token freqs and then use them
+    #     processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
+    #         chunk,
+    #         con=con,
+    #         pre_cleaned_addresses=True,
+    #         derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
+    #         debug_options=debug_options if chunk_index == 0 else None,
+    #     )
 
-        _log_progress(
-            total_rows,
-            min(offset + chunk_size, total_rows),
-            stage_type="Applied term frequencies: ",
-            chunk_index=chunk_index,
-            total_chunks=total_chunks,
-            chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
-        )
+    #     if offset == 0:
+    #         con.execute(f"DROP TABLE IF EXISTS __ukam_addresses_processed_{uid}")
+    #         processed_chunk.create(f"__ukam_addresses_processed_{uid}")
+    #     else:
+    #         processed_chunk.insert_into(f"__ukam_addresses_processed_{uid}")
 
-    return con.table(f"__ukam_addresses_processed_{uid}")
+    #     _log_progress(
+    #         total_rows,
+    #         min(offset + chunk_size, total_rows),
+    #         stage_type="Applied term frequencies: ",
+    #         chunk_index=chunk_index,
+    #         total_chunks=total_chunks,
+    #         chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
+    #     )
+
+    # return con.table(f"__ukam_addresses_processed_{uid}")
 
 
 __all__ = [
