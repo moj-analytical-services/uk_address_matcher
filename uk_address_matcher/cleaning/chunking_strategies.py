@@ -132,6 +132,7 @@ def clean_data_with_minimal_steps(
         processed_chunk = _clean_data_with_minimal_steps(
             chunk, con, debug_options=debug_options if chunk_index == 0 else None
         )
+        logger.info("mid")
 
         if chunk_index == 0:
             table_op_started_at = time.perf_counter()

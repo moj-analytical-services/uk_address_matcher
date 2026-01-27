@@ -26,7 +26,7 @@ def _add_ukam_address_id():
     return """
     SELECT
         *,
-        uuid() AS ukam_address_id
+        -- uprn AS ukam_address_id
     FROM {input}
     """
 

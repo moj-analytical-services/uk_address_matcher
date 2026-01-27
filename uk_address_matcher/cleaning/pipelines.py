@@ -36,36 +36,38 @@ from uk_address_matcher.cleaning.steps.tokenisation import (
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid, package_resource_read_sql
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
+import logging
 
+logger = logging.getLogger(__name__)
 QUEUE_PRE_TF = [
     _add_ukam_address_id,
-    _rename_and_select_columns,
-    _trim_whitespace_address_and_postcode,
-    _upper_case_address_and_postcode,
-    _canonicalise_postcode,
-    _clean_address_string_first_pass,
-    _normalise_abbreviations_and_units,
-    _remove_duplicate_end_tokens,  # clean_full_address now completed
-    _create_tokenised_address_concat,  # based on clean_full_address
-    _parse_out_flat_position_and_letter,
-    _parse_out_business_unit,
-    _parse_out_numbers,
-    _clean_address_string_second_pass,
-    _split_numeric_tokens_to_cols,
-    _tokenise_address_without_numbers,
+    # _rename_and_select_columns,
+    # _trim_whitespace_address_and_postcode,
+    # _upper_case_address_and_postcode,
+    # _canonicalise_postcode,
+    # _clean_address_string_first_pass,
+    # _normalise_abbreviations_and_units,
+    # _remove_duplicate_end_tokens,  # clean_full_address now completed
+    # _create_tokenised_address_concat,  # based on clean_full_address
+    # _parse_out_flat_position_and_letter,
+    # _parse_out_business_unit,
+    # _parse_out_numbers,
+    # _clean_address_string_second_pass,
+    # _split_numeric_tokens_to_cols,
+    # _tokenise_address_without_numbers,
     # _classify_non_traditional_address,
 ]
 
-COMMON_AND_UNIQUE = [
-    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-    _generalised_token_aliases,
-    *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1 :],
-]
+# COMMON_AND_UNIQUE = [
+#     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+#     _generalised_token_aliases,
+#     *QUEUE_PRE_TF[QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1 :],
+# ]
 
-QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
-    *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1],
-    *COMMON_AND_UNIQUE,
-]
+# QUEUE_PRE_TF_WITH_UNIQUE_AND_COMMON = [
+#     *QUEUE_PRE_TF[: QUEUE_PRE_TF.index(_remove_duplicate_end_tokens) + 1],
+#     *COMMON_AND_UNIQUE,
+# ]
 
 QUEUE_POST_TF = [
     _move_common_end_tokens_to_field,
@@ -91,12 +93,14 @@ def _materialise_output_table(
         else ""
     )
     materialised_name = f"__address_table_cleaned_{uid}"
+    logging.info(f"Materialising cleaned address table to {materialised_name}")
     con.execute(
         f"""
         create or replace temporary table {materialised_name} as
         select * {exclude_clause} from __address_table_res
         """
     )
+    logging.info(f"Materialisation complete")
     return con.table(materialised_name)
 
 
@@ -114,7 +118,9 @@ def _clean_data_with_minimal_steps(
         pipeline_name="Clean data with minimal steps",
         pipeline_description="A minimal cleaning pipeline without term frequencies",
     )
+    logger.info("pipeline created")
     table_rel = pipeline.run(debug_options)
+    logger.info("pipeline run completed")
     return _materialise_output_table(
         con, table_rel, _uid(), exclude_source_dataset_name=False
     )
