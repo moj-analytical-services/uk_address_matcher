@@ -204,6 +204,18 @@ def clean_data_with_term_frequencies(
         address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
     )
 
+    # TODO REVERSE INDEX:  Here we want one or more functions like _create_term_frequency_tables
+    # That:
+    # If create_reverse_index arg is set,
+    #   (1) creates reverse index trigrams table of any trigrams that map to fewer than 20 unique_ids
+    #           and persists to database, called __ukam_ngram_reverse_index
+    #   (2) adds a column called exploding_unique_ids which is [unique_id] i.e. a list with one element
+    #  If create_reverse_index arg is not set:
+    #   (1) Uses the clean_full_address column (string split on ' ' ) to create a new table of
+    #       trigram vs ukam_address_id
+    #   (2) Joins thus tabble to the reverse index to retrieve any unique_ids in the reverse index and
+    #       uses these to create a column exploding_unique_ids column to the cleaned_address_table
+
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     use_data_specific_tfs = _should_use_data_specific_term_frequencies(
         total_rows, use_data_specific_term_frequencies
