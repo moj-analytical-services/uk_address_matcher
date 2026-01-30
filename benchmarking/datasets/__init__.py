@@ -75,32 +75,44 @@ def load_benchmark_data(
     # Load raw messy data with optional sampling
     df_messy_raw = load_dataset(dataset_name, con, sample_mode=sample_mode)
 
-    # Apply cleaning logic
-    if include_term_frequencies:
-        cleaning_function = clean_data_with_term_frequencies
-    else:
-        cleaning_function = clean_data_with_minimal_steps
-
-    df_messy = cleaning_function(df_messy_raw, con)
-
     # Load canonical data once with optional sampling
     canonical_config = (
         CanonicalConfig(local_path=os_data_path)
         if os_data_path
         else CanonicalConfig.default()
     )
-    df_canonical = load_canonical_data(con, canonical_config, sample_mode=sample_mode)
+    df_canonical_raw = load_canonical_data(
+        con, canonical_config, sample_mode=sample_mode
+    )
+
+    # TODO: This is a hack, we're going to re-process
+    df_canonical_raw = df_canonical_raw.select(
+        "unique_id, original_address_concat as address_concat, postcode, classification_code"
+    )
 
     # Apply dataset-specific canonical filter if defined
     canonical_filter_sql = _DATASET_REGISTRY[dataset_name].info.canonical_filter_sql
     if canonical_filter_sql is not None and canonical_filter_sql.strip():
-        df_canonical = con.sql(
+        df_canonical_raw_filtered = con.sql(
             f"""
             SELECT *
-            FROM df_canonical
+            FROM df_canonical_raw
             WHERE {canonical_filter_sql.strip()}
             """
         )
+
+    # Apply cleaning logic with reverse index for term frequencies
+    if include_term_frequencies:
+        df_canonical = clean_data_with_term_frequencies(
+            df_canonical_raw_filtered, con, create_reverse_index=True
+        )
+        df_messy = clean_data_with_term_frequencies(
+            df_messy_raw, con, create_reverse_index=False
+        )
+    else:
+        # Apply minimal cleaning without reverse index
+        df_messy = clean_data_with_minimal_steps(df_messy_raw, con)
+        df_canonical = df_canonical_raw
 
     # Show dataset info
     info = get_dataset_info(dataset_name)
