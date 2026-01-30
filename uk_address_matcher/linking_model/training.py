@@ -546,7 +546,11 @@ postcode_comparison = {
 }
 
 
-blocking_rules = old_blocking_rules + [block_on("postcode")]
+blocking_rules = (
+    old_blocking_rules
+    + [block_on("postcode")]
+    + [block_on("exploding_unique_ids", arrays_to_explode=["exploding_unique_ids"])]
+)
 
 
 def get_settings_for_training(

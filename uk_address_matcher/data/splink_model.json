@@ -85,6 +85,13 @@
         {
             "blocking_rule": "l.\"postcode\" = r.\"postcode\"",
             "sql_dialect": "duckdb"
+        },
+        {
+            "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
+            "sql_dialect": "duckdb",
+            "arrays_to_explode": [
+                "exploding_unique_ids"
+            ]
         }
     ],
     "comparisons": [

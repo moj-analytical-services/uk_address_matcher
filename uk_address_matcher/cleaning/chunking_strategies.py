@@ -11,6 +11,9 @@ from uk_address_matcher.cleaning.pipelines import (
     _clean_data_with_minimal_steps,
     _create_term_frequency_tables,
 )
+from uk_address_matcher.linking_model.exact_matching.resolve_with_trigrams import (
+    _ngram_expression,
+)
 from uk_address_matcher.sql_pipeline.helpers import _uid
 
 if TYPE_CHECKING:
@@ -76,6 +79,151 @@ def _should_use_data_specific_term_frequencies(
         # Auto-select TF strategy based on record count if not explicitly specified
         # Use data-specific TFs for large datasets (>= 500k records)
         return total_records >= 500_000
+
+
+def _create_trigram_reverse_index(
+    cleaned_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    *,
+    max_unique_ids_per_trigram: int = 20,
+) -> None:
+    """Create a reverse index mapping trigrams to unique_ids for blocking.
+
+    Generates all trigrams (3-token sequences) from each address's clean_full_address
+    field, then builds an inverted index mapping each trigram to the list of unique_ids
+    that contain it. Only trigrams appearing in between 1 and max_unique_ids_per_trigram
+    addresses are retained, to balance selectivity and coverage.
+
+    The resulting table is persisted as __ukam_ngram_reverse_index with columns:
+        - trigram: LIST(VARCHAR) - the 3-token sequence
+        - unique_ids_to_explode: LIST(VARCHAR) - list of unique_ids containing this trigram
+
+    Args:
+        cleaned_address_table: Pre-cleaned address relation with clean_full_address
+            and unique_id columns.
+        con: DuckDB connection.
+        max_unique_ids_per_trigram: Maximum number of unique_ids per trigram to retain.
+            Trigrams appearing in more addresses are excluded as they provide
+            insufficient selectivity for blocking. Defaults to 20.
+    """
+    table_name = cleaned_address_table.alias
+    ngram_expr = _ngram_expression("string_split(clean_full_address, ' ')", 3)
+
+    # Generate trigrams and explode into individual rows
+    con.execute(f"""
+        CREATE OR REPLACE TEMPORARY TABLE __ukam_trigram_index AS
+        SELECT
+            unnest({ngram_expr}) AS trigram,
+            unique_id
+        FROM {table_name}
+    """)
+
+    # Build reverse index: trigram -> list of unique_ids
+    # Filter to keep only trigrams with 1 to max_unique_ids_per_trigram unique_ids
+    con.execute(f"""
+        CREATE OR REPLACE TABLE __ukam_ngram_reverse_index AS
+        SELECT
+            trigram,
+            LIST(DISTINCT unique_id) AS unique_ids_to_explode
+        FROM __ukam_trigram_index
+        GROUP BY trigram
+        HAVING length(unique_ids_to_explode) BETWEEN 1 AND {max_unique_ids_per_trigram}
+    """)
+
+    # Clean up temporary table
+    con.execute("DROP TABLE IF EXISTS __ukam_trigram_index")
+
+
+def _add_exploding_unique_ids_from_reverse_index(
+    cleaned_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+) -> DuckDBPyRelation:
+    """Add exploding_unique_ids column by looking up trigrams in the reverse index.
+
+    For each address, generates all trigrams from clean_full_address, joins them
+    against the pre-built reverse index (__ukam_ngram_reverse_index), and aggregates
+    the matched unique_ids into a single list. If no matching trigrams are found,
+    the column contains an empty list.
+
+    Args:
+        cleaned_address_table: Pre-cleaned address relation with clean_full_address
+            and unique_id columns.
+        con: DuckDB connection with __ukam_ngram_reverse_index table available.
+
+    Returns:
+        Address relation with an additional exploding_unique_ids column containing
+        the list of candidate unique_ids from the reverse index.
+    """
+    table_name = cleaned_address_table.alias
+    ngram_expr = _ngram_expression("string_split(clean_full_address, ' ')", 3)
+
+    # Create a temporary table of address trigrams
+    con.execute(f"""
+        CREATE OR REPLACE TEMPORARY TABLE __ukam_address_trigrams AS
+        SELECT
+            ukam_address_id,
+            unnest({ngram_expr}) AS trigram
+        FROM {table_name}
+    """)
+
+    # Join address trigrams to reverse index and aggregate unique_ids
+    con.execute("""
+        CREATE OR REPLACE TEMPORARY TABLE __ukam_matched_unique_ids AS
+        SELECT
+            addr_tri.ukam_address_id,
+            LIST(DISTINCT ri_uid ORDER BY ri_uid) AS exploding_unique_ids
+        FROM __ukam_address_trigrams AS addr_tri
+        INNER JOIN __ukam_ngram_reverse_index AS ri
+            ON addr_tri.trigram = ri.trigram,
+        UNNEST(ri.unique_ids_to_explode) AS u(ri_uid)
+        GROUP BY addr_tri.ukam_address_id
+    """)
+
+    # Join back to original table to add the exploding_unique_ids column
+    # Materialise immediately as a table to avoid lazy evaluation issues
+    # when the temporary tables are dropped
+    uid_result = _uid()
+    con.execute(f"""
+        CREATE OR REPLACE TABLE __ukam_with_exploding_result_{uid_result} AS
+        SELECT
+            addr.*,
+            COALESCE(matched.exploding_unique_ids, []) AS exploding_unique_ids
+        FROM {table_name} AS addr
+        LEFT JOIN __ukam_matched_unique_ids AS matched
+            ON addr.ukam_address_id = matched.ukam_address_id
+    """)
+    result = con.table(f"__ukam_with_exploding_result_{uid_result}")
+
+    # Clean up temporary tables
+    con.execute("DROP TABLE IF EXISTS __ukam_address_trigrams")
+    con.execute("DROP TABLE IF EXISTS __ukam_matched_unique_ids")
+
+    return result
+
+
+def _add_self_unique_id_as_exploding(
+    cleaned_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+) -> DuckDBPyRelation:
+    """Add exploding_unique_ids column containing just the record's own unique_id.
+
+    Used for canonical/reference data where each record should only match itself
+    during the Splink blocking phase.
+
+    Args:
+        cleaned_address_table: Pre-cleaned address relation with unique_id column.
+        con: DuckDB connection.
+
+    Returns:
+        Address relation with exploding_unique_ids column as [unique_id].
+    """
+    table_name = cleaned_address_table.alias
+    return con.sql(f"""
+        SELECT
+            *,
+            [unique_id] AS exploding_unique_ids
+        FROM {table_name}
+    """)
 
 
 def clean_data_with_minimal_steps(
@@ -157,6 +305,7 @@ def clean_data_with_term_frequencies(
     num_of_chunks: int = 10,
     use_data_specific_term_frequencies: bool | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
+    create_reverse_index: bool | None = None,
     *,
     debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
@@ -189,6 +338,15 @@ def clean_data_with_term_frequencies(
                 (< 1M → precomputed; ≥ 1M → data-specific)
         derive_distinguishing_wrt_adjacent_records: Whether to derive distinguishing
             tokens relative to adjacent records.
+        create_reverse_index:
+            - True: Create the trigram reverse index from this data (for canonical/
+              reference data). Persists the index as __ukam_ngram_reverse_index and
+              adds exploding_unique_ids as [unique_id] (i.e. just itself).
+            - False: Look up trigrams against an existing reverse index (for fuzzy/
+              input data). Adds exploding_unique_ids containing candidate unique_ids
+              from matching trigrams in the index.
+            - None (default): Do not use reverse index functionality; no
+              exploding_unique_ids column is added.
         debug_options: Optional debug configuration for pipeline execution.
             Note: Debug options are only applied on the first iteration to avoid
             excessive logging output.
@@ -204,17 +362,31 @@ def clean_data_with_term_frequencies(
         address_table, con, num_of_chunks=num_of_chunks, debug_options=debug_options
     )
 
-    # TODO REVERSE INDEX:  Here we want one or more functions like _create_term_frequency_tables
-    # That:
-    # If create_reverse_index arg is set,
-    #   (1) creates reverse index trigrams table of any trigrams that map to fewer than 20 unique_ids
-    #           and persists to database, called __ukam_ngram_reverse_index
-    #   (2) adds a column called exploding_unique_ids which is [unique_id] i.e. a list with one element
-    #  If create_reverse_index arg is not set:
-    #   (1) Uses the clean_full_address column (string split on ' ' ) to create a new table of
-    #       trigram vs ukam_address_id
-    #   (2) Joins thus tabble to the reverse index to retrieve any unique_ids in the reverse index and
-    #       uses these to create a column exploding_unique_ids column to the cleaned_address_table
+    # Handle reverse index creation or lookup for blocking
+    if create_reverse_index is True:
+        # For canonical/reference data: build the trigram reverse index
+        _create_trigram_reverse_index(cleaned_address_table, con)
+        # Add exploding_unique_ids as [unique_id] for canonical data
+        cleaned_address_table = _add_self_unique_id_as_exploding(
+            cleaned_address_table, con
+        )
+        # Re-register the updated table
+        uid_canonical = _uid()
+        con.execute(f"DROP TABLE IF EXISTS __ukam_with_exploding_{uid_canonical}")
+        cleaned_address_table.create(f"__ukam_with_exploding_{uid_canonical}")
+        cleaned_address_table = con.table(f"__ukam_with_exploding_{uid_canonical}")
+    elif create_reverse_index is False:
+        # For fuzzy/input data: look up against existing reverse index
+        # The index must have been created by a prior call with create_reverse_index=True
+        cleaned_address_table = _add_exploding_unique_ids_from_reverse_index(
+            cleaned_address_table, con
+        )
+        # Re-register the updated table
+        uid_lookup = _uid()
+        con.execute(f"DROP TABLE IF EXISTS __ukam_with_exploding_{uid_lookup}")
+        cleaned_address_table.create(f"__ukam_with_exploding_{uid_lookup}")
+        cleaned_address_table = con.table(f"__ukam_with_exploding_{uid_lookup}")
+    # If create_reverse_index is None, skip reverse index handling entirely
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     use_data_specific_tfs = _should_use_data_specific_term_frequencies(
