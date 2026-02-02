@@ -57,6 +57,7 @@ def _extract_postcode_from_address() -> str:
 
     # - Use COALESCE to prefer existing postcode over extracted
     # - Always remove postcode from  address_concat to avoid duplication
+    # - Use NULLIF to convert empty string from regexp_extract to NULL
     return f"""
     SELECT
         * EXCLUDE (postcode, address_concat),
@@ -68,7 +69,7 @@ def _extract_postcode_from_address() -> str:
         )) AS address_concat,
         COALESCE(
             NULLIF(TRIM(postcode), ''),
-            UPPER(regexp_extract(UPPER(address_concat), '{uk_postcode_regex}'))
+            NULLIF(UPPER(regexp_extract(UPPER(address_concat), '{uk_postcode_regex}')), '')
         ) AS postcode
     FROM {{input}}
     """

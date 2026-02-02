@@ -55,14 +55,14 @@ def get_hackney_council_data(
 
     df_messy_raw = con.sql(sql)
 
-    # df_messy_raw = con.sql(
-    #     """
-    #         SELECT
-    #             * EXCLUDE (postcode),
-    #             CASE WHEN hash(unique_id) % 20 > 2 THEN NULL ELSE postcode END AS postcode
-    #         FROM df_messy_raw
-    #         """
-    # )
+    df_messy_raw = con.sql(
+        """
+            SELECT
+                * EXCLUDE (postcode),
+                CASE WHEN hash(unique_id) % 20 > 2 THEN NULL ELSE postcode END AS postcode
+            FROM df_messy_raw
+            """
+    )
 
     if sample_mode:
         df_messy_raw = con.sql(

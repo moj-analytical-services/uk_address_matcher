@@ -91,6 +91,11 @@ with time_phase(variant_timings, variant_label, "splink_linking"):
         include_full_postcode_block=True,
         retain_intermediate_calculation_columns=True,
     )
+    display(linker.visualisations.match_weights_chart())
+    for i, br2 in enumerate(
+        linker._settings_obj._blocking_rules_to_generate_predictions
+    ):
+        print(f"{i}: {br2}")
     df_predict = linker.inference.predict(threshold_match_weight=10)
     df_predict_ddb = df_predict.as_duckdbpyrelation()
 
@@ -150,21 +155,54 @@ incorrect_count = (
     .fetchone()[0]
 )
 
-if incorrect_count > 0:
-    print(
-        f"\n📊 Found {incorrect_count:,} incorrect matches. Analysing mismatches...\n"
-    )
-    mismatch_results = analyse_mismatches(
-        ukam_matches=match_candidates,
-        ukam_canonical=df_os_clean,
-        ukam_messy=df_messy_clean,
-        samples_per_reason=MISMATCH_SAMPLES_PER_REASON,
-        top_worst=TOP_WORST_MISMATCHES,
-    )
-    print_mismatch_analysis(mismatch_results)
-else:
-    print("\n✓ No incorrect matches found!\n")
+# if incorrect_count > 0:
+#     print(
+#         f"\n📊 Found {incorrect_count:,} incorrect matches. Analysing mismatches...\n"
+#     )
+#     mismatch_results = analyse_mismatches(
+#         ukam_matches=match_candidates,
+#         ukam_canonical=df_os_clean,
+#         ukam_messy=df_messy_clean,
+#         samples_per_reason=MISMATCH_SAMPLES_PER_REASON,
+#         top_worst=TOP_WORST_MISMATCHES,
+#     )
+#     print_mismatch_analysis(mismatch_results)
+# else:
+#     print("\n✓ No incorrect matches found!\n")
 
 print("\nTiming summary:")
 for line in format_timing_summary(variant_timings):
     print(line)
+
+recs = df_predict_ddb.filter("match_key = 18").limit(5).df().to_dict(orient="records")
+linker.visualisations.waterfall_chart(recs)
+
+df_predict_ddb.filter("match_key = 18").limit(5).show(max_width=100000)
+
+to_select = df_predict_ddb.limit(5).select("ukam_address_id_r", "ukam_address_id_l")
+
+sql = """
+select * from
+df_predict_improved
+
+inner join
+to_select
+on df_predict_improved.ukam_address_id_r = to_select.ukam_address_id_r
+"""
+con.sql(sql).show(max_width=100000)
+
+
+sql = """
+select *
+from match_candidates
+where ukam_address_id in (select ukam_address_id_r from to_select)
+"""
+con.sql(sql).show(max_width=100000)
+
+
+sql = """
+select count(*)
+from match_candidates
+where match_reason = 'splink: probabilistic match'
+"""
+con.sql(sql).show(max_width=100000)

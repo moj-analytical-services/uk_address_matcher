@@ -37,8 +37,8 @@ def test_postcode_extraction_no_column_provided():
                 f"Expected postcode '{expected_postcode}', got '{extracted_postcode}'"
             )
         else:
-            assert extracted_postcode is None or extracted_postcode == "", (
-                f"Expected no postcode, got '{extracted_postcode}'"
+            assert extracted_postcode is None, (
+                f"Expected NULL postcode, got '{extracted_postcode}'"
             )
 
         # Check postcode removal from address
@@ -283,4 +283,75 @@ def test_postcode_column_case_insensitive():
         extracted_postcode = result[0]
         assert extracted_postcode == postcode_value, (
             f"Expected postcode '{postcode_value}', got '{extracted_postcode}'"
+        )
+
+
+def test_no_postcode_results_in_null_not_empty_string():
+    """Test that when no postcode exists in input, the cleaned postcode is NULL not empty string."""
+    connection = duckdb.connect()
+
+    test_cases = [
+        # Addresses with no postcode in address_concat and no postcode column
+        "10 HIGH STREET LONDON",
+        "FLAT 5 ACACIA AVENUE MANCHESTER",
+        "123 MAIN ROAD BIRMINGHAM",
+        "15 OAK LANE",
+        "THE COTTAGE",
+    ]
+
+    for input_address in test_cases:
+        # Test 1: No postcode column at all
+        input_rel = connection.sql(
+            f"SELECT '1' as unique_id, '{input_address}' as address_concat"
+        )
+
+        result_rel = _clean_data_with_minimal_steps(input_rel, connection)
+        result = result_rel.select("postcode").fetchall()[0]
+        extracted_postcode = result[0]
+
+        assert extracted_postcode is None, (
+            f"Expected NULL postcode for '{input_address}' with no postcode column, "
+            f"got '{extracted_postcode}' (type: {type(extracted_postcode)})"
+        )
+
+        # Test 2: Empty string in postcode column
+        input_rel = connection.sql(
+            f"SELECT '1' as unique_id, '{input_address}' as address_concat, '' as postcode"
+        )
+
+        result_rel = _clean_data_with_minimal_steps(input_rel, connection)
+        result = result_rel.select("postcode").fetchall()[0]
+        extracted_postcode = result[0]
+
+        assert extracted_postcode is None, (
+            f"Expected NULL postcode for '{input_address}' with empty postcode column, "
+            f"got '{extracted_postcode}' (type: {type(extracted_postcode)})"
+        )
+
+        # Test 3: NULL in postcode column
+        input_rel = connection.sql(
+            f"SELECT '1' as unique_id, '{input_address}' as address_concat, NULL as postcode"
+        )
+
+        result_rel = _clean_data_with_minimal_steps(input_rel, connection)
+        result = result_rel.select("postcode").fetchall()[0]
+        extracted_postcode = result[0]
+
+        assert extracted_postcode is None, (
+            f"Expected NULL postcode for '{input_address}' with NULL postcode column, "
+            f"got '{extracted_postcode}' (type: {type(extracted_postcode)})"
+        )
+
+        # Test 4: Whitespace-only in postcode column
+        input_rel = connection.sql(
+            f"SELECT '1' as unique_id, '{input_address}' as address_concat, '   ' as postcode"
+        )
+
+        result_rel = _clean_data_with_minimal_steps(input_rel, connection)
+        result = result_rel.select("postcode").fetchall()[0]
+        extracted_postcode = result[0]
+
+        assert extracted_postcode is None, (
+            f"Expected NULL postcode for '{input_address}' with whitespace-only postcode column, "
+            f"got '{extracted_postcode}' (type: {type(extracted_postcode)})"
         )
