@@ -137,7 +137,7 @@
                 },
                 {
                     "sql_condition": "flat_letter_l = flat_letter_r",
-                    "label_for_charts": "Exact match",
+                    "label_for_charts": "Exact match on flat letter",
                     "m_probability": 95.00950852025916,
                     "u_probability": 1,
                     "fix_m_probability": true,
@@ -153,8 +153,24 @@
                 },
                 {
                     "sql_condition": "\n            (flat_positional_l IS NOT NULL and flat_positional_r IS NULL and flat_letter_r IS NOT NULL)\n            or\n            (flat_positional_r IS NOT NULL and flat_positional_l IS NULL and flat_letter_l IS NOT NULL)\n            ",
-                    "label_for_charts": "Exact match",
+                    "label_for_charts": "Flat positional vs flat letter mismatch",
                     "m_probability": 1,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r",
+                    "label_for_charts": "Flat numbers both present but differ",
+                    "m_probability": 0.0001,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r",
+                    "label_for_charts": "Flat letters both present but differ",
+                    "m_probability": 0.0001,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
