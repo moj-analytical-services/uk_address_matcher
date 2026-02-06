@@ -6,36 +6,35 @@ on:
     paths:
       - 'uk_address_matcher/**'
       - 'tests/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
   push:
     branches: [ main ]
     paths:
       - 'uk_address_matcher/**'
       - 'tests/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
 
 jobs:
   run-pytest:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Setup uv
-      id: setup-uv
-      uses: astral-sh/setup-uv@v5
-      with:
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
 
-    - name: Install the project
-      run: uv sync --all-extras --dev
-
-    - name: Run pytest
-      run: uv run pytest
+      - name: Run pytest
+        run: uv run pytest tests/ -vv
