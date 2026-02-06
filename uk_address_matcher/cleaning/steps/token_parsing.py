@@ -129,8 +129,8 @@ def _parse_out_flat_position_and_letter():
     Strategy:
       - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
-      - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12) or multi-number heuristics
-      - Treat '2 69 GIPSY HILL' as flat_number=2 (two-number start heuristic)
+      - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
+      - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
     """
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone, others paired with FLOOR/GROUND
@@ -203,13 +203,12 @@ def _parse_out_flat_position_and_letter():
         ) AS flat_letter,
 
         -- 3) flat_number (priority explained inline)
-        -- Accept flat_number if we have:
-        -- A) Explicit FLAT + number (but NOT if followed by a letter like "FLAT 12A" or "FLAT 12 A"),
-        --    AND either multiple numbers exist OR a BLOCK letter pattern is present, OR
-        -- B) Multiple numbers AND no number+letter pattern (heuristic for "2 69 GIPSY HILL")
+        -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
+        -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
+        -- since "2" might be a building number, not a flat.
         -- Note: DuckDB regexp_extract returns '' not NULL for no match, so we use NULLIF(..., '')
         CASE
-            -- Case A: Explicit "FLAT X" - extract ONLY if no letter follows AND (multiple numbers OR BLOCK pattern)
+            -- Explicit "FLAT X" - extract ONLY if no letter follows AND (multiple numbers OR BLOCK pattern)
             WHEN NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '') IS NOT NULL
                  AND NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), '') IS NULL
                  AND (
@@ -222,18 +221,6 @@ def _parse_out_flat_position_and_letter():
                 -- FLAT 12 → 12
                 NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '')
             )
-            -- Case B: Multiple numbers AND no number+letter pattern
-            WHEN (
-                COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
-                AND NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 1), '') IS NULL
-                AND NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 1), '') IS NULL
-            ) THEN
-                -- Two-number start heuristic: "2 69 GIPSY HILL" → 2
-                CASE
-                    WHEN NULLIF(regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1), '') IS NOT NULL
-                     AND NULLIF(regexp_extract(i.clean_full_address, '^\\s*\\d{{1,4}}\\D+.*?\\b(\\d{{1,4}})\\b', 1), '') IS NOT NULL
-                    THEN regexp_extract(i.clean_full_address, '^\\s*(\\d{{1,4}})\\b', 1)
-                END
             ELSE NULL
         END AS flat_number
 

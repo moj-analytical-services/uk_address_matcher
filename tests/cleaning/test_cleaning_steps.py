@@ -36,9 +36,9 @@ def test_parse_out_flat_positional():
         ("GROUND FLOOR FLAT B 25 MAIN ROAD", "GROUND FLOOR", "B", None),
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
-        ("FLAT 2 69 GIPSY HILL", None, None, "2"),
-        ("2 69 GIPSY HILL", None, None, "2"),
-        ("69 GIPSY HILL", None, None, None),
+        ("FLAT 2 733 GIPSY HILL", None, None, "2"),
+        ("2 7 GIPSY HILL", None, None, None),  # Ambiguous - no explicit FLAT indicator
+        ("773 GIPSY HILL", None, None, None),
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
         ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
