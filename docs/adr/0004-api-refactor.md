@@ -1,4 +1,4 @@
-# 4. trie-matching
+# 4. API Refactor
 
 ## Status
 
@@ -25,470 +25,522 @@ intuitive, discoverable interface whilst preserving flexibility for advanced use
 
 ## Decision
 
-We will introduce a central `AddressMatcher` (final name tbc) class that encapsulates the matching
-workflow. Users will interact with the library through method chaining and clearly
-defined configuration objects.
+We will introduce a central `AddressMatcher` class that encapsulates the matching workflow. Users
+will interact with the library through clearly defined configuration objects and a simple `match()`
+method that encapsulates all matching stages.
 
 This is a standard pattern for data processing and machine learning libraries, and will make it easier
 for new users to get started quickly.
 
 ---
 
-## Pipeline stage notes
+## Pipeline Stage Notes
 
 Our pipelines currently consist of three main stages:
-1. Data cleaning and preparation, broken down into standard cleaning and tokenisation 
+1. Data cleaning and preparation, broken down into standard cleaning and tokenisation
 2. Deterministic exact matching
 3. Probabilistic matching via Splink
 
 These stages are interwoven amongst various utility functions. In the new design, these will be
-encapsulated within methods of the `AddressMatcher` class. The internal implementation can evolve
-without affecting the public API.
+encapsulated within the `AddressMatcher` class. The internal implementation can evolve without
+affecting the public API.
 
 ---
 
 ## API Design Overview
 
-### Core Classes
+### Core Components
 
-| Class | Responsibility |
-|-------|----------------|
+| Component | Responsibility |
+|-----------|----------------|
 | `AddressMatcher` | Primary entry point; orchestrates the full matching pipeline |
-| `Addresses` | Wrapper for address data (canonical or messy) with persistence |
-| `MatchResult` | Container for match outputs with convenience methods |
+| `MatchResult` | Container for match outputs with convenience methods - this is be handled in another PR w/ some notes available in https://github.com/moj-analytical-services/uk_address_matcher/issues/181 |
 | `MatcherSettings` | Configuration for matching behaviour and thresholds |
+| `prepare_and_persist_canonical_data()` | Function to pre-clean canonical data and save to folder |
 
-> [!NOTE]
-> **Design note:** We use a single `Addresses` class rather than separate
-> `CanonicalAddresses` and `AddressesToMatch` classes. The underlying schema is
-> identical, and the role (canonical vs. messy) is already clear from the argument
-> names in the API. This keeps the interface simple whilst allowing flexibility.
+### Canonical Data Modes
 
-### High-Level Workflow
+The matcher supports two modes for canonical data:
 
-<details>
-<summary>Example: Basic matching workflow</summary>
+1. **On-the-fly cleaning**: Pass a raw `DuckDBPyRelation`. The matcher cleans the data and
+   derives term frequencies internally. Simple but slower for repeated matching against a large canonical dataset.
 
-```python
-from uk_address_matcher import AddressMatcher, Addresses
+2. **Pre-prepared folder**: Pass a path to a folder containing pre-cleaned artefacts. The matcher
+   loads the files automatically. Faster for repeated matching against large canonical datasets. This is not intended for use initially by the messy addresses, but we could support this in future if there is demand.
 
-# Load address datasets
-canonical = Addresses.from_file("./canonical_addresses.parquet")
-messy = Addresses.from_file("./messy_addresses.parquet")
+#### Prepared Folder Structure
 
-# Create the matcher
-matcher = AddressMatcher(canonical_addresses=canonical, addresses_to_match=messy)
+When using `prepare_and_persist_canonical_data()`, the function writes three files to a folder:
 
-# Run matching stages
-exact = matcher.match_deterministic()
-prob = matcher.match_probabilistic()
-final = matcher.combine_results()
-
-# Inspect results
-final.summary().show()
-final.to_parquet("./matched_addresses.parquet")
+```
+./prepared_canonical/
+├── addresses.parquet       # Cleaned and tokenised addresses
+├── term_frequencies.parquet # Term frequency lookup table
+└── inverted_index.parquet   # Inverted index for candidate retrieval
 ```
 
-</details>
+The matcher recognises this structure and loads all three files when given the folder path.
+
+Users should be able to overwrite this folder with new prepared data if needed, and the matcher should validate the presence of required files when loading.
+
+---
+
+## User Paths
+
+### Path 1: Simple Matching (Most Common)
+
+This is the typical non-power-user path. It should be as easy as possible with minimal understanding
+of `uk_address_matcher` internals.
+
+```python
+import duckdb
+from uk_address_matcher import AddressMatcher
+
+con = duckdb.connect()
+
+canonical = con.read_parquet("./canonical_addresses.parquet")
+messy = con.read_parquet("./messy_addresses.parquet")
+
+matcher = AddressMatcher(
+    canonical_addresses=canonical,
+    addresses_to_match=messy,
+    con=con,
+)
+
+result = matcher.match()
+
+result.to_parquet("./matched_addresses.parquet")
+```
+
+In this mode, the matcher:
+- Cleans the canonical addresses on the fly
+- Derives term frequencies on the fly
+- Builds any required indices internally
+
+This is the easiest path but involves repeated work if you match against the same canonical
+dataset multiple times.
+
+### Path 2: Pre-Prepared Canonical Data (Power Users)
+
+For users matching against large canonical datasets (e.g. full AddressBase), pre-preparing the
+canonical data avoids repeated expensive cleaning operations.
+
+#### Step 1: Prepare and persist canonical data (one-time)
+
+```python
+import duckdb
+from uk_address_matcher import prepare_and_persist_canonical_data
+
+con = duckdb.connect()
+
+df_os_raw = con.read_parquet("./raw_addressbase.parquet")
+
+# One call prepares everything and writes to folder:
+# - cleaned/tokenised addresses
+# - term frequency table
+# - inverted index
+prepare_and_persist_canonical_data(
+    df_os_raw,
+    output_folder="./prepared_addressbase",
+    con=con,
+    overwrite=True,
+    # optional:
+    # address_column="full_address",
+    # postcode_column=None,  # parse from address if not provided
+)
+```
+
+This creates:
+```
+./prepared_addressbase/
+├── addresses.parquet
+├── term_frequencies.parquet
+└── inverted_index.parquet
+```
+
+#### Step 2: Use prepared folder in matcher
+
+```python
+import duckdb
+from uk_address_matcher import AddressMatcher, MatcherSettings
+
+con = duckdb.connect()
+
+df_messy = con.read_parquet("./messy_addresses.parquet")
+
+# Point to prepared folder instead of raw relation
+matcher = AddressMatcher(
+    canonical_addresses="./prepared_addressbase",  # folder path
+    addresses_to_match=df_messy,
+    con=con,
+    settings=MatcherSettings(
+        match_weight_threshold=15,
+        splink_prediction_threshold=-50,
+        include_unmatched=True,
+    ),
+)
+
+result = matcher.match()
+```
+
+When `canonical_addresses` is a string path to a folder, the matcher automatically loads:
+- `addresses.parquet` as the cleaned canonical addresses
+- `term_frequencies.parquet` as the TF lookup
+- `inverted_index.parquet` as the inverted index
 
 ---
 
 ## Detailed API Specification
 
-### 1. `Addresses`
+### 1. `MatcherSettings`
 
-Represents a cleaned, indexed address dataset. Used for both canonical/gazetteer data
-and messy input addresses. Supports loading from various sources and persisting to disk
-for reuse.
+Configuration object for controlling matching behaviour. Implemented as a `dataclass` for:
+- IDE autocomplete and type hints
+- Clear documentation of defaults
+- Easy introspection of available options
 
-#### Construction
+We keep a single settings object so users only have one place to look for defaults, we avoid
+duplicated options across stages, and we can add new settings without breaking the public API.
 
-```python
-from uk_address_matcher import Addresses
-import duckdb
-
-# From a file path (parquet, CSV, or other DuckDB-supported formats)
-addresses = Addresses.from_file(
-    path: str | Path,
-    *,
-    cleaned: bool | None = None,  # None = auto-detect
-    con: duckdb.DuckDBPyConnection | str | None = None,
-)
-
-# From a DuckDB relation
-addresses = Addresses.from_relation(
-    relation: duckdb.DuckDBPyRelation,
-    *,
-    cleaned: bool | None = None,
-    con: duckdb.DuckDBPyConnection | str | None = None,
-)
-
-# From a pandas DataFrame
-addresses = Addresses.from_dataframe(
-    df: pd.DataFrame,
-    *,
-    cleaned: bool | None = None,
-    con: duckdb.DuckDBPyConnection | str | None = None,
-)
-```
-
-An alternative to this could be to simply have a single `Addresses()` constructor that
-accepts multiple input types. However, I feel that using class methods improves discoverability and
-clarity in code completion.
-
-#### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str \| Path` | — | Path to input file |
-| `relation` | `duckdb.DuckDBPyRelation` | — | DuckDB relation containing address data |
-| `df` | `pd.DataFrame` | — | Pandas DataFrame with address data |
-| `cleaned` | `bool \| None` | `None` | Whether data is pre-cleaned (`None` = auto-detect) |
-| `con` | `duckdb.DuckDBPyConnection \| str \| None` | `None` | DuckDB connection, path to database file, or `None` for in-memory |
-
-#### Required Input Schema
-
-We previously required that input data must contain the following columns:
-
-| Column | DuckDB Type | Description |
-|--------|-------------|-------------|
-| `unique_id` | `BIGINT` or `VARCHAR` | Unique identifier for each record |
-| `source_dataset` | `VARCHAR` | Source dataset label (e.g., `'os_addressbase'`) |
-| `address_concat` | `VARCHAR` | Full address excluding postcode |
-| `postcode` | `VARCHAR` | UK postcode |
-
-But this requires:
-1. Users to manually create a `unique_id` column if not present, despite the fact that we have moved to our own internal unique ID (`ukam_address_id`) for consistency.
-2. The `source_dataset` column is dropped during cleaning and not used in matching, so it's unnecessary overhead.
-3. We require users to split `address_concat` and `postcode`, which is inconvenient. Most users seem to have full addresses including postcodes in a single column.
-
-In the new design, we will relax these requirements. The only mandatory column will be
-`address_concat` (which may include postcode). If users have a `unique_id` column (which they will likely want to preserve), we can create a basic lookup view to map to our internal IDs.
-
-#### Methods
+#### Implementation
 
 ```python
-# Save cleaned data for later reuse (saves as parquet)
-addresses.save(path: str | Path, overwrite: bool = False) -> None
-# Alternatively, we could expose this as plain parquet saving - with optional partitioning?
-addresses.to_parquet(path: str | Path, overwrite: bool = False) -> None
+from dataclasses import dataclass, field
+from enum import Enum
 
-# Access the underlying DuckDB relation
-addresses.relation -> duckdb.DuckDBPyRelation
+class MatchingStage(Enum):
+    """Available matching stages beyond exact matching."""
+    EXACT_MATCH = "exact_match"           # Always runs, cannot be disabled
+    TRIGRAM = "trigram"                   # Trigram-based fuzzy matching
+    PROBABILISTIC = "probabilistic"       # Splink probabilistic matching
 
-# Access the DuckDB connection
-addresses.con -> duckdb.DuckDBPyConnection
+@dataclass
+class MatcherSettings:
+    """Configuration for address matching behaviour."""
 
-# Check if data has been cleaned
-addresses.is_cleaned -> bool
+    # === Thresholds ===
+    match_weight_threshold: float = 15.0
+    """Minimum match weight for a confident match."""
 
-# Preview the data
-addresses.head(n: int = 10) -> duckdb.DuckDBPyRelation
+    distinguishability_threshold: float | None = None
+    """Minimum gap between best and second-best match (optional)."""
 
-# Get record count
-len(addresses) -> int
-```
+    splink_prediction_threshold: float = -50.0
+    """Threshold for Splink candidate generation."""
 
-<details>
-<summary>Example: Building and saving a canonical dataset</summary>
+    # === Matching Stages ===
+    # Exact matching always runs first. Additional stages are optional.
+    additional_stages: list[MatchingStage] = field(
+        default_factory=lambda: [MatchingStage.PROBABILISTIC]
+    )
+    """Additional matching stages to run after exact matching."""
 
-```python
-from uk_address_matcher import Addresses
+    # === Output Options ===
+    include_unmatched: bool = True
+    """Include records with no confident match in output."""
 
-# Clean and prepare the canonical dataset (expensive operation)
-canonical = Addresses.from_file(
-    "./raw_os_addressbase.parquet",
-    con="./matcher.duckdb",  # Persist to disk
-)
+    retain_intermediate_columns: bool = False
+    """Keep Splink comparison columns in output for debugging."""
 
-# Save cleaned version for future reuse
-canonical.save("./cleaned_canonical.parquet")
-# or
-canonical.to_parquet("./cleaned_canonical.parquet")
+    @staticmethod
+    def available_stages() -> list[MatchingStage]:
+        """Return all available matching stages (for discoverability)."""
+        return list(MatchingStage)
 
-# In future sessions, load the pre-cleaned file:
-canonical = Addresses.from_file("./cleaned_canonical.parquet")  # Auto-detects cleaned
-```
-
-</details>
-
----
-
-### 2. `MatcherSettings`
-
-Configuration object for controlling matching behaviour. We keep a single settings object so users
-only have one place to look for defaults, we avoid duplicated options across stages, and we can
-add new settings without breaking the public API. Per-call overrides remain possible for the odd
-run that needs different thresholds.
-
-> [!NOTE]
-> `MatcherSettings` is not imperative for 1.0. We can defer it if users have sufficient control
-> via `AddressMatcher` constructor and method parameters. However, it does improve discoverability.
-
-#### Construction
-
-```python
-from uk_address_matcher import MatcherSettings
-
-settings = MatcherSettings(
-    # Thresholds
-    match_weight_threshold: float = 15.0,
-    distinguishability_threshold: float | None = None,
-    splink_prediction_threshold: float = -50.0,
-
-    # Deterministic matching options
-    enable_trie_matching: bool = True,
-
-    # Output options
-    include_unmatched: bool = True,
-    retain_intermediate_columns: bool = False,
-)
+    @staticmethod
+    def describe_stages() -> None:
+        """Print descriptions of all available matching stages."""
+        descriptions = {
+            MatchingStage.EXACT_MATCH: "Exact postcode + address concat matching (always runs)",
+            MatchingStage.TRIGRAM: "Trigram-based fuzzy matching (useful when canonical is complete)",
+            MatchingStage.PROBABILISTIC: "Splink probabilistic matching for remaining unmatched",
+        }
+        print("Available matching stages:")
+        for stage in MatchingStage:
+            print(f"  - {stage.name}: {descriptions[stage]}")
 ```
 
 #### Parameters
+
+##### Thresholds
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `match_weight_threshold` | `float` | `15.0` | Minimum match weight for a confident match |
 | `distinguishability_threshold` | `float \| None` | `None` | Minimum gap to second-best match (optional) |
 | `splink_prediction_threshold` | `float` | `-50.0` | Threshold for Splink candidate generation |
-| `enable_trie_matching` | `bool` | `True` | Use trie-based suffix matching in deterministic pass |
-| `enable_numeric_token_matching` | `bool` | `True` | Use numeric token matching in deterministic pass |
-| `include_unmatched` | `bool` | `True` | Include records with no confident match in output |
-| `retain_intermediate_columns` | `bool` | `False` | Keep Splink comparison columns in output |
+
+##### Matching Stages
+
+Exact matching (postcode + address concat) always runs first and cannot be disabled.
+Additional stages are specified as a list. I think we probably also want probabilitsic matching by default, but listing it below so it is noted in our documentation and discoverable via `MatcherSettings.describe_stages()`.
+
+| Stage | Description |
+|-------|-------------|
+| `MatchingStage.EXACT_MATCH` | Exact postcode + address concat matching (always runs) |
+| `MatchingStage.TRIGRAM` | Trigram-based fuzzy matching |
+| `MatchingStage.PROBABILISTIC` | Splink probabilistic matching |
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `additional_stages` | `list[MatchingStage]` | `[PROBABILISTIC]` | Stages to run after exact matching |
+
+We can then log the stages being run at the start of `match()` for transparency.
+
+##### Output Options
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `include_unmatched` | `bool` | `True` | Include unmatched records in output |
+| `retain_intermediate_columns` | `bool` | `False` | Keep Splink comparison columns |
+
+<details>
+<summary>Example: Discovering available stages</summary>
+
+```python
+from uk_address_matcher import MatcherSettings, MatchingStage
+
+# See all available stages
+MatcherSettings.describe_stages()
+# Available matching stages:
+#   - EXACT_MATCH: Exact postcode + address concat matching (always runs)
+#   - TRIGRAM: Trigram-based fuzzy matching (useful when canonical is complete)
+#   - PROBABILISTIC: Splink probabilistic matching for remaining unmatched
+
+# Or get the list programmatically
+stages = MatcherSettings.available_stages()
+```
+
+</details>
+
+<details>
+<summary>Example: Customising settings</summary>
+
+For this, we may want to add some additional functionality to our [match_reasons ENUM](../../uk_address_matcher/sql_pipeline/match_reasons.py) to ensure all info relating to match stages is grouped and we can more easily compile this info for users.
+
+```python
+from uk_address_matcher import MatcherSettings, MatchingStage
+
+# Default settings (exact + probabilistic)
+settings = MatcherSettings()
+
+# Include trigram matching (when canonical data is complete)
+settings = MatcherSettings(
+    additional_stages=[MatchingStage.TRIGRAM, MatchingStage.PROBABILISTIC]
+)
+
+# Stricter thresholds
+settings = MatcherSettings(
+    match_weight_threshold=20.0,
+    distinguishability_threshold=5.0,
+)
+```
+
+</details>
+
+---
+
+### 2. `prepare_and_persist_canonical_data()`
+
+A function to prepare canonical data and persist it to a folder for later use. This performs:
+- Address cleaning and tokenisation
+- Term frequency computation
+- Inverted index generation
+
+```python
+from uk_address_matcher import prepare_and_persist_canonical_data
+
+prepare_and_persist_canonical_data(
+    data: duckdb.DuckDBPyRelation,
+    output_folder: str | Path,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+    overwrite: bool = False,
+    address_column: str = "address_concat",
+    postcode_column: str | None = "postcode",  # None = parse from address
+) -> None
+```
+
+#### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `data` | `DuckDBPyRelation` | — | Raw canonical address data |
+| `output_folder` | `str \| Path` | — | Folder to write prepared artefacts |
+| `con` | `DuckDBPyConnection \| None` | `None` | DuckDB connection (uses data's connection if `None`) |
+| `overwrite` | `bool` | `False` | Whether to overwrite existing files |
+| `address_column` | `str` | `"address_concat"` | Column containing address text |
+| `postcode_column` | `str \| None` | `"postcode"` | Column containing postcode (`None` to parse from address) |
+
+For alpha, we may want to make this more prescriptive and omit `address_column` and `postcode_column` to reduce complexity. We can add these options in a future release if there is demand for more flexibility.
+
+#### Output
+
+Creates the following files in `output_folder`:
+
+| File | Description |
+|------|-------------|
+| `addresses.parquet` | Cleaned and tokenised canonical addresses |
+| `term_frequencies.parquet` | Term frequency lookup table |
+| `inverted_index.parquet` | Inverted index for candidate retrieval |
+
+<details>
+<summary>Example</summary>
+
+```python
+import duckdb
+from uk_address_matcher import prepare_and_persist_canonical_data
+
+con = duckdb.connect()
+df_os = con.read_parquet("./raw_addressbase.parquet")
+
+prepare_and_persist_canonical_data(
+    df_os,
+    output_folder="./prepared_addressbase",
+    con=con,
+    overwrite=True,
+)
+
+# Creates:
+# ./prepared_addressbase/addresses.parquet
+# ./prepared_addressbase/term_frequencies.parquet
+# ./prepared_addressbase/inverted_index.parquet
+```
+
+</details>
 
 ---
 
 ### 3. `AddressMatcher`
 
-The primary entry point for address matching operations.
+The primary entry point for address matching operations. Accepts either:
+- A raw `DuckDBPyRelation` (cleaned on the fly)
+- A path to a prepared folder (loads artefacts automatically)
 
 #### Construction
 
 ```python
-from uk_address_matcher import AddressMatcher, Addresses, MatcherSettings
+import duckdb
+from uk_address_matcher import AddressMatcher, MatcherSettings
 
-# Basic construction
+# Mode 1: Raw relation (cleaned on the fly)
 matcher = AddressMatcher(
-    canonical_addresses: Addresses,
-    addresses_to_match: Addresses,
+    canonical_addresses: duckdb.DuckDBPyRelation,
+    addresses_to_match: duckdb.DuckDBPyRelation,
     *,
+    con: duckdb.DuckDBPyConnection | None = None,
     settings: MatcherSettings | None = None,
-    con: duckdb.DuckDBPyConnection | str | None = None,
 )
 
-# With custom settings
-settings = MatcherSettings(match_weight_threshold=20.0)
-matcher = AddressMatcher(canonical_addresses=canonical, addresses_to_match=messy, settings=settings)
+# Mode 2: Pre-prepared folder
+matcher = AddressMatcher(
+    canonical_addresses: str | Path,  # folder path
+    addresses_to_match: duckdb.DuckDBPyRelation,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+    settings: MatcherSettings | None = None,
+)
 ```
+
+> [!NOTE]
+> Our other option here would be to have two separate APIs for users and use overloading to route to the correct one based on input type. However, I think this would be less intuitive for users and more complex to maintain. By using a single class that can handle both modes, we provide a simpler interface and can manage the different data loading internally.
+
+Where the system detects that the input addresses contain our cleaned canonical format (e.g. presence of `ukam_address_id`), assume cleaning has already been done. This allows users to clean the messy addresses themselves if they want to, and pass them in ready for matching.
 
 #### Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `canonical_addresses` | `Addresses` | The canonical address dataset to match against |
-| `addresses_to_match` | `Addresses` | The address dataset to match |
+| `canonical_addresses` | `DuckDBPyRelation \| str \| Path` | Raw relation OR path to prepared folder |
+| `addresses_to_match` | `DuckDBPyRelation` | Addresses to match (always raw, cleaned internally) |
+| `con` | `DuckDBPyConnection \| None` | DuckDB connection |
 | `settings` | `MatcherSettings \| None` | Matching configuration (uses defaults if `None`) |
-| `con` | `duckdb.DuckDBPyConnection \| str \| None` | DuckDB connection override |
 
-> [!NOTE]
-> **Connection resolution order:** When `con` is not supplied, the matcher will:
-> 1. Use the connection from `canonical_addresses` if available.
-> 2. Fall back to the connection from `addresses_to_match`.
-> 3. Create a new in-memory DuckDB connection if neither has one.
->
-> This allows you to share a connection across datasets or let the library manage it for you.
+#### Canonical Data Resolution
 
-#### Primary Methods
+When `canonical_addresses` is a **DuckDBPyRelation**:
+- Data is cleaned on the fly
+- Term frequencies are derived on the fly
+- Inverted index is built internally
 
-We expose the matching pipeline as separate methods so users can inspect intermediate results,
-tune thresholds, and compose stages as needed. This mirrors the real workflow where you typically
-want to check exact-match rates before deciding whether to run the more expensive probabilistic
-pass.
+When `canonical_addresses` is a **string/Path** pointing to a folder:
+- Loads `addresses.parquet` as cleaned canonical addresses
+- Loads `term_frequencies.parquet` as TF lookup
+- Loads `inverted_index.parquet` as inverted index
 
-> [!WARNING]
-> **Stage ordering:** Calling `match_probabilistic()` before `match_deterministic()` raises
-> `MatcherStateError`. Similarly, `combine_results()` requires both prior stages to have run.
-> This ensures the internal state is consistent and prevents silent errors.
+#### Primary Method
 
-##### `match_deterministic()`
+##### `match()`
 
-Run the deterministic matching stages (exact postcode + address, trie-based suffix matching,
-numeric token alignment). Returns a `MatchResult` containing exact matches and unmatched records.
+Run the full matching pipeline. All enabled stages (deterministic and probabilistic) are executed
+in sequence, with results combined automatically.
 
 ```python
-def match_deterministic(
-    self,
-    *,
-    settings: MatcherSettings | None = None,
-) -> MatchResult:
+def match(self) -> MatchResult:
     ...
 ```
 
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `settings` | `MatcherSettings \| None` | Override settings for this run only |
-
-**Returns:** `MatchResult` with exact matches and unmatched records.
+**Returns:** `MatchResult` containing all matches with confidence scores and match reasons.
 
 <details>
-<summary>Example</summary>
+<summary>Example: Simple matching</summary>
 
 ```python
-exact_results = matcher.match_deterministic()
+import duckdb
+from uk_address_matcher import AddressMatcher
 
-# Inspect before deciding to run probabilistic
-print(f"Exact match rate: {exact_results.match_rate:.1%}")
-exact_results.by_match_reason().show()
-```
+con = duckdb.connect()
 
-</details>
+canonical = con.read_parquet("./canonical.parquet")
+messy = con.read_parquet("./messy.parquet")
 
-##### `match_probabilistic()`
-
-Run the probabilistic (Splink) stage on records that were not matched deterministically. Must be
-called after `match_deterministic()`. The matcher tracks state internally, so you don't need to
-pass the deterministic result.
-
-```python
-def match_probabilistic(
-    self,
-    *,
-    settings: MatcherSettings | None = None,
-) -> MatchResult:
-    ...
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `settings` | `MatcherSettings \| None` | Override settings for this run only |
-
-**Returns:** `MatchResult` with probabilistic matches for previously unmatched records.
-
-<details>
-<summary>Example</summary>
-
-```python
-exact_results = matcher.match_deterministic()
-prob_results = matcher.match_probabilistic()
-
-# Combine or inspect separately
-prob_results.above_threshold(match_weight=15).show()
-```
-
-</details>
-
-##### `combine_results()`
-
-Merge deterministic and probabilistic results into a single `MatchResult`, applying final
-thresholds and producing the unified output schema.
-
-The matcher tracks which stages have been run internally, so you don't need to pass the
-intermediate results—just call `combine_results()` and it pulls together whatever has been
-computed.
-
-```python
-def combine_results(
-    self,
-    *,
-    match_weight_threshold: float = 15.0,
-    distinguishability_threshold: float | None = None,
-    include_unmatched: bool = True,
-) -> MatchResult:
-    ...
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `match_weight_threshold` | `float` | Minimum weight for confident probabilistic match |
-| `distinguishability_threshold` | `float \| None` | Minimum gap to second-best candidate |
-| `include_unmatched` | `bool` | Whether to include unmatched records in output |
-
-**Returns:** `MatchResult` with all matches combined.
-
-<details>
-<summary>Example</summary>
-
-```python
-matcher.match_deterministic()
-matcher.match_probabilistic()
-final = matcher.combine_results(match_weight_threshold=20)
-
-final.to_parquet("./matched_addresses.parquet")
-```
-
-</details>
-
-<details>
-<summary>Example: Typical workflow</summary>
-
-```python
-from uk_address_matcher import AddressMatcher, Addresses
-
-canonical = Addresses.from_file("./os_addressbase.parquet")
-messy = Addresses.from_file("./epc_addresses.parquet")
-
-matcher = AddressMatcher(canonical_addresses=canonical, addresses_to_match=messy)
-
-# Stage 1: Deterministic
-exact = matcher.match_deterministic()
-print(f"Exact matches: {exact.matched_count} ({exact.match_rate:.1%})")
-
-# Stage 2: Probabilistic (only if needed)
-if exact.unmatched_count > 0:
-    prob = matcher.match_probabilistic()
-    prob.above_threshold(match_weight=10).sample(20).show()
-
-# Stage 3: Combine (pulls from internal state)
-final = matcher.combine_results(match_weight_threshold=15)
-
-final.to_parquet("./matched_epc.parquet")
-```
-
-</details>
-
-#### Helper Methods and Utilities
-
-##### `available_deterministic_stages()`
-
-List the deterministic matching stages that can be enabled. `EXACT_MATCHES` is always on and not
-listed here.
-
-```python
-from uk_address_matcher import available_deterministic_stages
-
-for stage in available_deterministic_stages():
-    print(f"  - {stage.value} (StageName.{stage.name})")
-```
-
-##### Enabling Additional Stages
-
-Pass `enabled_stages` to `match_deterministic()` to opt-in to extra matching strategies:
-
-```python
-from uk_address_matcher import StageName
-
-# Enable trigram matching (only if canonical is complete)
-exact = matcher.match_deterministic(
-    enabled_stages=[StageName.UNIQUE_TRIGRAM],
+matcher = AddressMatcher(
+    canonical_addresses=canonical,
+    addresses_to_match=messy,
+    con=con,
 )
+
+result = matcher.match()
+
+# Print the match reason breakdown to the console for quick inspection
+result.match_reasons().show()
+result.to_parquet("./matched.parquet")
 ```
+
+</details>
+
+<details>
+<summary>Example: With pre-prepared canonical folder</summary>
+
+```python
+import duckdb
+from uk_address_matcher import AddressMatcher, MatcherSettings
+
+con = duckdb.connect()
+
+messy = con.read_parquet("./messy.parquet")
+
+matcher = AddressMatcher(
+    canonical_addresses="./prepared_addressbase",  # folder path
+    addresses_to_match=messy,
+    con=con,
+    settings=MatcherSettings(
+        match_weight_threshold=20,
+        include_unmatched=False,
+    ),
+)
+
+result = matcher.match()
+```
+
+</details>
+
+#### Helper Methods
 
 ##### `match_one()`
 
 Match a single address string. Useful for testing, debugging, or interactive exploration. The
 address should include the postcode - the library will parse it automatically using regex.
-
-> [!NOTE]
-> `match_one()` is a standalone convenience method. It does **not** require prior calls to
-> `match_deterministic()` or `match_probabilistic()` - it runs a self-contained matching
-> pipeline against the canonical addresses.
 
 ```python
 def match_one(
@@ -507,52 +559,19 @@ def match_one(
 | `address` | `str` | The full address string (including postcode) |
 | `top_n` | `int` | Number of top candidates to return |
 
-**Returns:** `MatchResult`
+**Returns:** `MatchResult` with top candidates.
 
 <details>
 <summary>Example</summary>
 
 ```python
-# Quick single-address lookup - cleaned on the fly
 result = matcher.match_one("10 Downing Street, Westminster, SW1A 2AA")
-
-# Show top candidates
 result.head(5)
 ```
 
 </details>
 
 ---
-
-### 4. `MatchResult`
-
-Container for match outputs with convenience methods for inspection and export.
-
-Match results are also stored internally within the `AddressMatcher` instance, so users can
-inspect intermediate outputs without needing to pass around `MatchResult` objects.
-
-This allows us to wrap convenience methods around the result objects and consolidate our separate matching outputs.
-
-#### Properties
-
-```python
-# Access the underlying DuckDB relation
-result.relation -> duckdb.DuckDBPyRelation
-
-# Get the number of input records
-result.input_count -> int
-
-# Get the number of matched records
-result.matched_count -> int
-
-# Get the number of unmatched records
-result.unmatched_count -> int
-
-# Get match rate as a proportion
-result.match_rate -> float
-```
-
-#### Misc Methods
 
 ##### Summary Statistics
 
@@ -564,28 +583,97 @@ result.summary() -> duckdb.DuckDBPyRelation
 result.by_match_reason() -> duckdb.DuckDBPyRelation
 ```
 
-##### Inspection and Debugging
+We can gradually flesh these out as we go. There are also lots of Splink charts that we'd ideally give users access to at some point, but we can start with just a few key metrics and add more over time.
+
+---
+
+### 5. Low-Level Helper Functions (Advanced)
+
+For users who want granular control over individual preparation steps (beyond what
+`prepare_and_persist_canonical_data()` provides), we expose the underlying functions.
+These return DuckDB relations that can be saved and loaded independently.
+
+> [!NOTE]
+> Most users should use `prepare_and_persist_canonical_data()` instead. These functions
+> are for advanced use cases requiring custom pipelines or debugging.
+
+#### `derive_term_frequencies_table()`
+
+Compute term frequency statistics from canonical addresses.
 
 ```python
-# Filter to specific match reasons
-result.filter_by_reason(
-    reason: str | list[str],
-) -> MatchResult
+from uk_address_matcher import derive_term_frequencies_table
 
-# Get records above/below thresholds
-result.above_threshold(
-    match_weight: float | None = None,
-    distinguishability: float | None = None,
-) -> MatchResult
-
-result.below_threshold(
-    match_weight: float | None = None,
-    distinguishability: float | None = None,
-) -> MatchResult
-
-# Sample random records for inspection
-result.sample(n: int = 10) -> MatchResult
+tf_table = derive_term_frequencies_table(
+    data: duckdb.DuckDBPyRelation,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+) -> duckdb.DuckDBPyRelation
 ```
+
+#### `prepare_canonical_data_for_matching()`
+
+Clean and tokenise canonical addresses, generating all required features.
+
+```python
+from uk_address_matcher import prepare_canonical_data_for_matching
+
+df_clean = prepare_canonical_data_for_matching(
+    data: duckdb.DuckDBPyRelation,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+    term_frequency_lookup: duckdb.DuckDBPyRelation | None = None,
+) -> duckdb.DuckDBPyRelation
+```
+
+#### `derive_inverted_index()`
+
+Build an inverted index for efficient candidate retrieval during matching.
+
+```python
+from uk_address_matcher import derive_inverted_index
+
+inverted_index = derive_inverted_index(
+    cleaned_data: duckdb.DuckDBPyRelation,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+) -> duckdb.DuckDBPyRelation
+```
+
+<details>
+<summary>Example: Manual preparation workflow</summary>
+
+```python
+import duckdb
+from uk_address_matcher import (
+    derive_term_frequencies_table,
+    prepare_canonical_data_for_matching,
+    derive_inverted_index,
+)
+
+con = duckdb.connect()
+df_os = con.read_parquet("./raw_addressbase.parquet")
+
+# Step 1: Term frequencies
+tf_table = derive_term_frequencies_table(df_os, con=con)
+
+# Step 2: Clean addresses
+df_os_clean = prepare_canonical_data_for_matching(
+    df_os,
+    con=con,
+    term_frequency_lookup=tf_table,
+)
+
+# Step 3: Inverted index
+inverted_index = derive_inverted_index(df_os_clean, con=con)
+
+# Save artefacts
+df_os_clean.write_parquet("./canonical_clean.parquet")
+tf_table.write_parquet("./term_frequencies.parquet")
+inverted_index.write_parquet("./inverted_index.parquet")
+```
+
+</details>
 
 ---
 
@@ -593,18 +681,41 @@ result.sample(n: int = 10) -> MatchResult
 
 ### Positive
 
-- **Simpler onboarding**: New users can match addresses in three lines of code.
-- **Checkpointing**: Expensive canonical cleaning happens once and is reusable.
-- **Discoverable API**: Method chaining and IDE autocompletion guide users.
-- **Stable interface**: Internal changes will not break user code.
+- **Simpler onboarding**: Non-power users can match addresses with minimal library knowledge -
+  just pass DuckDB relations and call `match()`.
+- **Familiar interface**: Users work directly with `DuckDBPyRelation`, avoiding the need to learn
+  wrapper classes or re-implemented DataFrame methods.
+- **Checkpointing**: `prepare_and_persist_canonical_data()` writes artefacts to a folder that
+  can be reloaded by simply passing the path to `AddressMatcher`.
+- **Discoverable settings**: `MatcherSettings` provides IDE autocomplete for all configuration
+  options.
+- **Flexible power-user path**: Low-level helper functions give full control over each artefact.
+- **Stable interface**: Internal implementation can evolve without breaking user code.
+- **No custom abstractions**: Users don't need to learn new classes like `Addresses` or
+  `CanonicalIndex` - just standard DuckDB relations and filesystem paths.
 
 ### Negative
 
 - **Migration effort**: Existing users must update their code.
-- **Flexibility trade-off**: Advanced users may need to access internal APIs.
+- **Folder convention**: Users must use the expected folder structure when loading prepared data.
+- **To make bespoke changes to workflows requires more effort**: Power users who want to customise individual stages must use low-level functions and manage artefacts manually. This is balanced by the fact that the common use cases are now much simpler and should get people the majority of the way without needing to dive into the internals.
 
 ### Mitigation
 
-- Expose `matcher.linker` and `matcher.con` for advanced use cases.
-- Maintain functional utilities in a `uk_address_matcher.legacy` namespace for one
-  major version cycle.
+- Provide clear migration guide with before/after examples.
+- Expose `matcher.con` for advanced use cases needing raw DuckDB access.
+- Validate folder contents on load and provide helpful error messages if files are missing.
+- Maintain functional utilities in `uk_address_matcher.legacy` namespace for one major version
+  cycle.
+
+---
+
+## Summary
+
+| Use Case | Recommended Approach |
+|----------|---------------------|
+| Quick matching (small canonical) | Pass raw `DuckDBPyRelation` to `AddressMatcher`, call `match()` |
+| Repeated matching (large canonical) | Use `prepare_and_persist_canonical_data()`, then pass folder path |
+| Full control over artefacts | Use low-level helper functions, manage files manually |
+
+The key principle is: **make the common case trivial, and the advanced case possible**.
