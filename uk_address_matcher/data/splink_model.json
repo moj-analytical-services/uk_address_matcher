@@ -118,22 +118,51 @@
             "comparison_description": "ExactMatch"
         },
         {
-            "output_column_name": "flat_positional",
+            "output_column_name": "flat_number",
             "comparison_levels": [
                 {
-                    "sql_condition": "\"flat_positional_l\" IS NULL AND \"flat_positional_r\" IS NULL AND \"flat_letter_l\" IS NULL AND \"flat_letter_r\" IS NULL",
+                    "sql_condition": "\"flat_number_l\" IS NULL AND \"flat_number_r\" IS NULL",
                     "label_for_charts": "Null",
                     "fix_m_probability": false,
                     "fix_u_probability": false,
                     "is_null_level": true
                 },
                 {
-                    "sql_condition": "flat_positional_l = flat_positional_r",
-                    "label_for_charts": "Exact match",
+                    "sql_condition": "flat_number_l = flat_number_r",
+                    "label_for_charts": "Exact match on flat number",
                     "m_probability": 95.00950852025916,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r",
+                    "label_for_charts": "Flat numbers both present but differ",
+                    "m_probability": 0.0001,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "ELSE",
+                    "label_for_charts": "All other comparisons",
+                    "m_probability": 0.0625,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                }
+            ],
+            "comparison_description": "CustomComparison"
+        },
+        {
+            "output_column_name": "flat_letter",
+            "comparison_levels": [
+                {
+                    "sql_condition": "\"flat_letter_l\" IS NULL AND \"flat_letter_r\" IS NULL",
+                    "label_for_charts": "Null",
+                    "fix_m_probability": false,
+                    "fix_u_probability": false,
+                    "is_null_level": true
                 },
                 {
                     "sql_condition": "flat_letter_l = flat_letter_r",
@@ -144,32 +173,45 @@
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "flat_letter_l = numeric_token_1_r OR flat_letter_r = numeric_token_1_l",
-                    "label_for_charts": "Exact match inverted numbers",
-                    "m_probability": 1,
+                    "sql_condition": "flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r",
+                    "label_for_charts": "Flat letters both present but differ",
+                    "m_probability": 0.00005,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "\n            (flat_positional_l IS NOT NULL and flat_positional_r IS NULL and flat_letter_r IS NOT NULL)\n            or\n            (flat_positional_r IS NOT NULL and flat_positional_l IS NULL and flat_letter_l IS NOT NULL)\n            ",
-                    "label_for_charts": "Flat positional vs flat letter mismatch",
-                    "m_probability": 1,
+                    "sql_condition": "ELSE",
+                    "label_for_charts": "All other comparisons",
+                    "m_probability": 0.0625,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                }
+            ],
+            "comparison_description": "CustomComparison"
+        },
+        {
+            "output_column_name": "flat_positional",
+            "comparison_levels": [
+                {
+                    "sql_condition": "\"flat_positional_l\" IS NULL AND \"flat_positional_r\" IS NULL",
+                    "label_for_charts": "Null",
+                    "fix_m_probability": false,
+                    "fix_u_probability": false,
+                    "is_null_level": true
+                },
+                {
+                    "sql_condition": "flat_positional_l = flat_positional_r",
+                    "label_for_charts": "Exact match on flat positional",
+                    "m_probability": 95.00950852025916,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
                     "sql_condition": "flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r",
-                    "label_for_charts": "Flat numbers both present but differ",
-                    "m_probability": 0.0001,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r",
-                    "label_for_charts": "Flat letters both present but differ",
+                    "label_for_charts": "Flat positional both present but differ",
                     "m_probability": 0.0001,
                     "u_probability": 1,
                     "fix_m_probability": true,
@@ -178,7 +220,7 @@
                 {
                     "sql_condition": "ELSE",
                     "label_for_charts": "All other comparisons",
-                    "m_probability": 0.03125,
+                    "m_probability": 0.0625,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -190,8 +232,8 @@
             "output_column_name": "numeric_token_1",
             "comparison_levels": [
                 {
-                    "sql_condition": "\"numeric_token_1_l\" IS NULL OR \"numeric_token_1_r\" IS NULL",
-                    "label_for_charts": "numeric_token_1 is NULL",
+                    "sql_condition": "\"numeric_token_1_l\" IS NULL AND \"numeric_token_1_r\" IS NULL",
+                    "label_for_charts": "Both null",
                     "fix_m_probability": false,
                     "fix_u_probability": false,
                     "is_null_level": true
@@ -208,7 +250,7 @@
                 },
                 {
                     "sql_condition": "\n                            nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '')\n                            = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')\n                            ",
-                    "label_for_charts": "Exact match",
+                    "label_for_charts": "Numeric part matches",
                     "m_probability": 95.00950852025916,
                     "u_probability": 1,
                     "fix_m_probability": true,
@@ -225,9 +267,9 @@
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "\"numeric_token_1_l\" IS NULL OR \"numeric_token_1_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "m_probability": 0.0625,
+                    "sql_condition": "numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
+                    "label_for_charts": "Primary numbers both present but differ",
+                    "m_probability": 0.0001,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -235,7 +277,7 @@
                 {
                     "sql_condition": "ELSE",
                     "label_for_charts": "All other comparisons",
-                    "m_probability": 0.00390625,
+                    "m_probability": 0.0625,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
