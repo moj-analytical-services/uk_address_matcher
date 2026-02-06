@@ -1,6 +1,9 @@
 import duckdb
 
-from uk_address_matcher import clean_data_with_term_frequencies, get_linker
+from uk_address_matcher.cleaning.chunking_strategies import (
+    clean_data_with_term_frequencies,
+)
+from uk_address_matcher.linking_model.splink_model import get_linker
 
 MATCH_WEIGHT_THRESHOLD = 10.0
 
