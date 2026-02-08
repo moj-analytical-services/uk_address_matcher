@@ -29,7 +29,8 @@ def analyse_mismatches(
     ----------
     ukam_matches:
         Match results with unique_id, resolved_canonical_id, match_reason, and
-        original_address_concat (ground truth address).
+        ukam_address_id. Ground truth address fields are sourced from
+        ``ukam_messy``.
     ukam_canonical:
         Canonical dataset with ukam_address_id, original_address_concat, and
         clean_full_address.
@@ -67,9 +68,11 @@ def analyse_mismatches(
                 matches_input.ukam_label,
                 matches_input.resolved_canonical_id,
                 matches_input.match_reason,
-                matches_input.original_address_concat,
-                matches_input.postcode
+                messy.original_address_concat,
+                messy.postcode
             FROM matches_input
+            LEFT JOIN ukam_messy AS messy
+              ON matches_input.ukam_address_id = messy.ukam_address_id
             WHERE matches_input.match_reason IS NOT NULL
               AND matches_input.ukam_label != matches_input.resolved_canonical_id
               AND NOT EXISTS (
@@ -109,14 +112,14 @@ def analyse_mismatches(
         im.ukam_address_id,
         im.canonical_ukam_address_id,
         im.match_reason,
-        im.original_address_concat AS messy_original_address_concat,
+                messy.original_address_concat AS messy_original_address_concat,
         messy.clean_full_address AS messy_clean_full_address,
-        im.postcode AS postcode_messy,
+                messy.postcode AS postcode_messy,
         c.original_address_concat AS canonical_original_address_concat,
         c.clean_full_address AS canonical_clean_full_address,
         c.postcode AS postcode_canonical,
         jaro_winkler_similarity(
-            im.original_address_concat,
+                        messy.original_address_concat,
             c.original_address_concat
         ) AS similarity_score
     FROM (
@@ -126,9 +129,7 @@ def analyse_mismatches(
             matches_input.resolved_canonical_id,
             matches_input.ukam_address_id,
             matches_input.canonical_ukam_address_id,
-            matches_input.match_reason,
-            matches_input.original_address_concat,
-            matches_input.postcode
+                        matches_input.match_reason
         FROM matches_input
         WHERE matches_input.match_reason IS NOT NULL
           AND matches_input.ukam_label != matches_input.resolved_canonical_id{unmatchable_filter}

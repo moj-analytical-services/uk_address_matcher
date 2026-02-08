@@ -7,21 +7,12 @@ from tests.utils import prepare_combined_test_data
 
 # Import necessary functions from the library
 from uk_address_matcher import (
-    prepare_data_for_matching,
+    ExactMatchStage,
+    SplinkStage,
+    TrigramStage,
     evaluate_predictions_against_labels,
-    get_linker,
-    inspect_match_results_vs_labels,
-    run_deterministic_match_pass,
-)
-from uk_address_matcher.linking_model.training import get_settings_for_training
-from uk_address_matcher.post_linkage.analyse_results import (
-    best_matches_with_distinguishability,
-)
-from uk_address_matcher.post_linkage.match_candidate_selection import (
-    select_top_match_candidates,
-)
-from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
-    improve_predictions_using_distinguishing_tokens,
+    prepare_data_for_matching,
+    run_matching,
 )
 
 logger = logging.getLogger("uk_address_matcher")
@@ -38,21 +29,7 @@ def test_address_matching_workflow_runs():
         yaml_path, duckdb_con
     )
 
-    labels_rel = duckdb_con.sql(
-        """
-        SELECT
-            unique_id,
-            true_match_id::VARCHAR AS correct_unique_id
-        FROM (
-            SELECT * FROM messy_addresses_raw
-        )
-        WHERE true_match_id IS NOT NULL
-    """
-    )
-
-    df_os_rel = canonical_addresses_raw.select(
-        "unique_id, address_concat, postcode"
-    )
+    df_os_rel = canonical_addresses_raw.select("unique_id, address_concat, postcode")
     messy_data_rel = messy_addresses_raw.select(
         "unique_id, address_concat, postcode, true_match_id::VARCHAR AS ukam_label"
     )
@@ -67,49 +44,23 @@ def test_address_matching_workflow_runs():
         con=duckdb_con,
     )
 
-    settings = get_settings_for_training()
-
-    linker = get_linker(
-        df_addresses_to_match=df_messy_data_clean_rel,
-        df_addresses_to_search_within=df_os_clean_rel,
+    match_candidates_rel = run_matching(
         con=duckdb_con,
-        include_full_postcode_block=False,
-        include_outside_postcode_block=True,
-        retain_intermediate_calculation_columns=True,  # Still needed for inspect
-        settings=settings,
-    )
-
-    df_predict = linker.inference.predict(threshold_match_weight=-20)
-    df_predict_rel = df_predict.as_duckdbpyrelation()
-
-    df_predict_improved_rel = improve_predictions_using_distinguishing_tokens(
-        df_predict=df_predict_rel,
-        con=duckdb_con,
-        match_weight_threshold=-10,
-        top_n_matches=3,
-        use_bigrams=True,
-    )
-
-    df_predict_with_distinguishability_rel = best_matches_with_distinguishability(
-        df_predict=df_predict_improved_rel,
-        df_addresses_to_match=df_messy_data_clean_rel,
-        con=duckdb_con,
-    )
-
-    df_exact_matches_rel = run_deterministic_match_pass(
-        con=duckdb_con,
-        df_addresses_to_match=df_messy_data_clean_rel,
-        df_addresses_to_search_within=df_os_clean_rel,
-    )
-
-    match_candidates_rel = select_top_match_candidates(
-        con=duckdb_con,
-        df_exact_matches=df_exact_matches_rel,
-        df_splink_matches=df_predict_with_distinguishability_rel,
-        df_canonical=df_os_clean_rel,
-        match_weight_threshold=-10,
-        distinguishability_threshold=None,
-        include_unmatched=True,
+        df_messy_clean=df_messy_data_clean_rel,
+        df_canonical_clean=df_os_clean_rel,
+        stages=[
+            ExactMatchStage(),
+            TrigramStage(),
+            SplinkStage(
+                predict_threshold_match_weight=-20,
+                improve_threshold_match_weight=-10,
+                final_match_weight_threshold=-10,
+                final_distinguishability_threshold=None,
+                include_full_postcode_block=False,
+                include_outside_postcode_block=True,
+                retain_intermediate_calculation_columns=True,
+            ),
+        ],
     )
 
     evaluation_results_rel = evaluate_predictions_against_labels(
@@ -118,17 +69,3 @@ def test_address_matching_workflow_runs():
     )
     logger.info("Evaluation Results:")
     evaluation_results_rel.show()
-
-    inspect_match_results_vs_labels(
-        labels=labels_rel,
-        df_predict_improved=df_predict_improved_rel,
-        df_predict_with_distinguishability=df_predict_with_distinguishability_rel,
-        df_os_addresses=df_os_rel,
-        df_messy_data_clean=df_messy_data_clean_rel,
-        df_os_addresses_clean=df_os_clean_rel,
-        df_predict_original=df_predict_rel,
-        linker=linker,
-        con=duckdb_con,
-        unique_id_r="1",  # Inspect the first messy record
-        example_number=1,  # Fallback (shouldn't be needed with unique_id_r set)
-    )

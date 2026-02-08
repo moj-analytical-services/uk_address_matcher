@@ -28,7 +28,6 @@ OS_DATA_PATH: Path | None = None
 #     pretty_print_sql=True, debug_incremental=True, debug_mode=True, debug_show_sql=True
 # )
 DEBUG_OPTIONS: Optional[DebugOptions] = None
-EXPLAIN = False
 
 # Analysis configuration
 MISMATCH_SAMPLES_PER_REASON = 10  # Random samples per match_reason
@@ -83,7 +82,6 @@ for label, variant_spec in pipeline_variants.items():
             enabled_stage_names=variant_spec["enabled_stages"],
             pipeline_name=f"Exact benchmark - {label}",
             debug_options=DEBUG_OPTIONS,
-            explain=EXPLAIN,
         )
 
     pipeline_duration = variant_timings[label]["pipeline"]

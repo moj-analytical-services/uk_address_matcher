@@ -12,8 +12,6 @@ from uk_address_matcher.linking_model.matching import (
     SplinkStageConfig,
     StageName,
     TrigramStage,
-    available_deterministic_stages,
-    run_deterministic_match_pass,
     run_matching,
 )
 from uk_address_matcher.linking_model.splink_model import get_linker
@@ -50,8 +48,6 @@ __all__ = [
     "best_matches_summary",
     "inspect_match_results_vs_labels",
     "evaluate_predictions_against_labels",
-    # Legacy multi-step API (still functional)
-    "run_deterministic_match_pass",
-    "available_deterministic_stages",
+    # Splink linker (advanced use)
     "get_linker",
 ]

@@ -26,22 +26,9 @@ _STAGE_REGISTRY: dict[StageName, MatchingStage] = {
 _ALWAYS_ON: tuple[StageName, ...] = (StageName.EXACT_MATCHES,)
 _DEFAULT_STAGES: tuple[StageName, ...] = (StageName.EXACT_MATCHES, StageName.SPLINK)
 
-# Stages that are not always-on and not Splink (for legacy API)
-_NON_SPLINK_OPTIONAL: tuple[StageName, ...] = (StageName.UNIQUE_TRIGRAM,)
-
 
 StageNameInput = Union[StageName, str]
 StageInput = Union[StageName, str, MatchingStage]
-
-
-def available_deterministic_stages() -> list[StageName]:
-    """Get a list of optional non-Splink stages.
-
-    Returns stages that can be enabled via enabled_stage_names
-    in the legacy ``run_deterministic_match_pass()`` API.
-    EXACT_MATCHES is always on and excluded from this list.
-    """
-    return list(_NON_SPLINK_OPTIONAL)
 
 
 def _stage_name_for_instance(stage: MatchingStage) -> StageName:
@@ -100,39 +87,3 @@ def _normalise_stage_list(
     ordered.extend(requested)
 
     return ordered
-
-
-def _normalise_enabled_stages(
-    enabled: Optional[Iterable[StageNameInput]],
-) -> list[StageName]:
-    """Validate optional stage configuration while preserving order.
-
-    Legacy function used by run_deterministic_match_pass().
-    """
-    if enabled is None:
-        return []
-
-    out: list[StageName] = []
-    seen: set[StageName] = set()
-
-    for item in enabled:
-        try:
-            name = item if isinstance(item, StageName) else StageName(item)
-        except ValueError as e:
-            allowed = ", ".join(s.value for s in available_deterministic_stages())
-            raise ValueError(
-                f"Unknown exact matching stage: {item!r}. Available stages: {allowed}"
-            ) from e
-
-        if name in _ALWAYS_ON:
-            raise ValueError(
-                f"{name.value} is always enabled and should not be provided."
-            )
-
-        if name in seen:
-            raise ValueError(f"Duplicate exact matching stage specified: {name.value}")
-
-        seen.add(name)
-        out.append(name)
-
-    return out

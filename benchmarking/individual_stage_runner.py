@@ -12,8 +12,11 @@ from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import setup_connection
 from benchmarking.utils.timing import time_phase
 from uk_address_matcher.linking_model.matching import (
+    ExactMatchStage,
+    SplinkStage,
     StageName,
-    _run_stage,
+    TrigramStage,
+    run_matching,
 )
 from uk_address_matcher.post_linkage.analyse_results import calculate_match_metrics
 from uk_address_matcher.sql_pipeline.runner import DebugOptions
@@ -28,7 +31,6 @@ DEBUG_OPTIONS: Optional[DebugOptions] = None
 # DEBUG_OPTIONS = DebugOptions(
 #     pretty_print_sql=True, debug_mode=True, debug_show_sql=True, debug_incremental=True
 # )
-EXPLAIN = False
 pipeline_variants = [
     StageName.UNIQUE_TRIGRAM,
     # StageName.JARO_WINKLER,
@@ -63,18 +65,24 @@ for pipeline_variant in pipeline_variants:
     )
 
     with time_phase(variant_timings, pipeline_variant.value, "pipeline"):
-        matches = _run_stage(
-            con,
-            pipeline_variant,
-            df_messy_clean,
-            df_os_clean,
+        if pipeline_variant is StageName.EXACT_MATCHES:
+            stages = [ExactMatchStage()]
+        elif pipeline_variant is StageName.UNIQUE_TRIGRAM:
+            stages = [ExactMatchStage(), TrigramStage()]
+        elif pipeline_variant is StageName.SPLINK:
+            stages = [ExactMatchStage(), SplinkStage()]
+        else:
+            raise ValueError(f"Unsupported stage variant: {pipeline_variant}")
+
+        matches = run_matching(
+            con=con,
+            df_messy_clean=df_messy_clean,
+            df_canonical_clean=df_os_clean,
+            stages=stages,
             debug_options=DEBUG_OPTIONS,
-            explain=EXPLAIN,
         ).join(
             df_messy_clean.select(
                 "ukam_address_id",
-                "unique_id",
-                "ukam_label",
                 "original_address_concat",
                 "postcode",
             ),

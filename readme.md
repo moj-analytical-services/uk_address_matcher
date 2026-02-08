@@ -77,13 +77,12 @@ Match them with:
 import duckdb
 
 from uk_address_matcher import (
-    run_deterministic_match_pass,
-    get_linker,
-    best_matches_with_distinguishability,
-    improve_predictions_using_distinguishing_tokens,
+    ExactMatchStage,
+    SplinkStage,
+    TrigramStage,
+    prepare_data_for_matching,
+    run_matching,
 )
-from uk_address_matcher.cleaning.chunking_strategies import clean_data_with_term_frequencies
-from uk_address_matcher.post_linkage.match_candidate_selection import select_top_match_candidates
 
 p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
 p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
@@ -93,55 +92,25 @@ con = duckdb.connect(database=":memory:")
 df_ch = con.read_parquet(p_ch).order("postcode")
 df_fhrs = con.read_parquet(p_fhrs).order("postcode")
 
-df_ch_clean = clean_data_with_term_frequencies(df_ch, con=con)
-df_fhrs_clean = clean_data_with_term_frequencies(df_fhrs, con=con)
+df_ch_clean = prepare_data_for_matching(df_ch, con=con)
+df_fhrs_clean = prepare_data_for_matching(df_fhrs, con=con)
 
-
-df_fhrs_exact_matches = run_deterministic_match_pass(
+match_candidates = run_matching(
     con=con,
-    df_addresses_to_match=df_fhrs_clean,
-    df_addresses_to_search_within=df_ch_clean,
-)
-
-linker = get_linker(
-    df_addresses_to_match=df_fhrs_exact_matches,
-    df_addresses_to_search_within=df_ch_clean,
-    con=con,
-    include_full_postcode_block=True,
-    additional_columns_to_retain=["original_address_concat"],
-)
-
-# First pass - standard probabilistic linkage
-df_predict = linker.inference.predict(
-    threshold_match_weight=-50
-)
-df_predict_ddb = df_predict.as_duckdbpyrelation()
-
-# Second pass - improve predictions using distinguishing tokens
-
-df_predict_improved = improve_predictions_using_distinguishing_tokens(
-    df_predict=df_predict_ddb,
-    con=con,
-    match_weight_threshold=-20,
-)
-
-# Find best matches within group and compute distinguishability
-
-best_matches = best_matches_with_distinguishability(
-    df_predict=df_predict_improved,
-    df_addresses_to_match=df_fhrs_exact_matches,
-    con=con,
-)
-
-# Find top matches in system
-match_candidates = select_top_match_candidates(
-    con=con,
-    df_exact_matches=df_fhrs_exact_matches,
-    df_splink_matches=best_matches,
-    df_canonical=df_ch_clean,
-    match_weight_threshold=15,
-    distinguishability_threshold=None,
-    include_unmatched=True,
+    df_messy_clean=df_fhrs_clean,
+    df_canonical_clean=df_ch_clean,
+    stages=[
+        ExactMatchStage(),
+        TrigramStage(),
+        SplinkStage(
+            predict_threshold_match_weight=-50,
+            improve_threshold_match_weight=-20,
+            final_match_weight_threshold=15,
+            final_distinguishability_threshold=None,
+            include_full_postcode_block=True,
+            additional_columns_to_retain=["original_address_concat"],
+        ),
+    ],
 )
 
 match_candidates.show(max_width=500, max_rows=20)

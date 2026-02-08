@@ -1,6 +1,6 @@
 import pytest
 
-from uk_address_matcher.linking_model.matching import run_deterministic_match_pass
+from uk_address_matcher.linking_model.matching import ExactMatchStage, run_matching
 
 
 @pytest.fixture
@@ -443,11 +443,11 @@ def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
     locality tokens."""
     df_fuzzy, df_canonical = peeled_test_data
 
-    results = run_deterministic_match_pass(
-        duck_con,
-        df_fuzzy,
-        df_canonical,
-        enabled_stage_names=["peeled_address"],
+    results = run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
     )
 
     # Convert to list of dicts for easier assertions
@@ -487,11 +487,11 @@ def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data)
     """Test that peeled address matching doesn't inflate or reduce row count."""
     df_fuzzy, df_canonical = peeled_test_data
 
-    results = run_deterministic_match_pass(
-        duck_con,
-        df_fuzzy,
-        df_canonical,
-        enabled_stage_names=["peeled_address"],
+    results = run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
     )
 
     input_row_count = df_fuzzy.count("*").fetchone()[0]
@@ -507,11 +507,11 @@ def test_peeled_address_matching_match_reason(duck_con, peeled_test_data):
     """Test that peeled matches have the correct match_reason."""
     df_fuzzy, df_canonical = peeled_test_data
 
-    results = run_deterministic_match_pass(
-        duck_con,
-        df_fuzzy,
-        df_canonical,
-        enabled_stage_names=["peeled_address"],
+    results = run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
     )
 
     results_df = results.fetchdf()
@@ -625,11 +625,11 @@ def test_peeled_address_multi_word_token_handling(duck_con):
         """
     )
 
-    results = run_deterministic_match_pass(
-        duck_con,
-        df_fuzzy,
-        df_canonical,
-        enabled_stage_names=["peeled_address"],
+    results = run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
     )
 
     results_df = results.fetchdf()
