@@ -13,7 +13,7 @@ from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import setup_connection
 from benchmarking.utils.pipelines import run_deterministic_pipeline
 from benchmarking.utils.timing import time_phase
-from uk_address_matcher.linking_model.exact_matching.matching_stages import StageName
+from uk_address_matcher.linking_model.matching import StageName
 from uk_address_matcher.post_linkage.analyse_results import calculate_match_metrics
 from uk_address_matcher.sql_pipeline.runner import DebugOptions
 

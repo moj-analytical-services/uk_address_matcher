@@ -1,11 +1,55 @@
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Optional
 
+from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
+if TYPE_CHECKING:
+    import duckdb
+
+    from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
 FuzzyInputName = Literal["fuzzy_addresses", "unmatched_records"]
+
+
+@dataclass(frozen=True)
+class ExactMatchStage(MatchingStage):
+    """Exact hash-join matching on clean_full_address + postcode."""
+
+    def find_matches(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        stage_name: str,
+        df_unmatched: duckdb.DuckDBPyRelation,
+        df_canonical: duckdb.DuckDBPyRelation,
+        debug_options: Optional[DebugOptions] = None,
+    ) -> Optional[duckdb.DuckDBPyRelation]:
+        from uk_address_matcher.linking_model.matching.input_filters import (
+            _restrict_canonical_to_fuzzy_postcodes,
+        )
+        from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
+            run_sql_pipeline,
+        )
+
+        return run_sql_pipeline(
+            con=con,
+            pipeline_stages=[
+                _restrict_canonical_to_fuzzy_postcodes("exact"),
+                _annotate_exact_matches,
+            ],
+            stage_name=stage_name,
+            df_unmatched=df_unmatched,
+            df_canonical=df_canonical,
+            debug_options=debug_options,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SQL implementation
+# ---------------------------------------------------------------------------
 
 
 @pipeline_stage(
@@ -20,22 +64,12 @@ FuzzyInputName = Literal["fuzzy_addresses", "unmatched_records"]
 def _annotate_exact_matches(
     fuzzy_input_name: FuzzyInputName = "fuzzy_addresses",
 ) -> list[CTEStep]:
-    """Annotate fuzzy addresses with exact matches.
-
-    Parameters
-    ----------
-    fuzzy_input_name:
-        The placeholder name for the fuzzy input table. Defaults to "fuzzy_addresses" for
-        the initial pass. Can be set to "unmatched_records" when running after filtering.
-    """
+    """Annotate fuzzy addresses with exact matches."""
     match_condition = """
         fuzzy.clean_full_address = canon.clean_full_address
         AND fuzzy.postcode = canon.postcode
     """
 
-    # TODO(ThomasHepworth): For now, we are deduplicating on exact matches, where a
-    # a single address appears multiple times in the canonical dataset. This should be
-    # reviewed later to see if we can improve handling of these cases.
     exact_value = MatchReason.EXACT.value
     enum_values = str(MatchReason.enum_values())
     annotated_sql = f"""
@@ -51,8 +85,6 @@ def _annotate_exact_matches(
                 canon.canonical_unique_id as canonical_unique_id
             FROM {{canonical_addresses_restricted}} AS canon
             WHERE {match_condition}
-            -- If we get multiple matches, we just take the first one
-            -- Usually an indication that the canonical dataset has duplicates
             LIMIT 1
         ) AS matched_canon ON true
     """
@@ -60,6 +92,3 @@ def _annotate_exact_matches(
     return [
         CTEStep("annotated_exact_matches", annotated_sql),
     ]
-
-
-__all__ = ["_annotate_exact_matches"]

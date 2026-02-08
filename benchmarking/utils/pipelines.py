@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from uk_address_matcher.linking_model.exact_matching import run_deterministic_match_pass
+from uk_address_matcher.linking_model.matching import run_deterministic_match_pass
 
 if TYPE_CHECKING:
     import duckdb

@@ -11,7 +11,7 @@ from benchmarking.analysis.reporting import print_benchmark
 from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import setup_connection
 from benchmarking.utils.timing import time_phase
-from uk_address_matcher.linking_model.exact_matching.matching_stages import (
+from uk_address_matcher.linking_model.matching import (
     StageName,
     _run_stage,
 )

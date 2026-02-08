@@ -15,7 +15,7 @@ from uk_address_matcher import (
     get_linker,
     improve_predictions_using_distinguishing_tokens,
 )
-from uk_address_matcher.linking_model.exact_matching.matching_stages import StageName
+from uk_address_matcher.linking_model.matching import StageName
 from uk_address_matcher.post_linkage.analyse_results import calculate_match_metrics
 from uk_address_matcher.post_linkage.match_candidate_selection import (
     select_top_match_candidates,

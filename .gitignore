@@ -1,4 +1,5 @@
-old_del/*
+del/
+old_del/
 .tmp
 try_*
 secret_data/
@@ -195,7 +196,6 @@ tmp/test_trigram.py
 tmp/testing_enum_logic.py
 tmp/testing_validation.py
 tmp/tmp_clean_os.py
-tmp/trie_matching_smoke.py
 tmp/trigram_tmp.py
 tmp/validate_chunking.py
 tmp/validate_exact_matching.py

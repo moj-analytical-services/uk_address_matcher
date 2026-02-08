@@ -1,7 +1,63 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
+from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
+
+if TYPE_CHECKING:
+    import duckdb
+
+    from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+@dataclass(frozen=True)
+class TrigramStage(MatchingStage):
+    """Trigram-based matching with uniqueness constraint."""
+
+    ngram_size: int = 3
+    min_unique_hits: int = 1
+    include_conflicts: bool = False
+    include_trigram_text: bool = True
+
+    def find_matches(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        stage_name: str,
+        df_unmatched: duckdb.DuckDBPyRelation,
+        df_canonical: duckdb.DuckDBPyRelation,
+        debug_options: Optional[DebugOptions] = None,
+    ) -> Optional[duckdb.DuckDBPyRelation]:
+        from uk_address_matcher.linking_model.matching.input_filters import (
+            _restrict_canonical_to_fuzzy_postcodes,
+        )
+        from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
+            run_sql_pipeline,
+        )
+
+        return run_sql_pipeline(
+            con=con,
+            pipeline_stages=[
+                _restrict_canonical_to_fuzzy_postcodes("exact"),
+                _resolve_with_trigrams(
+                    ngram_size=self.ngram_size,
+                    min_unique_hits=self.min_unique_hits,
+                    include_conflicts=self.include_conflicts,
+                    include_trigram_text=self.include_trigram_text,
+                ),
+            ],
+            stage_name=stage_name,
+            df_unmatched=df_unmatched,
+            df_canonical=df_canonical,
+            debug_options=debug_options,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SQL implementation
+# ---------------------------------------------------------------------------
 
 
 def _ngram_expression(tokens_column: str, ngram_size: int) -> str:
@@ -51,10 +107,6 @@ def _resolve_with_trigrams(
         ", supporting_trigram_texts" if include_trigram_text else ""
     )
 
-    # Flat and business unit indicator fields to carry through the pipeline for filtering.
-    # We require exact matches on these to reduce false positives (e.g. matching
-    # "12 ALLEN ROAD" to "FIRST FLOOR FLAT 12 ALLEN ROAD" or
-    # "UNIT C 32 PARKHALL" to "UNIT F 32 PARKHALL").
     unit_fields = """
         has_flat_indicator,
         flat_positional,
@@ -90,9 +142,6 @@ def _resolve_with_trigrams(
         WHERE tri IS NOT NULL
     """
 
-    # Group by flat and business unit indicators so uniqueness is scoped to
-    # records with matching unit characteristics. This reduces ambiguity
-    # significantly (e.g. prevents UNIT C matching UNIT F at same address).
     unique_trigram_index_sql = """
         SELECT
             postcode,
@@ -146,14 +195,6 @@ def _resolve_with_trigrams(
         WHERE tri IS NOT NULL
     """
 
-    # Join on all flat and business unit indicators using IS NOT DISTINCT FROM
-    # for NULL-safe equality. This ensures:
-    # - Both have flat indicator OR both don't
-    # - Flat positional matches (or both NULL)
-    # - Flat letter matches (or both NULL)
-    # - Flat number matches (or both NULL)
-    # - Business unit type matches (or both NULL)
-    # - Business unit ID matches (or both NULL)
     trigram_candidate_links_sql = f"""
         SELECT
             fuzzy.fuzzy_ukam_address_id,
@@ -176,8 +217,6 @@ def _resolve_with_trigrams(
             AND fuzzy.business_unit_id IS NOT DISTINCT FROM unique_index.business_unit_id
     """
 
-    # TODO(ThomasHepworth): Realistically, we don't need the count check if
-    # we only want >= 1 unique hits. We can just check for existence.
     trigram_one_to_one_links_sql = f"""
         SELECT
             links.fuzzy_ukam_address_id,
@@ -216,7 +255,6 @@ def _resolve_with_trigrams(
         CTEStep("trigram_matches", trigram_matches_sql),
     ]
 
-    # This SQL path is for debugging / analysis purposes
     if include_conflicts:
         trigram_conflicts_sql = f"""
             SELECT

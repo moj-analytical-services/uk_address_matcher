@@ -13,7 +13,7 @@ from uk_address_matcher import (
     get_linker,
     improve_predictions_using_distinguishing_tokens,
 )
-from uk_address_matcher.linking_model.exact_matching import (
+from uk_address_matcher.linking_model.matching import (
     available_deterministic_stages,
     run_deterministic_match_pass,
 )

@@ -6,10 +6,15 @@ from uk_address_matcher.cleaning.chunking_strategies import (
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
-from uk_address_matcher.linking_model.exact_matching import (
+from uk_address_matcher.linking_model.matching import (
+    ExactMatchStage,
+    SplinkStage,
+    SplinkStageConfig,
     StageName,
+    TrigramStage,
     available_deterministic_stages,
     run_deterministic_match_pass,
+    run_matching,
 )
 from uk_address_matcher.linking_model.splink_model import get_linker
 from uk_address_matcher.post_linkage.accuracy_from_labels import (
@@ -26,19 +31,27 @@ from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
 )
 
 __all__ = [
-    "get_linker",
+    # Unified matching API
+    "run_matching",
+    "StageName",
+    "ExactMatchStage",
+    "TrigramStage",
+    "SplinkStage",
+    "SplinkStageConfig",
+    # Data preparation
     "prepare_data_for_matching",
     "derive_inverted_index",
     "derive_term_frequencies_table",
     "clean_data_pre_term_frequencies",
+    # Analysis
     "calculate_match_metrics",
     "improve_predictions_using_distinguishing_tokens",
     "best_matches_with_distinguishability",
     "best_matches_summary",
     "inspect_match_results_vs_labels",
     "evaluate_predictions_against_labels",
-    # Exact matching
+    # Legacy multi-step API (still functional)
     "run_deterministic_match_pass",
-    "StageName",
     "available_deterministic_stages",
+    "get_linker",
 ]
