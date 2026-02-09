@@ -227,7 +227,8 @@ def _parse_out_flat_position_and_letter():
     FROM {{input}} i
     """
 
-    # Final step: boolean indicator (split out so we can refer to computed aliases)
+    # Final step: boolean indicator and composite flat identity
+    # (split out so we can refer to computed aliases)
     # Also check for the word FLAT itself as a flat signal
     final_sql = r"""
     SELECT
@@ -237,7 +238,16 @@ def _parse_out_flat_position_and_letter():
             OR flat_number IS NOT NULL
             OR flat_positional IS NOT NULL
             OR regexp_matches(clean_full_address, '\bFLAT\b')
-        ) AS has_flat_indicator
+        ) AS has_flat_indicator,
+        CASE
+            WHEN flat_number IS NOT NULL OR flat_letter IS NOT NULL
+                 OR flat_positional IS NOT NULL
+            THEN CONCAT_WS('_',
+                     COALESCE(flat_number, ''),
+                     COALESCE(flat_letter, ''),
+                     COALESCE(flat_positional, ''))
+            ELSE NULL
+        END AS flat_identity
     FROM {final_base}
     """
 

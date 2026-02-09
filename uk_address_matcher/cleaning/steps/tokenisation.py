@@ -44,7 +44,7 @@ def _split_numeric_tokens_to_cols():
 def _tokenise_address_without_numbers():
     sql = """
     select
-        * exclude (address_without_numbers),
+        *,
         regexp_split_to_array(trim(address_without_numbers), '\\s+')
             AS address_without_numbers_tokenised
     from {input}
