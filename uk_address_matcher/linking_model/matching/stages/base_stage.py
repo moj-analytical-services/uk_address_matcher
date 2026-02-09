@@ -175,11 +175,11 @@ def _update_results_table(
     if extra_columns:
         # Infer types from the temp table
         col_types = {
-            row[0]: row[1]
+            row[1]: row[2]
             for row in con.execute(
                 f"PRAGMA table_info('{tmp_table}')"
             ).fetchall()
-            if row[0] in extra_columns
+            if row[1] in extra_columns
         }
         for col_name in extra_columns:
             col_type = col_types.get(col_name, "VARCHAR")
