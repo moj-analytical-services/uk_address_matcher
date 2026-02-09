@@ -143,6 +143,14 @@
                     "fix_u_probability": false
                 },
                 {
+                    "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.99",
+                    "label_for_charts": "Jaccard >= 0.99 on address_without_numbers",
+                    "m_probability": 12,
+                    "u_probability": 1,
+                    "fix_m_probability": false,
+                    "fix_u_probability": false
+                },
+                {
                     "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.95",
                     "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
                     "m_probability": 8,
