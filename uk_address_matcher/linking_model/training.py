@@ -3,17 +3,178 @@
 
 import splink.comparison_level_library as cll
 import splink.comparison_library as cl
-from .blocking import old_blocking_rules
+from splink import SettingsCreator, block_on
 from splink.internals.misc import match_weight_to_bayes_factor
 
-from splink import block_on, SettingsCreator
+from .blocking import old_blocking_rules
 
 toggle_u_probability_fix = True
 toggle_m_probability_fix = True
 
-original_address_concat_comparison = cl.ExactMatch(
-    "original_address_concat",
+clean_full_address_comparison = cl.ExactMatch(
+    "clean_full_address",
 ).configure(u_probabilities=[1, 2], m_probabilities=[15, 1])
+
+
+def get_address_without_numbers_comparison(
+    WEIGHT_EXACT=15,
+    WEIGHT_JACCARD_HIGH=8,
+    WEIGHT_JACCARD_MED=4,
+    WEIGHT_JACCARD_LOW=2,
+    WEIGHT_ELSE_M=1,
+    WEIGHT_ELSE_U=2,
+):
+    """Compare addresses with all numeric tokens stripped.
+
+    This comparison captures street/locality similarity independent of building
+    and flat numbers.  We use DuckDB's built-in ``jaccard`` (character-bigram
+    based) rather than Levenshtein because it is:
+
+    - Robust to space insertion:  MIDLOTHIAN vs MID LOTHIAN → 0.90
+    - Robust to character transposition:  GIPSY HILL vs GYPSY HILL → 1.0
+    - Robust to truncation:  SHAKESPEARE vs SHAKESPEAR → 1.0
+    - Still discriminating for genuine differences:  LOVE LANE vs LOVE LAND → 0.875
+
+    Levenshtein treats a space insertion the same as a character change (both
+    cost 1), so ``MIDLOTHIAN`` vs ``MID LOTHIAN`` is lev=1 — the same as
+    ``LOVE LANE`` vs ``LOVE LAND``.  That conflates a harmless formatting
+    difference with a possible location difference.  Jaccard on the character
+    bigrams separates these cases neatly.
+    """
+    address_without_numbers_comparison = {
+        "output_column_name": "address_without_numbers",
+        "comparison_levels": [
+            {
+                "sql_condition": '"address_without_numbers_l" IS NULL OR "address_without_numbers_r" IS NULL',
+                "label_for_charts": "address_without_numbers is NULL",
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": '"address_without_numbers_l" = "address_without_numbers_r"',
+                "label_for_charts": "Exact match on address_without_numbers",
+                "m_probability": WEIGHT_EXACT,
+                "u_probability": 1,
+            },
+            {
+                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.95",
+                "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
+                "m_probability": WEIGHT_JACCARD_HIGH,
+                "u_probability": 1,
+            },
+            {
+                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.88",
+                "label_for_charts": "Jaccard >= 0.88 on address_without_numbers",
+                "m_probability": WEIGHT_JACCARD_MED,
+                "u_probability": 1,
+            },
+            {
+                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.80",
+                "label_for_charts": "Jaccard >= 0.80 on address_without_numbers",
+                "m_probability": WEIGHT_JACCARD_LOW,
+                "u_probability": 1,
+            },
+            {
+                "sql_condition": "ELSE",
+                "label_for_charts": "All other comparisons",
+                "m_probability": WEIGHT_ELSE_M,
+                "u_probability": WEIGHT_ELSE_U,
+            },
+        ],
+        "comparison_description": "Address without numbers comparison",
+    }
+    return address_without_numbers_comparison
+
+
+def get_flat_identity_comparison(
+    WEIGHT_ASYMMETRIC=-10,
+    WEIGHT_MATCH=6.57,
+    WEIGHT_CROSS_TYPE=-2,
+    WEIGHT_MISMATCH=-20,
+):
+    """Compare the composite flat identity (number + letter + positional).
+
+    The cleaning pipeline produces ``flat_identity`` by concatenating
+    ``flat_number``, ``flat_letter``, and ``flat_positional`` into a
+    single string.  This means '14D GROUND FLOOR' vs '14A GROUND FLOOR'
+    is a single mismatch rather than separate partial hits.
+
+    Levels are evaluated top-to-bottom:
+
+    1. **Early exit** — if ``has_flat_indicator`` differs between the
+       two sides (one address mentions a flat, the other does not) we
+       apply a strong penalty immediately.  This avoids the ambiguity
+       of comparing NULL flat_identity against a populated one.
+    2. **Both NULL** — neither side has flat info; neutral.
+    3. **Exact match** — all components agree; positive evidence.
+    4. **Cross-type** — one side uses a positional descriptor
+       (BASEMENT, FIRST FLOOR, etc.) while the other uses a
+       letter/number (FLAT A, FLAT 1).  These naming conventions
+       are interchangeable in practice (BASEMENT = FLAT 1,
+       GROUND FLOOR = FLAT A), so we treat this as near-neutral.
+    5. **ELSE** — same naming system but values differ (e.g.
+       FLAT A vs FLAT B); very heavy penalty.
+    """
+    # Cross-type condition: one side has a positional descriptor, the other
+    # does not, but both sides DO have some flat identity populated.
+    # This catches FIRST FLOOR vs FLAT A, BASEMENT vs FLAT 1, etc.
+    cross_type_sql = """(
+        (flat_positional_l IS NOT NULL AND flat_positional_r IS NULL)
+        OR
+        (flat_positional_r IS NOT NULL AND flat_positional_l IS NULL)
+    )
+    AND flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL"""
+
+    flat_identity_comparison = {
+        "output_column_name": "flat_identity",
+        "comparison_levels": [
+            # Early exit: one side has flat info, other does not
+            {
+                "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
+                "label_for_charts": "One has flat indicator, other does not",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_ASYMMETRIC),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            # Both null → neutral
+            {
+                "sql_condition": '"flat_identity_l" IS NULL AND "flat_identity_r" IS NULL',
+                "label_for_charts": "Both null (no flat info)",
+                "is_null_level": True,
+            },
+            # Exact match on composite identity
+            {
+                "sql_condition": "flat_identity_l = flat_identity_r",
+                "label_for_charts": "Exact match on flat identity",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_MATCH),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            # Cross-type: positional on one side, letter/number on the other.
+            # e.g. BASEMENT vs FLAT 1, FIRST FLOOR vs FLAT A.
+            # Different naming conventions but could be the same flat.
+            {
+                "sql_condition": cross_type_sql,
+                "label_for_charts": "Cross-type flat (positional vs letter/number)",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_CROSS_TYPE),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            # Same naming system but values differ → wrong flat
+            {
+                "sql_condition": "ELSE",
+                "label_for_charts": "Flat identity differs (same type)",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_MISMATCH),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+        ],
+        "comparison_description": "Combined flat identity comparison",
+    }
+    return flat_identity_comparison
 
 
 def get_first_n_tokens_comparison(
@@ -89,72 +250,6 @@ def get_first_n_tokens_comparison(
         ],
     }
     return first_n_tokens_comparison
-
-
-def get_flat_positional_comparison(
-    WEIGHT_1=6.57,
-    WEIGHT_2=6.57,
-    WEIGHT_3=0,
-    WEIGHT_4=0,
-    WEIGHT_5=-5,
-):
-    flat_positional_comparison = {
-        "output_column_name": "flat_positional",
-        "comparison_levels": [
-            # Note AND not OR
-            {
-                "sql_condition": '"flat_positional_l" IS NULL AND "flat_positional_r" IS NULL AND "flat_letter_l" IS NULL AND "flat_letter_r" IS NULL',
-                "label_for_charts": "Null",
-                "is_null_level": True,
-            },
-            {
-                "sql_condition": "flat_positional_l = flat_positional_r",
-                "label_for_charts": "Exact match",
-                "m_probability": match_weight_to_bayes_factor(WEIGHT_1),
-                "u_probability": 1,
-                "fix_m_probability": toggle_m_probability_fix,
-                "fix_u_probability": toggle_u_probability_fix,
-            },
-            {
-                "sql_condition": "flat_letter_l = flat_letter_r",
-                "label_for_charts": "Exact match",
-                "m_probability": match_weight_to_bayes_factor(WEIGHT_2),
-                "u_probability": 1,
-                "fix_m_probability": toggle_m_probability_fix,
-                "fix_u_probability": toggle_u_probability_fix,
-            },
-            {
-                "sql_condition": "flat_letter_l = numeric_token_1_r OR flat_letter_r = numeric_token_1_l",
-                "label_for_charts": "Exact match inverted numbers",
-                "m_probability": match_weight_to_bayes_factor(WEIGHT_3),
-                "u_probability": 1,
-                "fix_m_probability": toggle_m_probability_fix,
-                "fix_u_probability": toggle_u_probability_fix,
-            },
-            {
-                "sql_condition": """
-            (flat_positional_l IS NOT NULL and flat_positional_r IS NULL and flat_letter_r IS NOT NULL)
-            or
-            (flat_positional_r IS NOT NULL and flat_positional_l IS NULL and flat_letter_l IS NOT NULL)
-            """,
-                "label_for_charts": "Exact match",
-                "m_probability": match_weight_to_bayes_factor(WEIGHT_4),
-                "u_probability": 1,
-                "fix_m_probability": toggle_m_probability_fix,
-                "fix_u_probability": toggle_u_probability_fix,
-            },
-            {
-                "sql_condition": "ELSE",
-                "label_for_charts": "All other comparisons",
-                "m_probability": match_weight_to_bayes_factor(WEIGHT_5),
-                "u_probability": 1,
-                "fix_m_probability": toggle_m_probability_fix,
-                "fix_u_probability": toggle_u_probability_fix,
-            },
-        ],
-        "comparison_description": "Flat position comparison",
-    }
-    return flat_positional_comparison
 
 
 def get_num_1_comparison(
@@ -271,11 +366,6 @@ def get_num_2_comparison(
         "comparison_description": "numeric_token_2",
     }
     return num_2_comparison
-
-
-original_address_concat_comparison = cl.ExactMatch(
-    "original_address_concat",
-).configure(u_probabilities=[1, 2], m_probabilities=[15, 1])
 
 
 num_3_comparison = {
@@ -552,24 +642,27 @@ blocking_rules = old_blocking_rules + [block_on("postcode")]
 def get_settings_for_training(
     num_1_weights=None,
     num_2_weights=None,
-    token_rel_freq_arr_comparison=None,
-    flat_positional_weights=None,
+    token_rel_freq_arr_weights=None,
+    flat_identity_weights=None,
+    address_without_numbers_weights=None,
     first_n_tokens_weights=None,
     include_first_n_tokens=False,
 ):
     num_1_weights = num_1_weights or {}
     num_2_weights = num_2_weights or {}
-    token_rel_freq_arr_comparison = token_rel_freq_arr_comparison or {}
-    flat_positional_weights = flat_positional_weights or {}
+    token_rel_freq_arr_weights = token_rel_freq_arr_weights or {}
+    flat_identity_weights = flat_identity_weights or {}
+    address_without_numbers_weights = address_without_numbers_weights or {}
     first_n_tokens_weights = first_n_tokens_weights or {}
 
     comparisons = [
-        original_address_concat_comparison,
-        get_flat_positional_comparison(**flat_positional_weights),
+        clean_full_address_comparison,
+        get_address_without_numbers_comparison(**address_without_numbers_weights),
+        get_flat_identity_comparison(**flat_identity_weights),
         get_num_1_comparison(**num_1_weights),
         get_num_2_comparison(**num_2_weights),
         num_3_comparison,
-        get_token_rel_freq_arr_comparison(**token_rel_freq_arr_comparison),
+        get_token_rel_freq_arr_comparison(**token_rel_freq_arr_weights),
         common_end_tokens_comparison,
         postcode_comparison,
     ]
