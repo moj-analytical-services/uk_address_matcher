@@ -1,6 +1,6 @@
 import pytest
 
-from uk_address_matcher import StageName, run_matching
+from uk_address_matcher import SplinkStage, StageName, run_matching
 
 
 @pytest.fixture
@@ -385,3 +385,24 @@ class TestStageNameValidation:
         matched = results_df[results_df["resolved_canonical_id"].notna()]
         # Exact matches should still have found IDs 1 and 2
         assert len(matched) >= 2
+
+
+class TestRunMatchingSplinkConfigValidation:
+    def test_invalid_splink_blocking_config_raises(self, duck_con, matching_data):
+        df_fuzzy, df_canonical = matching_data
+
+        with pytest.raises(
+            ValueError,
+            match="At least one of 'include_full_postcode_block' or 'include_outside_postcode_block' must be True",
+        ):
+            run_matching(
+                con=duck_con,
+                df_messy_clean=df_fuzzy,
+                df_canonical_clean=df_canonical,
+                stages=[
+                    SplinkStage(
+                        include_full_postcode_block=False,
+                        include_outside_postcode_block=False,
+                    )
+                ],
+            )

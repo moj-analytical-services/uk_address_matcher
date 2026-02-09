@@ -78,22 +78,18 @@ class SplinkStage(MatchingStage):
             return None
 
         # Step 1: Build linker
-        try:
-            linker = get_linker(
-                df_addresses_to_match=df_unmatched,
-                df_addresses_to_search_within=df_canonical,
-                con=con,
-                include_full_postcode_block=self.include_full_postcode_block,
-                include_outside_postcode_block=self.include_outside_postcode_block,
-                additional_columns_to_retain=self.additional_columns_to_retain,
-                retain_intermediate_calculation_columns=(
-                    self.retain_intermediate_calculation_columns
-                ),
-                settings=self.settings,
-            )
-        except ValueError as e:
-            logger.info("Splink stage skipped: %s", e)
-            return None
+        linker = get_linker(
+            df_addresses_to_match=df_unmatched,
+            df_addresses_to_search_within=df_canonical,
+            con=con,
+            include_full_postcode_block=self.include_full_postcode_block,
+            include_outside_postcode_block=self.include_outside_postcode_block,
+            additional_columns_to_retain=self.additional_columns_to_retain,
+            retain_intermediate_calculation_columns=(
+                self.retain_intermediate_calculation_columns
+            ),
+            settings=self.settings,
+        )
 
         # Step 2: Predict
         df_predict = linker.inference.predict(
