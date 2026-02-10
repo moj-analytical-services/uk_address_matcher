@@ -71,50 +71,101 @@ We provide a recommendation for automated build scripts for how to build such a 
 
 ### Basic Matching
 
-Match them with:
-
 ```python
 import duckdb
 
+from uk_address_matcher import AddressMatcher, ExactMatchStage, SplinkStage
+
+con = duckdb.connect()
+
+df_canonical = con.read_parquet("your_canonical_addresses.parquet")
+df_messy = con.read_parquet("your_messy_addresses.parquet")
+
+matcher = AddressMatcher(
+    canonical_addresses=df_canonical,
+    addresses_to_match=df_messy,
+    con=con,
+)
+
+result = matcher.match()  # returns a DuckDBPyRelation
+result.limit(10).show(max_width=500)
+```
+
+The default stages are `ExactMatchStage` followed by `SplinkStage`. You can
+customise them by passing your own `stages` list:
+
+```python
 from uk_address_matcher import (
+    AddressMatcher,
     ExactMatchStage,
     SplinkStage,
     UniqueTrigramStage,
-    run_matching,
 )
-from uk_address_matcher.cleaning.chunking_strategies import clean_data_with_term_frequencies
 
-p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
-p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
-
-con = duckdb.connect(database=":memory:")
-
-df_ch = con.read_parquet(p_ch).order("postcode")
-df_fhrs = con.read_parquet(p_fhrs).order("postcode")
-
-df_ch_clean = clean_data_with_term_frequencies(df_ch, con=con)
-df_fhrs_clean = clean_data_with_term_frequencies(df_fhrs, con=con)
-
-match_candidates = run_matching(
+matcher = AddressMatcher(
+    canonical_addresses=df_canonical,
+    addresses_to_match=df_messy,
     con=con,
-    df_messy_clean=df_fhrs_clean,
-    df_canonical_clean=df_ch_clean,
     stages=[
         ExactMatchStage(),
         UniqueTrigramStage(),
         SplinkStage(
-            predict_threshold_match_weight=-50,
-            improve_threshold_match_weight=-20,
-            final_match_weight_threshold=15,
-            final_distinguishability_threshold=None,
-            include_full_postcode_block=True,
-            additional_columns_to_retain=["original_address_concat"],
+            final_match_weight_threshold=20.0,
+            final_distinguishability_threshold=5.0,
         ),
     ],
 )
 
-match_candidates.show(max_width=500, max_rows=20)
+result = matcher.match()
+```
 
+### Pre-preparing canonical data
+
+Cleaning a large canonical dataset (e.g. AddressBase) is expensive. Use
+`prepare_and_persist_canonical_data` to do it once and write the artefacts to
+disk. Subsequent runs load the prepared folder directly, skipping cleaning
+entirely.
+
+```python
+from uk_address_matcher import AddressMatcher, prepare_canonical_folder
+
+# One-time preparation
+prepare_canonical_folder(
+    df_canonical,
+    output_folder="./ukam_prepared_canonical",
+    con=con,
+    overwrite=True,
+)
+
+# Fast matching — pass the folder path instead of a relation
+matcher = AddressMatcher(
+    canonical_addresses="./ukam_prepared_canonical",
+    addresses_to_match=df_messy,
+    con=con,
+)
+
+result = matcher.match()
+```
+
+### Matching a single address
+
+Use `match_one` with an `AddressRecord` or a plain dict for quick lookups:
+
+```python
+from uk_address_matcher import AddressMatcher, AddressRecord
+
+result = matcher.match_one(
+    AddressRecord(
+        address_concat="10 downing street westminster london",
+        postcode="SW1A 2AA",
+    )
+)
+
+# Or with a dict:
+result = matcher.match_one({
+    "address_concat": "10 downing street westminster london",
+    "postcode": "SW1A 2AA",
+})
 ```
 
 
