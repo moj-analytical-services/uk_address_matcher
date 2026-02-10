@@ -133,7 +133,7 @@ def _build_final_output(
     )
 
 
-def run_matching(
+def _run_matching(
     con: duckdb.DuckDBPyConnection,
     df_messy_clean: duckdb.DuckDBPyRelation,
     df_canonical_clean: duckdb.DuckDBPyRelation,

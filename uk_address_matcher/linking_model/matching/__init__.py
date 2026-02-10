@@ -1,4 +1,4 @@
-from uk_address_matcher.linking_model.matching.runner import run_matching
+from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages import (
     ExactMatchStage,
     MatchingStage,
@@ -13,5 +13,5 @@ __all__ = [
     "UniqueTrigramStage",
     "PeeledAddressStage",
     "SplinkStage",
-    "run_matching",
+    "_run_matching",
 ]
