@@ -79,7 +79,8 @@ def load_canonical_data(
                 address_concat,
                 postcode,
                 classification_code,
-                variant_label
+                variant_label,
+                is_primary
             FROM rel
             """
         )

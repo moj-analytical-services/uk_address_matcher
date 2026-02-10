@@ -8,6 +8,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_apostrophes,
     remove_commas_periods,
     remove_multiple_spaces,
+    replace_excluding_basement_terms,
     replace_fwd_slash_with_dash,
     separate_letter_num,
     standarise_num_letter,
@@ -161,6 +162,7 @@ def _clean_address_string_first_pass() -> str:
             remove_commas_periods,
             remove_apostrophes,
             remove_multiple_spaces,
+            replace_excluding_basement_terms,
             replace_fwd_slash_with_dash,
             # standarise_num_dash_num,  # left commented as in original
             separate_letter_num,

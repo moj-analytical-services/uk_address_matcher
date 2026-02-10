@@ -16,6 +16,44 @@ def _get_model_settings_dict():
         return json.load(f)
 
 
+def _sanitise_null_comparison_levels(settings_as_dict: dict) -> dict:
+    """Normalise null comparison levels for Splink compatibility.
+
+    Some Splink versions raise when serialising comparison levels flagged with
+    `is_null_level` because null levels have no m-probability.
+
+    Our bundled JSON settings include explicit "... IS NULL" levels. Some of
+    those have `is_null_level: true` but also include `m_probability`/`u_probability`.
+
+    In Splink, null levels must not have m/u probabilities (their weight is
+    defined as neutral for that comparison). If m/u values are present, Splink
+    can raise during settings normalisation.
+
+    We keep `is_null_level` (to avoid Splink "No null level found" warnings),
+    but strip any m/u probabilities from null levels.
+    """
+
+    comparisons = settings_as_dict.get("comparisons", [])
+    if not isinstance(comparisons, list):
+        return settings_as_dict
+
+    for comparison in comparisons:
+        if not isinstance(comparison, dict):
+            continue
+        levels = comparison.get("comparison_levels")
+        if not isinstance(levels, list):
+            continue
+        for level in levels:
+            if not isinstance(level, dict):
+                continue
+            if not level.get("is_null_level"):
+                continue
+            level.pop("m_probability", None)
+            level.pop("u_probability", None)
+
+    return settings_as_dict
+
+
 def _get_precomputed_numeric_tf_table(con: DuckDBPyConnection):
     read_tf_sql = package_resource_read_sql(
         "uk_address_matcher.data", "numeric_token_frequencies.parquet"
@@ -81,6 +119,8 @@ def get_linker(
         settings_as_dict = _get_model_settings_dict()
     else:
         settings_as_dict = settings.create_settings_dict("duckdb")
+
+    settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
     if additional_columns_to_retain:
         settings_as_dict.setdefault("additional_columns_to_retain", [])

@@ -7,6 +7,7 @@ from uk_address_matcher.cleaning.steps import (
     _remove_duplicate_end_tokens,
 )
 from uk_address_matcher.cleaning.steps.normalisation import (
+    _clean_address_string_first_pass,
     _peel_common_uk_end_tokens,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
@@ -186,6 +187,34 @@ def test_remove_duplicate_end_tokens():
     )
 
     result = _run_single_stage(_remove_duplicate_end_tokens, input_relation, connection)
+    rows = result.fetchall()
+
+    for (address, expected), row in zip(test_cases, rows):
+        assert row[0] == expected, (
+            f"Address '{address}' expected '{expected}' but got '{row[0]}'"
+        )
+
+
+def test_replace_excluding_basement_terms_first_pass_cleaning():
+    connection = duckdb.connect()
+    test_cases = [
+        ("EXCLUDING BASEMENT FLAT 1 2 ROAD", "EXCL_BSMT FLAT 1 2 ROAD"),
+        ("EXCLUDING PART BASEMENT FLAT 1 2 ROAD", "EXCL_PT_BSMT FLAT 1 2 ROAD"),
+        (
+            "HSE EXC BST FLAT 1 2 ROAD",
+            "HOUSE EXCL_BSMT FLAT 1 2 ROAD",
+        ),
+    ]
+
+    input_relation = connection.sql(
+        "SELECT * FROM (VALUES "
+        + ",".join(f"('{address}')" for address, _ in test_cases)
+        + ") AS t(clean_full_address)"
+    )
+
+    result = _run_single_stage(
+        _clean_address_string_first_pass, input_relation, connection
+    )
     rows = result.fetchall()
 
     for (address, expected), row in zip(test_cases, rows):
