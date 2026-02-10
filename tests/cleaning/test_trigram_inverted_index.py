@@ -1,4 +1,4 @@
-"""Tests for trigram-based inverted index functionality."""
+"""Tests for blocking-index functionality used by inverted index lookup."""
 
 import pytest
 
@@ -201,20 +201,46 @@ class TestDeriveInvertedIndexFunction:
         )
 
         # Check structure
-        assert "trigram" in inverted_idx.columns
+        assert "index_value" in inverted_idx.columns
         assert "unique_ids" in inverted_idx.columns
 
         # Check that we have some results
         count = inverted_idx.count("*").fetchone()[0]
         assert count > 0
 
-        # Check specific trigram mappings
+        # Check specific index value mappings
         result = inverted_idx.fetchall()
         result_dict = {row[0]: row[1] for row in result}
 
-        # '9 LOVE LANE' should map to records 1 and 2
+        # '9 LOVE LANE' should map to records 1 and 2 (trigram strategy)
         assert "9 LOVE LANE" in result_dict
         assert sorted(result_dict["9 LOVE LANE"]) == ["1", "2"]
+
+    def test_derive_inverted_index_default_strategies_include_bigrams_and_numeric(
+        self, duck_con
+    ):
+        """Test default strategies include bigrams and numeric+first-non-numeric."""
+        from uk_address_matcher.cleaning.chunking_strategies import derive_inverted_index
+
+        pre_cleaned = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('1', ['12', '14', '16', 'HIGH', 'STREET'], ['12', '14', '16']),
+                ('2', ['12', '14', '16', 'LOW', 'ROAD'], ['12', '14', '16'])
+            ) AS t(unique_id, address_tokens, numeric_tokens)
+        """)
+
+        inverted_idx = derive_inverted_index(
+            pre_cleaned, duck_con, max_unique_ids_per_index_value=20
+        )
+
+        result_dict = {row[0]: row[1] for row in inverted_idx.fetchall()}
+
+        # Bigram strategy
+        assert sorted(result_dict["HIGH STREET"]) == ["1"]
+
+        # Numeric + first non-numeric strategy
+        assert sorted(result_dict["12 14 16 HIGH"]) == ["1"]
+        assert sorted(result_dict["12 14 16 LOW"]) == ["2"]
 
     def test_derive_inverted_index_filters_common_trigrams(self, duck_con):
         """Test that trigrams appearing in too many records are filtered out."""
@@ -319,6 +345,47 @@ class TestPrepareDataForMatchingWithInvertedIndex:
         results = prepared.select("unique_id, exploding_unique_ids").fetchall()
         for unique_id, exploding_ids in results:
             assert exploding_ids == [unique_id]
+
+    def test_prepare_data_with_custom_index_strategies(self, duck_con):
+        """Test custom strategy lists are honoured during lookup."""
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            derive_inverted_index,
+            prepare_data_for_matching,
+        )
+        from uk_address_matcher.cleaning.steps import TRIGRAM_STRATEGY
+
+        canonical_raw = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('1', '10 HIGH STREET LONDON', 'SW1A 1AA')
+            ) AS t(unique_id, address_concat, postcode)
+        """)
+
+        messy = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('100', '10 HIGH', 'SW1A 1AA')
+            ) AS t(unique_id, address_concat, postcode)
+        """)
+
+        canonical_clean = prepare_data_for_matching(
+            canonical_raw, duck_con, num_of_chunks=1
+        )
+
+        inverted_idx = derive_inverted_index(
+            canonical_clean,
+            duck_con,
+            index_strategies=[TRIGRAM_STRATEGY],
+        )
+
+        prepared_messy = prepare_data_for_matching(
+            messy,
+            duck_con,
+            num_of_chunks=1,
+            inverted_index=inverted_idx,
+            index_strategies=[TRIGRAM_STRATEGY],
+        )
+
+        result = prepared_messy.select("exploding_unique_ids").fetchone()[0]
+        assert result == []
 
     def test_exploding_unique_ids_empty_when_no_matches(self, duck_con):
         """Test that exploding_unique_ids is empty when no trigrams match."""

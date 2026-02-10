@@ -34,9 +34,14 @@ from uk_address_matcher.cleaning.steps.tokenisation import (
     _tokenise_address_without_numbers,
 )
 from uk_address_matcher.cleaning.steps.trigram_blocking import (
-    _build_inverted_index_from_trigrams,
-    _derive_trigrams_from_address_tokens,
-    _lookup_trigrams_in_inverted_index,
+    BIGRAM_STRATEGY,
+    DEFAULT_BLOCKING_INDEX_STRATEGIES,
+    NUMERIC_PLUS_FIRST_NON_NUMERIC_STRATEGY,
+    TRIGRAM_STRATEGY,
+    BlockingIndexStrategy,
+    _build_inverted_index_from_index_values,
+    _derive_index_values_from_strategies,
+    _lookup_index_values_in_inverted_index,
     _set_exploding_unique_ids_to_self,
 )
 
@@ -71,8 +76,13 @@ __all__ = [
     "_separate_unusual_tokens",
     "_create_histograms_from_token_frequencies",
     # trigram_blocking
-    "_build_inverted_index_from_trigrams",
-    "_derive_trigrams_from_address_tokens",
-    "_lookup_trigrams_in_inverted_index",
+    "BlockingIndexStrategy",
+    "TRIGRAM_STRATEGY",
+    "BIGRAM_STRATEGY",
+    "NUMERIC_PLUS_FIRST_NON_NUMERIC_STRATEGY",
+    "DEFAULT_BLOCKING_INDEX_STRATEGIES",
+    "_derive_index_values_from_strategies",
+    "_lookup_index_values_in_inverted_index",
+    "_build_inverted_index_from_index_values",
     "_set_exploding_unique_ids_to_self",
 ]

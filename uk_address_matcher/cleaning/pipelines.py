@@ -6,16 +6,16 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from uk_address_matcher.cleaning.steps import (
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _add_ukam_address_id,
-    _build_inverted_index_from_trigrams,
+    _build_inverted_index_from_index_values,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
-    _derive_trigrams_from_address_tokens,
+    _derive_index_values_from_strategies,
     _extract_postcode_from_address,
     _first_unusual_token,
     _generalised_token_aliases,
     _get_token_frequeny_table,
-    _lookup_trigrams_in_inverted_index,
+    _lookup_index_values_in_inverted_index,
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
     _parse_out_business_unit,
@@ -117,12 +117,7 @@ QUEUE_POST_TF = [
 # Minimal pipeline for TF derivation: just clean address + tokenise
 QUEUE_FOR_TF_DERIVATION = QUEUE_CLEAN_FULL_ADDRESS + [_create_tokenised_address_concat]
 
-# Trigram blocking pipelines
-QUEUE_TRIGRAM_WITH_INVERTED_INDEX = [
-    _derive_trigrams_from_address_tokens,
-    _lookup_trigrams_in_inverted_index,
-]
-
+# Blocking pipelines
 QUEUE_TRIGRAM_SELF = [
     _set_exploding_unique_ids_to_self,
 ]
@@ -333,12 +328,13 @@ def _register_inverted_index_table(
     con: DuckDBPyConnection,
     inverted_index: Optional[DuckDBPyRelation] = None,
 ) -> Optional[str]:
-    """Register inverted index table for trigram lookups.
+    """Register inverted index table for blocking lookups.
 
     Args:
         con: DuckDB connection.
-        inverted_index: Pre-computed inverted index table with 'trigram' and
-            'unique_ids' columns. If None, no table is registered.
+        inverted_index: Pre-computed inverted index table with either
+            ('index_value', 'unique_ids') or legacy ('trigram', 'unique_ids')
+            columns. If None, no table is registered.
 
     Returns:
         The registered table name, or None if no inverted_index provided.
@@ -348,5 +344,37 @@ def _register_inverted_index_table(
 
     # Materialise to avoid lazy evaluation issues
     con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
-    inverted_index.create("__ukam_inverted_index")
+    columns_lower = [column.lower() for column in inverted_index.columns]
+
+    if "index_value" in columns_lower:
+        idx_col = next(
+            column
+            for column in inverted_index.columns
+            if column.lower() == "index_value"
+        )
+    elif "trigram" in columns_lower:
+        idx_col = next(
+            column for column in inverted_index.columns if column.lower() == "trigram"
+        )
+    else:
+        raise ValueError(
+            "inverted_index must contain either an 'index_value' column or a "
+            "legacy 'trigram' column."
+        )
+
+    if "unique_ids" not in columns_lower:
+        raise ValueError("inverted_index must contain a 'unique_ids' column.")
+
+    unique_ids_col = next(
+        column for column in inverted_index.columns if column.lower() == "unique_ids"
+    )
+    con.register("__ukam_inverted_index_input", inverted_index)
+    con.sql(
+        f"""
+        SELECT
+            CAST({idx_col} AS VARCHAR) AS index_value,
+            {unique_ids_col} AS unique_ids
+        FROM __ukam_inverted_index_input
+        """
+    ).create("__ukam_inverted_index")
     return "__ukam_inverted_index"

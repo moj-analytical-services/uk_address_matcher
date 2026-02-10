@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
     QUEUE_TRIGRAM_SELF,
-    QUEUE_TRIGRAM_WITH_INVERTED_INDEX,
-    _build_inverted_index_from_trigrams,
+    _build_inverted_index_from_index_values,
     _clean_data_using_precomputed_rel_tok_freq,
     _clean_data_pre_term_frequencies,
     _create_term_frequency_tables,
-    _derive_trigrams_from_address_tokens,
+    _derive_index_values_from_strategies,
     _ensure_postcode_column,
+    _lookup_index_values_in_inverted_index,
     _register_inverted_index_table,
+)
+from uk_address_matcher.cleaning.steps import (
+    BlockingIndexStrategy,
+    DEFAULT_BLOCKING_INDEX_STRATEGIES,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 from uk_address_matcher.sql_pipeline.helpers import _uid
@@ -245,17 +249,22 @@ def derive_term_frequencies_table(
 def derive_inverted_index(
     cleaned_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
-    max_unique_ids_per_trigram: int = 20,
+    max_unique_ids_per_index_value: int = 20,
+    index_strategies: Sequence[
+        BlockingIndexStrategy
+    ] = DEFAULT_BLOCKING_INDEX_STRATEGIES,
     *,
+    max_unique_ids_per_trigram: Optional[int] = None,
     debug_options: Optional["DebugOptions"] = None,
 ) -> DuckDBPyRelation:
-    """Derive a trigram-based inverted index from already-cleaned canonical data.
+    """Derive a blocking inverted index from already-cleaned canonical data.
 
     This function expects pre-cleaned address data (output of prepare_data_for_matching)
-    with `address_tokens` and `unique_id` columns already present. It computes trigrams
-    (consecutive 3-token sequences) and builds an inverted index mapping each trigram
-    to a list of unique_ids. Trigrams appearing in more than `max_unique_ids_per_trigram`
-    records are filtered out as they provide poor blocking selectivity.
+    with `address_tokens`, `numeric_tokens`, and `unique_id` columns already present.
+    It applies one or more index strategies to derive address-level index values and
+    builds an inverted index mapping each value to a list of unique_ids. Values
+    appearing in more than `max_unique_ids_per_index_value` records are filtered out
+    as they provide poor blocking selectivity.
 
     Example usage:
         # First clean canonical data (no inverted index needed)
@@ -273,27 +282,36 @@ def derive_inverted_index(
         cleaned_address_table: Pre-cleaned address relation with `address_tokens`
             and `unique_id` columns (output of prepare_data_for_matching).
         con: DuckDB connection.
-        max_unique_ids_per_trigram: Maximum number of unique_ids a trigram can
-            reference before being filtered out. Default 20.
+        max_unique_ids_per_index_value: Maximum number of unique_ids an index value
+            can reference before being filtered out. Default 20.
+        index_strategies: Blocking index derivation strategies. Each strategy emits
+            a list of index values per row, and all emitted values are merged into
+            one shared inverted index.
+        max_unique_ids_per_trigram: Backwards-compatible alias for
+            `max_unique_ids_per_index_value`.
         debug_options: Optional debug configuration for pipeline execution.
 
     Returns:
-        Inverted index table with 'trigram' (VARCHAR) and 'unique_ids' (LIST) columns.
+        Inverted index table with 'index_value' (VARCHAR) and 'unique_ids' (LIST)
+        columns.
     """
     uid = _uid()
 
-    # Generate trigrams and build inverted index using pipeline stages
-    trigram_pipeline = create_sql_pipeline(
+    if max_unique_ids_per_trigram is not None:
+        max_unique_ids_per_index_value = max_unique_ids_per_trigram
+
+    # Generate index values and build inverted index using pipeline stages
+    inverted_index_pipeline = create_sql_pipeline(
         con,
         input_rel=cleaned_address_table,
         stage_specs=[
-            _derive_trigrams_from_address_tokens,
-            _build_inverted_index_from_trigrams(max_unique_ids_per_trigram),
+            _derive_index_values_from_strategies(index_strategies),
+            _build_inverted_index_from_index_values(max_unique_ids_per_index_value),
         ],
         pipeline_name="Build inverted index",
-        pipeline_description="Derive trigrams and aggregate into inverted index",
+        pipeline_description="Derive index values and aggregate into inverted index",
     )
-    inverted_index_result = trigram_pipeline.run(debug_options)
+    inverted_index_result = inverted_index_pipeline.run(debug_options)
 
     # Materialise the result
     result_table = f"__ukam_derived_inverted_index_{uid}"
@@ -316,6 +334,9 @@ def prepare_data_for_matching(
     inverted_index: Optional[DuckDBPyRelation] = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
+    index_strategies: Sequence[
+        BlockingIndexStrategy
+    ] = DEFAULT_BLOCKING_INDEX_STRATEGIES,
     debug_options: Optional[DebugOptions] = None,
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
@@ -330,12 +351,16 @@ def prepare_data_for_matching(
             'token' and 'rel_freq' columns. Use derive_term_frequencies_table()
             to create this from a reference dataset (typically the canonical addresses).
             If not provided, uses the package's pre-baked term frequencies.
-        inverted_index: Optional pre-computed trigram inverted index table with
-            'trigram' and 'unique_ids' columns. Use derive_inverted_index()
+        inverted_index: Optional pre-computed blocking inverted index table with
+            'index_value' and 'unique_ids' columns (or legacy 'trigram' and
+            'unique_ids'). Use derive_inverted_index()
             to create this from canonical addresses. When provided, the function
-            derives trigrams from addresses and looks up matching unique_ids,
+            derives index values from addresses and looks up matching unique_ids,
             populating the `exploding_unique_ids` column. When not provided,
             `exploding_unique_ids` is set to [unique_id] (single-element array).
+        index_strategies: Blocking index derivation strategies used to generate
+            index values for lookup when `inverted_index` is supplied. This
+            should match the strategies used to build the supplied index.
         derive_distinguishing_wrt_adjacent_records: Whether to derive distinguishing
             tokens relative to adjacent records.
         debug_options: Optional debug configuration for pipeline execution.
@@ -381,12 +406,15 @@ def prepare_data_for_matching(
     # Register inverted index table if provided (for use in pipeline stages)
     inv_idx_table_name = _register_inverted_index_table(con, inverted_index)
 
-    # Determine which trigram stages to use as additional pipeline stages
-    trigram_stages = (
-        list(QUEUE_TRIGRAM_WITH_INVERTED_INDEX)
-        if inv_idx_table_name is not None
-        else list(QUEUE_TRIGRAM_SELF)
-    )
+    # Determine which blocking stages to use as additional pipeline stages.
+    # We build strategy stages dynamically so callers can override strategies.
+    if inv_idx_table_name is not None:
+        blocking_stages = [
+            _derive_index_values_from_strategies(index_strategies),
+            _lookup_index_values_in_inverted_index,
+        ]
+    else:
+        blocking_stages = list(QUEUE_TRIGRAM_SELF)
 
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
     total_chunks = (total_rows + chunk_size - 1) // chunk_size
@@ -396,7 +424,7 @@ def prepare_data_for_matching(
 
     processed_table = f"__ukam_addresses_processed_{uid}"
 
-    # Apply term frequencies and trigram blocking to cleaned chunks
+    # Apply term frequencies and blocking index lookups to cleaned chunks
     for chunk_index in range(total_chunks):
         chunk_started_at = time.perf_counter()
         chunk = con.sql(f"""
@@ -405,13 +433,13 @@ def prepare_data_for_matching(
             WHERE (abs(hash(original_address_concat)) % {total_chunks}) = {chunk_index}
         """)
 
-        # Process chunk: apply term frequencies + trigram blocking in one pass
+        # Process chunk: apply term frequencies + blocking in one pass
         processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
             chunk,
             con=con,
             pre_cleaned_addresses=True,
             derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
-            additional_stages=trigram_stages,
+            additional_stages=blocking_stages,
             debug_options=debug_options if chunk_index == 0 else None,
         )
 

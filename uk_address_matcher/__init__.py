@@ -6,6 +6,13 @@ from uk_address_matcher.cleaning.chunking_strategies import (
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
+from uk_address_matcher.cleaning.steps.trigram_blocking import (
+    BIGRAM_STRATEGY,
+    DEFAULT_BLOCKING_INDEX_STRATEGIES,
+    NUMERIC_PLUS_FIRST_NON_NUMERIC_STRATEGY,
+    TRIGRAM_STRATEGY,
+    BlockingIndexStrategy,
+)
 from uk_address_matcher.linking_model.matching import (
     ExactMatchStage,
     PeeledAddressStage,
@@ -33,6 +40,12 @@ __all__ = [
     "derive_inverted_index",
     "derive_term_frequencies_table",
     "clean_data_pre_term_frequencies",
+    # Blocking index strategies
+    "BlockingIndexStrategy",
+    "TRIGRAM_STRATEGY",
+    "BIGRAM_STRATEGY",
+    "NUMERIC_PLUS_FIRST_NON_NUMERIC_STRATEGY",
+    "DEFAULT_BLOCKING_INDEX_STRATEGIES",
     "calculate_match_metrics",
     "improve_predictions_using_distinguishing_tokens",
     "best_matches_with_distinguishability",
