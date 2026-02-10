@@ -66,6 +66,7 @@ def prepare_canonical_folder(
     output_folder: str | Path,
     *,
     con: duckdb.DuckDBPyConnection,
+    num_of_chunks: int = 10,
     overwrite: bool = False,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
@@ -83,6 +84,8 @@ def prepare_canonical_folder(
         data: Raw canonical address data as a DuckDB relation.
         output_folder: Folder to write prepared artefacts to.
         con: DuckDB connection.
+        num_of_chunks: Number of chunks to split the data into for cleaning
+            and term frequency derivation. Set to 1 for no chunking.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -114,10 +117,15 @@ def prepare_canonical_folder(
 
     # Derive artefacts / cleaned canonical data for export
     logger.debug("Deriving term frequencies from canonical data")
-    tf_table = derive_term_frequencies_table(data, con=con)
+    tf_table = derive_term_frequencies_table(data, con=con, num_of_chunks=num_of_chunks)
 
     logger.debug("Cleaning canonical addresses")
-    df_clean = prepare_data_for_matching(data, con=con, term_frequency_lookup=tf_table)
+    df_clean = prepare_data_for_matching(
+        data,
+        con=con,
+        num_of_chunks=num_of_chunks,
+        term_frequency_lookup=tf_table,
+    )
 
     logger.debug("Building inverted index")
     inverted_index = derive_inverted_index(df_clean, con=con)
