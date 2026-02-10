@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -8,7 +7,6 @@ from uk_address_matcher.linking_model.matching.stages.base_stage import Matching
 
 if TYPE_CHECKING:
     import duckdb
-
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
