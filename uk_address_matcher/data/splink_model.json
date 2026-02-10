@@ -212,6 +212,14 @@
                     "fix_u_probability": true
                 },
                 {
+                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_l = flat_positional_r",
+                    "label_for_charts": "Same positional, different letter/number",
+                    "m_probability": 0.25,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
                     "sql_condition": "(\n        (flat_positional_l IS NOT NULL AND flat_positional_r IS NULL)\n        OR\n        (flat_positional_r IS NOT NULL AND flat_positional_l IS NULL)\n    )\n    AND flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL",
                     "label_for_charts": "Cross-type flat (positional vs letter/number)",
                     "m_probability": 0.25,
@@ -220,8 +228,32 @@
                     "fix_u_probability": true
                 },
                 {
+                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_r IS NOT NULL\n    AND flat_positional_l != flat_positional_r",
+                    "label_for_charts": "Both positional but different floors",
+                    "m_probability": 0.00390625,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
+                    "label_for_charts": "Same number, letter one-sided",
+                    "m_probability": 0.25,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r",
+                    "label_for_charts": "Same number, letters both differ",
+                    "m_probability": 0.00390625,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
                     "sql_condition": "ELSE",
-                    "label_for_charts": "Flat identity differs (same type)",
+                    "label_for_charts": "Flat identity differs (different number)",
                     "m_probability": 9.5367431640625e-07,
                     "u_probability": 1,
                     "fix_m_probability": true,
@@ -316,8 +348,16 @@
                     "fix_u_probability": true
                 },
                 {
+                    "sql_condition": "\"numeric_token_2_l\" IS NOT NULL AND \"numeric_token_2_r\" IS NOT NULL AND \"numeric_token_2_l\" != \"numeric_token_2_r\"",
+                    "label_for_charts": "Secondary numbers both present but differ",
+                    "m_probability": 0.0001,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
                     "sql_condition": "\"numeric_token_2_l\" IS NULL OR \"numeric_token_2_r\" IS NULL",
-                    "label_for_charts": "Null",
+                    "label_for_charts": "One null",
                     "m_probability": 0.25,
                     "u_probability": 1,
                     "fix_m_probability": true,
