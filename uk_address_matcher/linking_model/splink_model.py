@@ -61,7 +61,7 @@ def _get_precomputed_numeric_tf_table(con: DuckDBPyConnection):
     return con.sql(read_tf_sql)
 
 
-def get_linker(
+def _get_linker(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
     *,
@@ -81,7 +81,7 @@ def get_linker(
     ):
         raise ValueError(
             "Input datasets contain a 'source_dataset' column. This column should be removed "
-            "before calling get_linker as it will be overwritten by the linker."
+            "before calling _get_linker as it will be overwritten by the linker."
         )
 
     # Skim off any matches that we have already labelled as exact matches

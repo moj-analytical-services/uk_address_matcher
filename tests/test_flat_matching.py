@@ -1,6 +1,7 @@
 import duckdb
 
-from uk_address_matcher import get_linker, prepare_data_for_matching
+from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.linking_model.splink_model import _get_linker
 
 # (messy_id, messy_address, postcode, canonical_id, should_match)
 TEST_CASES = [
@@ -71,7 +72,7 @@ def test_flat_penalties():
     canon_cleaned = prepare_data_for_matching(canon_rel, con=con)
 
     # Get linker and run predictions
-    linker = get_linker(messy_cleaned, canon_cleaned, con=con)
+    linker = _get_linker(messy_cleaned, canon_cleaned, con=con)
     predictions = linker.inference.predict(threshold_match_probability=0.00001)
     results_df = predictions.as_pandas_dataframe()
 
@@ -152,7 +153,7 @@ def test_flat_one_sided_null_penalty():
     messy_cleaned = prepare_data_for_matching(messy_rel, con=con)
     canon_cleaned = prepare_data_for_matching(canon_rel, con=con)
 
-    linker = get_linker(messy_cleaned, canon_cleaned, con=con)
+    linker = _get_linker(messy_cleaned, canon_cleaned, con=con)
     predictions = linker.inference.predict(threshold_match_probability=0.00001)
     results_df = predictions.as_pandas_dataframe()
 

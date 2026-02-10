@@ -1,6 +1,6 @@
 import pytest
 
-from uk_address_matcher.linking_model.splink_model import get_linker
+from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
@@ -81,7 +81,7 @@ def test_get_linker_raises_when_no_unresolved_rows(
     canonical_non_empty,
 ):
     with pytest.raises(ValueError, match="No unresolved records remain"):
-        get_linker(
+        _get_linker(
             df_addresses_to_match=resolved_only_matches,
             df_addresses_to_search_within=canonical_non_empty,
             con=duck_con,
@@ -94,7 +94,7 @@ def test_get_linker_raises_when_canonical_empty(
     canonical_empty,
 ):
     with pytest.raises(ValueError, match="Canonical relation is empty"):
-        get_linker(
+        _get_linker(
             df_addresses_to_match=unresolved_matches,
             df_addresses_to_search_within=canonical_empty,
             con=duck_con,

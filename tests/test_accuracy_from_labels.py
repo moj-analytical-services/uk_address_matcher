@@ -7,15 +7,17 @@ from tests.utils import prepare_combined_test_data
 
 # Import necessary functions from the library
 from uk_address_matcher import (
-    prepare_data_for_matching,
-    evaluate_predictions_against_labels,
-    get_linker,
-    inspect_match_results_vs_labels,
-    run_matching,
     ExactMatchStage,
     SplinkStage,
+    prepare_data_for_matching,
 )
+from uk_address_matcher.linking_model.matching.runner import _run_matching
+from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.linking_model.training import get_settings_for_training
+from uk_address_matcher.post_linkage.accuracy_from_labels import (
+    evaluate_predictions_against_labels,
+    inspect_match_results_vs_labels,
+)
 from uk_address_matcher.post_linkage.analyse_results import (
     best_matches_with_distinguishability,
 )
@@ -67,7 +69,7 @@ def test_address_matching_workflow_runs():
     settings = get_settings_for_training()
 
     # Run the unified matching pipeline first
-    match_candidates_rel = run_matching(
+    match_candidates_rel = _run_matching(
         con=duckdb_con,
         df_messy_clean=df_messy_data_clean_rel,
         df_canonical_clean=df_os_clean_rel,
@@ -96,7 +98,7 @@ def test_address_matching_workflow_runs():
     evaluation_results_rel.show()
 
     # Build a separate linker for the inspect helper (needs its own artifacts)
-    linker = get_linker(
+    linker = _get_linker(
         df_addresses_to_match=df_messy_data_clean_rel,
         df_addresses_to_search_within=df_os_clean_rel,
         con=duckdb_con,

@@ -1,7 +1,8 @@
 import duckdb
 import pytest
 
-from uk_address_matcher import get_linker, prepare_data_for_matching
+from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.linking_model.splink_model import _get_linker
 
 
 def test_source_dataset_is_ignored():
@@ -59,7 +60,7 @@ def test_source_dataset_is_ignored():
     )
 
     # Create a linker with the cleaned data
-    linker = get_linker(
+    linker = _get_linker(
         df_addresses_to_match=messy_clean,
         df_addresses_to_search_within=canonical_clean,
         con=con,
@@ -88,7 +89,7 @@ def test_source_dataset_is_ignored():
 
 def test_get_linker_raises_error_with_source_dataset():
     """
-    Test that get_linker raises an error when a source_dataset column is present in the input data.
+    Test that _get_linker raises an error when a source_dataset column is present in the input data.
     """
     # Create a DuckDB connection
     con = duckdb.connect(":memory:")
@@ -120,7 +121,7 @@ def test_get_linker_raises_error_with_source_dataset():
     with pytest.raises(
         ValueError, match="Input datasets contain a 'source_dataset' column"
     ):
-        get_linker(
+        _get_linker(
             df_addresses_to_match=test_data,
             df_addresses_to_search_within=test_data_no_source,
             con=con,
@@ -130,7 +131,7 @@ def test_get_linker_raises_error_with_source_dataset():
     with pytest.raises(
         ValueError, match="Input datasets contain a 'source_dataset' column"
     ):
-        get_linker(
+        _get_linker(
             df_addresses_to_match=test_data_no_source,
             df_addresses_to_search_within=test_data,
             con=con,
@@ -141,7 +142,7 @@ def test_get_linker_raises_error_with_source_dataset():
     test_data_no_source_clean = prepare_data_for_matching(test_data_no_source, con=con)
 
     # Verify this works without error
-    get_linker(
+    _get_linker(
         df_addresses_to_match=test_data_clean,
         df_addresses_to_search_within=test_data_no_source_clean,
         con=con,
