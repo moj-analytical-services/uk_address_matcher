@@ -200,3 +200,4 @@ tmp/trigram_tmp.py
 tmp/validate_chunking.py
 tmp/validate_exact_matching.py
 benchmarking/.config.json
+ukam_prepared_canonical/*
