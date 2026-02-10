@@ -741,11 +741,10 @@
             "output_column_name": "postcode",
             "comparison_levels": [
                 {
-                    "sql_condition": "postcode_l IS NULL OR postcode_r IS NULL",
+                    "sql_condition": "postcode_r IS NULL",
                     "label_for_charts": "Null",
                     "fix_m_probability": false,
                     "fix_u_probability": false,
-                    "is_null_level": true,
                     "m_probability": 1024,
                     "u_probability": 1
                 },
