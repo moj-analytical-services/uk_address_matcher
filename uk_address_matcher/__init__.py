@@ -6,10 +6,12 @@ from uk_address_matcher.cleaning.chunking_strategies import (
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
-from uk_address_matcher.linking_model.exact_matching import (
-    StageName,
-    available_deterministic_stages,
-    run_deterministic_match_pass,
+from uk_address_matcher.linking_model.matching import (
+    ExactMatchStage,
+    PeeledAddressStage,
+    SplinkStage,
+    UniqueTrigramStage,
+    run_matching,
 )
 from uk_address_matcher.linking_model.splink_model import get_linker
 from uk_address_matcher.post_linkage.accuracy_from_labels import (
@@ -37,8 +39,10 @@ __all__ = [
     "best_matches_summary",
     "inspect_match_results_vs_labels",
     "evaluate_predictions_against_labels",
-    # Exact matching
-    "run_deterministic_match_pass",
-    "StageName",
-    "available_deterministic_stages",
+    # Matching
+    "run_matching",
+    "ExactMatchStage",
+    "UniqueTrigramStage",
+    "PeeledAddressStage",
+    "SplinkStage",
 ]

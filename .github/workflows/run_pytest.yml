@@ -2,19 +2,18 @@ name: Run pytest
 
 on:
   pull_request:
-    branches: [ main ]
     paths:
-      - 'uk_address_matcher/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - "uk_address_matcher/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'uk_address_matcher/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - "uk_address_matcher/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
 
 jobs:
   run-pytest:
@@ -25,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5

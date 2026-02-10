@@ -24,6 +24,7 @@ HACKNEY_COUNCIL_INFO = DatasetInfo(
               AND trim(postcode) <> ''
         )
         and substr(classification_code, 1, 1) = 'R'
+        and variant_label != 'HISTORICAL'
     """.strip(),
 )
 

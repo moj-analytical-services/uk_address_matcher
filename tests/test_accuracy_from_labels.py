@@ -11,14 +11,13 @@ from uk_address_matcher import (
     evaluate_predictions_against_labels,
     get_linker,
     inspect_match_results_vs_labels,
-    run_deterministic_match_pass,
+    run_matching,
+    ExactMatchStage,
+    SplinkStage,
 )
 from uk_address_matcher.linking_model.training import get_settings_for_training
 from uk_address_matcher.post_linkage.analyse_results import (
     best_matches_with_distinguishability,
-)
-from uk_address_matcher.post_linkage.match_candidate_selection import (
-    select_top_match_candidates,
 )
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
@@ -50,9 +49,7 @@ def test_address_matching_workflow_runs():
     """
     )
 
-    df_os_rel = canonical_addresses_raw.select(
-        "unique_id, address_concat, postcode"
-    )
+    df_os_rel = canonical_addresses_raw.select("unique_id, address_concat, postcode")
     messy_data_rel = messy_addresses_raw.select(
         "unique_id, address_concat, postcode, true_match_id::VARCHAR AS ukam_label"
     )
@@ -69,6 +66,36 @@ def test_address_matching_workflow_runs():
 
     settings = get_settings_for_training()
 
+    # Run the unified matching pipeline first
+    match_candidates_rel = run_matching(
+        con=duckdb_con,
+        df_messy_clean=df_messy_data_clean_rel,
+        df_canonical_clean=df_os_clean_rel,
+        stages=[
+            ExactMatchStage(),
+            SplinkStage(
+                predict_threshold_match_weight=-20,
+                improve_threshold_match_weight=-10,
+                improve_top_n_matches=3,
+                improve_use_bigrams=True,
+                final_match_weight_threshold=-10,
+                final_distinguishability_threshold=None,
+                include_full_postcode_block=False,
+                include_outside_postcode_block=True,
+                retain_intermediate_calculation_columns=True,
+                settings=settings,
+            ),
+        ],
+    )
+
+    evaluation_results_rel = evaluate_predictions_against_labels(
+        match_candidates=match_candidates_rel,
+        con=duckdb_con,
+    )
+    logger.info("Evaluation Results:")
+    evaluation_results_rel.show()
+
+    # Build a separate linker for the inspect helper (needs its own artifacts)
     linker = get_linker(
         df_addresses_to_match=df_messy_data_clean_rel,
         df_addresses_to_search_within=df_os_clean_rel,
@@ -95,29 +122,6 @@ def test_address_matching_workflow_runs():
         df_addresses_to_match=df_messy_data_clean_rel,
         con=duckdb_con,
     )
-
-    df_exact_matches_rel = run_deterministic_match_pass(
-        con=duckdb_con,
-        df_addresses_to_match=df_messy_data_clean_rel,
-        df_addresses_to_search_within=df_os_clean_rel,
-    )
-
-    match_candidates_rel = select_top_match_candidates(
-        con=duckdb_con,
-        df_exact_matches=df_exact_matches_rel,
-        df_splink_matches=df_predict_with_distinguishability_rel,
-        df_canonical=df_os_clean_rel,
-        match_weight_threshold=-10,
-        distinguishability_threshold=None,
-        include_unmatched=True,
-    )
-
-    evaluation_results_rel = evaluate_predictions_against_labels(
-        match_candidates=match_candidates_rel,
-        con=duckdb_con,
-    )
-    logger.info("Evaluation Results:")
-    evaluation_results_rel.show()
 
     inspect_match_results_vs_labels(
         labels=labels_rel,

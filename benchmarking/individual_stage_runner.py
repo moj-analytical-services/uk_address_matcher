@@ -11,10 +11,8 @@ from benchmarking.analysis.reporting import print_benchmark
 from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import setup_connection
 from benchmarking.utils.timing import time_phase
-from uk_address_matcher.linking_model.exact_matching.matching_stages import (
-    StageName,
-    _run_stage,
-)
+from uk_address_matcher import run_matching, ExactMatchStage, UniqueTrigramStage
+from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.analyse_results import calculate_match_metrics
 from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
@@ -30,9 +28,7 @@ DEBUG_OPTIONS: Optional[DebugOptions] = None
 # )
 EXPLAIN = False
 pipeline_variants = [
-    StageName.UNIQUE_TRIGRAM,
-    # StageName.JARO_WINKLER,
-    # StageName.DAMERAU_LEVENSHTEIN,
+    UniqueTrigramStage(),
 ]
 
 # Analysis configuration
@@ -56,20 +52,19 @@ matches_by_variant: dict[str, duckdb.DuckDBPyRelation] = {}
 variant_timings: dict[str, dict[str, float]] = {}
 
 for pipeline_variant in pipeline_variants:
+    variant_name = pipeline_variant.__class__.__name__
     # Print clear benchmark header
     print_benchmark(
         dataset_name=dataset_info.name,
-        variant_name=pipeline_variant.value,
+        variant_name=variant_name,
     )
 
-    with time_phase(variant_timings, pipeline_variant.value, "pipeline"):
-        matches = _run_stage(
-            con,
-            pipeline_variant,
-            df_messy_clean,
-            df_os_clean,
-            debug_options=DEBUG_OPTIONS,
-            explain=EXPLAIN,
+    with time_phase(variant_timings, variant_name, "pipeline"):
+        matches = run_matching(
+            con=con,
+            df_messy_clean=df_messy_clean,
+            df_canonical_clean=df_os_clean,
+            stages=[ExactMatchStage(), pipeline_variant],
         ).join(
             df_messy_clean.select(
                 "ukam_address_id",
@@ -83,10 +78,10 @@ for pipeline_variant in pipeline_variants:
         )
         matches.show(max_width=200)
 
-    pipeline_duration = variant_timings[pipeline_variant.value]["pipeline"]
+    pipeline_duration = variant_timings[variant_name]["pipeline"]
     print(f"⏱  Pipeline completed in {pipeline_duration:.2f} seconds.\n")
 
-    matches_by_variant[pipeline_variant.value] = matches
+    matches_by_variant[variant_name] = matches
 
     # Match reason breakdown
     print("--- Match Reason Breakdown ---\n")

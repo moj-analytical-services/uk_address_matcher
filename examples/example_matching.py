@@ -12,13 +12,10 @@ from uk_address_matcher import (
     prepare_data_for_matching,
     get_linker,
     improve_predictions_using_distinguishing_tokens,
-)
-from uk_address_matcher.linking_model.exact_matching import (
-    available_deterministic_stages,
-    run_deterministic_match_pass,
-)
-from uk_address_matcher.post_linkage.match_candidate_selection import (
-    select_top_match_candidates,
+    run_matching,
+    ExactMatchStage,
+    UniqueTrigramStage,
+    SplinkStage,
 )
 
 pd.options.display.max_colwidth = 1000
@@ -66,16 +63,12 @@ df_fhrs_clean = prepare_data_for_matching(df_fhrs, con=con)
 # Step 3: Run exact matching to reduce the number of records to consider
 # -----------------------------------------------------------------------------
 
-# Discover available matching stages (EXACT_MATCHES is always enabled)
-print("\nAvailable deterministic matching stages (optional):")
-for stage in available_deterministic_stages():
-    print(f"  - {stage.value} (StageName.{stage.name})")
-
 # Enable additional stages beyond the always-on EXACT_MATCHES
-df_fhrs_exact_matches = run_deterministic_match_pass(
+df_fhrs_exact_matches = run_matching(
     con=con,
-    df_addresses_to_match=df_fhrs_clean,
-    df_addresses_to_search_within=df_ch_clean,
+    df_messy_clean=df_fhrs_clean,
+    df_canonical_clean=df_ch_clean,
+    stages=[ExactMatchStage()],
 )
 
 exact_match_summary = calculate_match_metrics(df_fhrs_exact_matches)
@@ -247,14 +240,21 @@ display(
 # Step 8: Combine deterministic and Splink match candidates
 # -----------------------------------------------------------------------------
 
-match_candidates = select_top_match_candidates(
+match_candidates = run_matching(
     con=con,
-    df_exact_matches=df_fhrs_exact_matches,
-    df_splink_matches=best_matches,
-    df_canonical=df_ch_clean,
-    match_weight_threshold=15,
-    distinguishability_threshold=None,
-    include_unmatched=True,
+    df_messy_clean=df_fhrs_clean,
+    df_canonical_clean=df_ch_clean,
+    stages=[
+        ExactMatchStage(),
+        SplinkStage(
+            predict_threshold_match_weight=-50,
+            improve_threshold_match_weight=-20,
+            final_match_weight_threshold=15,
+            final_distinguishability_threshold=None,
+            include_full_postcode_block=True,
+            retain_intermediate_calculation_columns=True,
+        ),
+    ],
 )
 
 print("\nCombined match candidates summary:")

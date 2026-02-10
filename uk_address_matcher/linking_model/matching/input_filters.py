@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 PostcodeStrategy = Literal["exact", "drop_last_char"]
@@ -13,32 +12,15 @@ POSTCODE_STRATEGIES: tuple[PostcodeStrategy, PostcodeStrategy] = (
 
 
 @pipeline_stage(
-    name="filter_unmatched_matches",
-    description="Filter records that haven't been matched yet",
-    tags=["phase_1", "exact_matching"],
-    stage_output="unmatched_records",
-)
-def _filter_unmatched_exact_matches() -> list[CTEStep]:
-    unmatched_value = MatchReason.UNMATCHED.value
-    sql = f"""
-        SELECT
-            f.*
-        FROM {{input}} AS f
-        WHERE f.match_reason = '{unmatched_value}'
-    """
-    return [CTEStep("unmatched_records", sql)]
-
-
-@pipeline_stage(
-    name="restrict_canonical_to_fuzzy_postcodes",
-    description="Restrict canonical addresses to postcodes observed in the fuzzy input.",
-    tags=["phase_1", "exact_matching", "utility"],
+    name="restrict_canonical_to_messy_postcodes",
+    description="Restrict canonical addresses to postcodes observed in the messy input.",
+    tags=["phase_1", "matching", "utility"],
     stage_output="canonical_addresses_restricted",
 )
-def _restrict_canonical_to_fuzzy_postcodes(
+def _restrict_canonical_to_messy_postcodes(
     postcode_strategy: PostcodeStrategy,
 ) -> list[CTEStep]:
-    """Filter canonical addresses to those matching fuzzy input postcodes."""
+    """Filter canonical addresses to those matching messy input postcodes."""
     if postcode_strategy not in POSTCODE_STRATEGIES:
         valid_strategies = ", ".join(f"'{s}'" for s in POSTCODE_STRATEGIES)
         raise ValueError(
@@ -68,12 +50,11 @@ def _restrict_canonical_to_fuzzy_postcodes(
     ]
 
     if postcode_strategy == "exact":
-        fuzzy_key_expr = "postcode"
+        messy_key_expr = "postcode"
         canonical_key_expr = "canon.postcode"
 
     else:
-        # TODO(ThomasHepworth): extend to support outcode-only filtering.
-        fuzzy_key_expr = _postcode_prefix("postcode")
+        messy_key_expr = _postcode_prefix("postcode")
         canonical_key_expr = _postcode_prefix("canon.postcode")
         canonical_select_fields.append(
             "LEFT(canon.postcode, LENGTH(canon.postcode) - 1) AS postcode_group"
@@ -81,11 +62,11 @@ def _restrict_canonical_to_fuzzy_postcodes(
 
     canonical_select_fields_str = ",\n            ".join(canonical_select_fields)
 
-    fuzzy_subquery = f"""
+    messy_subquery = f"""
         SELECT DISTINCT
-            {fuzzy_key_expr} AS postcode_key
-        FROM {{fuzzy_addresses}}
-        WHERE {fuzzy_key_expr} IS NOT NULL
+            {messy_key_expr} AS postcode_key
+        FROM {{messy_addresses}}
+        WHERE {messy_key_expr} IS NOT NULL
     """
 
     sql = f"""
@@ -93,15 +74,12 @@ def _restrict_canonical_to_fuzzy_postcodes(
             {canonical_select_fields_str}
         FROM {{canonical_addresses}} AS canon
         JOIN (
-        {fuzzy_subquery}
-        ) AS fuzzy
-          ON {canonical_key_expr} = fuzzy.postcode_key
+        {messy_subquery}
+        ) AS messy
+          ON {canonical_key_expr} = messy.postcode_key
         WHERE canon.unique_id IS NOT NULL
     """
     return [CTEStep("canonical_addresses_restricted", sql)]
 
 
-__all__ = [
-    "_filter_unmatched_exact_matches",
-    "_restrict_canonical_to_fuzzy_postcodes",
-]
+__all__ = ["_restrict_canonical_to_messy_postcodes"]

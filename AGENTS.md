@@ -8,8 +8,8 @@ This document acts as your onboarding pack when working in the `uk_address_match
 - Core tools: DuckDB SQL, the Splink probabilistic linkage model, and Python helper utilities.
 - Typical flow:
   1. Clean input data to generate token features.
-  2. Run deterministic exact matching to remove easy wins.
-  3. Execute Splink based probabilistic matching and apply distinguishing token analysis.
+  2. Run early deterministic matching stages to remove easy wins.
+  3. Execute the Splink stage and apply distinguishing token analysis.
   4. Produce final match decisions and metrics for downstream reporting.
 
 > [! TIP]
@@ -19,7 +19,7 @@ This document acts as your onboarding pack when working in the `uk_address_match
 
 - `uk_address_matcher/`
   - `cleaning/`: Address parsing, token generation, and shared preprocessing logic.
-  - `linking_model/`: Matching stages. Notable subpackages include `exact_matching` for deterministic joins and `post_linkage` for downstream metrics.
+  - `linking_model/`: Matching stages and runners, plus `post_linkage` for downstream metrics.
   - `sql_pipeline/`: Pipeline framework that composes DuckDB CTE stages with dependency tracking and match reason enums.
 - `examples/`: End to end scripts demonstrating address cleaning, matching, and evaluation.
 - `scripts/`: Utility programmes for training, analysis, and parameter tuning.
@@ -111,7 +111,7 @@ This document acts as your onboarding pack when working in the `uk_address_match
 This project marries deterministic SQL stages with probabilistic Splink linkage to achieve rapid UK address matching. Core responsibilities:
 
 - `cleaning`: create standardised tokens and representations of addresses.
-- `linking_model.exact_matching`: deterministic postcode plus address concat matching.
+- `linking_model.matching`: deterministic and probabilistic stages plus the unified runner.
 - `linking_model.post_linkage`: evaluate match quality and derive metrics.
 - `sql_pipeline`: orchestrate staged DuckDB execution with dependency management and match reason enums.
 

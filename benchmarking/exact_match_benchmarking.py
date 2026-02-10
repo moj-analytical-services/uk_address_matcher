@@ -11,9 +11,8 @@ from benchmarking.analysis import (
 from benchmarking.analysis.mismatches import print_mismatch_analysis
 from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import setup_connection
-from benchmarking.utils.pipelines import run_deterministic_pipeline
 from benchmarking.utils.timing import time_phase
-from uk_address_matcher.linking_model.exact_matching.matching_stages import StageName
+from uk_address_matcher import ExactMatchStage, UniqueTrigramStage, run_matching
 from uk_address_matcher.post_linkage.analyse_results import calculate_match_metrics
 from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
@@ -48,40 +47,27 @@ dataset_info = get_dataset_info(DATASET_NAME)
 # Define pipeline variants
 # Each variant specifies which optional stages to enable (exact matching always runs)
 pipeline_variants = {
-    # "exact_match_only": {
-    #     "enabled_stages": None,  # Only exact matching (always-on)
-    # },
-    # "exact_match_then_trigram": {
-    #     "enabled_stages": [StageName.UNIQUE_TRIGRAM],  # Exact matching + trigram
-    # },
-    "exact_match_with_all_stages": {
-        "enabled_stages": [
-            # StageName.PEELED_ADDRESS,
-            # StageName.UNIQUE_TRIGRAM,
-            # StageName.JARO_WINKLER,
-            # StageName.DAMERAU_LEVENSHTEIN,
-        ],
-    },
+    "exact_match_only": [ExactMatchStage()],
+    "exact_match_then_trigram": [ExactMatchStage(), UniqueTrigramStage()],
 }
 
 matches_by_variant: dict[str, duckdb.DuckDBPyRelation] = {}
 variant_timings: dict[str, dict[str, float]] = {}
 
-for label, variant_spec in pipeline_variants.items():
+for label, stages in pipeline_variants.items():
     # Print clear benchmark header
     print_stages_benchmark_header(
         dataset_name=dataset_info.name,
         variant_name=label,
-        enabled_stages=variant_spec["enabled_stages"],
+        stages=stages,
     )
 
     with time_phase(variant_timings, label, "pipeline"):
-        matches = run_deterministic_pipeline(
+        matches = run_matching(
             con=con,
-            df_to_match=df_messy_clean,
-            df_canonical=df_os_clean,
-            enabled_stage_names=variant_spec["enabled_stages"],
-            pipeline_name=f"Exact benchmark - {label}",
+            df_messy_clean=df_messy_clean,
+            df_canonical_clean=df_os_clean,
+            stages=stages,
             debug_options=DEBUG_OPTIONS,
             explain=EXPLAIN,
         )

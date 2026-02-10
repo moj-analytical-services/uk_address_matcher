@@ -87,11 +87,21 @@ def get_linker(
     # Skim off any matches that we have already labelled as exact matches
     # Neither match_reason or resolved_canonical_id are needed for Splink processing
     if "resolved_canonical_id" in df_addresses_to_match.columns:
+        excluded_columns = [
+            col
+            for col in [
+                "match_reason",
+                "resolved_canonical_id",
+                "canonical_ukam_address_id",
+                "original_address_concat_canonical",
+                "postcode_canonical",
+            ]
+            if col in df_addresses_to_match.columns
+        ]
+        exclude_sql = ", ".join(excluded_columns)
         df_addresses_to_match = df_addresses_to_match.filter(
             "resolved_canonical_id IS NULL"
-        ).select(
-            "* EXCLUDE(match_reason, resolved_canonical_id, canonical_ukam_address_id)"
-        )
+        ).select(f"* EXCLUDE({exclude_sql})")
     unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
     if unresolved_count == 0:
         raise ValueError(
@@ -160,6 +170,11 @@ def get_linker(
 
     con.register("df_addresses_to_match_fix", df_addresses_to_match)
     con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
+
+    # Drop stale Splink views/tables from any prior linker on this connection.
+    for tbl in ("m_", "c_"):
+        con.execute(f"DROP VIEW IF EXISTS {tbl}")
+        con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
     linker = Linker(
         [df_addresses_to_match, df_addresses_to_search_within],

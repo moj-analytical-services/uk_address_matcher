@@ -91,6 +91,7 @@ from benchmarking.datasets import (
     get_dataset_info,
     list_datasets,
 )
+from uk_address_matcher import ExactMatchStage, run_matching
 
 # Load canonical data once (reuse across multiple datasets)
 df_canonical = load_canonical_data(con)
@@ -104,7 +105,12 @@ for dataset_name in list_datasets():
     df_messy = load_dataset(dataset_name, con)
 
     # Run matching pipeline
-    matches = run_deterministic_pipeline(con, df_messy, df_canonical)
+    matches = run_matching(
+        con=con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
     # ... analyse results ...
 ```
 

@@ -40,7 +40,7 @@ Pretty-prints the mismatch analysis with:
 
 Display utilities for benchmark runs.
 
-**Key function:** `print_benchmark_header(dataset_name, variant_name, enabled_stages)`
+**Key function:** `print_stages_benchmark_header(dataset_name, variant_name, stages)`
 
 Prints a clear header showing:
 - Dataset being benchmarked
@@ -53,19 +53,25 @@ Prints a clear header showing:
 from benchmarking.analysis import (
     calculate_accuracy_metrics,
     analyse_mismatches,
-    print_benchmark_header,
+    print_stages_benchmark_header,
 )
 from benchmarking.analysis.mismatches import print_mismatch_analysis
+from uk_address_matcher import ExactMatchStage, run_matching
 
 # Print header
-print_benchmark_header(
+print_stages_benchmark_header(
     dataset_name="Lambeth Council",
     variant_name="exact_match_only",
-    enabled_stages=[]
+    stages=[ExactMatchStage()]
 )
 
 # Run pipeline
-matches = run_deterministic_pipeline(con, df_messy, df_canonical)
+matches = run_matching(
+    con=con,
+    df_messy_clean=df_messy,
+    df_canonical_clean=df_canonical,
+    stages=[ExactMatchStage()],
+)
 
 # Calculate accuracy
 accuracy = calculate_accuracy_metrics(matches)

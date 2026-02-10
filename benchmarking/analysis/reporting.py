@@ -19,8 +19,14 @@ def print_benchmark(dataset_name: str, variant_name: str) -> None:
     print(f"Dataset: {dataset_name}")
 
 
+def _format_stage_name(stage: object) -> str:
+    if hasattr(stage, "__class__"):
+        return stage.__class__.__name__
+    return str(stage)
+
+
 def print_stages_benchmark_header(
-    dataset_name: str, variant_name: str, enabled_stages: list | None = None
+    dataset_name: str, variant_name: str, stages: list | None = None
 ) -> None:
     """Print a clear header for benchmark run.
 
@@ -30,18 +36,15 @@ def print_stages_benchmark_header(
         Name of the dataset being benchmarked.
     variant_name:
         Name of the pipeline variant being run.
-    enabled_stages:
-        List of enabled stages, or None if only default stages.
+    stages:
+        List of stages executed for this variant, or None if not specified.
     """
     print_benchmark(dataset_name, variant_name)
 
-    if enabled_stages is None:
-        print("Techniques: Exact matching only (always-on stages)")
+    if stages is None:
+        print("Techniques: default stages")
     else:
-        stage_names = [
-            s.value if hasattr(s, "value") else str(s) for s in enabled_stages
-        ]
-        techniques = ["Exact matching (always-on)"] + stage_names
-        print(f"Techniques: {', '.join(techniques)}")
+        stage_names = [_format_stage_name(stage) for stage in stages]
+        print(f"Techniques: {', '.join(stage_names)}")
 
     print("=" * 80 + "\n")
