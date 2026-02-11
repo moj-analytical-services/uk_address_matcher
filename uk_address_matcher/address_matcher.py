@@ -26,7 +26,8 @@ def _ensure_splink_udfs(con: duckdb.DuckDBPyConnection) -> None:
         "WHERE extension_name = 'splink_udfs' AND loaded"
     ).fetchone()
     if loaded is None:
-        con.execute("INSTALL splink_udfs FROM community; LOAD splink_udfs;")
+        con.execute("INSTALL splink_udfs FROM community")
+        con.execute("LOAD splink_udfs")
 
 
 def _is_fully_prepared(rel: duckdb.DuckDBPyRelation) -> bool:
