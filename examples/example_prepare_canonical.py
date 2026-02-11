@@ -7,7 +7,7 @@ con = duckdb.connect(database=":memory:")
 # Pre-prepare canonical data for faster repeated matching.
 
 # Cleaning a large canonical dataset (e.g. AddressBase) is expensive.
-# Use `prepare_and_persist_canonical_data` to do this once and write the
+# Use `prepare_canonical_folder` to do this once and write the
 # artefacts to disk. Subsequent matching runs can then load the prepared
 # folder directly, skipping cleaning entirely.
 
