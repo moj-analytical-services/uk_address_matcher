@@ -8,31 +8,56 @@ from uk_address_matcher import (
     SplinkStage,
 )
 
-# Required input columns:
+# -----------------------------------------------------------------------------
+# Input data requirements
+# -----------------------------------------------------------------------------
+# Your input tables can be DuckDB relations, Pandas DataFrames, or anything
+# DuckDB can query. The matcher expects the following columns to be present.
 #
-# | Column         | DuckDB dtype       | Description                         |
-# |----------------|--------------------|-------------------------------------|
-# | unique_id      | BIGINT or VARCHAR   | Unique identifier for each record   |
-# | address_concat | VARCHAR             | Full address (without postcode)     |
-# | postcode       | VARCHAR             | Postcode                            |
+# Required columns
+# | Column         | DuckDB dtype         | What it's used for                              |
+# |----------------|----------------------|--------------------------------------------------|
+# | unique_id      | BIGINT or VARCHAR     | Stable identifier for each row (must be unique) |
+# | address_concat | VARCHAR               | Address text *excluding postcode* (recommended) |
 #
-# Any additional columns are retained through the pipeline.
+# Optional columns
+# | Column         | DuckDB dtype         | What it's used for                              |
+# |----------------|----------------------|--------------------------------------------------|
+# | postcode       | VARCHAR               | Improves speed + accuracy (recommended)         |
+#
+# Postcode handling rules:
+#
+# 1. If you provide a separate `postcode` column:
+#    - `address_concat` should ideally NOT contain the postcode.
+#    - The matcher will use the structured postcode for blocking and matching.
+#
+# 2. If you do NOT provide a `postcode` column:
+#    - `address_concat` may include the postcode.
+#    - The matcher will attempt to extract it during cleaning.
+# -----------------------------------------------------------------------------
 
-# You can alternatively provide a full address string including the postcode in `address_concat` and leave `postcode` blank. The matcher will attempt to extract the postcode from the full address string during cleaning. However, providing a separate `postcode` column is recommended for better performance and accuracy, as it allows the matcher to use the postcode for candidate retrieval and matching without needing to parse it out of the full address string.
-
+# Example input files (canonical addresses vs. addresses to match)
 p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
 p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
 
+# DuckDB connection used for all processing (in-memory for convenience)
 con = duckdb.connect(database=":memory:")
 
+# Load inputs
 df_ch = con.read_parquet(p_ch)
 df_fhrs = con.read_parquet(p_fhrs)
 
+# Optional: limit rows for quick local testing (set TEST_LIMIT to any value)
 if os.getenv("TEST_LIMIT"):
     df_ch = df_ch.limit(250)
     df_fhrs = df_fhrs.limit(250)
 
-
+# -----------------------------------------------------------------------------
+# Configure and run the matcher
+# -----------------------------------------------------------------------------
+# Stages run in order; earlier stages typically find "easy" matches cheaply.
+# - ExactMatchStage(): deterministic rules / exact matches
+# - SplinkStage(): probabilistic matching for fuzzier cases (typos, formatting)
 matcher = AddressMatcher(
     canonical_addresses=df_ch,
     addresses_to_match=df_fhrs,
@@ -40,8 +65,12 @@ matcher = AddressMatcher(
     stages=[
         ExactMatchStage(),
         SplinkStage(
+            # Lower = more permissive; higher = more conservative.
+            # Tune these based on your desired precision/recall trade-off.
             predict_threshold_match_weight=-20,
             final_match_weight_threshold=12,
+            # When True, uses full postcode as a blocking key to reduce the
+            # candidate search space (faster, usually higher precision).
             include_full_postcode_block=True,
         ),
     ],
@@ -49,17 +78,26 @@ matcher = AddressMatcher(
 
 result = matcher.match()
 
+# -----------------------------------------------------------------------------
+# Preview results
+# -----------------------------------------------------------------------------
 print("=== First 10 matched records ===")
 result.limit(10).show(max_width=500)
 
-
-# Inspect results by match reason
+# -----------------------------------------------------------------------------
+# Explore results by match reason
+# -----------------------------------------------------------------------------
+# `match_reason` indicates which stage/rule produced the match, which is useful
+# for QA and for tuning thresholds.
 match_reasons = [row[0] for row in result.project("match_reason").distinct().fetchall()]
 
 for reason in match_reasons:
     if reason is None:
         continue
+
+    # Escape single quotes so we can safely filter in SQL
     escaped = str(reason).replace("'", "''")
+
     print(f"\n=== 10 records matched by '{reason}' ===")
     result.filter(f"match_reason = '{escaped}'").limit(10).show(
         max_width=500, max_rows=10
