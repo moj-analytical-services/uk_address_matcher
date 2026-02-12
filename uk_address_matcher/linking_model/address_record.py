@@ -38,18 +38,13 @@ class AddressRecord:
             unique_id=data.get("unique_id"),
         )
 
-    def _as_duckdb_sql(self) -> duckdb.DuckDBPyRelation:
-        """Convert the record to a DuckDB relation for matching."""
-
-        return f"""
-        select
-        '{self.unique_id}' as unique_id,
-        '{self.address_concat}' as address_concat,
-        '{self.postcode}' as postcode
-        """
-
     def as_duckdb_relation(
         self, con: duckdb.DuckDBPyConnection
     ) -> duckdb.DuckDBPyRelation:
         """Convert the record to a DuckDB relation for matching."""
-        return con.sql(self._as_duckdb_sql())
+
+        return con.query(
+            "select '{}' as unique_id, '{}' as address_concat, '{}' as postcode".format(
+                self.unique_id, self.address_concat, self.postcode
+            )
+        )
