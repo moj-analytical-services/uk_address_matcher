@@ -253,6 +253,7 @@ def _stage_name_for_instance(stage: MatchingStage) -> str:
     from uk_address_matcher.linking_model.matching.stages import (
         ExactMatchStage,
         PeeledAddressStage,
+        UniqueSignatureStage,
         UniqueTrigramStage,
     )
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
@@ -260,6 +261,7 @@ def _stage_name_for_instance(stage: MatchingStage) -> str:
     _names = {
         ExactMatchStage: "exact_matches",
         UniqueTrigramStage: "unique_trigram",
+        UniqueSignatureStage: "unique_signature",
         PeeledAddressStage: "peeled_address",
         SplinkStage: "splink",
     }

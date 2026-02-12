@@ -14,9 +14,12 @@ from uk_address_matcher.cleaning.steps.trigram_blocking import (
     BlockingIndexStrategy,
 )
 from uk_address_matcher.linking_model.matching import (
+    DEFAULT_SIGNATURE_TEMPLATES,
     ExactMatchStage,
     PeeledAddressStage,
+    SignatureTemplate,
     SplinkStage,
+    UniqueSignatureStage,
     UniqueTrigramStage,
     run_matching,
 )
@@ -56,6 +59,9 @@ __all__ = [
     "run_matching",
     "ExactMatchStage",
     "UniqueTrigramStage",
+    "UniqueSignatureStage",
+    "SignatureTemplate",
+    "DEFAULT_SIGNATURE_TEMPLATES",
     "PeeledAddressStage",
     "SplinkStage",
 ]

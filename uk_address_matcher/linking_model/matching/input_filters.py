@@ -40,6 +40,7 @@ def _restrict_canonical_to_messy_postcodes(
         "canon.ukam_address_id AS ukam_address_id",
         "canon.address_tokens",
         "canon.numeric_tokens",
+        "canon.unusual_tokens_arr",
         "canon.has_flat_indicator",
         "canon.flat_positional",
         "canon.flat_letter",
