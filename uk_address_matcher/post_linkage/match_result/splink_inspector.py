@@ -38,10 +38,10 @@ class _SplinkInspector:
         self,
         *,
         con: DuckDBPyConnection,
-        tables: dict[str, str],
+        linker: Any,
     ) -> None:
         self._con = con
-        self._tables = tables
+        self._linker = linker
 
     def predictions(
         self,
@@ -56,10 +56,7 @@ class _SplinkInspector:
         All parameters are optional filters. With no arguments the full
         predictions table is returned.
         """
-        table = self._tables.get("predictions") or self._discover_predictions_table()
-        if not table:
-            raise ValueError("Splink predictions table is not available.")
-        self._tables.setdefault("predictions", table)
+        predictions = self._get_predictions_relation()
 
         has_filters = (
             limit is not None
@@ -68,9 +65,7 @@ class _SplinkInspector:
             or threshold_match_weight is not None
         )
         if not has_filters:
-            return self._con.table(table)
-
-        predictions = self._con.table(table)
+            return predictions
         conditions: list[str] = []
 
         pred_view = f"__ukam_tmp_pred_{id(predictions)}"
@@ -98,14 +93,28 @@ class _SplinkInspector:
         ).strip()
         return self._con.sql(query)
 
-    def _discover_predictions_table(self) -> str | None:
-        for table_name in self._list_tables():
-            if "__splink__df_predict" in table_name:
-                return table_name
-        for table_name in self._list_tables():
-            if "df_predict" in table_name:
-                return table_name
-        return None
+    def _get_predictions_relation(self) -> DuckDBPyRelation | None:
+        predictions = self._find_cached_table("__splink__df_predict")
+        if predictions is None:
+            predictions = self._find_cached_table("df_predict")
+        return predictions
+
+    def _find_cached_table(self, table_hint: str) -> DuckDBPyRelation | None:
+        try:
+            cache = self._linker._intermediate_table_cache
+        except AttributeError:
+            raise AttributeError(
+                "Splink linker does not have an intermediate table cache. "
+                "Splink inspection helpers require a compatible Splink version."
+            )
+
+        matches = [value for name, value in cache.items() if table_hint in str(name)]
+        if len(matches) > 1:
+            raise ValueError(f"Multiple cached tables matched the hint {table_hint!r}.")
+        if not matches:
+            raise ValueError(f"No cached table found matching the hint {table_hint!r}.")
+
+        return matches[0].as_duckdbpyrelation()
 
     def _list_tables(self) -> list[str]:
         rows = self._con.execute("SHOW TABLES").fetchall()

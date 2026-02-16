@@ -255,17 +255,13 @@ class AddressMatcher:
         )
 
         splink_stage = self._find_splink_stage()
-        splink_tables = {}
         splink_linker = None
         if splink_stage is not None:
             splink_linker = splink_stage.linker
-            if splink_stage.predictions_table is not None:
-                splink_tables["predictions"] = splink_stage.predictions_table
 
         return MatchResult(
             result,
             con=self.con,
-            metadata={"splink_tables": splink_tables},
             _splink_linker=splink_linker,
         )
 
