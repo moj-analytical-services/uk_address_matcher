@@ -55,6 +55,9 @@ if os.getenv("TEST_LIMIT"):
 # -----------------------------------------------------------------------------
 # Configure and run the matcher
 # -----------------------------------------------------------------------------
+# Find available stages:
+print(AddressMatcher.available_stages())
+
 # Stages run in order; earlier stages typically find "easy" matches cheaply.
 # - ExactMatchStage(): deterministic rules / exact matches
 # - SplinkStage(): probabilistic matching for fuzzier cases (typos, formatting)
@@ -65,18 +68,18 @@ matcher = AddressMatcher(
     stages=[
         ExactMatchStage(),
         SplinkStage(
-            # Lower = more permissive; higher = more conservative.
-            # Tune these based on your desired precision/recall trade-off.
             predict_threshold_match_weight=-20,
             final_match_weight_threshold=12,
-            # When True, uses full postcode as a blocking key to reduce the
-            # candidate search space (faster, usually higher precision).
             include_full_postcode_block=True,
+            retain_intermediate_calculation_columns=True,
         ),
     ],
 )
 
-result = matcher.match()
+match_result = matcher.match()
+
+# The underlying DuckDB relation is always available via .relation
+result = match_result.relation
 
 # -----------------------------------------------------------------------------
 # Preview results
@@ -85,20 +88,33 @@ print("=== First 10 matched records ===")
 result.limit(10).show(max_width=500)
 
 # -----------------------------------------------------------------------------
-# Explore results by match reason
+# Match-reason breakdown
 # -----------------------------------------------------------------------------
-# `match_reason` indicates which stage/rule produced the match, which is useful
-# for QA and for tuning thresholds.
-match_reasons = [row[0] for row in result.project("match_reason").distinct().fetchall()]
+# match_metrics() groups rows by match_reason and shows counts + percentages.
+print("\n=== Match metrics ===")
+match_result.match_metrics().show()
 
-for reason in match_reasons:
-    if reason is None:
-        continue
+# List the distinct match reasons present in the output
+print(f"\nMatch reasons: {match_result.match_reasons()}")
 
-    # Escape single quotes so we can safely filter in SQL
-    escaped = str(reason).replace("'", "''")
-
+# -----------------------------------------------------------------------------
+# Inspect results for a specific match reason
+# -----------------------------------------------------------------------------
+for reason in match_result.match_reasons():
     print(f"\n=== 10 records matched by '{reason}' ===")
-    result.filter(f"match_reason = '{escaped}'").limit(10).show(
+    match_result.filter_by_match_reason(reason).limit(10).show(
         max_width=500, max_rows=10
     )
+
+# -----------------------------------------------------------------------------
+# Splink inspection helpers (available when a Splink stage runs)
+# -----------------------------------------------------------------------------
+if match_result.has_splink():
+    print("\n=== Splink predictions sample ===")
+    splink_results = match_result.splink_predictions(limit=5)
+    splink_results.show(max_width=500)
+
+    # Waterfall charts require retain_intermediate_calculation_columns=True
+    # on the SplinkStage.
+    print("\n=== Splink waterfall chart ===")
+    display(match_result.splink_waterfall_chart(splink_results, filter_nulls=False))
