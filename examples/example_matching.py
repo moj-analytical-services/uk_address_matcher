@@ -1,6 +1,7 @@
 import os
 
 import duckdb
+from IPython.display import display
 
 from uk_address_matcher import (
     AddressMatcher,
