@@ -1,7 +1,6 @@
 import os
 
 import duckdb
-from IPython.display import display
 
 from uk_address_matcher import (
     AddressMatcher,
@@ -80,7 +79,7 @@ matcher = AddressMatcher(
 match_result = matcher.match()
 
 # The underlying DuckDB relation is always available via .relation
-result = match_result.relation
+result = match_result.matches
 
 # -----------------------------------------------------------------------------
 # Preview results
@@ -95,27 +94,9 @@ result.limit(10).show(max_width=500)
 print("\n=== Match metrics ===")
 match_result.match_metrics().show()
 
-# List the distinct match reasons present in the output
-print(f"\nMatch reasons: {match_result.match_reasons()}")
-
-# -----------------------------------------------------------------------------
-# Inspect results for a specific match reason
-# -----------------------------------------------------------------------------
-for reason in match_result.match_reasons():
-    print(f"\n=== 10 records matched by '{reason}' ===")
-    match_result.filter_by_match_reason(reason).limit(10).show(
-        max_width=500, max_rows=10
-    )
-
 # -----------------------------------------------------------------------------
 # Splink inspection helpers (available when a Splink stage runs)
 # -----------------------------------------------------------------------------
-if match_result.has_splink():
-    print("\n=== Splink predictions sample ===")
-    splink_results = match_result.splink_predictions(limit=5)
-    splink_results.show(max_width=500)
-
-    # Waterfall charts require retain_intermediate_calculation_columns=True
-    # on the SplinkStage.
-    print("\n=== Splink waterfall chart ===")
-    display(match_result.splink_waterfall_chart(splink_results, filter_nulls=False))
+print("\n=== Splink predictions sample ===")
+splink_results = match_result.splink_predictions(limit=5)
+splink_results.show(max_width=500)
