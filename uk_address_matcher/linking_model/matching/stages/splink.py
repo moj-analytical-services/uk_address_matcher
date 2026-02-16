@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
-@dataclass(frozen=True)
+@dataclass
 class SplinkStage(MatchingStage):
     """Splink probabilistic matching stage.
 
@@ -53,6 +53,10 @@ class SplinkStage(MatchingStage):
     # Whether to retain intermediate calculation columns (for debugging)
     retain_intermediate_calculation_columns: bool = False
 
+    # Populated after find_matches runs — used by MatchResult for inspection
+    linker: Any = field(default=None, init=False, repr=False)
+    predictions_table: str | None = field(default=None, init=False, repr=False)
+
     def find_matches(
         self,
         con: duckdb.DuckDBPyConnection,
@@ -69,6 +73,7 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
+        from uk_address_matcher.sql_pipeline.helpers import _uid
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:
@@ -92,11 +97,23 @@ class SplinkStage(MatchingStage):
             settings=self.settings,
         )
 
+        self.linker = linker
+
         # Step 2: Predict
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
         df_predict_ddb = df_predict.as_duckdbpyrelation()
+
+        table_name = f"ukam__splink__predictions__{_uid()}"
+        con.execute(
+            "CREATE OR REPLACE TEMP VIEW "
+            + table_name
+            + " AS SELECT * FROM ("
+            + df_predict_ddb.sql_query()
+            + ")"
+        )
+        self.predictions_table = table_name
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(

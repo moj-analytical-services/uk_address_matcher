@@ -17,6 +17,45 @@ _REQUIRED_COLUMNS = {
     "resolved_canonical_id",
 }
 
+_IMPORT_MODULE = "uk_address_matcher"
+
+
+class _StageList(list):
+    """A ``list`` subclass whose `repr`/`str` shows stage documentation.
+
+    Behaves identically to a plain `list[type[MatchingStage]]` for iteration,
+    indexing, and membership tests, but prints a human-friendly summary when
+    displayed interactively or via `print()`.
+    """
+
+    @staticmethod
+    def _stage_summary(stage_cls: type) -> str:
+        doc = stage_cls.__doc__ or ""
+        # Take only the first line of the docstring.
+        first_line = doc.strip().split("\n")[0].strip()
+        return first_line
+
+    def __repr__(self) -> str:
+        if not self:
+            return "No matching stages registered."
+
+        lines = [f"Available matching stages (import from {_IMPORT_MODULE}):"]
+        name_width = max(len(cls.__name__) for cls in self)
+        for cls in self:
+            summary = self._stage_summary(cls)
+            desc = f" — {summary}" if summary else ""
+            lines.append(f"  {cls.__name__:<{name_width}}{desc}")
+
+        lines.append("")
+        lines.append("Usage:")
+        names = ", ".join(cls.__name__ for cls in self)
+        lines.append(f"  from {_IMPORT_MODULE} import {names}")
+
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return repr(self)
+
 
 class MatchingStage(ABC):
     """Base class for matching stages.
@@ -70,6 +109,31 @@ class MatchingStage(ABC):
     results table
 
     """
+
+    @classmethod
+    def available_stages(cls) -> _StageList:
+        """All registered ``MatchingStage`` subclasses.
+
+        Returns a list of stage classes.  Printing the result shows each
+        stage with its one-line description and an import example::
+
+            >>> MatchingStage.available_stages()
+            Available matching stages (from uk_address_matcher):
+              ExactMatchStage  – Exact hash-join matching on clean_full_address + postcode.
+              SplinkStage      – Splink probabilistic matching stage.
+              ...
+
+        The returned object is a regular ``list`` subclass, so you can iterate,
+        index, or pass it to any code that expects ``list[type[MatchingStage]]``.
+        """
+        out: list[type[MatchingStage]] = []
+        stack = list(cls.__subclasses__())
+        while stack:
+            sub = stack.pop()
+            out.append(sub)
+            stack.extend(sub.__subclasses__())
+        out.sort(key=lambda s: s.__name__)
+        return _StageList(out)
 
     @abstractmethod
     def find_matches(

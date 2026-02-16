@@ -10,6 +10,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
+from uk_address_matcher.post_linkage.match_result import MatchResult
 
 if TYPE_CHECKING:
     import duckdb
@@ -217,16 +218,26 @@ class AddressMatcher:
     # Public API
     # ------------------------------------------------------------------
 
-    def match(self) -> duckdb.DuckDBPyRelation:
+    @classmethod
+    def available_stages(cls) -> list[type[MatchingStage]]:
+        """All registered ``MatchingStage`` subclasses.
+
+        Delegates to ``MatchingStage.available_stages()`` which walks the
+        subclass tree dynamically, so newly added stages are picked up
+        automatically without maintaining a hard-coded list.
+        """
+        return MatchingStage.available_stages()
+
+    def match(self) -> MatchResult:
         """Runs the full matching pipeline.
 
         Each stage is executed in sequence. Earlier stages consume easy
         matches; later stages handle the remainder.
 
         Returns:
-            A `DuckDBPyRelation` with match results including
-            `unique_id`, `resolved_canonical_id`, `match_reason`,
-            and any additional columns produced by the stages.
+            A `MatchResult` wrapper around the final DuckDB relation, including
+            `unique_id`, `resolved_canonical_id`, `match_reason`, and any
+            additional columns produced by the stages.
         """
 
         stage_list = "\n".join(f"    - {s.__class__.__name__}" for s in self.stages)
@@ -235,12 +246,27 @@ class AddressMatcher:
         self._resolve_canonical_data()
         self._resolve_messy_data()
 
-        return _run_matching(
+        result = _run_matching(
             con=self.con,
             df_messy_clean=self._messy_clean,
             df_canonical_clean=self._canonical_clean,
             stages=self.stages,
             debug_options=self.debug_options,
+        )
+
+        splink_stage = self._find_splink_stage()
+        splink_tables = {}
+        splink_linker = None
+        if splink_stage is not None:
+            splink_linker = splink_stage.linker
+            if splink_stage.predictions_table is not None:
+                splink_tables["predictions"] = splink_stage.predictions_table
+
+        return MatchResult(
+            result,
+            con=self.con,
+            metadata={"splink_tables": splink_tables},
+            _splink_linker=splink_linker,
         )
 
     def match_one(
@@ -308,3 +334,12 @@ class AddressMatcher:
         )
 
         return result.limit(top_n)
+
+    def _find_splink_stage(self):
+        """Return the first SplinkStage instance from the stage list, or None."""
+        from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
+
+        for stage in self.stages:
+            if isinstance(stage, SplinkStage):
+                return stage
+        return None

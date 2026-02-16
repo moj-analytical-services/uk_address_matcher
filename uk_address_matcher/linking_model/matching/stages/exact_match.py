@@ -48,6 +48,12 @@ class ExactMatchStage(MatchingStage):
             explain=explain,
         )
 
+    def __repr__(self) -> str:
+        return (
+            "Exact match linking stage:\n"
+            "    from uk_address_matcher import ExactMatchStage\n"
+        )
+
 
 @pipeline_stage(
     name="exact_matches",
