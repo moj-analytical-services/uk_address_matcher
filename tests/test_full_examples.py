@@ -1,6 +1,7 @@
 import os
 import subprocess
 
+
 def test_example_matching():
     env = os.environ.copy()
 
@@ -8,7 +9,7 @@ def test_example_matching():
     env["TEST_LIMIT"] = "1"
 
     result = subprocess.run(
-        ["python", "examples/example_matching.py"],
+        ["uv", "run", "python", "examples/example_matching.py"],
         env=env,
         capture_output=True,
         text=True,
