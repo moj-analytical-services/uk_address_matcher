@@ -42,9 +42,9 @@ def print_stages_benchmark_header(
     print_benchmark(dataset_name, variant_name)
 
     if stages is None:
-        print("Techniques: default stages")
+        print("Stages: default stages")
     else:
         stage_names = [_format_stage_name(stage) for stage in stages]
-        print(f"Techniques: {', '.join(stage_names)}")
+        print(f"Stages: {', '.join(stage_names)}")
 
     print("=" * 80 + "\n")
