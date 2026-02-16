@@ -5,27 +5,32 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 @pipeline_stage(
     name="derive_trigrams_from_address_tokens",
-    description="Generate trigrams (consecutive 3-token sequences) from address_tokens array",
+    description="Generate trigrams (consecutive 3-token sequences) from clean_full_address",
     tags="trigram_blocking",
 )
 def _derive_trigrams_from_address_tokens():
-    """Generate trigrams from address_tokens array.
+    """Generate trigrams from clean_full_address tokens.
 
     Creates a 'trigrams' column containing an array of space-delimited trigrams.
     For addresses with fewer than 3 tokens, returns an empty array.
     """
     sql = """
     SELECT
-        *,
+        base.* EXCLUDE (tokenised),
         CASE
-            WHEN len(address_tokens) >= 3 THEN
+            WHEN len(tokenised) >= 3 THEN
                 list_transform(
-                    generate_series(1, len(address_tokens) - 2),
-                    i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                    generate_series(1, len(tokenised) - 2),
+                    i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                 )
             ELSE []
         END AS trigrams
-    FROM {input}
+    FROM (
+        SELECT
+            *,
+            string_split(clean_full_address, ' ') AS tokenised
+        FROM {input}
+    ) AS base
     """
     return sql
 

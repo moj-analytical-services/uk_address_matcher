@@ -2,12 +2,10 @@ from typing import Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-
 from uk_address_matcher.cleaning.steps import (
     _add_numeric_term_frequencies_using_registered_df,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _add_ukam_address_id,
-    _build_inverted_index_from_trigrams,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
@@ -35,9 +33,6 @@ from uk_address_matcher.cleaning.steps import (
 )
 from uk_address_matcher.cleaning.steps.term_frequencies import (
     _create_histograms_from_token_frequencies,
-)
-from uk_address_matcher.cleaning.steps.tokenisation import (
-    _create_tokenised_address_concat,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
@@ -84,7 +79,6 @@ QUEUE_CLEAN_FULL_ADDRESS = [
 
 
 QUEUE_DERIVE_NON_TF_FEATURES = [
-    _create_tokenised_address_concat,  # based on clean_full_address
     _parse_out_flat_position_and_letter,
     _parse_out_business_unit,
     _parse_out_numbers,
@@ -115,8 +109,8 @@ QUEUE_POST_TF = [
     _create_histograms_from_token_frequencies,
 ]
 
-# Minimal pipeline for TF derivation: just clean address + tokenise
-QUEUE_FOR_TF_DERIVATION = QUEUE_CLEAN_FULL_ADDRESS + [_create_tokenised_address_concat]
+# Minimal pipeline for TF derivation: just clean address
+QUEUE_FOR_TF_DERIVATION = QUEUE_CLEAN_FULL_ADDRESS
 
 # Trigram blocking pipelines
 QUEUE_TRIGRAM_WITH_INVERTED_INDEX = [
@@ -146,11 +140,17 @@ def _clean_data_pre_term_frequencies(
     )
     result = pipeline.run(debug_options)
 
-    # Exclude source_dataset column if present (will be overwritten by linker)
+    exclude_columns = []
     if "source_dataset" in result.columns:
+        exclude_columns.append("source_dataset")
+    if "address_without_numbers" in result.columns:
+        exclude_columns.append("address_without_numbers")
+
+    if exclude_columns:
         con.register("__temp_result_for_exclude", result)
+        exclude_sql = ", ".join(exclude_columns)
         result = con.sql(
-            "SELECT * EXCLUDE (source_dataset) FROM __temp_result_for_exclude"
+            f"SELECT * EXCLUDE ({exclude_sql}) FROM __temp_result_for_exclude"
         )
 
     return result
@@ -195,11 +195,17 @@ def _clean_data_using_precomputed_rel_tok_freq(
     )
     result = pipeline.run(debug_options)
 
-    # Exclude source_dataset column if present (will be overwritten by linker)
+    exclude_columns = []
     if "source_dataset" in result.columns:
+        exclude_columns.append("source_dataset")
+    if "address_without_numbers" in result.columns:
+        exclude_columns.append("address_without_numbers")
+
+    if exclude_columns:
         con.register("__temp_result_for_exclude", result)
+        exclude_sql = ", ".join(exclude_columns)
         result = con.sql(
-            "SELECT * EXCLUDE (source_dataset) FROM __temp_result_for_exclude"
+            f"SELECT * EXCLUDE ({exclude_sql}) FROM __temp_result_for_exclude"
         )
 
     return result
