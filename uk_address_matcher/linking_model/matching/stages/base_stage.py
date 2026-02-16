@@ -198,6 +198,9 @@ class MatchingStage(ABC):
             else f"'{stage_name}' AS match_reason"
         )
 
+        # The stage returns a lazy DuckDBPyRelation.  Shouldn't be too big because
+        # it's one row per messy ID, not many columns
+        # Materialising it just runs the pipeline (the stage's actual calculation).
         con.execute(f"DROP TABLE IF EXISTS {tmp_table}")
         con.execute(
             f"""
@@ -218,13 +221,14 @@ class MatchingStage(ABC):
             """
         )
 
-        temp_columns = con.execute(f"DESCRIBE SELECT * FROM {tmp_table}").fetchall()
-        temp_column_types = {row[0]: row[1] for row in temp_columns}
-
-        results_columns = {
-            row[1]
-            for row in con.execute(f"PRAGMA table_info('{results_table}')").fetchall()
+        tmp_relation = con.table(tmp_table)
+        tmp_types = tmp_relation.dtypes
+        temp_column_types = {
+            column_name: str(column_type)
+            for column_name, column_type in zip(tmp_relation.columns, tmp_types)
         }
+
+        results_columns = set(con.table(results_table).columns)
 
         additional_columns = [
             col

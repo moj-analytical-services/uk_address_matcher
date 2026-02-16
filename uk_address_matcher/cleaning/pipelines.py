@@ -4,6 +4,7 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 
 from uk_address_matcher.cleaning.steps import (
+    _add_numeric_term_frequencies_using_registered_df,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _add_ukam_address_id,
     _build_inverted_index_from_trigrams,
@@ -174,7 +175,8 @@ def _clean_data_using_precomputed_rel_tok_freq(
     )
 
     tf_and_post = [
-        _add_term_frequencies_to_address_tokens_using_registered_df
+        _add_term_frequencies_to_address_tokens_using_registered_df,
+        _add_numeric_term_frequencies_using_registered_df,
     ] + QUEUE_POST_TF
     stage_queue = (
         pre_queue + tf_and_post + additional_stages
@@ -325,6 +327,9 @@ def _create_term_frequency_tables(
     numeric_term_frequencies_rel = con.sql(read_numeric_tf_sql)
     con.sql("DROP TABLE IF EXISTS __ukam_numeric_term_frequencies")
     numeric_term_frequencies_rel.create("__ukam_numeric_term_frequencies")
+    con.register(
+        "numeric_term_frequencies", con.table("__ukam_numeric_term_frequencies")
+    )
 
     return con.table("__ukam_rel_tok_freq")
 

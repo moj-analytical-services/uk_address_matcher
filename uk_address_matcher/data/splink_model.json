@@ -47,14 +47,6 @@
             "sql_dialect": "duckdb"
         },
         {
-            "blocking_rule": "list_extract(l.very_unusual_tokens_arr, 1) = list_extract(r.very_unusual_tokens_arr, 1) and l.numeric_token_1 = r.numeric_token_1",
-            "sql_dialect": "duckdb"
-        },
-        {
-            "blocking_rule": "list_extract(l.very_unusual_tokens_arr, 1) = list_extract(r.very_unusual_tokens_arr, 2) and l.numeric_token_1 = r.numeric_token_1",
-            "sql_dialect": "duckdb"
-        },
-        {
             "blocking_rule": "l.numeric_token_2 = r.numeric_token_2 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
             "sql_dialect": "duckdb"
         },
@@ -80,10 +72,6 @@
         },
         {
             "blocking_rule": "list_extract(l.extremely_unusual_tokens_arr, 1) = list_extract(r.extremely_unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
-            "sql_dialect": "duckdb"
-        },
-        {
-            "blocking_rule": "l.\"postcode\" = r.\"postcode\"",
             "sql_dialect": "duckdb"
         },
         {
@@ -419,13 +407,6 @@
             "output_column_name": "token_rel_freq_arr_hist",
             "comparison_levels": [
                 {
-                    "sql_condition": "\"token_rel_freq_arr_hist_l\" IS NULL OR \"token_rel_freq_arr_hist_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
                     "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-29",
                     "label_for_charts": " < 1e-29",
                     "m_probability": 77935.87748881833,
@@ -741,11 +722,15 @@
             "output_column_name": "postcode",
             "comparison_levels": [
                 {
-                    "sql_condition": "postcode_l IS NULL OR postcode_r IS NULL",
+                    "sql_condition": "postcode_l IS NULL AND postcode_r IS NULL",
                     "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true,
+                    "is_null_level": true
+                },
+                {
+                    "sql_condition": "postcode_r IS NULL",
+                    "label_for_charts": "Postcode missing from messy table",
+                    "fix_m_probability": true,
+                    "fix_u_probability": true,
                     "m_probability": 1024,
                     "u_probability": 1
                 },

@@ -12,6 +12,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _upper_case_address_and_postcode,
 )
 from uk_address_matcher.cleaning.steps.term_frequencies import (
+    _add_numeric_term_frequencies_using_registered_df,
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _create_histograms_from_token_frequencies,
@@ -63,6 +64,7 @@ __all__ = [
     "_split_numeric_tokens_to_cols",
     "_tokenise_address_without_numbers",
     # term_frequencies
+    "_add_numeric_term_frequencies_using_registered_df",
     "_add_term_frequencies_to_address_tokens",
     "_add_term_frequencies_to_address_tokens_using_registered_df",
     "_move_common_end_tokens_to_field",

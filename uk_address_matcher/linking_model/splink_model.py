@@ -198,4 +198,19 @@ def _get_linker(
             df, f"numeric_token_{i}", overwrite=True
         )
 
+    cols_to_select = df_addresses_to_match.columns
+    select_expr = ", ".join(cols_to_select)
+
+    sql = f"""
+    select {select_expr}, 'm_' as source_dataset
+    from df_addresses_to_match
+    UNION ALL
+    select {select_expr}, 'c_' as source_dataset
+    from df_addresses_to_search_within
+
+    """
+
+    concat_with_tf = con.sql(sql)
+    linker.table_management.register_table_input_nodes_concat_with_tf(concat_with_tf)
+
     return linker

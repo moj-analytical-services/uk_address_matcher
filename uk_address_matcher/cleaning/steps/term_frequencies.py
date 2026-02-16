@@ -156,6 +156,41 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
 
 
 @pipeline_stage(
+    name="add_numeric_term_frequencies_using_registered_df",
+    description="Attach numeric token term frequencies from registered lookup",
+    tags="term_frequency_analysis",
+)
+def _add_numeric_term_frequencies_using_registered_df():
+    """Attach numeric term frequency columns for numeric_token_1..3."""
+
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    final_sql = """
+    SELECT
+        base.*,
+        tf1.tf_numeric_token AS tf_numeric_token_1,
+        tf2.tf_numeric_token AS tf_numeric_token_2,
+        tf3.tf_numeric_token AS tf_numeric_token_3
+    FROM {base} AS base
+    LEFT JOIN numeric_term_frequencies AS tf1
+        ON base.numeric_token_1 = tf1.numeric_token
+    LEFT JOIN numeric_term_frequencies AS tf2
+        ON base.numeric_token_2 = tf2.numeric_token
+    LEFT JOIN numeric_term_frequencies AS tf3
+        ON base.numeric_token_3 = tf3.numeric_token
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return steps
+
+
+@pipeline_stage(
     name="move_common_end_tokens_to_field",
     description="Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and remove from token frequency array",
     tags="term_frequency_analysis",

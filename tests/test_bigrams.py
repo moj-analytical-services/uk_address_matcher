@@ -1,5 +1,4 @@
 import duckdb
-import pandas as pd
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
@@ -20,12 +19,7 @@ def generate_test_data(
     common_end_token: str | None = None,
 ) -> list[dict]:
     """Generate test data for a messy address and its canonical counterparts."""
-    # Set common_end_tokens_r based on whether a common_end_token is provided
-    common_end_tokens_r = (
-        [{"tok": common_end_token, "rel_freq": 0.0004}]
-        if common_end_token is not None
-        else []
-    )
+    # Keep the token in a simple column; the SQL step creates a typed map.
     data = []
     for i, canonical_address in enumerate(canonical_addresses, start=1):
         row = {
@@ -37,7 +31,7 @@ def generate_test_data(
             "unique_id_r": "r1",
             "original_address_concat_l": canonical_address,
             "original_address_concat_r": messy_address,
-            "common_end_tokens_r": common_end_tokens_r,
+            "common_end_token": common_end_token,
             "postcode_l": "W1A",
             "postcode_r": "W1A",
             "ukam_address_id_l": i,
@@ -60,9 +54,62 @@ def run_assertions(
         canonical_addresses = [item["address"] for item in canonical_data]
         # Generate test data and create a DuckDB table
         data = generate_test_data(messy_address, canonical_addresses, common_end_token)
-        df = pd.DataFrame(data)
+        con.execute(
+            """
+            create temp table df (
+                match_weight double,
+                match_probability double,
+                source_dataset_l varchar,
+                source_dataset_r varchar,
+                unique_id_l varchar,
+                unique_id_r varchar,
+                original_address_concat_l varchar,
+                original_address_concat_r varchar,
+                common_end_token varchar,
+                postcode_l varchar,
+                postcode_r varchar,
+                ukam_address_id_l integer,
+                ukam_address_id_r integer
+            )
+            """
+        )
+        rows = [
+            (
+                row["match_weight"],
+                row["match_probability"],
+                row["source_dataset_l"],
+                row["source_dataset_r"],
+                row["unique_id_l"],
+                row["unique_id_r"],
+                row["original_address_concat_l"],
+                row["original_address_concat_r"],
+                row["common_end_token"],
+                row["postcode_l"],
+                row["postcode_r"],
+                row["ukam_address_id_l"],
+                row["ukam_address_id_r"],
+            )
+            for row in data
+        ]
+        con.executemany(
+            """
+            insert into df values (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            rows,
+        )
         df_ddb = con.sql(
-            "select *, array_aggregate(common_end_tokens_r, 'histogram') as common_end_tokens_hist_r from df"
+            """
+            select
+                *,
+                case
+                    when common_end_token is null then
+                        cast(map([], []) as map(varchar, integer))
+                    else map([common_end_token], [1])
+                end as common_end_tokens_hist_r
+            from df
+            """
         )
         if show:
             df_ddb.show(max_width=10000)
@@ -137,9 +184,9 @@ def run_assertions(
                 # For map-type columns, iterate over key-value pairs
                 for key, expected in checks:
                     if expected is None:
-                        assert (
-                            key not in map_dict
-                        ), f"{key} should not be in {column} for {unique_id_l}"
+                        assert key not in map_dict, (
+                            f"{key} should not be in {column} for {unique_id_l}"
+                        )
                     else:
                         actual = map_dict.get(key)
                         assert actual == expected, (

@@ -92,10 +92,7 @@ def _build_final_output(
     df_canonical_clean: duckdb.DuckDBPyRelation,
     results_table: str,
 ) -> duckdb.DuckDBPyRelation:
-    results_columns = [
-        row[1]
-        for row in con.execute(f"PRAGMA table_info('{results_table}')").fetchall()
-    ]
+    results_columns = con.table(results_table).columns
 
     excluded = {
         "ukam_address_id",

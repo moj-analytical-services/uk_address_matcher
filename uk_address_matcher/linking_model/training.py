@@ -672,11 +672,6 @@ def get_token_rel_freq_arr_comparison(
     token_rel_freq_arr_comparison = {
         "output_column_name": "token_rel_freq_arr_hist",
         "comparison_levels": [
-            {
-                "sql_condition": '"token_rel_freq_arr_hist_l" IS NULL OR "token_rel_freq_arr_hist_r" IS NULL',
-                "label_for_charts": "Null",
-                "is_null_level": True,
-            },
             *middle_conditions,
             {
                 "sql_condition": "ELSE",
@@ -728,9 +723,17 @@ postcode_comparison = {
     "output_column_name": "postcode",
     "comparison_levels": [
         {
-            "sql_condition": '"postcode_l" IS NULL OR "postcode_r" IS NULL',
+            "sql_condition": "postcode_l IS NULL AND postcode_r IS NULL",
             "label_for_charts": "Null",
             "is_null_level": True,
+        },
+        {
+            "sql_condition": "postcode_r IS NULL",
+            "label_for_charts": "Postcode missing from messy table",
+            "fix_m_probability": True,
+            "fix_u_probability": True,
+            "m_probability": 1024,
+            "u_probability": 1,
         },
         {
             "sql_condition": "postcode_l = postcode_r",
