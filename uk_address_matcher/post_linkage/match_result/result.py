@@ -20,8 +20,8 @@ class MatchResult:
     Access the underlying DuckDB relation via `.matches`.
 
     Key methods:
+        matches           - the underlying DuckDB relation containing match results.
         match_metrics      - match-reason breakdown with counts and percentages.
-        match_reasons      - distinct match-reason values.
         splink_predictions - raw Splink predictions table (requires `SplinkStage`).
     """
 

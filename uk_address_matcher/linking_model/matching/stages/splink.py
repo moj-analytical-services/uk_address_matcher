@@ -55,7 +55,6 @@ class SplinkStage(MatchingStage):
 
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
-    predictions_table: str | None = field(default=None, init=False, repr=False)
 
     def find_matches(
         self,
@@ -73,7 +72,6 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
-        from uk_address_matcher.sql_pipeline.helpers import _uid
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:
@@ -104,16 +102,6 @@ class SplinkStage(MatchingStage):
             threshold_match_weight=self.predict_threshold_match_weight
         )
         df_predict_ddb = df_predict.as_duckdbpyrelation()
-
-        table_name = f"ukam__splink__predictions__{_uid()}"
-        con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
-            + table_name
-            + " AS SELECT * FROM ("
-            + df_predict_ddb.sql_query()
-            + ")"
-        )
-        self.predictions_table = table_name
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(
