@@ -38,9 +38,10 @@ class MatchResult:
             )
 
     def __repr__(self) -> str:
+        class_name = self.__class__.__name__
         return (
-            "MatchResult object.\n"
-            "Use result.matches to retrieve your raw results as a DuckDB table."
+            f"{class_name} object.\n"
+            "Use .matches to retrieve your raw results as a DuckDB table."
         )
 
     @property
