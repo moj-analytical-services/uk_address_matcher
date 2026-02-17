@@ -42,15 +42,6 @@ def _is_fully_prepared(rel: duckdb.DuckDBPyRelation) -> bool:
     return "tf_numeric_token_1" in cols and "exploding_unique_ids" in cols
 
 
-def _is_pre_cleaned(rel: duckdb.DuckDBPyRelation) -> bool:
-    """True when a relation has been through `clean_data_pre_term_frequencies`.
-
-    That stage adds `ukam_address_id` but does not yet add term-frequency
-    adjustments or trigram blocking columns.
-    """
-    return "ukam_address_id" in rel.columns and not _is_fully_prepared(rel)
-
-
 def _default_stages() -> list[MatchingStage]:
     """Return the default stage sequence: exact match then Splink."""
     from uk_address_matcher.linking_model.matching.stages import ExactMatchStage
