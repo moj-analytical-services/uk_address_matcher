@@ -13,6 +13,7 @@ from benchmarking.utils.timing import format_timing_summary, time_phase
 from uk_address_matcher import (
     AddressMatcher,
     ExactMatchStage,
+    PeeledAddressStage,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
@@ -42,6 +43,7 @@ FILTER_CANONICAL_BY_MESSY_POSTCODES = True
 # Stage configuration
 STAGES = [
     ExactMatchStage(),
+    PeeledAddressStage(),
     # UniqueTrigramStage(),
     # SplinkStage(
     #     predict_threshold_match_weight=10,
