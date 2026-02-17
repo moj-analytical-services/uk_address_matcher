@@ -88,6 +88,12 @@ def analyse_mismatches(
             "matches_input", unmatchable_sql
         )
 
+    # Determine if canonical data contains the primary flag before building SQL
+    canonical_has_is_primary = "is_primary" in ukam_canonical.columns
+    primary_sort_expression = (
+        "COALESCE(is_primary, FALSE)" if canonical_has_is_primary else "FALSE"
+    )
+
     # Build and MATERIALISE the base mismatch data once to avoid repeated EXISTS checks
     unmatchable_filter = (
         """
@@ -115,7 +121,7 @@ def analyse_mismatches(
                 ROW_NUMBER() OVER (
                     PARTITION BY unique_id
                     ORDER BY
-                        COALESCE(is_primary, FALSE) DESC,
+                        {primary_sort_expression} DESC,
                         ukam_address_id
                 ) AS rn
             FROM ukam_canonical
