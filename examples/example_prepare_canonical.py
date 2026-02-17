@@ -36,7 +36,7 @@ matcher = AddressMatcher(
 )
 
 match_result = matcher.match()
-result = match_result.relation
+result = match_result.matches
 
 print("\n=== First 10 matched records ===")
 result.limit(10).show(max_width=500)

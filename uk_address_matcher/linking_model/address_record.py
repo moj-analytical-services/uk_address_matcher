@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
+from uuid import uuid4
 
 import duckdb
 
@@ -48,3 +50,28 @@ class AddressRecord:
                 self.unique_id, self.address_concat, self.postcode
             )
         )
+
+    @staticmethod
+    def to_duckdb_relation(
+        records: Iterable[AddressRecord],
+        con: duckdb.DuckDBPyConnection,
+    ) -> duckdb.DuckDBPyRelation:
+        """Convert a list of records to a DuckDB relation for matching."""
+
+        rows = [
+            (record.unique_id, record.address_concat, record.postcode)
+            for record in records
+        ]
+        if not rows:
+            raise ValueError("At least one AddressRecord is required.")
+
+        table_name = f"ukam_address_records_{uuid4().hex}"
+        con.execute(
+            f"CREATE TEMP TABLE {table_name} ("
+            "unique_id VARCHAR, address_concat VARCHAR, postcode VARCHAR)"
+        )
+        con.executemany(
+            f"INSERT INTO {table_name} VALUES (?, ?, ?)",
+            rows,
+        )
+        return con.table(table_name)

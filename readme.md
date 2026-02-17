@@ -32,6 +32,10 @@ Will match two datasets provided in this format:
 - You may also provide a separate column called `postcode`, which, if provided will trump any postcode information provided in `address_concat`.
 - If you have labelled data (you know the ground truth), you may provide a column called `ukam_label`, if provided, this will propagate through your results for accuracy analysis.
 
+Postcode handling rules:
+- If you provide a separate `postcode` column, `address_concat` should ideally not include the postcode.
+- If you do not provide `postcode`, the matcher will attempt to extract it during cleaning.
+
 
 Generally one dataset will be a dataset of 'messy addresses' which need matching, and the second will be a 'canonical dataset' of addresses to match to.
 
@@ -122,9 +126,8 @@ result = matcher.match()
 ### Pre-preparing canonical data
 
 Cleaning a large canonical dataset (e.g. AddressBase) is expensive. Use
-`prepare_and_persist_canonical_data` to do it once and write the artefacts to
-disk. Subsequent runs load the prepared folder directly, skipping cleaning
-entirely.
+`prepare_canonical_folder` to do it once and write the artefacts to disk.
+Subsequent runs load the prepared folder directly, skipping cleaning entirely.
 
 ```python
 from uk_address_matcher import AddressMatcher, prepare_canonical_folder
@@ -137,6 +140,8 @@ prepare_canonical_folder(
     overwrite=True,
 )
 
+print("Prepared canonical data written to ./ukam_prepared_canonical/")
+
 # Fast matching — pass the folder path instead of a relation
 matcher = AddressMatcher(
     canonical_addresses="./ukam_prepared_canonical",
@@ -147,25 +152,43 @@ matcher = AddressMatcher(
 result = matcher.match()
 ```
 
-### Matching a single address
+### Matching one or more AddressRecord entries
 
-Use `match_one` with an `AddressRecord` or a plain dict for quick lookups:
+If you want to match a small number of addresses, or you have them in-memory as Python dictionaries, you can pass them directly as `addresses_to_match` without needing to create a DuckDB relation first.
+
+You can pass a list of `AddressRecord` entries directly as
+`addresses_to_match`. The matcher also accepts a list of dicts with
+`address_concat`, `postcode`, and `unique_id`, or a DuckDB relation.
 
 ```python
+import duckdb
+
 from uk_address_matcher import AddressMatcher, AddressRecord
 
-result = matcher.match_one(
+con = duckdb.connect()
+
+df_canonical = con.read_parquet("your_canonical_addresses.parquet")
+
+records = [
     AddressRecord(
+        unique_id="m_1",
         address_concat="10 downing street westminster london",
         postcode="SW1A 2AA",
-    )
+    ),
+    AddressRecord(
+        unique_id="m_2",
+        address_concat="11 downing street westminster london",
+        postcode="SW1A 2AB",
+    ),
+]
+
+matcher = AddressMatcher(
+    canonical_addresses=df_canonical,
+    addresses_to_match=records,
+    con=con,
 )
 
-# Or with a dict:
-result = matcher.match_one({
-    "address_concat": "10 downing street westminster london",
-    "postcode": "SW1A 2AA",
-})
+result = matcher.match()
 ```
 
 
