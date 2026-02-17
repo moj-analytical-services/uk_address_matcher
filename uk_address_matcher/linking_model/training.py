@@ -41,34 +41,50 @@ def get_address_without_numbers_comparison(
     difference with a possible location difference.  Jaccard on the character
     bigrams separates these cases neatly.
     """
+    regex_pattern = (
+        r"\b"
+        r"(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)"
+        r"\b"
+    )
+
+    def _strip_numbers(expr: str) -> str:
+        return (
+            "trim(regexp_replace(regexp_replace("  # remove numbers and tidy spaces
+            f"{expr}, '{regex_pattern}', '', 'g'), "
+            "'\\s+', ' ', 'g'))"
+        )
+
+    left_expr = _strip_numbers("clean_full_address_l")
+    right_expr = _strip_numbers("clean_full_address_r")
+
     address_without_numbers_comparison = {
         "output_column_name": "address_without_numbers",
         "comparison_levels": [
             {
-                "sql_condition": '"address_without_numbers_l" IS NULL OR "address_without_numbers_r" IS NULL',
+                "sql_condition": f"{left_expr} IS NULL OR {right_expr} IS NULL",
                 "label_for_charts": "address_without_numbers is NULL",
                 "is_null_level": True,
             },
             {
-                "sql_condition": '"address_without_numbers_l" = "address_without_numbers_r"',
+                "sql_condition": f"{left_expr} = {right_expr}",
                 "label_for_charts": "Exact match on address_without_numbers",
                 "m_probability": WEIGHT_EXACT,
                 "u_probability": 1,
             },
             {
-                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.95",
+                "sql_condition": f"jaccard({left_expr}, {right_expr}) >= 0.95",
                 "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
                 "m_probability": WEIGHT_JACCARD_HIGH,
                 "u_probability": 1,
             },
             {
-                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.88",
+                "sql_condition": f"jaccard({left_expr}, {right_expr}) >= 0.88",
                 "label_for_charts": "Jaccard >= 0.88 on address_without_numbers",
                 "m_probability": WEIGHT_JACCARD_MED,
                 "u_probability": 1,
             },
             {
-                "sql_condition": "jaccard(address_without_numbers_l, address_without_numbers_r) >= 0.80",
+                "sql_condition": f"jaccard({left_expr}, {right_expr}) >= 0.80",
                 "label_for_charts": "Jaccard >= 0.80 on address_without_numbers",
                 "m_probability": WEIGHT_JACCARD_LOW,
                 "u_probability": 1,

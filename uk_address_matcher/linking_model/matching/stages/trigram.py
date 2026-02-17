@@ -125,6 +125,9 @@ def _resolve_with_trigrams(
         business_unit_id
     """
 
+    canonical_tokens_expr = "string_split(canon.clean_full_address, ' ')"
+    messy_tokens_expr = "string_split(m.clean_full_address, ' ')"
+
     canonical_trigrams_sql = f"""
         SELECT
             canon.ukam_address_id as canonical_ukam_address_id,
@@ -132,9 +135,9 @@ def _resolve_with_trigrams(
             canon.postcode,
             canon.numeric_tokens,
             canon.{unit_fields.replace(chr(10), " ")},
-            {_ngram_expression("canon.address_tokens", ngram_size)} AS ngrams
+            {_ngram_expression(canonical_tokens_expr, ngram_size)} AS ngrams
         FROM {{canonical_addresses_restricted}} AS canon
-        WHERE length(canon.address_tokens) >= {ngram_size}
+        WHERE length({canonical_tokens_expr}) >= {ngram_size}
     """
 
     canonical_trigrams_exploded_sql = f"""
@@ -188,9 +191,9 @@ def _resolve_with_trigrams(
             m.postcode,
             m.numeric_tokens,
             m.{unit_fields.replace(chr(10), " ")},
-            {_ngram_expression("m.address_tokens", ngram_size)} AS ngrams
+            {_ngram_expression(messy_tokens_expr, ngram_size)} AS ngrams
         FROM {{messy_addresses}} AS m
-        WHERE length(m.address_tokens) >= {ngram_size}
+        WHERE length({messy_tokens_expr}) >= {ngram_size}
     """
 
     messy_trigrams_exploded_sql = f"""

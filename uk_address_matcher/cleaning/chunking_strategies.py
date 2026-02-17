@@ -10,16 +10,18 @@ from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
     QUEUE_TRIGRAM_SELF,
     QUEUE_TRIGRAM_WITH_INVERTED_INDEX,
-    _build_inverted_index_from_trigrams,
-    _clean_data_using_precomputed_rel_tok_freq,
     _clean_data_pre_term_frequencies,
+    _clean_data_using_precomputed_rel_tok_freq,
     _create_term_frequency_tables,
-    _derive_trigrams_from_address_tokens,
     _ensure_postcode_column,
     _register_inverted_index_table,
 )
-from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
+from uk_address_matcher.cleaning.steps.trigram_blocking import (
+    _build_inverted_index_from_trigrams,
+    _derive_trigrams_from_address_tokens,
+)
 from uk_address_matcher.sql_pipeline.helpers import _uid
+from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
 if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
@@ -217,10 +219,10 @@ def derive_term_frequencies_table(
             chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
         )
 
-    # Compute token frequencies from address_tokens
+    # Compute token frequencies from clean_full_address tokens
     tf_sql = f"""
     WITH unnested AS (
-        SELECT unnest(address_tokens) AS token
+        SELECT unnest(string_split(clean_full_address, ' ')) AS token
         FROM {cleaned_table}
     )
     SELECT
@@ -252,7 +254,7 @@ def derive_inverted_index(
     """Derive a trigram-based inverted index from already-cleaned canonical data.
 
     This function expects pre-cleaned address data (output of prepare_data_for_matching)
-    with `address_tokens` and `unique_id` columns already present. It computes trigrams
+    with `clean_full_address` and `unique_id` columns already present. It computes trigrams
     (consecutive 3-token sequences) and builds an inverted index mapping each trigram
     to a list of unique_ids. Trigrams appearing in more than `max_unique_ids_per_trigram`
     records are filtered out as they provide poor blocking selectivity.
@@ -270,7 +272,7 @@ def derive_inverted_index(
         )
 
     Args:
-        cleaned_address_table: Pre-cleaned address relation with `address_tokens`
+        cleaned_address_table: Pre-cleaned address relation with `clean_full_address`
             and `unique_id` columns (output of prepare_data_for_matching).
         con: DuckDB connection.
         max_unique_ids_per_trigram: Maximum number of unique_ids a trigram can

@@ -1,8 +1,3 @@
-"""Tests for trigram-based inverted index functionality."""
-
-import pytest
-
-
 class TestTrigramGeneration:
     """Tests for trigram generation from token arrays."""
 
@@ -13,14 +8,17 @@ class TestTrigramGeneration:
 
         result = duck_con.sql("""
             WITH input AS (
-                SELECT ['9', 'LOVE', 'LANE', 'LONDON'] AS address_tokens
+                SELECT '9 LOVE LANE LONDON' AS clean_full_address
             )
             SELECT
                 list_transform(
-                    generate_series(1, len(address_tokens) - 2),
-                    i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                    generate_series(1, len(tokenised) - 2),
+                    i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                 ) AS trigrams
-            FROM input
+            FROM (
+                SELECT string_split(clean_full_address, ' ') AS tokenised
+                FROM input
+            )
         """).fetchone()[0]
 
         assert result == ["9 LOVE LANE", "LOVE LANE LONDON"]
@@ -32,18 +30,21 @@ class TestTrigramGeneration:
 
         result = duck_con.sql("""
             WITH input AS (
-                SELECT ['HIGH', 'STREET'] AS address_tokens
+                SELECT 'HIGH STREET' AS clean_full_address
             )
             SELECT
                 CASE
-                    WHEN len(address_tokens) >= 3 THEN
+                    WHEN len(tokenised) >= 3 THEN
                         list_transform(
-                            generate_series(1, len(address_tokens) - 2),
-                            i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                            generate_series(1, len(tokenised) - 2),
+                            i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                         )
                     ELSE []
                 END AS trigrams
-            FROM input
+            FROM (
+                SELECT string_split(clean_full_address, ' ') AS tokenised
+                FROM input
+            )
         """).fetchone()[0]
 
         assert result == []
@@ -55,14 +56,17 @@ class TestTrigramGeneration:
 
         result = duck_con.sql("""
             WITH input AS (
-                SELECT ['1', 'HIGH', 'STREET'] AS address_tokens
+                SELECT '1 HIGH STREET' AS clean_full_address
             )
             SELECT
                 list_transform(
-                    generate_series(1, len(address_tokens) - 2),
-                    i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                    generate_series(1, len(tokenised) - 2),
+                    i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                 ) AS trigrams
-            FROM input
+            FROM (
+                SELECT string_split(clean_full_address, ' ') AS tokenised
+                FROM input
+            )
         """).fetchone()[0]
 
         assert result == ["1 HIGH STREET"]
@@ -77,19 +81,24 @@ class TestInvertedIndexBuilding:
         result = duck_con.sql("""
             WITH addresses AS (
                 SELECT * FROM (VALUES
-                    (1, ['9', 'LOVE', 'LANE', 'LONDON']),
-                    (2, ['9', 'LOVE', 'LANE', 'BRIGHTON']),
-                    (3, ['8', 'LOVE', 'LANE', 'LONDON'])
-                ) AS t(unique_id, address_tokens)
+                    (1, '9 LOVE LANE LONDON'),
+                    (2, '9 LOVE LANE BRIGHTON'),
+                    (3, '8 LOVE LANE LONDON')
+                ) AS t(unique_id, clean_full_address)
             ),
             trigrams_per_record AS (
                 SELECT
                     unique_id,
                     list_transform(
-                        generate_series(1, len(address_tokens) - 2),
-                        i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                        generate_series(1, len(tokenised) - 2),
+                        i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                     ) AS trigrams
-                FROM addresses
+                FROM (
+                    SELECT
+                        *,
+                        string_split(clean_full_address, ' ') AS tokenised
+                    FROM addresses
+                )
             ),
             unnested AS (
                 SELECT unique_id, unnest(trigrams) AS trigram
@@ -128,20 +137,25 @@ class TestInvertedIndexBuilding:
         result = duck_con.sql("""
             WITH addresses AS (
                 SELECT * FROM (VALUES
-                    (1, ['COMMON', 'TRIGRAM', 'HERE', 'A']),
-                    (2, ['COMMON', 'TRIGRAM', 'HERE', 'B']),
-                    (3, ['COMMON', 'TRIGRAM', 'HERE', 'C']),
-                    (4, ['UNIQUE', 'OTHER', 'TOKENS', 'D'])
-                ) AS t(unique_id, address_tokens)
+                    (1, 'COMMON TRIGRAM HERE A'),
+                    (2, 'COMMON TRIGRAM HERE B'),
+                    (3, 'COMMON TRIGRAM HERE C'),
+                    (4, 'UNIQUE OTHER TOKENS D')
+                ) AS t(unique_id, clean_full_address)
             ),
             trigrams_per_record AS (
                 SELECT
                     unique_id,
                     list_transform(
-                        generate_series(1, len(address_tokens) - 2),
-                        i -> address_tokens[i] || ' ' || address_tokens[i+1] || ' ' || address_tokens[i+2]
+                        generate_series(1, len(tokenised) - 2),
+                        i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
                     ) AS trigrams
-                FROM addresses
+                FROM (
+                    SELECT
+                        *,
+                        string_split(clean_full_address, ' ') AS tokenised
+                    FROM addresses
+                )
             ),
             unnested AS (
                 SELECT unique_id, unnest(trigrams) AS trigram
@@ -299,7 +313,9 @@ class TestPrepareDataForMatchingWithInvertedIndex:
 
     def test_prepare_data_without_inverted_index(self, duck_con):
         """Test that data without inverted index gets [unique_id] as exploding_unique_ids."""
-        from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            prepare_data_for_matching,
+        )
 
         # Create canonical addresses
         canonical = duck_con.sql("""

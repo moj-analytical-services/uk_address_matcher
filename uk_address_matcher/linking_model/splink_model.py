@@ -7,6 +7,14 @@ from splink import DuckDBAPI, Linker, SettingsCreator
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
 
+def _ensure_column(
+    rel: DuckDBPyRelation, column_name: str, column_type: str
+) -> DuckDBPyRelation:
+    if column_name in rel.columns:
+        return rel
+    return rel.select(f"*, CAST(NULL AS {column_type}) AS {column_name}")
+
+
 def _get_model_settings_dict():
     with (
         pkg_resources.files("uk_address_matcher.data")
@@ -142,6 +150,13 @@ def _get_linker(
             df_addresses_to_search_within = df_addresses_to_search_within.select(
                 "*, NULL::VARCHAR AS ukam_label"
             )
+
+    df_addresses_to_match = _ensure_column(
+        df_addresses_to_match, "address_without_numbers", "VARCHAR"
+    )
+    df_addresses_to_search_within = _ensure_column(
+        df_addresses_to_search_within, "address_without_numbers", "VARCHAR"
+    )
 
     settings_as_dict["retain_intermediate_calculation_columns"] = (
         retain_intermediate_calculation_columns

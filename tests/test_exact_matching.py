@@ -20,7 +20,6 @@ def test_data(duck_con):
                     '4 SAMPLE STREET',
                     '4 SAMPLE STREET',
                     'CC3 3CC',
-                    ARRAY['4', 'SAMPLE', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     1::BIGINT
                 ),
@@ -29,7 +28,6 @@ def test_data(duck_con):
                     '4 SAMPLE STREET',
                     '4 SAMPLE STREET',
                     'CC3 3CC',
-                    ARRAY['4', 'SAMPLE', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     2::BIGINT
                 ),
@@ -38,7 +36,6 @@ def test_data(duck_con):
                     '5 DEMO RD',
                     '5 DEMO RD',
                     'DD4 4DD',
-                    ARRAY['5', 'DEMO', 'RD'],
                     CAST([] AS VARCHAR[]),
                     3::BIGINT
                 ),
@@ -47,7 +44,6 @@ def test_data(duck_con):
                     '5 DEMO RD',
                     '5 DEMO RD',
                     'DD4 4DD',
-                    ARRAY['5', 'DEMO', 'RD'],
                     CAST([] AS VARCHAR[]),
                     4::BIGINT
                 ),
@@ -56,7 +52,6 @@ def test_data(duck_con):
                     '5 DEMO ROAD',
                     '5 DEMO ROAD',
                     'DD4 4DD',
-                    ARRAY['5', 'DEMO', 'ROAD'],
                     CAST([] AS VARCHAR[]),
                     5::BIGINT
                 ),
@@ -65,7 +60,6 @@ def test_data(duck_con):
                     '5 DEMO ROAD',
                     '5 DEMO ROAD',
                     'DD4 4DD',
-                    ARRAY['5', 'DEMO', 'ROAD'],
                     CAST([] AS VARCHAR[]),
                     6::BIGINT
                 ),
@@ -74,7 +68,6 @@ def test_data(duck_con):
                     '4 SAMPLE ST',
                     '4 SAMPLE ST',
                     'CC3 3CC',
-                    ARRAY['4', 'SAMPLE', 'ST'],
                     CAST([] AS VARCHAR[]),
                     7::BIGINT
                 ),
@@ -83,7 +76,6 @@ def test_data(duck_con):
                     '999 MYSTERY LANE',
                     '999 MYSTERY LANE',
                     'EE5 5EE',
-                    ARRAY['999', 'MYSTERY', 'LANE'],
                     CAST([] AS VARCHAR[]),
                     8::BIGINT
                 )
@@ -92,7 +84,6 @@ def test_data(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             ukam_address_id
         )
@@ -109,7 +100,6 @@ def test_data(duck_con):
                     '4 SAMPLE STREET',
                     '4 SAMPLE STREET',
                     'CC3 3CC',
-                    ARRAY['4', 'SAMPLE', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     1
                 ),
@@ -118,7 +108,6 @@ def test_data(duck_con):
                     '5 DEMO RD',
                     '5 DEMO RD',
                     'DD4 4DD',
-                    ARRAY['5', 'DEMO', 'ROAD'],
                     CAST([] AS VARCHAR[]),
                     2
                 )
@@ -127,7 +116,6 @@ def test_data(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             ukam_address_id
         )
@@ -158,7 +146,6 @@ def peeled_test_data(duck_con):
                     '100 HIGH STREET LONDON',
                     '100 HIGH STREET LONDON',
                     'SW1A 1AA',
-                    ARRAY['100', 'HIGH', 'STREET', 'LONDON'],
                     ARRAY['LONDON'],
                     ARRAY['100']::VARCHAR[],
                     FALSE,
@@ -177,7 +164,6 @@ def peeled_test_data(duck_con):
                     '200 PARK AVENUE LONDON GREATER LONDON',
                     '200 PARK AVENUE LONDON GREATER LONDON',
                     'SW1A 2BB',
-                    ARRAY['200', 'PARK', 'AVENUE', 'LONDON', 'GREATER', 'LONDON'],
                     ARRAY['LONDON', 'GREATER LONDON'],
                     ARRAY['200']::VARCHAR[],
                     FALSE,
@@ -196,7 +182,6 @@ def peeled_test_data(duck_con):
                     '50 MAIN ROAD TUNBRIDGE WELLS',
                     '50 MAIN ROAD TUNBRIDGE WELLS',
                     'TN1 1AA',
-                    ARRAY['50', 'MAIN', 'ROAD', 'TUNBRIDGE', 'WELLS'],
                     ARRAY['TUNBRIDGE WELLS'],
                     ARRAY['50']::VARCHAR[],
                     FALSE,
@@ -215,7 +200,6 @@ def peeled_test_data(duck_con):
                     '75 OAK DRIVE',
                     '75 OAK DRIVE',
                     'SW1A 1AA',
-                    ARRAY['75', 'OAK', 'DRIVE'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['75']::VARCHAR[],
                     FALSE,
@@ -234,7 +218,6 @@ def peeled_test_data(duck_con):
                     '10 TEST LANE HACKNEY LONDON',
                     '10 TEST LANE HACKNEY LONDON',
                     'E8 1AA',
-                    ARRAY['10', 'TEST', 'LANE', 'HACKNEY', 'LONDON'],
                     ARRAY['HACKNEY', 'LONDON'],
                     ARRAY['10']::VARCHAR[],
                     FALSE,
@@ -253,7 +236,6 @@ def peeled_test_data(duck_con):
                     '300 CHURCH ROAD',
                     '300 CHURCH ROAD',
                     'M1 1AA',
-                    ARRAY['300', 'CHURCH', 'ROAD'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['300']::VARCHAR[],
                     FALSE,
@@ -270,7 +252,6 @@ def peeled_test_data(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             numeric_tokens,
             has_flat_indicator,
@@ -297,7 +278,6 @@ def peeled_test_data(duck_con):
                     '100 HIGH STREET',
                     '100 HIGH STREET',
                     'SW1A 1AA',
-                    ARRAY['100', 'HIGH', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['100']::VARCHAR[],
                     FALSE,
@@ -315,7 +295,6 @@ def peeled_test_data(duck_con):
                     '200 PARK AVENUE',
                     '200 PARK AVENUE',
                     'SW1A 2BB',
-                    ARRAY['200', 'PARK', 'AVENUE'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['200']::VARCHAR[],
                     FALSE,
@@ -333,7 +312,6 @@ def peeled_test_data(duck_con):
                     '50 MAIN ROAD',
                     '50 MAIN ROAD',
                     'TN1 1AA',
-                    ARRAY['50', 'MAIN', 'ROAD'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['50']::VARCHAR[],
                     FALSE,
@@ -351,7 +329,6 @@ def peeled_test_data(duck_con):
                     '75 OAK DRIVE',
                     '75 OAK DRIVE',
                     'SW1A 1AA',
-                    ARRAY['75', 'OAK', 'DRIVE'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['75']::VARCHAR[],
                     FALSE,
@@ -369,7 +346,6 @@ def peeled_test_data(duck_con):
                     '10 TEST LANE',
                     '10 TEST LANE',
                     'E8 1AA',
-                    ARRAY['10', 'TEST', 'LANE'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['10']::VARCHAR[],
                     FALSE,
@@ -388,7 +364,6 @@ def peeled_test_data(duck_con):
                     '300 CHURCH ROAD MANCHESTER',
                     '300 CHURCH ROAD MANCHESTER',
                     'M1 1AA',
-                    ARRAY['300', 'CHURCH', 'ROAD', 'MANCHESTER'],
                     ARRAY['MANCHESTER'],
                     ARRAY['300']::VARCHAR[],
                     FALSE,
@@ -406,7 +381,6 @@ def peeled_test_data(duck_con):
                     '100 HIGH STREET',
                     '100 HIGH STREET',
                     'XX9 9XX',
-                    ARRAY['100', 'HIGH', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['100']::VARCHAR[],
                     FALSE,
@@ -423,7 +397,6 @@ def peeled_test_data(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             numeric_tokens,
             has_flat_indicator,
@@ -541,7 +514,7 @@ def test_peeled_address_multi_word_token_handling(duck_con):
     """Test that multi-word peeled tokens like 'TUNBRIDGE WELLS' are handled correctly.
 
     The key challenge: peeled_tokens_list=['TUNBRIDGE WELLS'] has length 1,
-    but we need to remove 2 words from address_tokens.
+    but we need to remove 2 words from the tokenised clean_full_address.
     """
     # Setup: fuzzy has 'TUNBRIDGE WELLS' as a single entry in peeled_tokens_list
     df_fuzzy = duck_con.sql(
@@ -554,7 +527,6 @@ def test_peeled_address_multi_word_token_handling(duck_con):
                     '10 TEST STREET TUNBRIDGE WELLS',
                     '10 TEST STREET TUNBRIDGE WELLS',
                     'TN1 1AA',
-                    ARRAY['10', 'TEST', 'STREET', 'TUNBRIDGE', 'WELLS'],
                     ARRAY['TUNBRIDGE WELLS'],
                     ARRAY['10']::VARCHAR[],
                     FALSE,
@@ -571,7 +543,6 @@ def test_peeled_address_multi_word_token_handling(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             numeric_tokens,
             has_flat_indicator,
@@ -597,7 +568,6 @@ def test_peeled_address_multi_word_token_handling(duck_con):
                     '10 TEST STREET',
                     '10 TEST STREET',
                     'TN1 1AA',
-                    ARRAY['10', 'TEST', 'STREET'],
                     CAST([] AS VARCHAR[]),
                     ARRAY['10']::VARCHAR[],
                     FALSE,
@@ -614,7 +584,6 @@ def test_peeled_address_multi_word_token_handling(duck_con):
             original_address_concat,
             clean_full_address,
             postcode,
-            address_tokens,
             peeled_tokens_list,
             numeric_tokens,
             has_flat_indicator,

@@ -70,7 +70,7 @@ def _peeled_address_matches() -> list[CTEStep]:
         - "10 MAIN AVENUE MANCHESTER GREATER MANCHESTER" -> "10 MAIN AVENUE"
 
     This stage uses pre-computed columns from the cleaning pipeline:
-        - address_tokens: VARCHAR[] of the full address tokens
+        - clean_full_address: cleaned address string used to derive tokens inline
         - peeled_tokens_list: VARCHAR[] of tokens that were peeled from the end
 
     Matching rules:
@@ -89,7 +89,7 @@ def _peeled_address_matches() -> list[CTEStep]:
             ukam_address_id,
             postcode,
             clean_full_address,
-            address_tokens,
+            string_split(clean_full_address, ' ') AS address_tokens,
             peeled_tokens_list,
             COALESCE(
                 (SELECT SUM(len(string_split(token, ' ')))
@@ -121,7 +121,7 @@ def _peeled_address_matches() -> list[CTEStep]:
             canonical_unique_id,
             postcode,
             clean_full_address AS canonical_clean_full_address,
-            address_tokens AS canonical_address_tokens,
+            string_split(clean_full_address, ' ') AS canonical_address_tokens,
             peeled_tokens_list AS canonical_peeled_tokens_list,
             COALESCE(
                 (SELECT SUM(len(string_split(token, ' ')))
@@ -130,12 +130,12 @@ def _peeled_address_matches() -> list[CTEStep]:
             )::INTEGER AS canonical_peeled_word_count,
             CASE
                 WHEN peeled_tokens_list IS NULL OR len(peeled_tokens_list) = 0
-                THEN array_to_string(address_tokens, ' ')
+                THEN array_to_string(canonical_address_tokens, ' ')
                 ELSE array_to_string(
                     list_slice(
-                        address_tokens,
+                        canonical_address_tokens,
                         1,
-                        len(address_tokens) - COALESCE(
+                        len(canonical_address_tokens) - COALESCE(
                             (SELECT SUM(len(string_split(token, ' ')))
                              FROM unnest(peeled_tokens_list) AS t(token)),
                             0

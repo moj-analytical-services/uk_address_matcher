@@ -3,22 +3,6 @@ from __future__ import annotations
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
-# TODO(ThomasHepworth): Do we want this as a separate stage?
-@pipeline_stage(
-    name="create_tokenised_address_concat",
-    description="Combine our cleaned address into an array of tokens to be used for exact matching and token-level matching",
-    tags="tokenisation",
-)
-def _create_tokenised_address_concat():
-    sql = """
-    SELECT
-        *,
-       string_split(clean_full_address, ' ') AS address_tokens
-    FROM {input}
-    """
-    return sql
-
-
 @pipeline_stage(
     name="split_numeric_tokens_to_cols",
     description="Split numeric tokens array into separate columns (numeric_token_1, numeric_token_2, numeric_token_3)",
