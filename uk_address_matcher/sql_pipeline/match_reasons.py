@@ -6,6 +6,9 @@ from enum import Enum
 class MatchReason(Enum):
     """Canonical set of match reason values shared between Python and DuckDB."""
 
+    PEELED_ADDRESS = "peeled_address: match after removing common UK end tokens"
+    """Match derived by peeling locality tokens from the end of addresses."""
+
     EXACT = "exact: full match"
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
