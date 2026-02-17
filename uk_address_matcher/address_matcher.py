@@ -64,7 +64,7 @@ class AddressMatcher:
 
     Accepts either a raw `DuckDBPyRelation` (cleaned on the fly) or a
     `str` / `Path` pointing to a folder created by
-    `prepare_canonical_folder`.
+    `prepare_canonical_folder` for canonical addresses. Messy addresses can be a DuckDB relation or a list of `AddressRecord` / dicts.
 
     Stages default to `[ExactMatchStage(), SplinkStage()]`. Pass your own
     list to customise matching behaviour — the existing stage dataclasses
@@ -74,8 +74,9 @@ class AddressMatcher:
     Args:
         canonical_addresses: Canonical dataset to match against. Can be a
             `DuckDBPyRelation` or a path to a prepared canonical folder.
-        addresses_to_match: Messy addresses to resolve. Must be a
-            `DuckDBPyRelation`.
+        addresses_to_match: Messy addresses to resolve. Can be a
+            `DuckDBPyRelation`, a list of `AddressRecord`, or a list of dicts
+            with `address_concat`, `postcode`, and `unique_id` fields.
         con: DuckDB connection to use for all operations.
         stages: Optional list of `MatchingStage` instances defining the
             matching pipeline. Defaults to exact match followed by Splink.
@@ -132,7 +133,11 @@ class AddressMatcher:
     def __init__(
         self,
         canonical_addresses: Union[duckdb.DuckDBPyRelation, str, Path],
-        addresses_to_match: duckdb.DuckDBPyRelation,
+        addresses_to_match: Union[
+            duckdb.DuckDBPyRelation,
+            list[AddressRecord],
+            list[dict],
+        ],
         *,
         con: duckdb.DuckDBPyConnection,
         stages: Optional[list[MatchingStage]] = None,
@@ -144,7 +149,7 @@ class AddressMatcher:
         self.debug_options = debug_options
 
         self._raw_canonical = canonical_addresses
-        self._raw_messy = addresses_to_match
+        self._raw_messy = self._coerce_addresses_to_match(addresses_to_match)
 
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
@@ -157,7 +162,6 @@ class AddressMatcher:
         from uk_address_matcher.cleaning.chunking_strategies import (
             derive_inverted_index,
             derive_term_frequencies_table,
-            prepare_data_for_matching,
         )
         from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 
@@ -197,9 +201,6 @@ class AddressMatcher:
 
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
-        from uk_address_matcher.cleaning.chunking_strategies import (
-            prepare_data_for_matching,
-        )
 
         if _is_fully_prepared(self._raw_messy):
             logger.debug("Messy data already fully prepared; skipping.")
@@ -213,6 +214,33 @@ class AddressMatcher:
                 term_frequency_lookup=self._tf_table,
                 inverted_index=self._inverted_index,
             )
+
+    def _coerce_addresses_to_match(
+        self,
+        addresses_to_match: Union[
+            duckdb.DuckDBPyRelation,
+            list[AddressRecord],
+            list[dict],
+        ],
+    ) -> duckdb.DuckDBPyRelation:
+        """Coerce addresses_to_match into a DuckDB relation."""
+
+        if isinstance(addresses_to_match, list):
+            if not addresses_to_match:
+                raise ValueError("addresses_to_match cannot be empty.")
+            if all(isinstance(record, AddressRecord) for record in addresses_to_match):
+                return AddressRecord.to_duckdb_relation(addresses_to_match, self.con)
+            if all(isinstance(record, dict) for record in addresses_to_match):
+                records = [
+                    AddressRecord.from_dict(record) for record in addresses_to_match
+                ]
+                return AddressRecord.to_duckdb_relation(records, self.con)
+            raise TypeError(
+                "addresses_to_match must be a DuckDB relation, a list of AddressRecord, "
+                "or a list of dicts."
+            )
+
+        return addresses_to_match
 
     # ------------------------------------------------------------------
     # Public API
@@ -255,85 +283,15 @@ class AddressMatcher:
         )
 
         splink_stage = self._find_splink_stage()
-        splink_tables = {}
         splink_linker = None
         if splink_stage is not None:
             splink_linker = splink_stage.linker
-            if splink_stage.predictions_table is not None:
-                splink_tables["predictions"] = splink_stage.predictions_table
 
         return MatchResult(
             result,
             con=self.con,
-            metadata={"splink_tables": splink_tables},
             _splink_linker=splink_linker,
         )
-
-    def match_one(
-        self,
-        address: Union[AddressRecord, dict],
-        *,
-        top_n: int = 5,
-    ) -> duckdb.DuckDBPyRelation:
-        """Matches a single address against the canonical dataset.
-
-        Useful for testing, debugging, or interactive exploration.
-
-        Args:
-            address: An `AddressRecord` or a dict with keys
-                `address_concat`, `postcode`, and optionally `unique_id`.
-            top_n: Number of top candidates to return.
-
-        Returns:
-            A `DuckDBPyRelation` with the top matching candidates.
-
-        Examples:
-                from uk_address_matcher import AddressMatcher, AddressRecord
-
-                result = matcher.match_one(
-                    AddressRecord(
-                        address_concat="10 downing street westminster london",
-                        postcode="SW1A 2AA",
-                    )
-                )
-
-                # Or with a plain dict:
-                result = matcher.match_one({
-                    "address_concat": "10 downing street westminster london",
-                    "postcode": "SW1A 2AA",
-                })
-        """
-
-        if isinstance(address, dict):
-            record = AddressRecord.from_dict(address)
-        elif isinstance(address, AddressRecord):
-            record = address
-        else:
-            raise TypeError(
-                f"Expected `AddressRecord` or dict, got {type(address).__name__}"
-            )
-
-        single_rel = record.as_duckdb_relation(self.con)
-
-        if self._canonical_clean is None:
-            self._resolve_canonical_data()
-
-        messy_clean = prepare_data_for_matching(
-            single_rel,
-            con=self.con,
-            term_frequency_lookup=self._tf_table,
-            inverted_index=self._inverted_index,
-        )
-
-        result = _run_matching(
-            con=self.con,
-            df_messy_clean=messy_clean,
-            df_canonical_clean=self._canonical_clean,
-            stages=self.stages,
-            debug_options=self.debug_options,
-        )
-
-        return result.limit(top_n)
 
     def _find_splink_stage(self):
         """Return the first SplinkStage instance from the stage list, or None."""

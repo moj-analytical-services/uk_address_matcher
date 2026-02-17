@@ -11,29 +11,22 @@ from uk_address_matcher.post_linkage.analyse_results import (
 from uk_address_matcher.post_linkage.match_result.splink_inspector import (
     _SplinkInspector,
 )
-from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
 @dataclass
 class MatchResult:
     """Wraps match output with connection-scoped inspection helpers.
 
-    The underlying DuckDB relation is accessible via ``.relation``.
-    Common DuckDB relation methods (e.g. ``.filter()``, ``.limit()``,
-    ``.project()``) are forwarded automatically, so you can treat a
-    ``MatchResult`` like a relation for quick exploration.
+    Access the underlying DuckDB relation via `.matches`.
 
     Key methods:
-        match_metrics         - match-reason breakdown with counts and percentages.
-        match_reasons         - distinct match-reason values.
-        filter_by_match_reason - filter rows to a single match reason.
-        splink_predictions     - raw Splink predictions table (requires SplinkStage).
-        splink_waterfall_chart - Splink waterfall chart for sampled records.
+        match_metrics      - match-reason breakdown with counts and percentages.
+        match_reasons      - distinct match-reason values.
+        splink_predictions - raw Splink predictions table (requires `SplinkStage`).
     """
 
     _relation: DuckDBPyRelation
     con: DuckDBPyConnection
-    metadata: dict[str, Any]
     _splink_linker: Any | None = None
     _splink_inspector: _SplinkInspector | None = None
 
@@ -41,18 +34,19 @@ class MatchResult:
         if self._splink_linker is not None:
             self._splink_inspector = _SplinkInspector(
                 con=self.con,
-                tables=self.metadata.get("splink_tables", {}),
+                linker=self._splink_linker,
             )
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._relation, name)
-
     def __repr__(self) -> str:
-        return f"MatchResult(relation={self._relation!r})"
+        class_name = self.__class__.__name__
+        return (
+            f"{class_name} object.\n"
+            "Use .matches to retrieve your raw results as a DuckDB table."
+        )
 
     @property
-    def relation(self) -> DuckDBPyRelation:
-        """The underlying DuckDB relation."""
+    def matches(self) -> DuckDBPyRelation:
+        """The underlying DuckDB relation containing match results."""
         return self._relation
 
     def match_metrics(
@@ -60,44 +54,21 @@ class MatchResult:
         *,
         order: Literal["descending", "ascending"] = "descending",
     ) -> DuckDBPyRelation:
-        """Match-reason breakdown with counts and percentages.
-
-        Equivalent to ``calculate_match_metrics(match_result.relation)``.
-        """
+        """Match-reason breakdown with counts and percentages"""
 
         return calculate_match_metrics(self._relation, order=order)
 
-    def match_reasons(self) -> list[str]:
-        """Distinct non-null match-reason values present in the results."""
-        rows = (
-            self._relation.aggregate("match_reason", group_expr="match_reason")
-            .filter("match_reason IS NOT NULL")
-            .fetchall()
-        )
-        return sorted(row[0] for row in rows)
-
-    def filter_by_match_reason(self, reason: MatchReason | str) -> DuckDBPyRelation:
-        """Return rows matching a specific ``match_reason`` value.
-
-        Accepts a ``MatchReason`` enum member or a plain string.  Raises
-        ``ValueError`` if the reason is not present in the results.
-        """
-        if isinstance(reason, MatchReason):
-            reason = reason.value
-
-        available = self.match_reasons()
-        if reason not in available:
-            raise ValueError(
-                f"Match reason {reason!r} not found in results. "
-                f"Available reasons: {available}"
-            )
-
-        escaped = reason.replace("'", "''")
-        return self._relation.filter(f"match_reason = '{escaped}'")
-
-    def has_splink(self) -> bool:
+    def _has_splink(self) -> bool:
         """True when a Splink stage ran and inspection helpers are available."""
         return self._splink_linker is not None
+
+    def _require_splink(self) -> _SplinkInspector:
+        """Return the Splink inspector or raise if unavailable."""
+        if self._splink_inspector is None:
+            raise ValueError(
+                "Splink inspection is unavailable. Run a Splink stage to enable it."
+            )
+        return self._splink_inspector
 
     def splink_predictions(
         self,
@@ -111,14 +82,14 @@ class MatchResult:
 
         Use ``ukam_ids`` to filter on the input-side identifier.
         """
-        return self._splink().predictions(
+        return self._require_splink().predictions(
             limit=limit,
             ukam_ids=ukam_ids,
             threshold_match_probability=threshold_match_probability,
             threshold_match_weight=threshold_match_weight,
         )
 
-    def splink_waterfall_chart(
+    def _splink_waterfall_chart(
         self,
         records: Any,
         *,
@@ -136,7 +107,7 @@ class MatchResult:
         ``SplinkStage`` so that the comparison-vector columns needed by the
         waterfall are present in the predictions table.
         """
-        self._splink()
+        self._require_splink()
         record_dicts = _ensure_record_dicts(records)
 
         try:
@@ -158,13 +129,6 @@ class MatchResult:
                     "    )"
                 ) from e
             raise
-
-    def _splink(self) -> _SplinkInspector:
-        if self._splink_inspector is None:
-            raise ValueError(
-                "Splink inspection is unavailable. Run a Splink stage to enable it."
-            )
-        return self._splink_inspector
 
 
 def _ensure_record_dicts(records: Any) -> list[dict[str, Any]]:
