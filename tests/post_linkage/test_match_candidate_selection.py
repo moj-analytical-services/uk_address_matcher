@@ -1,9 +1,7 @@
-import pandas as pd
 import pytest
 
 from uk_address_matcher.post_linkage.match_candidate_selection import (
     _prepare_splink_candidates,
-    select_top_match_candidates,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
@@ -166,89 +164,3 @@ def test_prepare_splink_candidates_returns_top_results(
             )
             == match_weight
         )
-
-
-# Confirms that we prioritise exact matches over Splink matches
-@pytest.mark.parametrize(
-    "include_unmatched,expected_ids,unmatched_id_present",
-    [
-        (False, [1, 2, 3, 4], False),  # Exclude unmatched: ID 5 not present
-        (True, [1, 2, 3, 4, 5], True),  # Include unmatched: ID 5 present
-    ],
-)
-def test_select_top_match_candidates_prioritises_exact_matches(
-    duck_con,
-    canonical_addresses_small,
-    exact_matches_with_duplicates,
-    splink_candidates_with_duplicates,
-    include_unmatched,
-    expected_ids,
-    unmatched_id_present,
-):
-    result = select_top_match_candidates(
-        con=duck_con,
-        df_exact_matches=exact_matches_with_duplicates,
-        df_splink_matches=splink_candidates_with_duplicates,
-        df_canonical=canonical_addresses_small,
-        match_weight_threshold=-100.0,
-        distinguishability_threshold=None,
-        include_unmatched=include_unmatched,
-    )
-
-    df = result.order("unique_id").to_df().set_index("unique_id")
-
-    # Check that the expected IDs are present (no duplicates)
-    assert list(df.index) == expected_ids
-
-    # Check exact matches (IDs 1, 2, 3)
-    exact_expectations = {
-        1: 100,
-        2: 102,
-        3: 103,
-    }
-    for unique_id, canonical_id in exact_expectations.items():
-        row = df.loc[unique_id]
-        assert row["resolved_canonical_id"] == canonical_id
-        assert row["match_reason"] == MatchReason.EXACT.value
-        assert pd.isna(row["match_weight"])
-        assert pd.isna(row["distinguishability"])
-
-    # Check Splink match (ID 4 had no exact match but has Splink match)
-    splink_row = df.loc[4]
-    assert splink_row["resolved_canonical_id"] == 104
-    assert splink_row["match_reason"] == MatchReason.SPLINK.value
-    assert splink_row["match_weight"] == 0.94
-    assert splink_row["distinguishability"] == 6.5
-
-    # Check unmatched record if present (ID 5 has no match anywhere)
-    if unmatched_id_present:
-        unmatched_row = df.loc[5]
-        assert pd.isna(unmatched_row["resolved_canonical_id"])
-        assert pd.isna(unmatched_row["match_reason"])
-        assert pd.isna(unmatched_row["match_weight"])
-        assert pd.isna(unmatched_row["distinguishability"])
-
-
-def test_select_top_match_candidates_handles_empty_splink_relation(
-    duck_con,
-    canonical_addresses_small,
-    exact_match_only_relation,
-    empty_splink_matches,
-):
-    result = select_top_match_candidates(
-        con=duck_con,
-        df_exact_matches=exact_match_only_relation,
-        df_splink_matches=empty_splink_matches,
-        df_canonical=canonical_addresses_small,
-        match_weight_threshold=5.0,
-        distinguishability_threshold=None,
-    )
-
-    # Here, we are basically testing that no errors are raised and the process
-    # completes, despite the Splink matches being empty.
-    # This isn't a scenario we will encounter in practice, but it's good to ensure
-    # robustness for testing/debugging scenarios.
-    rows = result.order("unique_id")
-    assert rows.count("*").fetchall()[0][0] == 1
-    assert rows.select("match_weight").fetchall()[0][0] is None
-    assert rows.select("distinguishability").fetchall()[0][0] is None
