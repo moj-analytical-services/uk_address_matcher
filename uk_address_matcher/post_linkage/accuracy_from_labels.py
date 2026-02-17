@@ -323,8 +323,7 @@ def evaluate_predictions_against_labels(
 
     Args:
         match_candidates: DuckDB relation containing the resolved match for each
-            messy record, typically the output of `select_top_match_candidates`.
-            Expected columns: `ukam_label`, `resolved_canonical_id`.
+            messy record. Expected columns: `ukam_label`, `resolved_canonical_id`.
         con: Active DuckDB connection.
 
     Returns:

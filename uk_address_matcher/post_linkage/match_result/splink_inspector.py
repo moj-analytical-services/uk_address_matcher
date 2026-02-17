@@ -115,7 +115,3 @@ class _SplinkInspector:
             raise ValueError(f"No cached table found matching the hint {table_hint!r}.")
 
         return matches[0].as_duckdbpyrelation()
-
-    def _list_tables(self) -> list[str]:
-        rows = self._con.execute("SHOW TABLES").fetchall()
-        return [row[0] for row in rows]
