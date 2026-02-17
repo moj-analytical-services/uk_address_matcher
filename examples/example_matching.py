@@ -78,7 +78,7 @@ matcher = AddressMatcher(
 
 match_result = matcher.match()
 
-# The underlying DuckDB relation is always available via .relation
+# The underlying DuckDB relation is always available via .matches, which includes all matched records and metadata about the match process
 result = match_result.matches
 
 # -----------------------------------------------------------------------------
