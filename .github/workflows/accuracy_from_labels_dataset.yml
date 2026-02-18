@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   run-address-matcher:
@@ -43,23 +42,15 @@ jobs:
       run: uv run .github/workflows/run_labels_accuracy_test.py
       continue-on-error: true
 
-    - name: Comment on PR with output
-      uses: actions/github-script@v6
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const fs = require('fs');
-          let commentContent;
-          try {
-            commentContent = fs.readFileSync('github-comment.md', 'utf8');
-          } catch (error) {
-            console.log('Error reading comment file:', error);
-            commentContent = '## ❌ Script failed to run.\nPlease check the logs for details.';
-          }
-
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentContent
-          });
+    - name: Publish heavy-check summary
+      if: always()
+      run: |
+        if [ -s github-comment.md ]; then
+          cat github-comment.md >> "$GITHUB_STEP_SUMMARY"
+        else
+          {
+            echo "## ❌ Address matcher heavy check failed"
+            echo ""
+            echo "No output file (github-comment.md) was produced."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
