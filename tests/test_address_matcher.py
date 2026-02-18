@@ -13,10 +13,7 @@ from uk_address_matcher import (
     UniqueTrigramStage,
     prepare_canonical_folder,
 )
-from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.post_linkage.match_result import MatchResult
-
-# -- Fixtures ----------------------------------------------------------------
 
 CANONICAL_RECORDS = [
     {
@@ -69,9 +66,6 @@ def messy_data(con):
     return _make_addresses(con, MESSY_RECORDS)
 
 
-# -- match() tests -----------------------------------------------------------
-
-
 def test_match_with_default_stages(con, canonical_data, messy_data):
     """Default stages (ExactMatchStage + SplinkStage) should produce results."""
     matcher = AddressMatcher(
@@ -82,8 +76,8 @@ def test_match_with_default_stages(con, canonical_data, messy_data):
     result = matcher.match()
 
     assert isinstance(result, MatchResult)
-    assert isinstance(result.relation, duckdb.DuckDBPyRelation)
-    assert result.count("*").fetchone()[0] > 0
+    assert isinstance(result.matches, duckdb.DuckDBPyRelation)
+    assert result.matches.count("*").fetchone()[0] > 0
 
 
 def test_match_with_explicit_stages(con, canonical_data, messy_data):
@@ -97,8 +91,8 @@ def test_match_with_explicit_stages(con, canonical_data, messy_data):
     result = matcher.match()
 
     assert isinstance(result, MatchResult)
-    assert isinstance(result.relation, duckdb.DuckDBPyRelation)
-    assert result.count("*").fetchone()[0] > 0
+    assert isinstance(result.matches, duckdb.DuckDBPyRelation)
+    assert result.matches.count("*").fetchone()[0] > 0
 
 
 def test_match_result_has_expected_columns(con, canonical_data, messy_data):
@@ -109,7 +103,7 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
         stages=[ExactMatchStage()],
     )
     result = matcher.match()
-    cols = result.columns
+    cols = result.matches.columns
 
     assert "unique_id_l" in cols or "unique_id" in cols
     assert "match_reason" in cols
@@ -131,10 +125,7 @@ def test_match_with_custom_splink_stage(con, canonical_data, messy_data):
     )
     result = matcher.match()
     assert isinstance(result, MatchResult)
-    assert isinstance(result.relation, duckdb.DuckDBPyRelation)
-
-
-# -- Prepared folder integration tests ---------------------------------------
+    assert isinstance(result.matches, duckdb.DuckDBPyRelation)
 
 
 def test_match_from_prepared_folder(con, canonical_data, messy_data):
@@ -153,8 +144,8 @@ def test_match_from_prepared_folder(con, canonical_data, messy_data):
         result = matcher.match()
 
         assert isinstance(result, MatchResult)
-        assert isinstance(result.relation, duckdb.DuckDBPyRelation)
-        assert result.count("*").fetchone()[0] > 0
+        assert isinstance(result.matches, duckdb.DuckDBPyRelation)
+        assert result.matches.count("*").fetchone()[0] > 0
 
 
 def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data):
@@ -171,47 +162,7 @@ def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data)
             stages=[ExactMatchStage()],
         )
         result = matcher.match()
-        assert result.count("*").fetchone()[0] > 0
-
-
-# -- match_one() tests -------------------------------------------------------
-
-
-def test_match_one_with_address_record(con, canonical_data):
-    matcher = AddressMatcher(
-        canonical_addresses=canonical_data,
-        addresses_to_match=_make_addresses(con, MESSY_RECORDS),
-        con=con,
-        stages=[ExactMatchStage()],
-    )
-    # Resolve canonical first so match_one can use it
-    matcher.match()
-
-    result = matcher.match_one(
-        AddressRecord(
-            address_concat="1 high street london",
-            postcode="SW1A 1AA",
-            unique_id="test_1",
-        )
-    )
-    assert isinstance(result, duckdb.DuckDBPyRelation)
-    assert result.count("*").fetchone()[0] > 0
-
-
-def test_match_one_with_dict(con, canonical_data):
-    matcher = AddressMatcher(
-        canonical_addresses=canonical_data,
-        addresses_to_match=_make_addresses(con, MESSY_RECORDS),
-        con=con,
-        stages=[ExactMatchStage()],
-    )
-    matcher.match()
-
-    result = matcher.match_one(
-        {"address_concat": "1 high street london", "postcode": "SW1A 1AA"}
-    )
-    assert isinstance(result, duckdb.DuckDBPyRelation)
-    assert result.count("*").fetchone()[0] > 0
+        assert result.matches.count("*").fetchone()[0] > 0
 
 
 def test_stage_repr_is_concise_and_informative():
@@ -222,15 +173,15 @@ def test_stage_repr_is_concise_and_informative():
 
     assert exact_repr.startswith("ExactMatchStage()")
     assert "\n  Purpose:" in exact_repr
-    assert (
-        "Exact hash-join matching on clean_full_address + postcode" in exact_repr
-    )
+    assert "Exact hash-join matching on clean_full_address + postcode" in exact_repr
     assert "\n  Import:  from uk_address_matcher import ExactMatchStage" in exact_repr
 
     assert peeled_repr.startswith("PeeledAddressStage()")
     assert "\n  Purpose:" in peeled_repr
     assert "peeling common UK locality suffix tokens" in peeled_repr
-    assert "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
+    assert (
+        "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
+    )
 
     assert splink_repr.startswith("SplinkStage(final_match_weight_threshold=7.0)")
     assert "\n  Purpose:" in splink_repr
@@ -240,13 +191,17 @@ def test_stage_repr_is_concise_and_informative():
     assert trigram_repr.startswith("UniqueTrigramStage(min_unique_hits=2)")
     assert "\n  Purpose:" in trigram_repr
     assert "unique trigram evidence" in trigram_repr
-    assert "\n  Import:  from uk_address_matcher import UniqueTrigramStage" in trigram_repr
+    assert (
+        "\n  Import:  from uk_address_matcher import UniqueTrigramStage" in trigram_repr
+    )
 
 
 def test_available_stages_prints_human_guidance():
     text = str(AddressMatcher.available_stages())
 
-    assert text.startswith("Available matching stages (import from uk_address_matcher):")
+    assert text.startswith(
+        "Available matching stages (import from uk_address_matcher):"
+    )
     assert "ExactMatchStage" in text
     assert "PeeledAddressStage" in text
     assert "SplinkStage" in text
