@@ -42,12 +42,12 @@ jobs:
       if: always()
       run: |
         if [ ! -s github-comment.md ]; then
-          cat > github-comment.md << 'EOF'
-          ## ❌ Address Matcher Test Failed
-
-          No results file was produced by the test step.
-          Please check the workflow logs for details.
-          EOF
+          printf '%s\n' \
+            '## ❌ Address Matcher Test Failed' \
+            '' \
+            'No results file was produced by the test step.' \
+            'Please check the workflow logs for details.' \
+            > github-comment.md
         fi
 
     - name: Debug comment file
