@@ -6,6 +6,7 @@ on:
       - "v*.*.*"
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -14,19 +15,85 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+
+      - name: Ensure tag commit is latest on main
+        id: main_guard
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const main = await github.rest.repos.getBranch({
+              owner,
+              repo,
+              branch: 'main',
+            });
+
+            const mainSha = main.data.commit.sha;
+            const tagSha = context.sha;
+
+            core.info(`main HEAD: ${mainSha}`);
+            core.info(`tag commit: ${tagSha}`);
+
+            if (mainSha !== tagSha) {
+              core.setFailed(
+                `Tag commit (${tagSha}) is not the latest commit on main (${mainSha}). ` +
+                'Create the release tag from current main HEAD to ensure the publish uses the newest built artifact.'
+              );
+              return;
+            }
+
+            core.setOutput('release_sha', tagSha);
+
+      - name: Find successful build artifact run
+        id: find_build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sha = '${{ steps.main_guard.outputs.release_sha }}';
+
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'build-package.yaml',
+              head_sha: sha,
+              event: 'push',
+              status: 'completed',
+              per_page: 50,
+            });
+
+            const run = runs.data.workflow_runs.find((r) => r.conclusion === 'success');
+
+            if (!run) {
+              core.setFailed(
+                `No successful Build & package run found for commit ${sha}. ` +
+                'Wait for the main build to pass, then re-run this release workflow.'
+              );
+              return;
+            }
+
+            core.info(`Using build run id ${run.id} from ${run.html_url}`);
+            core.setOutput('run_id', String(run.id));
+
+      - name: Download built dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          run-id: ${{ steps.find_build.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
 
-      - name: Build and validate package
-        run: |
-          ./shell/test_release_locally.sh
+      - name: Validate downloaded package metadata
+        run: uv run --with twine python -m twine check dist/*
 
       - name: Publish to PyPI
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          uv publish
+          uv publish dist/*

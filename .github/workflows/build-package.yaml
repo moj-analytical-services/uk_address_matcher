@@ -1,12 +1,7 @@
 name: Build & package
 
 on:
-  pull_request:
-    paths:
-      - "uk_address_matcher/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/**"
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -51,8 +46,8 @@ jobs:
 
       - name: Smoke test wheel installs and imports
         run: |
-          uv venv -p 3.10
-          . .venv/bin/activate
+          uv venv .venv-wheeltest -p 3.10 --clear
+          . .venv-wheeltest/bin/activate
           python -m pip install --upgrade pip
           python -m pip install dist/*.whl
           python -c "import uk_address_matcher; print('Imported uk_address_matcher OK')"
