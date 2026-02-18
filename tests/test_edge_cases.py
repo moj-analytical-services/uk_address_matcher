@@ -11,7 +11,7 @@ from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
 
-# Splink constants
+# Splink match weight constants
 MATCH_WEIGHT_THRESHOLD_PREDICT = -50
 MATCH_WEIGHT_THRESHOLD_IMPROVE = -20
 
