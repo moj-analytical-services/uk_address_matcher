@@ -70,14 +70,14 @@ def test_source_dataset_is_ignored():
 
     # Run prediction
     df_predict = linker.inference.predict(threshold_match_weight=-100)
-    df_predict.as_duckdbpyrelation()
+    df_predict_ddb = df_predict.as_duckdbpyrelation()
 
     # Check the source_dataset values in the output
     sql = """
     SELECT DISTINCT source_dataset_l, source_dataset_r
     FROM df_predict_ddb
     """
-    result = con.execute(sql).fetchall()
+    result = df_predict_ddb.query("df_predict_ddb", sql).fetchall()
 
     # Assert that the source_dataset values are set to 'c_' and 'm_' regardless of input
     assert len(result) == 1, "Expected exactly one distinct pair of source_dataset values"
