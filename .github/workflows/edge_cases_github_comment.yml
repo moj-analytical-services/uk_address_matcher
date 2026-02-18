@@ -2,15 +2,14 @@ name: Edge cases comment
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'uk_address_matcher/**'
-      - 'tests/**'
+      - "uk_address_matcher/**"
 
-# Add permissions to allow commenting on PRs
 permissions:
   contents: read
   pull-requests: write
+  issues: write # PR comments are issue comments under the hood; this avoids permission surprises
 
 jobs:
   test-address-matcher:
@@ -25,14 +24,10 @@ jobs:
         python-version: '3.10'
 
     - name: Setup uv
-      id: setup-uv
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
 
     - name: Install the project
       run: uv sync --all-extras --dev
@@ -42,24 +37,11 @@ jobs:
       run: uv run .github/workflows/run_address_test.py
       continue-on-error: true
 
-    - name: Comment on PR
-      uses: actions/github-script@v6
+    - name: Comment on PR (sticky)
+      uses: marocchino/sticky-pull-request-comment@v2
       with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const fs = require('fs');
-          let commentContent;
-
-          try {
-            commentContent = fs.readFileSync('github-comment.md', 'utf8');
-          } catch (error) {
-            console.log('Error reading comment file:', error);
-            commentContent = '## ❌ Address Matcher Test Failed\n\nThe test failed to run properly. Please check the workflow logs for details.';
-          }
-
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentContent
-          });
+        header: address-matcher-edge-cases
+        path: github-comment.md
+        hide_and_recreate: true
+        hide_classify: OUTDATED
+        skip_unchanged: true
