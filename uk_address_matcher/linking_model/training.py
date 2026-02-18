@@ -646,7 +646,7 @@ def array_reduce_by_freq(column_name: str) -> str:
                                 THEN list_value(
                                     POW(
                                         entry.key.rel_freq,
-                                        LEAST(entry.value, {column_name}_r[entry.key]),
+                                        LEAST(entry.value, {column_name}_r[entry.key])
                                     )
                                 )
                                 ELSE list_value()

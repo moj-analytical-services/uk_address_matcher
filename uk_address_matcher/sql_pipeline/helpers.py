@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import string
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -109,7 +110,11 @@ def _emit_debug(msg: str) -> None:
     if logger.handlers and logger.isEnabledFor(logging.DEBUG):
         logger.debug(msg)
     else:
-        logger.info(msg)
+        if msg.endswith("\n"):
+            sys.stdout.write(msg)
+        else:
+            sys.stdout.write(f"{msg}\n")
+        sys.stdout.flush()
 
 
 def _uid(n: int = 6) -> str:

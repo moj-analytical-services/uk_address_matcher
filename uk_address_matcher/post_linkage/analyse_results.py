@@ -108,6 +108,8 @@ def best_matches_with_distinguishability(
     )
     next_label_index = len(thres_sorted) + 2
     next_label_value = f"{str(next_label_index).zfill(2)}."
+    nan_label = f"{next_label_value}: NaN (last match in group)"
+    zero_label = f"{next_label_value}: Distinguishability = 0"
 
     rn_filter = (
         (
@@ -140,13 +142,9 @@ def best_matches_with_distinguishability(
                 *,
                 CASE
                     WHEN match_count = 1 THEN '01: One match only'
-                    WHEN distinguishability IS NULL THEN (
-                        f"{next_label_value}: NaN (last match in group)"
-                    )
+                    WHEN distinguishability IS NULL THEN '{nan_label}'
                     {d_case_whens}
-                    WHEN distinguishability = 0 THEN (
-                        f"{next_label_value}: Distinguishability = 0"
-                    )
+                    WHEN distinguishability = 0 THEN '{zero_label}'
                     ELSE '99: error, uncategorized'
                 END AS distinguishability_category
             FROM distinguishability_calc
