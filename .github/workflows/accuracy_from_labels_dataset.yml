@@ -39,14 +39,9 @@ jobs:
         git clone https://RobinL:${LABELS_PAT}@github.com/RobinL/address_matching_labels.git
 
 
-    - name: Run match_addresses.py and capture output
-      run: |
-        cd address_matching_labels
-        {
-        echo '```'
-        uv run match_addresses.py
-        echo '```'
-        } > ../github-comment.md || true
+    - name: Run labels accuracy script and capture output
+      run: uv run .github/workflows/run_labels_accuracy_test.py
+      continue-on-error: true
 
     - name: Comment on PR with output
       uses: actions/github-script@v6
