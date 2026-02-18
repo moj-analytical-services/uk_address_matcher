@@ -98,11 +98,13 @@ def test_flat_penalties():
                 )
         elif should_match and mw < match_weight_threshold:
             failures.append(
-                f"{messy_id} -> {canon_id}: MW={mw:.2f} < {match_weight_threshold} (expected match)"
+                f"{messy_id} -> {canon_id}: MW={mw:.2f} < "
+                f"{match_weight_threshold} (expected match)"
             )
         elif not should_match and mw >= match_weight_threshold:
             failures.append(
-                f"{messy_id} -> {canon_id}: MW={mw:.2f} >= {match_weight_threshold} (expected penalty)"
+                f"{messy_id} -> {canon_id}: MW={mw:.2f} >= "
+                f"{match_weight_threshold} (expected penalty)"
             )
 
     assert not failures, "Flat penalty failures:\n" + "\n".join(failures)
@@ -116,7 +118,13 @@ NULL_TEST_CASES = [
     # Same bare address vs bare canonical — should match
     ("m_bare_27", "27 LOVE LANE LONDON", "EC2V 7AA", "c_bare_27", True),
     # FLAT 1 vs bare address
-    ("m_flat1_null", "FLAT 1 50 CHURCH LANE MANCHESTER", "M1 1AA", "c_bare_50", False),
+    (
+        "m_flat1_null",
+        "FLAT 1 50 CHURCH LANE MANCHESTER",
+        "M1 1AA",
+        "c_bare_50",
+        False,
+    ),
     # Bare vs bare
     ("m_bare_50", "50 CHURCH LANE MANCHESTER", "M1 1AA", "c_bare_50", True),
 ]

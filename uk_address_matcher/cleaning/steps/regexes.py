@@ -26,9 +26,7 @@ def replace_excluding_basement_terms(input: str):
         + out
         + ", '\\bEXCLUDING\\s+PART\\s+BASEMENT\\b', 'EXCL_PT_BSMT', 'gi')"
     )
-    out = (
-        "regexp_replace(" + out + ", '\\bEXCLUDING\\s+BASEMENT\\b', 'EXCL_BSMT', 'gi')"
-    )
+    out = "regexp_replace(" + out + ", '\\bEXCLUDING\\s+BASEMENT\\b', 'EXCL_BSMT', 'gi')"
     return out
 
 
@@ -49,16 +47,17 @@ def standarise_num_dash_num(input: str):
         str: The standardized string with numeric ranges formatted correctly.
     """
     regex_pattern = (
-        r"(?<![A-Za-z])"  # Negative lookbehind to ensure the preceding character is not a letter
+        r"(?<![A-Za-z])"  # Ensure preceding character is not a letter.
         r"(\d+[A-Za-z]?)"  # Matches a number with an optional single letter
         r"\s*-\s*"  # Matches spaces around a dash
-        r"(\d+[A-Za-z]?)"  # Matches another number with an optional single letter
-        r"(?![A-Za-z])"  # Negative lookahead to ensure the following character is not a letter
+        r"(\d+[A-Za-z]?)"  # Another number with an optional single letter.
+        r"(?![A-Za-z])"  # Ensure following character is not a letter.
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
 
-# TODO(ThomasHepworth): Do we want this...? For Scottish flats we actually want to keep the slash
+# TODO(ThomasHepworth): Do we want this?
+# For Scottish flats we actually want to keep the slash.
 def replace_fwd_slash_with_dash(input: str):
     # Sometimes we see Unit 5/6 as opposed to unit 5-6
     return f"regexp_replace({input}, '/', '-', 'g')"
@@ -67,7 +66,8 @@ def replace_fwd_slash_with_dash(input: str):
 # TODO:  PROBABLY NO LONGER NEEDED
 def remove_repeated_tokens(input: str):
     """
-    If a token that's at least four characters long is repeated, remove the second instance.
+    If a token that's at least four characters long is repeated,
+    remove the second instance.
 
     Examples:
         'word word' -> 'word'

@@ -38,12 +38,12 @@ def prepare_combined_test_data(yaml_path, con=None):
         messy_address = test_case["messy_address"]
         messy_data.append(
             {
-                "unique_id": test_block_id,  # Use test_block_id as unique_id for messy addresses
+                "unique_id": test_block_id,  # test_block_id as unique_id
                 "source_dataset": "messy",
                 "address_concat": messy_address[0],
                 "postcode": messy_address[1],
                 "test_block": test_block_id,
-                "true_match_id": true_match_id,  # Add the true match ID as a column
+                "true_match_id": true_match_id,  # true match ID column
                 "ukam_address_id": test_block_id,
             }
         )

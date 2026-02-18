@@ -49,7 +49,7 @@ def improve_predictions_using_distinguishing_tokens(
         ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
     ) = 1
     """
-    good_matches = con.sql(sql_good_matches)
+    good_matches = con.sql(sql_good_matches)  # noqa: F841
 
     # Step 2: Create top_n_matches CTE
     sql_top_n_matches = f"""
@@ -97,8 +97,12 @@ def improve_predictions_using_distinguishing_tokens(
             .upper()
             .regexp_split_to_array('\\s+')
             .list_reverse()
-            .list_filter((tok, i) -> not (i = 1 and common_end_tokens_tok.list_contains(tok)))
-            .list_filter((tok, i) -> not (i = 1 and common_end_tokens_tok.list_contains(tok)))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
             .list_reverse()
             .array_to_string(' ')
             as original_address_concat_l,
@@ -108,8 +112,12 @@ def improve_predictions_using_distinguishing_tokens(
             .upper()
             .regexp_split_to_array('\\s+')
             .list_reverse()
-            .list_filter((tok, i) -> not (i = 1 and common_end_tokens_tok.list_contains(tok)))
-            .list_filter((tok, i) -> not (i = 1 and common_end_tokens_tok.list_contains(tok)))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
             .list_reverse()
             .array_to_string(' ')
             as original_address_concat_r

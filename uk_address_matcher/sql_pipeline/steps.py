@@ -58,8 +58,11 @@ class CTEStep:
                     converted.append(cls(name=n, sql=s))
                 else:
                     raise TypeError(
-                        "Stage return iterable items must be CTEStep or (name, sql) tuple; "
-                        f"got {item!r} at index {idx}"
+                        (
+                            "Stage return iterable items must be CTEStep or "
+                            "(name, sql) tuple; "
+                        )
+                        + f"got {item!r} at index {idx}"
                     )
             if not converted:
                 raise ValueError("Stage returned an empty iterable of steps")
@@ -150,9 +153,7 @@ class Stage:
         """
         meta = self.stage_metadata or StageMeta()
         display_name = (
-            self.name
-            if len(self.name) <= max_name
-            else self.name[: max_name - 3] + "..."
+            self.name if len(self.name) <= max_name else self.name[: max_name - 3] + "..."
         )
         lines: List[str] = []
         tags_part = f" [{', '.join(meta.tags)}]" if meta.tags else ""

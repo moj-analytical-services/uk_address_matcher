@@ -88,7 +88,8 @@ def load_duckdb_httpfs(con: duckdb.DuckDBPyConnection) -> None:
 
     if not credentials:
         print(
-            "Warning: No AWS credentials available from boto3 session; S3 access may fail."
+            "Warning: No AWS credentials available from boto3 session; "
+            "S3 access may fail."
         )
         return
 

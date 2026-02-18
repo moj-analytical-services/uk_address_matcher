@@ -295,12 +295,13 @@ def _create_term_frequency_tables(
 ) -> DuckDBPyRelation:
     """Register address token  and numeric term frequency tables.
 
-    - Numeric term frequencies are always loaded from pre-baked data. 'Numeric' meaning e.g. 'how often
-        does the token '1' appear relative to the token '7' in UK addresses.
+        - Numeric term frequencies are always loaded from pre-baked data.
+            'Numeric' means e.g. how often token '1' appears
+            relative to token '7' in UK addresses.
         They are used implicitly in the linking model by loading them into
         linker.table_management.register_term_frequency_lookup
-    - Token term frequencies are usually derived from the data itself, but if not provided by
-         the user a pre-baked table is used
+        - Token term frequencies are usually derived from the data itself,
+            but if not provided by the user a pre-baked table is used.
 
     Args:
         con: DuckDB connection.
@@ -333,9 +334,7 @@ def _create_term_frequency_tables(
     numeric_term_frequencies_rel = con.sql(read_numeric_tf_sql)
     con.sql("DROP TABLE IF EXISTS __ukam_numeric_term_frequencies")
     numeric_term_frequencies_rel.create("__ukam_numeric_term_frequencies")
-    con.register(
-        "numeric_term_frequencies", con.table("__ukam_numeric_term_frequencies")
-    )
+    con.register("numeric_term_frequencies", con.table("__ukam_numeric_term_frequencies"))
 
     return con.table("__ukam_rel_tok_freq")
 

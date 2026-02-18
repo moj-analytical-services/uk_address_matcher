@@ -146,7 +146,10 @@ def _validate_core(
             continue  # already reported
         if exp not in typed_pairs:
             actual = norm_map.get(exp.name)
-            msg = f"[{label}] column '{exp.name}': expected {exp.dtype}, found {actual if actual is not None else 'unknown'}"
+            msg = (
+                f"[{label}] column '{exp.name}': expected {exp.dtype}, "
+                f"found {actual if actual is not None else 'unknown'}"
+            )
             errors.append(msg)
 
     return errors

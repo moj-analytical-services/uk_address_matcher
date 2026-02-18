@@ -5,16 +5,28 @@ from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 @pipeline_stage(
     name="split_numeric_tokens_to_cols",
-    description="Split numeric tokens array into separate columns (numeric_token_1, numeric_token_2, numeric_token_3)",
+    description=(
+        "Split numeric tokens array into separate columns "
+        "(numeric_token_1, numeric_token_2, numeric_token_3)"
+    ),
     tags="tokenisation",
 )
 def _split_numeric_tokens_to_cols():
     sql = """
     SELECT
         *,
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[1] as numeric_token_1,
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[2] as numeric_token_2,
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3
+        regexp_extract_all(
+            array_to_string(numeric_tokens, ' '),
+            '\\d+'
+        )[1] as numeric_token_1,
+        regexp_extract_all(
+            array_to_string(numeric_tokens, ' '),
+            '\\d+'
+        )[2] as numeric_token_2,
+        regexp_extract_all(
+            array_to_string(numeric_tokens, ' '),
+            '\\d+'
+        )[3] as numeric_token_3
     FROM {input}
     """
     return sql

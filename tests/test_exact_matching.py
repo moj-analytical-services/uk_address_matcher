@@ -435,14 +435,13 @@ def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
 
     # Check specific matches
     matched = results_df[results_df["resolved_canonical_id"].notna()]
-    matched_dict = dict(
-        zip(matched["ukam_address_id"], matched["resolved_canonical_id"])
-    )
+    matched_dict = dict(zip(matched["ukam_address_id"], matched["resolved_canonical_id"]))
 
     # Case 1: '100 HIGH STREET LONDON' -> '100 HIGH STREET' (canonical 1001)
     assert matched_dict.get(1) == 1001, "Case 1 should match canonical 1001"
 
-    # Case 2: '200 PARK AVENUE LONDON GREATER LONDON' -> '200 PARK AVENUE' (canonical 1002)
+    # Case 2: '200 PARK AVENUE LONDON GREATER LONDON'
+    # -> '200 PARK AVENUE' (canonical 1002)
     assert matched_dict.get(2) == 1002, "Case 2 should match canonical 1002"
 
     # Case 3: '50 MAIN ROAD TUNBRIDGE WELLS' -> '50 MAIN ROAD' (canonical 1003)

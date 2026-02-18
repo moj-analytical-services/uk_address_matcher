@@ -92,9 +92,7 @@ with time_phase(variant_timings, variant_label, "deterministic_link"):
     df_blocked_ddb = df_blocked.as_duckdbpyrelation()
 
 blocking_duration = variant_timings[variant_label]["deterministic_link"]
-print(
-    f"⏱  Blocking (deterministic_link) completed in {blocking_duration:.2f} seconds.\n"
-)
+print(f"⏱  Blocking (deterministic_link) completed in {blocking_duration:.2f} seconds.\n")
 
 # ============================================================================
 # Calculate blocking recall
@@ -205,9 +203,7 @@ FROM combined
 
 misses_df = misses_ddb.df()
 print(f"Messy rows with no candidates (computed here): {len(misses_df):,}")
-print(
-    f"Messy rows with no candidates (previous summary): {messy_without_candidates:,}\n"
-)
+print(f"Messy rows with no candidates (previous summary): {messy_without_candidates:,}\n")
 
 n_show = 8
 if len(misses_df) == 0:

@@ -12,11 +12,11 @@ from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 @pipeline_stage()
 def join_lookup_stage():
     return """
-		SELECT a.id, b.extra
-		FROM {primary} AS a
-		JOIN {lookup} AS b
-		  ON a.id = b.id
-	"""
+                SELECT a.id, b.extra
+                FROM {primary} AS a
+                JOIN {lookup} AS b
+                    ON a.id = b.id
+        """
 
 
 @pipeline_stage()
@@ -65,11 +65,11 @@ def slugged_join_stage():
     return (
         "joined",
         """
-			SELECT p.id, l.extra
-			FROM {primary_input} AS p
-			JOIN {lookup_table} AS l
-			  ON p.id = l.id
-		""",
+                        SELECT p.id, l.extra
+                        FROM {primary_input} AS p
+                        JOIN {lookup_table} AS l
+                            ON p.id = l.id
+                """,
     )
 
 

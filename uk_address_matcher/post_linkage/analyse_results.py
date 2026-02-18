@@ -99,7 +99,10 @@ def best_matches_with_distinguishability(
 
     d_case_whens = "\n".join(
         [
-            f"WHEN distinguishability > {d} THEN '{str(index).zfill(2)}: Distinguishability > {d}'"
+            (
+                f"WHEN distinguishability > {d} THEN '"
+                f"{str(index).zfill(2)}: Distinguishability > {d}'"
+            )
             for index, d in enumerate(thres_sorted, start=2)
         ]
     )
@@ -107,7 +110,10 @@ def best_matches_with_distinguishability(
     next_label_value = f"{str(next_label_index).zfill(2)}."
 
     rn_filter = (
-        "QUALIFY ROW_NUMBER() OVER (PARTITION BY unique_id_r ORDER BY match_weight DESC, unique_id_l) = 1"
+        (
+            "QUALIFY ROW_NUMBER() OVER (PARTITION BY unique_id_r "
+            "ORDER BY match_weight DESC, unique_id_l) = 1"
+        )
         if best_match_only
         else ""
     )
@@ -134,9 +140,13 @@ def best_matches_with_distinguishability(
                 *,
                 CASE
                     WHEN match_count = 1 THEN '01: One match only'
-                    WHEN distinguishability IS NULL THEN '{next_label_value}: NaN (last match in group)'
+                    WHEN distinguishability IS NULL THEN (
+                        f"{next_label_value}: NaN (last match in group)"
+                    )
                     {d_case_whens}
-                    WHEN distinguishability = 0 THEN '{next_label_value}: Distinguishability = 0'
+                    WHEN distinguishability = 0 THEN (
+                        f"{next_label_value}: Distinguishability = 0"
+                    )
                     ELSE '99: error, uncategorized'
                 END AS distinguishability_category
             FROM distinguishability_calc
@@ -153,7 +163,9 @@ def best_matches_with_distinguishability(
         t.postcode_l,
         t.match_weight,
         t.distinguishability,
-        COALESCE(t.distinguishability_category, '99: No match') AS distinguishability_category,
+        COALESCE(
+            t.distinguishability_category, '99: No match'
+        ) AS distinguishability_category,
         {add_cols_select}
     FROM addresses_to_match AS a
     LEFT JOIN categorized_matches AS t

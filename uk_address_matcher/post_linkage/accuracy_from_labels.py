@@ -68,7 +68,8 @@ def inspect_match_results_vs_labels(
                 l.correct_unique_id::VARCHAR as correct_unique_id
             FROM df_predict_with_distinguishability_in as d
             INNER JOIN labels_in as l ON d.unique_id_r = l.unique_id
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY d.unique_id_r ORDER BY d.match_weight DESC) = 1
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY d.unique_id_r
+                ORDER BY d.match_weight DESC) = 1
         ), false_positives AS (
             SELECT unique_id_r
             FROM labeled_dist
@@ -116,7 +117,8 @@ def inspect_match_results_vs_labels(
     FROM df_with_dist_and_label as d
     LEFT JOIN df_os_addresses_in as o ON d.correct_unique_id = o.unique_id
     WHERE d.unique_id_r = '{target_unique_id_r}'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY d.unique_id_r ORDER BY d.match_weight DESC) = 1
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY d.unique_id_r
+        ORDER BY d.match_weight DESC) = 1
     """
     this_match_rel = con.sql(sql)
     row_dict_best_match = dict(zip(this_match_rel.columns, this_match_rel.fetchone()))
@@ -142,22 +144,30 @@ def inspect_match_results_vs_labels(
             "postcode_l": "",
         }
 
-    report_template = """
-===========================================================================
-unique_id_r:                  {this_id}
-{messy_label:<30}{messy_address} {messy_postcode}
+    report_template = (
+        "===========================================================================\n"
+        "unique_id_r:                  {this_id}\n"
+        "{messy_label:<30}{messy_address} {messy_postcode}\n\n"
+        "{best_match_label:<30}{best_match_address} {best_match_postcode} "
+        "(UPRN: {best_match_uprn})\n"
+        "{true_match_label:<30}{true_match_address} {true_match_postcode} "
+        "(UPRN: {true_match_uprn})\n"
+        "Distinguishability:           {distinguishability_value}\n"
+        "===========================================================================\n"
+    )
 
-{best_match_label:<30}{best_match_address} {best_match_postcode} (UPRN: {best_match_uprn})
-{true_match_label:<30}{true_match_address} {true_match_postcode} (UPRN: {true_match_uprn})
-Distinguishability:           {distinguishability_value}
-===========================================================================
-"""
+    best_match_label = (
+        f"Best match (score: {row_dict_best_match.get('match_weight', 'N/A'):,.2f}):"
+    )
+    true_match_label = (
+        f"True match (score: {row_dict_correct_match.get('match_weight', 'N/A'):,.2f}):"
+    )
 
     report = report_template.format(
         this_id=target_unique_id_r,
         messy_label="Messy address:",
-        best_match_label=f"Best match (score: {row_dict_best_match.get('match_weight', 'N/A'):,.2f}):",
-        true_match_label=f"True match (score: {row_dict_correct_match.get('match_weight', 'N/A'):,.2f}):",
+        best_match_label=best_match_label,
+        true_match_label=true_match_label,
         messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
         best_match_address=row_dict_best_match.get("original_address_concat_l", "N/A"),
         true_match_address=row_dict_best_match.get("label_address_concat", "N/A"),
@@ -178,7 +188,8 @@ Distinguishability:           {distinguishability_value}
     SELECT
         original_address_concat_r,
         CASE
-            WHEN unique_id_l = correct_unique_id THEN concat('✅ ', original_address_concat_l)
+            WHEN unique_id_l = correct_unique_id THEN concat('✅ ',
+                original_address_concat_l)
             ELSE original_address_concat_l
         END as address_concat_l,
         printf('%.2f', match_weight) as final_score,
@@ -238,11 +249,11 @@ Distinguishability:           {distinguishability_value}
     correct_unique_id = row_dict_best_match.get("correct_unique_id")
 
     if best_uprn:
-        waterfall_header = """
-Waterfall chart for messy address vs best match:
-{messy_address} {messy_postcode}
-{best_match_address} {best_match_postcode}
-"""
+        waterfall_header = (
+            "Waterfall chart for messy address vs best match:\n"
+            "{messy_address} {messy_postcode}\n"
+            "{best_match_address} {best_match_postcode}\n"
+        )
         logger.info(
             waterfall_header.format(
                 messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
@@ -270,11 +281,11 @@ Waterfall chart for messy address vs best match:
             )
 
     if correct_unique_id:
-        waterfall_header = """
-Waterfall chart for messy address vs true match:
-{messy_address} {messy_postcode}
-{true_match_address} {true_match_postcode}
-"""
+        waterfall_header = (
+            "Waterfall chart for messy address vs true match:\n"
+            "{messy_address} {messy_postcode}\n"
+            "{true_match_address} {true_match_postcode}\n"
+        )
         logger.info(
             waterfall_header.format(
                 messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
@@ -327,9 +338,10 @@ def evaluate_predictions_against_labels(
         con: Active DuckDB connection.
 
     Returns:
-        DuckDBPyRelation: A DataFrame with columns (status, count, percentage, percentage_fmt)
-                          and rows ('Correctly Predicted', 'Incorrectly Predicted', 'Total').
-                          Returns an empty relation if evaluation cannot be performed.
+        DuckDBPyRelation: A DataFrame with columns
+            (status, count, percentage, percentage_fmt) and rows
+            ('Correctly Predicted', 'Incorrectly Predicted', 'Total').
+        Returns an empty relation if evaluation cannot be performed.
     """
     candidates_reg_name = "__match_candidates_eval"
     con.register(candidates_reg_name, match_candidates)
@@ -346,7 +358,9 @@ def evaluate_predictions_against_labels(
             SELECT
                 CASE
                     WHEN resolved_canonical_id = ukam_label THEN 'Correctly Predicted'
-                    WHEN resolved_canonical_id IS NULL THEN 'Incorrectly Predicted (No match found)'
+                    WHEN resolved_canonical_id IS NULL THEN (
+                        'Incorrectly Predicted (No match found)'
+                    )
                     ELSE 'Incorrectly Predicted (Wrong prediction)'
                 END AS status
             FROM labeled_candidates
@@ -356,7 +370,8 @@ def evaluate_predictions_against_labels(
                 status,
                 COUNT(*) AS count
             FROM comparison
-            GROUP BY CUBE(status) -- Use CUBE to get individual statuses and the total (NULL)
+            GROUP BY CUBE(status) -- Use CUBE to get individual
+            -- statuses and the total (NULL)
         ),
         total_count_cte AS (
             SELECT count FROM status_counts WHERE status IS NULL

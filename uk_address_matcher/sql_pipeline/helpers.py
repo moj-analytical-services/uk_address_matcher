@@ -109,7 +109,7 @@ def _emit_debug(msg: str) -> None:
     if logger.handlers and logger.isEnabledFor(logging.DEBUG):
         logger.debug(msg)
     else:
-        print(msg)
+        logger.info(msg)
 
 
 def _uid(n: int = 6) -> str:
@@ -148,7 +148,8 @@ def package_resource_read_sql(package: str, filename: str) -> str:
 
 def _duckdb_table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     result = con.execute(
-        f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table_name}'"
+        "SELECT COUNT(*) FROM information_schema.tables "
+        f"WHERE table_name = '{table_name}'"
     ).fetchone()
     return result[0] > 0
 

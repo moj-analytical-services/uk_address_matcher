@@ -61,7 +61,8 @@ def test_peel_end_tokens_exact(connection, address, expected):
 
 
 # --- Fuzzy matching tests (requires fuzzy_threshold=1) ---
-# Note: Fuzzy matching only works on tokens with 4+ characters to avoid false positives
+# Note: Fuzzy matching only works on tokens with 4+ characters
+# to avoid false positives.
 # Uses pre-computed typo variants (deletions, transpositions) for O(1) lookup
 @pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 @pytest.mark.parametrize(
@@ -74,7 +75,8 @@ def test_peel_end_tokens_exact(connection, address, expected):
         ("UNIT 5 BUSINESS PARK BIRMINGAHM", ["BIRMINGHAM"]),  # transposition
         ("THE OLD RECTORY HERTFORDSHRIE", ["HERTFORDSHIRE"]),  # transposition
         ("5 PRINCES STREET EDINBRUGH", ["EDINBURGH"]),  # transposition
-        # Short tokens (< 4 chars) block peeling - UC doesn't match, so LONDON isn't reached
+        # Short tokens (< 4 chars) block peeling;
+        # UC doesn't match, so LONDON isn't reached.
         ("10 HIGH STREET LONDON UC", []),  # UC blocks further peeling
         (
             "25 MAIN ROAD HACKENY LONDON GREATER LONDON",

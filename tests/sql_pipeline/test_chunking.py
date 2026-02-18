@@ -89,10 +89,13 @@ def test_chunking_yields_same_result_as_no_chunking(
 
     # Same number of distinct IDs in both
     assert baseline_distinct_ids == chunked_distinct_ids, (
-        f"Distinct ID count mismatch: baseline={baseline_distinct_ids}, chunked={chunked_distinct_ids}"
+        "Distinct ID count mismatch: "
+        f"baseline={baseline_distinct_ids}, "
+        f"chunked={chunked_distinct_ids}"
     )
 
-    # All clean_full_address values are identical (via set intersection to avoid order issues)
+    # All clean_full_address values are identical
+    # (via set intersection to avoid order issues).
     baseline_addresses = baseline.select("clean_full_address").fetchall()
     chunked_addresses = chunked.select("clean_full_address").fetchall()
 
@@ -108,7 +111,9 @@ def test_chunking_yields_same_result_as_no_chunking(
 
     # Check that both have the same number of distinct addresses
     assert len(baseline_set) == len(chunked_set), (
-        f"Distinct address count mismatch: baseline={len(baseline_set)}, chunked={len(chunked_set)}"
+        "Distinct address count mismatch: "
+        f"baseline={len(baseline_set)}, "
+        f"chunked={len(chunked_set)}"
     )
 
 
@@ -170,5 +175,6 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
 
     # First 50 records should have identical histograms
     assert no_chunk_hist == chunked_hist, (
-        f"Token frequency histograms differ for use_data_specific_tfs={use_data_specific_tfs}"
+        "Token frequency histograms differ for "
+        f"use_data_specific_tfs={use_data_specific_tfs}"
     )
