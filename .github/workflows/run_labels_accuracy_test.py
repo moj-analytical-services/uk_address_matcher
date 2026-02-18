@@ -22,7 +22,6 @@ def _write_success_comment(
     total_cases: int,
     correct_matches: int,
     match_rate: float,
-    mismatches: list[dict],
 ) -> None:
     comment_path = Path.cwd() / "github-comment.md"
     with comment_path.open("w", encoding="utf-8") as file_handle:
@@ -30,40 +29,9 @@ def _write_success_comment(
         file_handle.write("### Statistics\n\n")
         file_handle.write(f"- **Total test cases:** {total_cases}\n")
         file_handle.write(f"- **Correct matches:** {correct_matches}\n")
+        file_handle.write(f"- **Incorrect matches:** {total_cases - correct_matches}\n")
         file_handle.write(f"- **Match rate:** {match_rate:.2f}%\n")
-        file_handle.write("- **Total reward:** N/A\n\n")
-
-        if mismatches:
-            file_handle.write("### ⚠️ Some addresses were not matched correctly:\n\n")
-            for mismatch in mismatches:
-                file_handle.write(
-                    f"#### Test Block ID: {mismatch['test_block_id']}\n\n"
-                )
-                file_handle.write(
-                    "| Record Type | Address | Postcode | Match Weight |\n"
-                )
-                file_handle.write(
-                    "| ----------- | ------- | -------- | ------------ |\n"
-                )
-                file_handle.write(
-                    "| Messy Record | "
-                    f"{mismatch['messy_address']} | {mismatch['messy_postcode']} | N/A |\n"
-                )
-                file_handle.write(
-                    "| True Match | "
-                    f"{mismatch['true_match_address']} | {mismatch['true_match_postcode']} | N/A |\n"
-                )
-                false_weight = (
-                    f"{mismatch['false_match_weight']:.2f}"
-                    if mismatch["false_match_weight"] is not None
-                    else "N/A"
-                )
-                file_handle.write(
-                    "| False Match | "
-                    f"{mismatch['false_match_address']} | {mismatch['false_match_postcode']} | {false_weight} |\n\n"
-                )
-        else:
-            file_handle.write("### ✅ All addresses were matched correctly!\n")
+        file_handle.write("- **Total reward:** N/A\n")
 
 
 def run_labels_accuracy() -> int:
@@ -87,7 +55,7 @@ def run_labels_accuracy() -> int:
         messy_data_rel = con.sql(
             """
             SELECT
-                unique_id_r::VARCHAR AS unique_id,
+                id::VARCHAR AS unique_id,
                 messy_address AS address_concat,
                 messy_postcode AS postcode,
                 unique_id_l::VARCHAR AS ukam_label
@@ -146,81 +114,10 @@ def run_labels_accuracy() -> int:
         correct_matches = int(stats_row[1] or 0)
         match_rate = (correct_matches / total_cases) * 100.0 if total_cases > 0 else 0.0
 
-        mismatch_rows = con.sql(
-            """
-            SELECT
-                unique_id,
-                ukam_label::VARCHAR AS true_match_id,
-                resolved_canonical_id::VARCHAR AS predicted_match_id,
-                match_weight,
-                original_address_concat,
-                postcode
-            FROM __match_candidates
-            WHERE ukam_label IS NOT NULL
-              AND (resolved_canonical_id IS NULL OR resolved_canonical_id::VARCHAR <> ukam_label::VARCHAR)
-            LIMIT 20
-            """
-        ).fetchall()
-
-        mismatches = []
-        for (
-            unique_id,
-            true_match_id,
-            predicted_match_id,
-            match_weight,
-            messy_address,
-            messy_postcode,
-        ) in mismatch_rows:
-            true_match_row = con.sql(
-                f"""
-                SELECT address_concat, postcode
-                FROM canonical_data
-                WHERE unique_id::VARCHAR = '{true_match_id}'
-                LIMIT 1
-                """
-            ).fetchone()
-
-            false_match_row = (
-                con.sql(
-                    f"""
-                    SELECT address_concat, postcode
-                    FROM canonical_data
-                    WHERE unique_id::VARCHAR = '{predicted_match_id}'
-                    LIMIT 1
-                    """
-                ).fetchone()
-                if predicted_match_id is not None
-                else None
-            )
-
-            mismatches.append(
-                {
-                    "test_block_id": unique_id,
-                    "messy_address": messy_address,
-                    "messy_postcode": messy_postcode,
-                    "true_match_address": true_match_row[0]
-                    if true_match_row
-                    else "N/A",
-                    "true_match_postcode": true_match_row[1]
-                    if true_match_row
-                    else "N/A",
-                    "false_match_address": false_match_row[0]
-                    if false_match_row
-                    else "No match found",
-                    "false_match_postcode": false_match_row[1]
-                    if false_match_row
-                    else "N/A",
-                    "false_match_weight": float(match_weight)
-                    if match_weight is not None
-                    else None,
-                }
-            )
-
         _write_success_comment(
             total_cases=total_cases,
             correct_matches=correct_matches,
             match_rate=match_rate,
-            mismatches=mismatches,
         )
 
         print(f"Completed labels accuracy run with {total_cases} labelled records.")
