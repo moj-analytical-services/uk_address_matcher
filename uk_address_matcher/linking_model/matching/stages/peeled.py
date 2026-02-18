@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class PeeledAddressStage(MatchingStage):
     """Match records after peeling common UK locality suffix tokens."""
 
@@ -174,7 +174,7 @@ def _peeled_address_matches() -> list[CTEStep]:
             messy_ukam_address_id AS ukam_address_id,
             canonical_ukam_address_id,
             canonical_unique_id AS resolved_canonical_id,
-            '{MatchReason.PEELED_ADDRESS.value}'::ENUM {enum_values} AS match_reason
+            '{match_reason_value}'::ENUM {enum_values} AS match_reason
         FROM (
             SELECT
                 *,

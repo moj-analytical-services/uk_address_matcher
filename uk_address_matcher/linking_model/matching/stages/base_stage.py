@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import MISSING, fields, is_dataclass
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.sql_pipeline.helpers import _uid
@@ -109,6 +110,48 @@ class MatchingStage(ABC):
     results table
 
     """
+
+    @staticmethod
+    def _one_line_summary(stage_cls: type) -> str:
+        doc = stage_cls.__doc__ or ""
+        return doc.strip().split("\n")[0].strip()
+
+    def _repr_field_values(self) -> list[str]:
+        if not is_dataclass(self):
+            return []
+
+        parts: list[str] = []
+        for field_def in fields(self):
+            if not field_def.repr:
+                continue
+
+            value = getattr(self, field_def.name)
+
+            if field_def.default is not MISSING and value == field_def.default:
+                continue
+
+            if (
+                field_def.default_factory is not MISSING
+                and value == field_def.default_factory()
+            ):
+                continue
+
+            parts.append(f"{field_def.name}={value!r}")
+
+        return parts
+
+    def __repr__(self) -> str:
+        class_name = self.__class__.__name__
+        field_parts = self._repr_field_values()
+        config = f"({', '.join(field_parts)})" if field_parts else "()"
+
+        summary = self._one_line_summary(self.__class__)
+        lines = [f"{class_name}{config}"]
+        if summary:
+            lines.append(f"  Purpose: {summary}")
+        lines.append(f"  Import:  from {_IMPORT_MODULE} import {class_name}")
+
+        return "\n".join(lines)
 
     @classmethod
     def available_stages(cls) -> _StageList:

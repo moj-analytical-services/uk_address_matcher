@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class UniqueTrigramStage(MatchingStage):
     """Match unresolved records using unique trigram evidence."""
 

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
-@dataclass
+@dataclass(repr=False)
 class SplinkStage(MatchingStage):
     """Splink probabilistic matching stage.
 
