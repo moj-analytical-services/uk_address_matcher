@@ -8,7 +8,6 @@ def run_test():
         # Make sure we have the required packages
         try:
             import pytest
-            import yaml
         except ImportError as e:
             print(f"Missing required package: {e}")
             create_error_comment(f"Missing required package: {e}")

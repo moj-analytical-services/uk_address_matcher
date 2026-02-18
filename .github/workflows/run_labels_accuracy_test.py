@@ -22,16 +22,20 @@ def _write_success_comment(
     total_cases: int,
     correct_matches: int,
     match_rate: float,
+    total_reward: float,
 ) -> None:
     comment_path = Path.cwd() / "github-comment.md"
     with comment_path.open("w", encoding="utf-8") as file_handle:
-        file_handle.write("## 📊 Address Matcher Test Results\n\n")
+        file_handle.write("## 📊 Address Matcher Heavy Check Results\n\n")
+        file_handle.write(
+            "_These numbers come from the heavier external-labels benchmark run._\n\n"
+        )
         file_handle.write("### Statistics\n\n")
         file_handle.write(f"- **Total test cases:** {total_cases}\n")
         file_handle.write(f"- **Correct matches:** {correct_matches}\n")
         file_handle.write(f"- **Incorrect matches:** {total_cases - correct_matches}\n")
         file_handle.write(f"- **Match rate:** {match_rate:.2f}%\n")
-        file_handle.write("- **Total reward:** N/A\n")
+        file_handle.write(f"- **Total reward:** {total_reward:.2f}\n")
 
 
 def run_labels_accuracy() -> int:
@@ -114,10 +118,29 @@ def run_labels_accuracy() -> int:
         correct_matches = int(stats_row[1] or 0)
         match_rate = (correct_matches / total_cases) * 100.0 if total_cases > 0 else 0.0
 
+        reward_row = con.sql(
+            """
+            SELECT
+                SUM(
+                    CASE
+                        WHEN resolved_canonical_id::VARCHAR = ukam_label::VARCHAR
+                            THEN COALESCE(match_weight, 0)
+                        ELSE -COALESCE(match_weight, 0)
+                    END
+                ) AS total_reward
+            FROM __match_candidates
+            WHERE ukam_label IS NOT NULL
+            """
+        ).fetchone()
+        total_reward = (
+            float(reward_row[0]) if reward_row and reward_row[0] is not None else 0.0
+        )
+
         _write_success_comment(
             total_cases=total_cases,
             correct_matches=correct_matches,
             match_rate=match_rate,
+            total_reward=total_reward,
         )
 
         print(f"Completed labels accuracy run with {total_cases} labelled records.")
