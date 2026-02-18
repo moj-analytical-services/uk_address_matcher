@@ -88,7 +88,9 @@ def _add_term_frequencies_to_address_tokens():
 
 @pipeline_stage(
     name="add_term_frequencies_to_address_tokens_using_registered_df",
-    description="Attach precomputed token frequencies from registered DataFrame rel_tok_freq",
+    description=(
+        "Attach precomputed token frequencies from registered DataFrame rel_tok_freq"
+    ),
     tags="term_frequency_analysis",
 )
 def _add_term_frequencies_to_address_tokens_using_registered_df():
@@ -192,7 +194,11 @@ def _add_numeric_term_frequencies_using_registered_df():
 
 @pipeline_stage(
     name="move_common_end_tokens_to_field",
-    description="Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and remove from token frequency array",
+    description=(
+        "Move frequently occurring trailing tokens "
+        "(e.g. counties) into a dedicated field and remove "
+        "from token frequency array"
+    ),
     tags="term_frequency_analysis",
 )
 def _move_common_end_tokens_to_field():

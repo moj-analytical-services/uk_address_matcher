@@ -13,7 +13,8 @@ class TestTrigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 2),
-                    i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
+                    i ->
+                        tokenised[i] || ' ' || tokenised[i + 1] || ' ' || tokenised[i + 2]
                 ) AS trigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
@@ -37,7 +38,12 @@ class TestTrigramGeneration:
                     WHEN len(tokenised) >= 3 THEN
                         list_transform(
                             generate_series(1, len(tokenised) - 2),
-                            i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
+                            i ->
+                                tokenised[i]
+                                || ' '
+                                || tokenised[i + 1]
+                                || ' '
+                                || tokenised[i + 2]
                         )
                     ELSE []
                 END AS trigrams
@@ -61,7 +67,8 @@ class TestTrigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 2),
-                    i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
+                    i ->
+                        tokenised[i] || ' ' || tokenised[i + 1] || ' ' || tokenised[i + 2]
                 ) AS trigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
@@ -91,7 +98,12 @@ class TestInvertedIndexBuilding:
                     unique_id,
                     list_transform(
                         generate_series(1, len(tokenised) - 2),
-                        i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
+                        i ->
+                            tokenised[i]
+                            || ' '
+                            || tokenised[i + 1]
+                            || ' '
+                            || tokenised[i + 2]
                     ) AS trigrams
                 FROM (
                     SELECT
@@ -148,7 +160,12 @@ class TestInvertedIndexBuilding:
                     unique_id,
                     list_transform(
                         generate_series(1, len(tokenised) - 2),
-                        i -> tokenised[i] || ' ' || tokenised[i+1] || ' ' || tokenised[i+2]
+                        i ->
+                            tokenised[i]
+                            || ' '
+                            || tokenised[i + 1]
+                            || ' '
+                            || tokenised[i + 2]
                     ) AS trigrams
                 FROM (
                     SELECT
@@ -312,7 +329,7 @@ class TestPrepareDataForMatchingWithInvertedIndex:
         assert "1" in result
 
     def test_prepare_data_without_inverted_index(self, duck_con):
-        """Test that data without inverted index gets [unique_id] as exploding_unique_ids."""
+        """Test data without inverted index gets [unique_id] as exploding_unique_ids."""
         from uk_address_matcher.cleaning.chunking_strategies import (
             prepare_data_for_matching,
         )

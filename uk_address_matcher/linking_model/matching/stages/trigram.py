@@ -111,9 +111,7 @@ def _resolve_with_trigrams(
         if include_trigram_text
         else ""
     )
-    supporting_text_select = (
-        ", supporting_trigram_texts" if include_trigram_text else ""
-    )
+    supporting_text_select = ", supporting_trigram_texts" if include_trigram_text else ""
 
     unit_fields = """
         has_flat_indicator,
@@ -222,12 +220,15 @@ def _resolve_with_trigrams(
             ON messy.postcode = unique_index.postcode
             AND messy.numeric_tokens = unique_index.numeric_tokens
             AND messy.trigram_hash = unique_index.trigram_hash
-            AND messy.has_flat_indicator IS NOT DISTINCT FROM unique_index.has_flat_indicator
+            AND messy.has_flat_indicator IS NOT DISTINCT FROM
+                unique_index.has_flat_indicator
             AND messy.flat_positional IS NOT DISTINCT FROM unique_index.flat_positional
             AND messy.flat_letter IS NOT DISTINCT FROM unique_index.flat_letter
             AND messy.flat_number IS NOT DISTINCT FROM unique_index.flat_number
-            AND messy.has_business_unit IS NOT DISTINCT FROM unique_index.has_business_unit
-            AND messy.business_unit_type IS NOT DISTINCT FROM unique_index.business_unit_type
+            AND messy.has_business_unit IS NOT DISTINCT FROM
+                unique_index.has_business_unit
+            AND messy.business_unit_type IS NOT DISTINCT FROM
+                unique_index.business_unit_type
             AND messy.business_unit_id IS NOT DISTINCT FROM unique_index.business_unit_id
     """
 
@@ -276,7 +277,8 @@ def _resolve_with_trigrams(
                 links.messy_ukam_address_id,
                 links.postcode,
                 COUNT(DISTINCT links.canonical_unique_id) AS candidate_canonical_count,
-                LIST(DISTINCT links.canonical_ukam_address_id) AS candidate_canonical_ukam_address_ids,
+                LIST(DISTINCT links.canonical_ukam_address_id) AS
+                    candidate_canonical_ukam_address_ids,
                 LIST(DISTINCT links.trigram_hash) AS conflicting_trigram_hashes
                 {conflicts_text_projection}
             FROM {{trigram_candidate_links}} AS links

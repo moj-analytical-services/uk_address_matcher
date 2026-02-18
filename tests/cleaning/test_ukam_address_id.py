@@ -3,8 +3,10 @@ from uk_address_matcher import clean_data_pre_term_frequencies
 
 def test_duplicate_records_get_unique_ukam_address_id(duck_con):
     # Create test data with:
-    # - Two identical addresses but different unique_ids (should get different ukam_address_id)
-    # - Two completely identical rows including unique_id (should get SAME ukam_address_id)
+    # - Two identical addresses but different unique_ids
+    #   (should get different ukam_address_id)
+    # - Two completely identical rows including unique_id
+    #   (should get SAME ukam_address_id)
     sql = """
     CREATE OR REPLACE TABLE test_data AS
     SELECT * FROM (VALUES
@@ -26,7 +28,8 @@ def test_duplicate_records_get_unique_ukam_address_id(duck_con):
 
     # Get the ukam_address_id values
     result = duck_con.sql(
-        "SELECT unique_id, ukam_address_id FROM cleaned ORDER BY unique_id, ukam_address_id"
+        "SELECT unique_id, ukam_address_id "
+        "FROM cleaned ORDER BY unique_id, ukam_address_id"
     ).fetchall()
 
     assert len(result) == 3, "Expected 3 records in output"

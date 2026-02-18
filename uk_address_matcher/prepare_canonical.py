@@ -323,9 +323,7 @@ def load_prepared_canonical_data(
     _check_manifest(folder)
 
     addresses = con.read_parquet(str(folder / PREPARED_ADDRESSES_FILENAME))
-    term_frequencies = con.read_parquet(
-        str(folder / PREPARED_TERM_FREQUENCIES_FILENAME)
-    )
+    term_frequencies = con.read_parquet(str(folder / PREPARED_TERM_FREQUENCIES_FILENAME))
     inverted_index = con.read_parquet(str(folder / PREPARED_INVERTED_INDEX_FILENAME))
 
     logger.debug("Loaded prepared canonical data from '%s'", folder)

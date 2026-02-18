@@ -12,7 +12,14 @@ def resolved_only_matches(duck_con):
         SELECT *
         FROM (
             VALUES
-                (1::BIGINT, 'ADDRESS 1'::VARCHAR, 'POSTCODE 1'::VARCHAR, '{reason}'::VARCHAR, 100::BIGINT, NULL::BIGINT)
+                (
+                    1::BIGINT,
+                    'ADDRESS 1'::VARCHAR,
+                    'POSTCODE 1'::VARCHAR,
+                    '{reason}'::VARCHAR,
+                    100::BIGINT,
+                    NULL::BIGINT
+                )
         ) AS t(
             unique_id,
             original_address_concat,
@@ -33,7 +40,14 @@ def unresolved_matches(duck_con):
         SELECT *
         FROM (
             VALUES
-                (2::BIGINT, 'ADDRESS 2'::VARCHAR, 'POSTCODE 2'::VARCHAR, '{reason}'::VARCHAR, NULL::BIGINT, NULL::BIGINT)
+                (
+                    2::BIGINT,
+                    'ADDRESS 2'::VARCHAR,
+                    'POSTCODE 2'::VARCHAR,
+                    '{reason}'::VARCHAR,
+                    NULL::BIGINT,
+                    NULL::BIGINT
+                )
         ) AS t(
             unique_id,
             original_address_concat,

@@ -116,7 +116,8 @@ def test_no_token_collisions_after_normalisation(abbr_rows: List[dict]) -> None:
         else:
             prev_raw, prev_rep = first_seen[t_norm]
             collisions.append(
-                f"{t_norm!r}: ({prev_raw!r}->{prev_rep!r}) vs ({row['token']!r}->{row['replacement']!r})"
+                f"{t_norm!r}: ({prev_raw!r}->{prev_rep!r}) "
+                f"vs ({row['token']!r}->{row['replacement']!r})"
             )
     assert not collisions, "Duplicate tokens after normalisation:\n" + "\n".join(
         collisions

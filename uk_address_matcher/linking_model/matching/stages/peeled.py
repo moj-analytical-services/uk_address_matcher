@@ -318,10 +318,16 @@ def _make_peel_iteration_sql(prev_cte: str) -> str:
                      THEN __tokens[len(__tokens)]
                      ELSE NULL END AS end1,
                  CASE WHEN __can_still_peel AND len(__tokens) >= 2
-                     THEN array_to_string(list_slice(__tokens, len(__tokens) - 1, len(__tokens)), ' ')
+                     THEN array_to_string(
+                         list_slice(__tokens, len(__tokens) - 1, len(__tokens)),
+                         ' '
+                     )
                      ELSE NULL END AS end2,
                  CASE WHEN __can_still_peel AND len(__tokens) >= 3
-                     THEN array_to_string(list_slice(__tokens, len(__tokens) - 2, len(__tokens)), ' ')
+                     THEN array_to_string(
+                         list_slice(__tokens, len(__tokens) - 2, len(__tokens)),
+                         ' '
+                     )
                      ELSE NULL END AS end3
             FROM {{{prev_cte}}}
         ),

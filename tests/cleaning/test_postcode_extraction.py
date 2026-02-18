@@ -85,9 +85,7 @@ def test_postcode_extraction_with_column_provided():
         )
 
         # Postcode from address should still be removed
-        postcode_in_address = (
-            input_address.split()[-2] + " " + input_address.split()[-1]
-        )
+        postcode_in_address = input_address.split()[-2] + " " + input_address.split()[-1]
         if postcode_in_address != expected_postcode:
             # Only check if they're different (if same, it's fine if it appears)
             assert postcode_in_address.replace(" ", "") not in cleaned_address.replace(
@@ -137,7 +135,8 @@ def test_postcode_extraction_empty_column():
         # original_address_concat should be preserved verbatim
         assert raw_address == input_address
 
-        # Should extract from address when column is empty/NULL (or be NULL if no postcode exists)
+        # Should extract from address when column is empty/NULL
+        # (or be NULL if no postcode exists).
         assert extracted_postcode == expected_postcode, (
             f"Expected postcode '{expected_postcode}', got '{extracted_postcode}'"
         )

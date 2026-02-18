@@ -102,7 +102,10 @@ def _prepare_splink_candidates(
                 *,
                 ROW_NUMBER() OVER (
                     PARTITION BY unique_id_r
-                    ORDER BY match_weight DESC, distinguishability DESC NULLS LAST, unique_id_l
+                        ORDER BY
+                            match_weight DESC,
+                            distinguishability DESC NULLS LAST,
+                            unique_id_l
                 ) AS match_rank
             FROM {{splink_matches__ukam}}
             WHERE match_weight >= {match_weight_threshold}

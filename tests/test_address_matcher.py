@@ -179,9 +179,7 @@ def test_stage_repr_is_concise_and_informative():
     assert peeled_repr.startswith("PeeledAddressStage()")
     assert "\n  Purpose:" in peeled_repr
     assert "peeling common UK locality suffix tokens" in peeled_repr
-    assert (
-        "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
-    )
+    assert "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
 
     assert splink_repr.startswith("SplinkStage(final_match_weight_threshold=7.0)")
     assert "\n  Purpose:" in splink_repr
@@ -199,9 +197,7 @@ def test_stage_repr_is_concise_and_informative():
 def test_available_stages_prints_human_guidance():
     text = str(AddressMatcher.available_stages())
 
-    assert text.startswith(
-        "Available matching stages (import from uk_address_matcher):"
-    )
+    assert text.startswith("Available matching stages (import from uk_address_matcher):")
     assert "ExactMatchStage" in text
     assert "PeeledAddressStage" in text
     assert "SplinkStage" in text

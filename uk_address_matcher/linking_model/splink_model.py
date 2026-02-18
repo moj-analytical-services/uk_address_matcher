@@ -88,7 +88,8 @@ def _get_linker(
         or "source_dataset" in df_addresses_to_search_within.columns
     ):
         raise ValueError(
-            "Input datasets contain a 'source_dataset' column. This column should be removed "
+            "Input datasets contain a 'source_dataset' column. "
+            "This column should be removed "
             "before calling _get_linker as it will be overwritten by the linker."
         )
 
@@ -134,7 +135,8 @@ def _get_linker(
         settings_as_dict.setdefault("additional_columns_to_retain", [])
         settings_as_dict["additional_columns_to_retain"] += additional_columns_to_retain
 
-    # Use ukam_address_id as unique_id column name (created as part of our cleaning process)
+    # Use ukam_address_id as unique_id column name
+    # (created as part of our cleaning process).
     settings_as_dict["unique_id_column_name"] = "ukam_address_id"
     # Also make sure we now retain unique_id from both datasets...
 
@@ -167,7 +169,8 @@ def _get_linker(
     # Check if both blocking rule settings are False
     if not include_full_postcode_block and not include_outside_postcode_block:
         raise ValueError(
-            "At least one of 'include_full_postcode_block' or 'include_outside_postcode_block' "
+            "At least one of 'include_full_postcode_block' or "
+            "'include_outside_postcode_block' "
             "must be True. Cannot proceed without any blocking rules."
         )
 

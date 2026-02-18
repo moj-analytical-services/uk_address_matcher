@@ -22,7 +22,8 @@ def test_parse_out_flat_positional():
 
     # Format of test cases:
     # (input_address, flat_positional, flat_letter, flat_number)
-    # Note: When a number+letter pattern exists (e.g., 11A, 15B), only the LETTER is a flat determinant
+    # Note: When a number+letter pattern exists (e.g., 11A, 15B),
+    # only the LETTER is a flat determinant.
     # The number is the building/house number, not a flat identifier
     test_cases = [
         ("11A SPITFIRE COURT BIRMINGHAM", None, "A", None),
@@ -36,7 +37,12 @@ def test_parse_out_flat_positional():
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
         ("FLAT 2 733 GIPSY HILL", None, None, "2"),
-        ("2 7 GIPSY HILL", None, None, None),  # Ambiguous - no explicit FLAT indicator
+        (
+            "2 7 GIPSY HILL",
+            None,
+            None,
+            None,
+        ),  # Ambiguous - no explicit FLAT indicator
         ("773 GIPSY HILL", None, None, None),
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
@@ -127,13 +133,16 @@ def test_parse_out_flat_positional():
         test_cases, rows
     ):
         assert row[positional_idx] == expected_pos, (
-            f"Address '{address}' expected positional '{expected_pos}' but got '{row[positional_idx]}'"
+            f"Address '{address}' expected positional '{expected_pos}' "
+            f"but got '{row[positional_idx]}'"
         )
         assert row[letter_idx] == expected_letter, (
-            f"Address '{address}' expected letter '{expected_letter}' but got '{row[letter_idx]}'"
+            f"Address '{address}' expected letter '{expected_letter}' "
+            f"but got '{row[letter_idx]}'"
         )
         assert row[number_idx] == expected_number, (
-            f"Address '{address}' expected number '{expected_number}' but got '{row[number_idx]}'"
+            f"Address '{address}' expected number '{expected_number}' "
+            f"but got '{row[number_idx]}'"
         )
         # has_flat_indicator is True if any of the three fields are set,
         # OR if the word FLAT appears in the address
@@ -145,7 +154,8 @@ def test_parse_out_flat_positional():
             or "FLAT" in address
         )
         assert row[indicator_idx] == expected_indicator, (
-            f"Address '{address}' expected has_flat_indicator '{expected_indicator}' but got '{row[indicator_idx]}'"
+            f"Address '{address}' expected has_flat_indicator '{expected_indicator}' "
+            f"but got '{row[indicator_idx]}'"
         )
 
 

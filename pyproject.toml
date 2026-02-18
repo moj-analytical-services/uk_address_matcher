@@ -15,10 +15,17 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/robinL/uk_address_matcher"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
+    "pyarrow>=19.0.1",
+    "pytest>=8.3.4",
+    "pyyaml>=6.0.2",
     "ipykernel>=6.29.4",
     "boto3>=1.40.0"
+]
+
+linting = [
+    "ruff>=0.6,<1.0"
 ]
 
 [build-system]
@@ -27,14 +34,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
 "uk_address_matcher" = ["data/*.parquet", "data/*.csv", "data/*.json"]
-
-
-[dependency-groups]
-dev = [
-    "pyarrow>=19.0.1",
-    "pytest>=8.3.4",
-    "pyyaml>=6.0.2",
-]
 
 [tool.setuptools.packages.find]
 include = ["uk_address_matcher*"]
@@ -51,3 +50,93 @@ pythonpath = [".", "src"]
 # log level settings used when running pytest
 log_cli = true
 log_cli_level = "INFO"
+
+[tool.ruff]
+# General settings
+line-length = 90
+cache-dir = "~/.cache/ruff"
+target-version = "py312"
+fix = false
+respect-gitignore = true
+include = [
+    "uk_address_matcher/**/*.py",
+    "tests/**/*.py",
+    "benchmarking/**/*.py",
+]
+
+# Exclude specific directories from being linted
+exclude = [
+    ".svn",
+    "CVS",
+    ".bzr",
+    ".hg",
+    ".git",
+    "__pycache__",
+    ".tox",
+    "venv/",
+    "env/",
+    ".github/",
+    "githooks/",
+]
+
+# Rules to ignore when linting
+lint.ignore = [
+    "E731", # Do not assign a `lambda` expression, use a `def`
+    "W191", # Indentation contains tabs
+    "E111", # Indentation is not a multiple of four
+    "E114", # Indentation is not a multiple of four (comment)
+    "E117", # Over-indented
+    "D206", # Docstring should be indented with spaces, not tabs
+    "D300", # Use """triple double quotes""" (found '''-quotes)
+    # Q00x - Prefer either single or double quotes, but be consistent
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "COM812", # Missing trailing comma
+    "COM819", # Trailing comma is missing
+    "ISC001", # isort found unsorted imports
+    "ISC002", # isort found ungrouped imports
+    "E266", # Too many leading '#' for block comment - ####
+]
+# Rules to include in the linting selection
+lint.select = [
+    # pycodestyle (default)
+    "E",
+    # Pyflakes (default)
+    "F",
+    # Whitespace warnings
+    "W",
+    # isort (sort imports)
+    "I001",
+    # flake8-print
+    "T20"
+]
+lint.fixable = ["ALL"]
+lint.unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+# Allow print statements in benchmarking
+"benchmarking/**/*.py" = ["T201"]
+
+# isort settings
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+# flake8-errmsg settings
+[tool.ruff.lint.flake8-errmsg]
+max-string-length = 50
+
+# Formatting rules (inspired by Black)
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# Docstring code formatting
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+# Exclude formatting for jupyter notebooks
+exclude = ["*.ipynb"]

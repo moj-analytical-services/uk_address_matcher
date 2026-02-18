@@ -61,14 +61,38 @@ def splink_candidates_with_duplicates(duck_con):
         SELECT *
         FROM (
             VALUES
-                (101, 1, 1001, 1, '10 Downing St Variant', 'SW1A 2AA', 0.82, 9.5, '02: Distinguishability > 5'),
-                (100, 1, 1000, 1, '10 Downing St Variant', 'SW1A 2AA', 0.85, 5.0, '03: Distinguishability > 1'),
-                (102, 2, 1002, 2, '11 Downing St Variant', 'SW1A 2AA', 0.91, 4.0, '03: Distinguishability > 1'),
-                (104, 2, 1004, 2, '11 Downing St Variant', 'SW1A 2AA', 0.87, 7.5, '02: Distinguishability > 5'),
-                (103, 3, 1003, 3, '12 Downing St Variant', 'SW1A 2AA', 0.92, 3.0, '03: Distinguishability > 1'),
-                (101, 3, 1001, 3, '12 Downing St Variant', 'SW1A 2AA', 0.91, 8.0, '02: Distinguishability > 5'),
-                (104, 4, 1004, 4, '14 Downing St Variant', 'SW1A 2AA', 0.94, 6.5, '02: Distinguishability > 5'),
-                (101, 4, 1001, 4, '14 Downing St Variant', 'SW1A 2AA', 0.80, 2.0, '03: Distinguishability > 1')
+                (
+                    101, 1, 1001, 1, '10 Downing St Variant',
+                    'SW1A 2AA', 0.82, 9.5, '02: Distinguishability > 5'
+                ),
+                (
+                    100, 1, 1000, 1, '10 Downing St Variant',
+                    'SW1A 2AA', 0.85, 5.0, '03: Distinguishability > 1'
+                ),
+                (
+                    102, 2, 1002, 2, '11 Downing St Variant',
+                    'SW1A 2AA', 0.91, 4.0, '03: Distinguishability > 1'
+                ),
+                (
+                    104, 2, 1004, 2, '11 Downing St Variant',
+                    'SW1A 2AA', 0.87, 7.5, '02: Distinguishability > 5'
+                ),
+                (
+                    103, 3, 1003, 3, '12 Downing St Variant',
+                    'SW1A 2AA', 0.92, 3.0, '03: Distinguishability > 1'
+                ),
+                (
+                    101, 3, 1001, 3, '12 Downing St Variant',
+                    'SW1A 2AA', 0.91, 8.0, '02: Distinguishability > 5'
+                ),
+                (
+                    104, 4, 1004, 4, '14 Downing St Variant',
+                    'SW1A 2AA', 0.94, 6.5, '02: Distinguishability > 5'
+                ),
+                (
+                    101, 4, 1001, 4, '14 Downing St Variant',
+                    'SW1A 2AA', 0.80, 2.0, '03: Distinguishability > 1'
+                )
         ) AS t(
             unique_id_l,
             unique_id_r,

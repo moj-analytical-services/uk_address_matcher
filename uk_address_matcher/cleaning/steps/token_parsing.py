@@ -10,19 +10,30 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 @pipeline_stage(
     name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
-    description="Identify common suffixes between addresses and separate them into unique and common token parts",
+    description=(
+        "Identify common suffixes between addresses and separate them "
+        "into unique and common token parts"
+    ),
     tags=["token_analysis", "address_comparison"],
 )
 def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records():
     """
-    Identifies common suffixes between addresses and separates them into unique and common parts.
-    This function analyzes each address in relation to its neighbors (previous and next addresses
-    when sorted by unique_id) to find common suffix patterns. It then splits each address into:
-    - unique_tokens: The tokens that are unique to this address (typically the beginning part)
-    - common_tokens: The tokens that are shared with neighboring addresses (typically the end part)
+    Identifies common suffixes between addresses and separates them
+    into unique and common parts.
+
+    This function analyses each address in relation to its neighbours
+    (previous and next addresses when sorted by unique_id) to find
+    common suffix patterns. It then splits each address into:
+
+        - unique_tokens: tokens unique to this address,
+            typically the beginning part.
+        - common_tokens: tokens shared with neighbouring addresses,
+            typically the end part.
+
     Args:
         ddb_pyrel (DuckDBPyRelation): The input relation
         con (DuckDBPyConnection): The DuckDB connection
+
     Returns:
         DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
     """
@@ -77,11 +88,13 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
         list_filter(
             __tokens,
-            (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)
+            (token, i) ->
+                i < __token_count - greatest(prev_common_suffix, next_common_suffix)
         ) AS unique_tokens,
         list_filter(
             __tokens,
-            (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
+            (token, i) ->
+                i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
         ) AS common_tokens
     FROM {with_suffix_lengths}
     """
@@ -119,7 +132,9 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
 @pipeline_stage(
     name="parse_out_flat_position_and_letter",
-    description="Extract flat positions and letters from address strings into separate columns",
+    description=(
+        "Extract flat positions and letters from address strings into separate columns"
+    ),
     tags=["token_extraction", "flat_parsing"],
 )
 def _parse_out_flat_position_and_letter():
@@ -133,7 +148,8 @@ def _parse_out_flat_position_and_letter():
       - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
     """
 
-    # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone, others paired with FLOOR/GROUND
+    # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
+    # others are paired with FLOOR/GROUND.
     # BLOCK indicates a flat block (e.g., "BLOCK B STANNARD HALL")
     standalone_floors = ["BASEMENT", "GARDEN", "BLOCK"]
     floor_with_suffix = [
@@ -151,11 +167,17 @@ def _parse_out_flat_position_and_letter():
         "NINTH",
         "TOP",
     ]
-    # Build regex: standalone floors OR (prefix + FLOOR) OR (prefix + GROUND for LOWER/UPPER)
+    # Build regex: standalone floors OR (prefix + FLOOR) OR
+    # (prefix + GROUND for LOWER/UPPER)
     # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
     # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
     # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
-    multi_floor_pattern = r"(?:(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TOP),? ?|AND )*(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TOP) FLOORS"
+    multi_floor_pattern = (
+        r"(?:(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
+        r"SEVENTH|EIGHTH|NINTH|TOP),? ?|AND )*"
+        r"(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
+        r"SEVENTH|EIGHTH|NINTH|TOP) FLOORS"
+    )
     floor_positions = (
         r"\b("
         + "|".join(
@@ -191,35 +213,85 @@ def _parse_out_flat_position_and_letter():
         i.*,
 
         -- 1) Positional/floor signal
-        NULLIF(regexp_extract(i.clean_full_address, '{floor_positions}', 1), '') AS flat_positional,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+            ''
+        ) AS flat_positional,
 
-        -- 2) flat_letter (priority: FLAT 12A → A, FLAT A → A, BLOCK A → A, 11A start → A, 15B anywhere → B)
+        -- 2) flat_letter (priority:
+        -- FLAT 12A → A, FLAT A → A, BLOCK A → A,
+        -- 11A start → A, 15B anywhere → B)
         COALESCE(
-            NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), ''),
-            NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1), ''),
-            NULLIF(regexp_extract(i.clean_full_address, '{block_letter}', 1), ''),
-            NULLIF(regexp_extract(i.clean_full_address, '{leading_num_letter}', 2), ''),
-            NULLIF(regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2), '')
+            NULLIF(
+                regexp_extract(
+                    i.clean_full_address,
+                    '{flat_letter_after_num_after_flat}',
+                    1
+                ),
+                ''
+            ),
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1),
+                ''
+            ),
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{block_letter}', 1),
+                ''
+            ),
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{leading_num_letter}', 2),
+                ''
+            ),
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2),
+                ''
+            )
         ) AS flat_letter,
 
         -- 3) flat_number (priority explained inline)
         -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
         -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
         -- since "2" might be a building number, not a flat.
-        -- Note: DuckDB regexp_extract returns '' not NULL for no match, so we use NULLIF(..., '')
+        -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
+        -- we use NULLIF(..., '') to normalise non-matches.
         CASE
-            -- Explicit "FLAT X" - extract ONLY if no letter follows AND (multiple numbers OR BLOCK pattern)
-            WHEN NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '') IS NOT NULL
-                 AND NULLIF(regexp_extract(i.clean_full_address, '{flat_letter_after_num_after_flat}', 1), '') IS NULL
+            -- Explicit "FLAT X" - extract ONLY if no letter follows AND (
+            -- multiple numbers OR BLOCK pattern)
+            WHEN NULLIF(
+                regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
+                ''
+            ) IS NOT NULL
+                 AND NULLIF(
+                     regexp_extract(
+                        i.clean_full_address,
+                        '{flat_letter_after_num_after_flat}',
+                        1
+                    ),
+                    ''
+                ) IS NULL
                  AND (
-                     COALESCE(length(regexp_extract_all(i.clean_full_address, '{count_numbers}')), 0) >= 2
-                     OR NULLIF(regexp_extract(i.clean_full_address, '{block_letter}', 1), '') IS NOT NULL
+                     COALESCE(
+                        length(
+                            regexp_extract_all(i.clean_full_address, '{count_numbers}')
+                        ),
+                        0
+                    ) >= 2
+                     OR NULLIF(
+                        regexp_extract(i.clean_full_address, '{block_letter}', 1),
+                        ''
+                    ) IS NOT NULL
                  )
             THEN COALESCE(
                 -- FLAT 3/2 → 2 (Scottish style)
-                NULLIF(regexp_extract(i.original_address_concat, '{scottish_flat}', 2), ''),
+                NULLIF(
+                    regexp_extract(i.original_address_concat, '{scottish_flat}', 2),
+                    ''
+                ),
                 -- FLAT 12 → 12
-                NULLIF(regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1), '')
+                NULLIF(
+                    regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
+                    ''
+                )
             )
             ELSE NULL
         END AS flat_number
@@ -260,7 +332,9 @@ def _parse_out_flat_position_and_letter():
 
 @pipeline_stage(
     name="parse_out_business_unit",
-    description="Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses",
+    description=(
+        "Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses"
+    ),
     tags=["token_extraction", "business_parsing"],
 )
 def _parse_out_business_unit():
@@ -329,7 +403,10 @@ def _parse_out_business_unit():
 
 @pipeline_stage(
     name="parse_out_numbers",
-    description="Extract and process numeric tokens from addresses, handling ranges and alphanumeric patterns",
+    description=(
+        "Extract and process numeric tokens from addresses, "
+        "handling ranges and alphanumeric patterns"
+    ),
     tags="token_extraction",
 )
 def _parse_out_numbers():
@@ -358,7 +435,12 @@ def _parse_out_numbers():
     sql = f"""
     SELECT
         *,
-        regexp_replace(clean_full_address, '{regex_pattern}', '', 'g') AS address_without_numbers,
+        regexp_replace(
+            clean_full_address,
+            '{regex_pattern}',
+            '',
+            'g'
+        ) AS address_without_numbers,
         CASE
             WHEN flat_letter IS NOT NULL AND flat_letter ~ '^\\d+$' THEN
             regexp_extract_all(clean_full_address, '{regex_pattern}')[2:]
@@ -372,7 +454,9 @@ def _parse_out_numbers():
 
 @pipeline_stage(
     name="clean_address_string_second_pass",
-    description="Apply final cleaning to address without numbers: remove multiple spaces and trim",
+    description=(
+        "Apply final cleaning to address without numbers: remove multiple spaces and trim"
+    ),
     tags="cleaning",
 )
 def _clean_address_string_second_pass():
@@ -402,7 +486,9 @@ GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
 
 @pipeline_stage(
     name="generalised_token_aliases",
-    description="Map specific tokens to more general categories for better matching heuristics",
+    description=(
+        "Map specific tokens to more general categories for better matching heuristics"
+    ),
     tags="token_transformation",
 )
 def _generalised_token_aliases():
@@ -419,7 +505,8 @@ def _generalised_token_aliases():
     is often ambiguous (is the 2nd floor the top floor), we know that
     'top floor' cannot match to 'ground' or 'basement'
 
-    This stage expands each token in `distinguishing_adj_start_tokens` into a small list of
+    This stage expands each token in `distinguishing_adj_start_tokens`
+    into a small list of
     aliases, then flattens the result into `distinguishing_adj_token_aliases`.
 
     Mappings applied:

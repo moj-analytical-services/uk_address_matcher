@@ -97,7 +97,8 @@ def test_peel_end_tokens_exact(connection, address, expected):
         ("UNIT 5 BUSINESS PARK BIRMINGAHM", ["BIRMINGHAM"]),  # transposition
         ("THE OLD RECTORY HERTFORDSHRIE", ["HERTFORDSHIRE"]),  # transposition
         ("5 PRINCES STREET EDINBRUGH", ["EDINBURGH"]),  # transposition
-        # Short tokens (< 4 chars) block peeling - UC doesn't match, so LONDON isn't reached
+        # Short tokens (< 4 chars) block peeling;
+        # UC doesn't match, so LONDON isn't reached.
         ("10 HIGH STREET LONDON UC", []),  # UC blocks further peeling
         (
             "25 MAIN ROAD HACKENY LONDON GREATER LONDON",

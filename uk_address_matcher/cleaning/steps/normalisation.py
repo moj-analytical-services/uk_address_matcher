@@ -20,7 +20,7 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 @pipeline_stage(
     name="ensure_ukam_address_id",
-    description="Assign a unique UUID to each row for safe joining without duplicates",
+    description=("Assign a unique UUID to each row for safe joining without duplicates"),
     tags=["setup"],
 )
 def _add_ukam_address_id():
@@ -35,7 +35,9 @@ def _add_ukam_address_id():
 
 @pipeline_stage(
     name="extract_postcode_from_address",
-    description="Extract UK postcode from address_concat and remove it from the address string",
+    description=(
+        "Extract UK postcode from address_concat and remove it from the address string"
+    ),
     tags=["setup", "parsing"],
 )
 def _extract_postcode_from_address() -> str:
@@ -69,7 +71,10 @@ def _extract_postcode_from_address() -> str:
         )) AS address_concat,
         COALESCE(
             NULLIF(TRIM(postcode), ''),
-            NULLIF(UPPER(regexp_extract(UPPER(address_concat), '{uk_postcode_regex}')), '')
+            NULLIF(
+                UPPER(regexp_extract(UPPER(address_concat), '{uk_postcode_regex}')),
+                ''
+            )
         ) AS postcode
     FROM {{input}}
     """
@@ -77,7 +82,10 @@ def _extract_postcode_from_address() -> str:
 
 @pipeline_stage(
     name="rename_and_select_columns",
-    description="Rename and select key columns for downstream processing and assign ukam_address_id",
+    description=(
+        "Rename and select key columns for downstream processing "
+        "and assign ukam_address_id"
+    ),
     tags=["setup"],
 )
 def _rename_and_select_columns() -> str:
@@ -88,7 +96,13 @@ def _rename_and_select_columns() -> str:
         address_concat,
         postcode,
         ukam_address_id,
-        * EXCLUDE (unique_id, original_address_concat, address_concat, postcode, ukam_address_id)
+        * EXCLUDE (
+            unique_id,
+            original_address_concat,
+            address_concat,
+            postcode,
+            ukam_address_id
+        )
     FROM {input}
     """
     return sql
@@ -112,7 +126,10 @@ def _trim_whitespace_address_and_postcode() -> str:
 
 @pipeline_stage(
     name="canonicalise_postcode",
-    description="Standardise UK postcodes by ensuring single space between outward and inward codes",
+    description=(
+        "Standardise UK postcodes by ensuring single space "
+        "between outward and inward codes"
+    ),
     tags=["normalisation", "cleaning"],
 )
 def _canonicalise_postcode() -> str:
@@ -136,7 +153,9 @@ def _canonicalise_postcode() -> str:
 
 @pipeline_stage(
     name="upper_case_address_and_postcode",
-    description="Convert address and postcode fields to uppercase for consistent formatting",
+    description=(
+        "Convert address and postcode fields to uppercase for consistent formatting"
+    ),
     tags=["normalisation", "formatting"],
 )
 def _upper_case_address_and_postcode() -> str:
@@ -152,7 +171,10 @@ def _upper_case_address_and_postcode() -> str:
 
 @pipeline_stage(
     name="clean_address_string_first_pass",
-    description="Apply initial address cleaning operations: remove punctuation, standardise separators, and normalise formatting",
+    description=(
+        "Apply initial address cleaning operations: remove punctuation, "
+        "standardise separators, and normalise formatting"
+    ),
     tags=["cleaning", "normalisation"],
 )
 def _clean_address_string_first_pass() -> str:
@@ -189,7 +211,10 @@ def _clean_address_string_first_pass() -> str:
 
 @pipeline_stage(
     name="remove_duplicate_end_tokens",
-    description="Remove duplicated tokens at the end of addresses (e.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS')",
+    description=(
+        "Remove duplicated tokens at the end of addresses "
+        "(e.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS')"
+    ),
     tags=["cleaning"],
 )
 def _remove_duplicate_end_tokens() -> str:
@@ -221,7 +246,10 @@ def _remove_duplicate_end_tokens() -> str:
 
 @pipeline_stage(
     name="clean_address_string_second_pass",
-    description="Apply final cleaning operations to address without numbers: remove extra spaces and trim",
+    description=(
+        "Apply final cleaning operations to address without numbers: "
+        "remove extra spaces and trim"
+    ),
     tags=["cleaning"],
 )
 def _clean_address_string_second_pass() -> str:
@@ -240,11 +268,16 @@ def _clean_address_string_second_pass() -> str:
 
 @pipeline_stage(
     name="normalise_abbreviations_and_units",
-    description="Normalise address abbreviations (RD->ROAD) and unit types using a vectorised map lookup",
+    description=(
+        "Normalise address abbreviations (RD->ROAD) and "
+        "unit types using a vectorised map lookup"
+    ),
     tags=["normalisation", "cleaning"],
 )
 def _normalise_abbreviations_and_units() -> list[CTEStep]:
-    """Normalise address abbreviations (RD->ROAD) and unit types using a vectorised map lookup
+    """Normalise address abbreviations (RD->ROAD).
+
+    Also normalise unit types using a vectorised map lookup.
 
     - 1. Load lookup (upper-case keys for case-insensitive match)
     - 2. Build a single-row MAP (hashmap) using list aggregations

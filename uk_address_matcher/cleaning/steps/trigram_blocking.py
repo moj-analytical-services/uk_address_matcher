@@ -5,7 +5,9 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 @pipeline_stage(
     name="derive_trigrams_from_address_tokens",
-    description="Generate trigrams (consecutive 3-token sequences) from clean_full_address",
+    description=(
+        "Generate trigrams (consecutive 3-token sequences) from clean_full_address"
+    ),
     tags="trigram_blocking",
 )
 def _derive_trigrams_from_address_tokens():
@@ -37,7 +39,10 @@ def _derive_trigrams_from_address_tokens():
 
 @pipeline_stage(
     name="lookup_trigrams_in_inverted_index",
-    description="Look up trigrams in pre-registered inverted index to populate exploding_unique_ids",
+    description=(
+        "Look up trigrams in pre-registered inverted index "
+        "to populate exploding_unique_ids"
+    ),
     tags="trigram_blocking",
 )
 def _lookup_trigrams_in_inverted_index():
@@ -101,7 +106,10 @@ def _lookup_trigrams_in_inverted_index():
 
 @pipeline_stage(
     name="set_exploding_unique_ids_to_self",
-    description="Set exploding_unique_ids to [unique_id] for canonical data (no inverted index lookup)",
+    description=(
+        "Set exploding_unique_ids to [unique_id] for canonical data "
+        "(no inverted index lookup)"
+    ),
     tags="trigram_blocking",
 )
 def _set_exploding_unique_ids_to_self():
@@ -131,7 +139,10 @@ def _build_inverted_index_from_trigrams(max_unique_ids_per_trigram: int = 20):
 
     @pipeline_stage(
         name="build_inverted_index_from_trigrams",
-        description=f"Aggregate trigrams into inverted index (max {max_unique_ids_per_trigram} unique_ids per trigram)",
+        description=(
+            f"Aggregate trigrams into inverted index (max {max_unique_ids_per_trigram} "
+            "unique_ids per trigram)"
+        ),
         tags="trigram_blocking",
     )
     def _stage():

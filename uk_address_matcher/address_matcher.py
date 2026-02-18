@@ -55,7 +55,9 @@ class AddressMatcher:
 
     Accepts either a raw `DuckDBPyRelation` (cleaned on the fly) or a
     `str` / `Path` pointing to a folder created by
-    `prepare_canonical_folder` for canonical addresses. Messy addresses can be a DuckDB relation or a list of `AddressRecord` / dicts.
+    `prepare_canonical_folder` for canonical addresses.
+    Messy addresses can be a DuckDB relation or a list of
+    `AddressRecord` / dicts.
 
     Stages default to `[ExactMatchStage(), SplinkStage()]`. Pass your own
     list to customise matching behaviour — the existing stage dataclasses
@@ -157,9 +159,7 @@ class AddressMatcher:
         from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 
         if isinstance(self._raw_canonical, (str, Path)):
-            logger.debug(
-                "Loading prepared canonical data from '%s'", self._raw_canonical
-            )
+            logger.debug("Loading prepared canonical data from '%s'", self._raw_canonical)
             prepared = load_prepared_canonical_data(self._raw_canonical, self.con)
             self._canonical_clean = prepared.addresses
             self._tf_table = prepared.term_frequencies

@@ -193,7 +193,8 @@ def load_benchmark_data(
                 print("Deriving term frequencies from canonical data...")
                 tf_table = derive_term_frequencies_table(df_canonical_loaded, con=con)
 
-            # Clean canonical data (no inverted index, so exploding_unique_ids will use unique_id)
+            # Clean canonical data (no inverted index, so
+            # exploding_unique_ids will use unique_id)
             print("Preparing canonical data for matching...")
             df_canonical = prepare_data_for_matching(
                 df_canonical_loaded,

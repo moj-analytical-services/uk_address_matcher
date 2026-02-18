@@ -36,8 +36,10 @@ def calculate_accuracy_metrics(
     # Check if ukam_label exists - required for accuracy calculation
     if "ukam_label" not in ukam_matches.columns:
         raise ValueError(
-            "Cannot calculate accuracy metrics: 'ukam_label' column not found in match results. "
-            "Accuracy calculation requires ground truth labels. If you're running in inference "
+            "Cannot calculate accuracy metrics: "
+            "'ukam_label' column not found in match results. "
+            "Accuracy calculation requires ground truth labels. "
+            "If you're running in inference "
             "mode without labels, skip the accuracy calculation step."
         )
 
@@ -70,19 +72,33 @@ def calculate_accuracy_metrics(
                 m.resolved_canonical_id,
                 m.match_reason,
                 {matchable_case}
-                CASE WHEN m.ukam_label = m.resolved_canonical_id THEN 1 ELSE 0 END AS is_correct
+                CASE
+                    WHEN m.ukam_label = m.resolved_canonical_id THEN 1
+                    ELSE 0
+                END AS is_correct
             FROM ukam_matches AS m
             {canonical_join}
             WHERE m.match_reason IS NOT NULL
         )
         SELECT
-            CASE WHEN GROUPING(match_reason) = 1 THEN 'OVERALL' ELSE match_reason END AS match_reason,
+            CASE
+                WHEN GROUPING(match_reason) = 1 THEN 'OVERALL'
+                ELSE match_reason
+            END AS match_reason,
             COUNT(*) AS total_matched,
             SUM(is_correct) AS correct_matches,
-            SUM(CASE WHEN is_correct = 0 AND is_matchable = 1 THEN 1 ELSE 0 END) AS incorrect_matches,
+            SUM(
+                CASE WHEN is_correct = 0 AND is_matchable = 1 THEN 1 ELSE 0 END
+            ) AS incorrect_matches,
             SUM(CASE WHEN is_matchable = 0 THEN 1 ELSE 0 END) AS unmatchable_records,
-            ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0), 2) AS accuracy_pct,
-            ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(SUM(is_matchable), 0), 0), 2) AS accuracy_pct_matchable
+            ROUND(
+                COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0),
+                2
+            ) AS accuracy_pct,
+            ROUND(
+                COALESCE(100.0 * SUM(is_correct) / NULLIF(SUM(is_matchable), 0), 0),
+                2
+            ) AS accuracy_pct_matchable
         FROM matched_records
         GROUP BY GROUPING SETS ((match_reason), ())
         ORDER BY
@@ -100,21 +116,38 @@ def calculate_accuracy_metrics(
             m.match_reason,
             COALESCE(m.{dataset_column}, 'UNKNOWN_DATASET') AS dataset_name,
             {matchable_case}
-            CASE WHEN m.ukam_label = m.resolved_canonical_id THEN 1 ELSE 0 END AS is_correct
+            CASE
+                WHEN m.ukam_label = m.resolved_canonical_id THEN 1
+                ELSE 0
+            END AS is_correct
         FROM ukam_matches AS m
         {canonical_join}
         WHERE m.match_reason IS NOT NULL
     ),
     aggregated AS (
         SELECT
-            CASE WHEN GROUPING(dataset_name) = 1 THEN 'ALL_DATASETS' ELSE dataset_name END AS dataset_name,
-            CASE WHEN GROUPING(match_reason) = 1 THEN 'OVERALL' ELSE match_reason END AS match_reason,
+            CASE
+                WHEN GROUPING(dataset_name) = 1 THEN 'ALL_DATASETS'
+                ELSE dataset_name
+            END AS dataset_name,
+            CASE
+                WHEN GROUPING(match_reason) = 1 THEN 'OVERALL'
+                ELSE match_reason
+            END AS match_reason,
             COUNT(*) AS total_matched,
             SUM(is_correct) AS correct_matches,
-            SUM(CASE WHEN is_correct = 0 AND is_matchable = 1 THEN 1 ELSE 0 END) AS incorrect_matches,
+            SUM(
+                CASE WHEN is_correct = 0 AND is_matchable = 1 THEN 1 ELSE 0 END
+            ) AS incorrect_matches,
             SUM(CASE WHEN is_matchable = 0 THEN 1 ELSE 0 END) AS unmatchable_records,
-            ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0), 2) AS accuracy_pct,
-            ROUND(COALESCE(100.0 * SUM(is_correct) / NULLIF(SUM(is_matchable), 0), 0), 2) AS accuracy_pct_matchable,
+            ROUND(
+                COALESCE(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 0),
+                2
+            ) AS accuracy_pct,
+            ROUND(
+                COALESCE(100.0 * SUM(is_correct) / NULLIF(SUM(is_matchable), 0), 0),
+                2
+            ) AS accuracy_pct_matchable,
             GROUPING(dataset_name) AS dataset_grouping,
             GROUPING(match_reason) AS reason_grouping
         FROM matched_records

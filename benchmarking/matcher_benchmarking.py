@@ -6,7 +6,10 @@ from benchmarking.analysis import (
     print_stages_benchmark_header,
 )
 from benchmarking.analysis.accuracy import calculate_accuracy_metrics
-from benchmarking.analysis.mismatches import analyse_mismatches, print_mismatch_analysis
+from benchmarking.analysis.mismatches import (
+    analyse_mismatches,
+    print_mismatch_analysis,
+)
 from benchmarking.datasets import get_dataset_info, load_benchmark_data
 from benchmarking.utils.io import apply_env_from_private_config, setup_connection
 from benchmarking.utils.timing import format_timing_summary, time_phase
@@ -31,12 +34,17 @@ CANONICAL_PREPARED_FOLDER: Path | None = (
     else None
 )
 # DEBUG_OPTIONS: Optional[DebugOptions] = DebugOptions(
-#     pretty_print_sql=True, debug_incremental=True, debug_mode=True, debug_show_sql=True
+#     pretty_print_sql=True,
+#     debug_incremental=True,
+#     debug_mode=True,
+#     debug_show_sql=True,
 # )
 DEBUG_OPTIONS: Optional[DebugOptions] = None
 SAMPLE_MODE = False
-# If you need to run in low-memory environments, set this to True to filter the canonical dataset to only
-# include postcodes present in the messy dataset. You won't get a full benchmark, but it can be useful for testing and debugging
+# If you need to run in low-memory environments, set this to True to
+# filter the canonical dataset to only include postcodes present in the
+# messy dataset. You won't get a full benchmark, but it can be useful
+# for testing and debugging.
 FILTER_CANONICAL_BY_MESSY_POSTCODES = True
 
 # Stage configuration
@@ -58,7 +66,8 @@ STAGES = [
 # If False, load pre-cleaned canonical data (faster, but won't have exploding_unique_ids)
 CLEAN_CANONICAL_ON_THE_FLY = False
 # If True, derive term frequencies from canonical data on the fly
-# If False, use pre-baked term frequencies (only relevant when CLEAN_CANONICAL_ON_THE_FLY=True)
+# If False, use pre-baked term frequencies
+# (only relevant when CLEAN_CANONICAL_ON_THE_FLY=True)
 DERIVE_TERM_FREQUENCIES_ON_THE_FLY = False
 
 # Analysis configuration
@@ -138,9 +147,7 @@ incorrect_count = (
 )
 
 if incorrect_count > 0:
-    print(
-        f"\n📊 Found {incorrect_count:,} incorrect matches. Analysing mismatches...\n"
-    )
+    print(f"\n📊 Found {incorrect_count:,} incorrect matches. Analysing mismatches...\n")
     mismatch_results = analyse_mismatches(
         ukam_matches=match_candidates,
         ukam_canonical=df_os_clean,

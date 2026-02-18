@@ -1,4 +1,5 @@
 import duckdb
+
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )

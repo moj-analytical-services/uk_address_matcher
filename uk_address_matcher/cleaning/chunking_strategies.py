@@ -44,9 +44,7 @@ def _log_progress(
     total_chunks: int | None = None,
     chunk_elapsed_seconds: float | None = None,
 ) -> None:
-    percentage_complete = (
-        processed_records / total_records if total_records > 0 else 1.0
-    )
+    percentage_complete = processed_records / total_records if total_records > 0 else 1.0
 
     message = (
         f"{stage_type}"
@@ -118,7 +116,8 @@ def clean_data_pre_term_frequencies(
             WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
         """)
 
-        # Process the chunk without address ID, applying debug options only on first iteration
+        # Process the chunk without address ID,
+        # applying debug options only on first iteration.
         processed_chunk = _clean_data_pre_term_frequencies(
             chunk,
             con,
@@ -158,8 +157,16 @@ def derive_term_frequencies_table(
 
     Example usage:
         tf_table = derive_term_frequencies_table(df_canonical, con)
-        df_messy = prepare_data_for_matching(df_messy, con, term_frequency_lookup=tf_table)
-        df_canonical = prepare_data_for_matching(df_canonical, con, term_frequency_lookup=tf_table)
+        df_messy = prepare_data_for_matching(
+            df_messy,
+            con,
+            term_frequency_lookup=tf_table,
+        )
+        df_canonical = prepare_data_for_matching(
+            df_canonical,
+            con,
+            term_frequency_lookup=tf_table,
+        )
 
     Args:
         address_table: Input address relation with address_concat column.
@@ -201,7 +208,7 @@ def derive_term_frequencies_table(
             input_rel=chunk,
             stage_specs=QUEUE_FOR_TF_DERIVATION,
             pipeline_name="Clean for TF derivation",
-            pipeline_description="Clean and tokenise for term frequency computation",
+            pipeline_description=("Clean and tokenise for term frequency computation"),
         )
         processed_chunk = pipeline.run(debug_options if chunk_index == 0 else None)
 
@@ -253,8 +260,10 @@ def derive_inverted_index(
 ) -> DuckDBPyRelation:
     """Derive a trigram-based inverted index from already-cleaned canonical data.
 
-    This function expects pre-cleaned address data (output of prepare_data_for_matching)
-    with `clean_full_address` and `unique_id` columns already present. It computes trigrams
+    This function expects pre-cleaned address data
+    (output of prepare_data_for_matching)
+    with `clean_full_address` and `unique_id` columns already present.
+    It computes trigrams
     (consecutive 3-token sequences) and builds an inverted index mapping each trigram
     to a list of unique_ids. Trigrams appearing in more than `max_unique_ids_per_trigram`
     records are filtered out as they provide poor blocking selectivity.
@@ -280,7 +289,8 @@ def derive_inverted_index(
         debug_options: Optional debug configuration for pipeline execution.
 
     Returns:
-        Inverted index table with 'trigram' (VARCHAR) and 'unique_ids' (LIST) columns.
+        Inverted index table with 'trigram' (VARCHAR)
+        and 'unique_ids' (LIST) columns.
     """
     uid = _uid()
 
@@ -346,7 +356,8 @@ def prepare_data_for_matching(
 
     Returns:
         Cleaned address data with computed term frequencies, including numeric
-        term frequency columns (tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3)
+        term frequency columns:
+        tf_numeric_token_1, tf_numeric_token_2, tf_numeric_token_3
         and an `exploding_unique_ids` column for blocking.
 
     Example:
@@ -412,7 +423,9 @@ def prepare_data_for_matching(
             chunk,
             con=con,
             pre_cleaned_addresses=True,
-            derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
+            derive_distinguishing_wrt_adjacent_records=(
+                derive_distinguishing_wrt_adjacent_records
+            ),
             additional_stages=trigram_stages,
             debug_options=debug_options if chunk_index == 0 else None,
         )
@@ -442,7 +455,8 @@ def prepare_data_for_matching(
     remaining_rows = con.sql(f"SELECT COUNT(*) FROM {cleaned_table_name}").fetchone()[0]
     if remaining_rows != 0:
         raise ValueError(
-            f"Expected intermediate table {cleaned_table_name} to be empty after processing, "
+            "Expected intermediate table "
+            f"{cleaned_table_name} to be empty after processing, "
             f"but found {remaining_rows} rows remaining."
         )
 

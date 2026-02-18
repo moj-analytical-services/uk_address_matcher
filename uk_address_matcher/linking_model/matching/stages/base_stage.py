@@ -162,7 +162,8 @@ class MatchingStage(ABC):
 
             >>> MatchingStage.available_stages()
             Available matching stages (from uk_address_matcher):
-              ExactMatchStage  – Exact hash-join matching on clean_full_address + postcode.
+              ExactMatchStage  – Exact hash-join matching on
+                                  clean_full_address + postcode.
               SplinkStage      – Splink probabilistic matching stage.
               ...
 

@@ -7,8 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from benchmarking.utils.io import get_env_setting
-from benchmarking.utils.io import apply_env_from_private_config
+from benchmarking.utils.io import apply_env_from_private_config, get_env_setting
 
 if TYPE_CHECKING:
     import duckdb
@@ -49,7 +48,8 @@ def resolve_s3_path(env_var_explicit: str, env_var_relative: str) -> str:
         if not prefix.strip() or not relative.strip():
             raise RuntimeError(
                 f"Either {env_var_explicit} must be set to a full path, or both "
-                f"UKAM_S3_BASE_PREFIX and {env_var_relative} must be set to construct the path."
+                "UKAM_S3_BASE_PREFIX and "
+                f"{env_var_relative} must be set to construct the path."
             )
         path = f"{prefix.strip().rstrip('/')}/{relative.strip().lstrip('/')}"
 
@@ -215,8 +215,10 @@ class CanonicalConfig:
             configured_path = get_env_setting("UKAM_OS_CANONICAL_PRECLEANED")
             if not configured_path:
                 raise RuntimeError(
-                    "Environment variable UKAM_OS_CANONICAL_PRECLEANED must be set to the "
-                    "local path of the pre-cleaned canonical OS dataset."
+                    "Environment variable UKAM_OS_CANONICAL_PRECLEANED "
+                    "must be set to the "
+                    "local path of the pre-cleaned canonical "
+                    "OS dataset."
                 )
             return cls(local_path=Path(configured_path))
 
