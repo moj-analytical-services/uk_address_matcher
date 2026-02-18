@@ -50,60 +50,21 @@ jobs:
           EOF
         fi
 
-    - name: Upsert PR comment (sticky)
+    - name: Debug comment file
       if: always()
-      uses: actions/github-script@v7
+      run: |
+        echo "Comment file info:"
+        ls -l github-comment.md
+        echo "Character count:"
+        wc -c github-comment.md
+        echo "Preview (first 40 lines):"
+        sed -n '1,40p' github-comment.md
+
+    - name: Comment on PR (sticky)
+      if: always()
+      uses: marocchino/sticky-pull-request-comment@v2
       with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const fs = require('fs');
-          const marker = '<!-- address-matcher-edge-cases -->';
-
-          let commentContent = '';
-          try {
-            commentContent = fs.readFileSync('github-comment.md', 'utf8').trim();
-          } catch (error) {
-            core.warning(`Failed to read github-comment.md: ${error.message}`);
-          }
-
-          if (!commentContent) {
-            commentContent = [
-              '## ❌ Address Matcher Test Failed',
-              '',
-              'No results content was produced.',
-              'Please check the workflow logs for details.'
-            ].join('\n');
-          }
-
-          const body = `${marker}\n${commentContent}`;
-          const { owner, repo } = context.repo;
-          const issue_number = context.issue.number;
-
-          const comments = await github.paginate(github.rest.issues.listComments, {
-            owner,
-            repo,
-            issue_number,
-            per_page: 100,
-          });
-
-          const existing = comments.find(
-            (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker)
-          );
-
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner,
-              repo,
-              comment_id: existing.id,
-              body,
-            });
-            core.info(`Updated existing sticky comment (${existing.id}).`);
-          } else {
-            const created = await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number,
-              body,
-            });
-            core.info(`Created sticky comment (${created.data.id}).`);
-          }
+        header: address-matcher-edge-cases
+        path: github-comment.md
+        hide_and_recreate: false
+        skip_unchanged: false
