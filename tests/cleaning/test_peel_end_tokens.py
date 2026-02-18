@@ -1,8 +1,13 @@
 import duckdb
 import pytest
 
-from uk_address_matcher.cleaning.steps.normalisation import _peel_common_uk_end_tokens
+from uk_address_matcher.linking_model.matching.stages.peeled import (
+    PEEL_ITERATIONS,
+    _build_peel_ctes,
+    _load_peeling_lookup_sql,
+)
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pytest.fixture
@@ -11,26 +16,45 @@ def connection():
     return duckdb.connect()
 
 
-def _run_peel_single(
-    address: str,
-    con: duckdb.DuckDBPyConnection,
-    fuzzy_threshold: int = 0,
-) -> list:
-    """Run peeling on a single address and return the peeled tokens."""
+def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
+    """Run peeled-stage token peeling on a single address."""
+
+    @pipeline_stage(stage_output="peeled_for_test")
+    def _peel_for_test():
+        peel_steps, final_name = _build_peel_ctes(
+            prefix="test",
+            source_placeholder="input",
+        )
+        return [
+            CTEStep("uk_end_tokens_lookup", _load_peeling_lookup_sql()),
+            *peel_steps,
+            CTEStep(
+                "peeled_for_test",
+                f"""
+                SELECT
+                    ukam_address_id,
+                    clean_full_address,
+                    peeled_tokens_list
+                FROM {{{final_name}}}
+                """,
+            ),
+        ]
+
     input_relation = con.sql(
         f"SELECT '{address}' AS clean_full_address, "
         f"'{address}' AS original_address_concat, "
+        "'E1 1AA' AS postcode, "
         "'0' AS ukam_address_id"
     )
+
     pipeline = DuckDBPipeline(con, input_relation)
-    pipeline.add_step(_peel_common_uk_end_tokens(fuzzy_threshold=fuzzy_threshold))
+    pipeline.add_step(_peel_for_test())
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
+
     row = result.fetchone()
     return list(row[result.columns.index("peeled_tokens_list")] or [])
 
 
-# --- Exact matching tests (run by default) ---
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 @pytest.mark.parametrize(
     "address,expected",
     [
@@ -56,15 +80,13 @@ def _run_peel_single(
     ],
 )
 def test_peel_end_tokens_exact(connection, address, expected):
-    """Test exact matching of end tokens (default behaviour)."""
-    assert _run_peel_single(address, connection, fuzzy_threshold=0) == expected
+    """Exact end-token peeling works as expected."""
+    assert _run_peel_single(address, connection) == expected
 
 
-# --- Fuzzy matching tests (requires fuzzy_threshold=1) ---
-# Note: Fuzzy matching only works on tokens with 4+ characters
-# to avoid false positives.
-# Uses pre-computed typo variants (deletions, transpositions) for O(1) lookup
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
+@pytest.mark.skip(
+    reason="Fuzzy typo handling is under review and may be deprecated soon."
+)
 @pytest.mark.parametrize(
     "address,expected",
     [
@@ -85,27 +107,59 @@ def test_peel_end_tokens_exact(connection, address, expected):
         ("10 HIGH STREET LONXYZ", []),  # too distant - no match
     ],
 )
-def test_peel_end_tokens_fuzzy(connection, address, expected):
-    """Test fuzzy matching of end tokens (typos with edit distance <= 1)."""
-    assert _run_peel_single(address, connection, fuzzy_threshold=1) == expected
+def test_peel_end_tokens_lookup_supports_fuzzy_single_token_typoes(
+    connection,
+    address,
+    expected,
+):
+    """Lookup SQL supports edit-distance-1 single-token typo matching."""
+    assert _run_peel_single(address, connection) == expected
 
 
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
+def test_lookup_keys_are_distinct_by_lookup_key(connection):
+    """Final lookup table has one row per lookup_key."""
+    row = connection.sql(
+        """
+        SELECT
+            COUNT(*) AS total_rows,
+            COUNT(DISTINCT lookup_key) AS distinct_lookup_keys
+        FROM (
+            {lookup_sql}
+        ) AS lookup
+        """.format(lookup_sql=_load_peeling_lookup_sql())
+    ).fetchone()
+
+    assert row[0] == row[1]
+
+
+def test_exact_lookup_key_is_preferred_over_fuzzy_variant(connection):
+    """Exact key wins when multiple candidates could map to same lookup key."""
+    row = connection.sql(
+        """
+        SELECT pattern, token_count
+        FROM (
+            {lookup_sql}
+        ) AS lookup
+        WHERE lookup_key = 'LONDON'
+        """.format(lookup_sql=_load_peeling_lookup_sql())
+    ).fetchone()
+
+    assert row == ("LONDON", 1)
+
+
+@pytest.mark.skip(
+    reason="Multi-token fuzzy peeling may be removed, so keep this on hold."
+)
 def test_multi_token_fuzzy_not_supported(connection):
-    """Multi-token fuzzy (e.g. GREATOR LONDON) only peels exact matches.
+    """Multi-token fuzzy (e.g. GREATOR LONDON) only peels exact matches."""
+    peeled = _run_peel_single("5 PARK LANE LONDON GREATOR LONDON", connection)
+    assert peeled == ["LONDON"]
 
-    This documents current behaviour - fuzzy only works on single-token patterns.
-    """
+
+def test_peeling_is_capped_by_iteration_limit(connection):
+    """Peeling depth is capped at PEEL_ITERATIONS."""
     peeled = _run_peel_single(
-        "5 PARK LANE LONDON GREATOR LONDON", connection, fuzzy_threshold=1
+        "1 TEST ROAD LONDON UK ENGLAND LONDON UK ENGLAND",
+        connection,
     )
-    # Only exact "LONDON" matches are peeled, not "GREATOR LONDON" as "GREATER LONDON"
-    assert len(peeled) >= 1
-    assert "LONDON" in peeled
-
-
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
-def test_fuzzy_threshold_above_1_raises_error():
-    """fuzzy_threshold > 1 is not supported and should raise ValueError."""
-    with pytest.raises(ValueError, match="fuzzy_threshold=2 is not supported"):
-        _peel_common_uk_end_tokens(fuzzy_threshold=2)
+    assert len(peeled) == PEEL_ITERATIONS

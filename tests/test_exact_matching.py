@@ -414,7 +414,6 @@ def peeled_test_data(duck_con):
     return df_fuzzy, df_canonical
 
 
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
     """Test that peeled address matching correctly finds matches after removing
     locality tokens."""
@@ -458,7 +457,6 @@ def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
     assert matched_dict.get(6) == 1006, "Case 6 should match canonical 1006"
 
 
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data):
     """Test that peeled address matching doesn't inflate or reduce row count."""
     df_fuzzy, df_canonical = peeled_test_data
@@ -478,7 +476,6 @@ def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data)
     )
 
 
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 def test_peeled_address_matching_match_reason(duck_con, peeled_test_data):
     """Test that peeled matches have the correct match_reason."""
     df_fuzzy, df_canonical = peeled_test_data
@@ -508,7 +505,6 @@ def test_peeled_address_matching_match_reason(duck_con, peeled_test_data):
     )
 
 
-@pytest.mark.skip(reason="Peeling logic removed from cleaning steps")
 def test_peeled_address_multi_word_token_handling(duck_con):
     """Test that multi-word peeled tokens like 'TUNBRIDGE WELLS' are handled correctly.
 
