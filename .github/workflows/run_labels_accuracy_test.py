@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -8,19 +7,6 @@ import duckdb
 from uk_address_matcher import ExactMatchStage, SplinkStage, prepare_data_for_matching
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.training import get_settings_for_training
-from uk_address_matcher.post_linkage.accuracy_from_labels import (
-    evaluate_predictions_against_labels,
-)
-
-
-def _labels_git_ref(repo_dir: Path) -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(repo_dir), "rev-parse", "--short", "HEAD"],
-            text=True,
-        ).strip()
-    except Exception:
-        return "unknown"
 
 
 def _write_error_comment(message: str) -> None:
@@ -33,35 +19,51 @@ def _write_error_comment(message: str) -> None:
 
 def _write_success_comment(
     *,
-    labels_repo_dir: Path,
-    total_labelled: int,
-    evaluation_rows: list[tuple],
-    wrong_predictions: list[tuple],
+    total_cases: int,
+    correct_matches: int,
+    match_rate: float,
+    mismatches: list[dict],
 ) -> None:
     comment_path = Path.cwd() / "github-comment.md"
     with comment_path.open("w", encoding="utf-8") as file_handle:
-        file_handle.write("## 📊 Address matcher accuracy (external labels)\n\n")
-        file_handle.write(f"- Labels repo: `{labels_repo_dir.name}`\n")
-        file_handle.write(f"- Labels ref: `{_labels_git_ref(labels_repo_dir)}`\n")
-        file_handle.write(f"- Labelled records used: **{total_labelled}**\n\n")
+        file_handle.write("## 📊 Address Matcher Test Results\n\n")
+        file_handle.write("### Statistics\n\n")
+        file_handle.write(f"- **Total test cases:** {total_cases}\n")
+        file_handle.write(f"- **Correct matches:** {correct_matches}\n")
+        file_handle.write(f"- **Match rate:** {match_rate:.2f}%\n")
+        file_handle.write("- **Total reward:** N/A\n\n")
 
-        file_handle.write("### Summary\n\n")
-        file_handle.write("| Status | Count | Percentage |\n")
-        file_handle.write("| ------ | -----:| ----------:|\n")
-
-        for status, count, _percentage, percentage_fmt in evaluation_rows:
-            safe_status = status if status is not None else "Unknown"
-            safe_percentage = percentage_fmt if percentage_fmt is not None else "N/A"
-            file_handle.write(f"| {safe_status} | {count} | {safe_percentage} |\n")
-
-        if wrong_predictions:
-            file_handle.write("\n### Sample wrong predictions (up to 20)\n\n")
-            file_handle.write("| unique_id | expected | predicted |\n")
-            file_handle.write("| --------- | -------- | --------- |\n")
-            for unique_id, expected, predicted in wrong_predictions:
+        if mismatches:
+            file_handle.write("### ⚠️ Some addresses were not matched correctly:\n\n")
+            for mismatch in mismatches:
                 file_handle.write(
-                    f"| {unique_id} | {expected} | {predicted if predicted is not None else 'NULL'} |\n"
+                    f"#### Test Block ID: {mismatch['test_block_id']}\n\n"
                 )
+                file_handle.write(
+                    "| Record Type | Address | Postcode | Match Weight |\n"
+                )
+                file_handle.write(
+                    "| ----------- | ------- | -------- | ------------ |\n"
+                )
+                file_handle.write(
+                    "| Messy Record | "
+                    f"{mismatch['messy_address']} | {mismatch['messy_postcode']} | N/A |\n"
+                )
+                file_handle.write(
+                    "| True Match | "
+                    f"{mismatch['true_match_address']} | {mismatch['true_match_postcode']} | N/A |\n"
+                )
+                false_weight = (
+                    f"{mismatch['false_match_weight']:.2f}"
+                    if mismatch["false_match_weight"] is not None
+                    else "N/A"
+                )
+                file_handle.write(
+                    "| False Match | "
+                    f"{mismatch['false_match_address']} | {mismatch['false_match_postcode']} | {false_weight} |\n\n"
+                )
+        else:
+            file_handle.write("### ✅ All addresses were matched correctly!\n")
 
 
 def run_labels_accuracy() -> int:
@@ -82,16 +84,6 @@ def run_labels_accuracy() -> int:
         labels_export = con.read_csv(str(labels_path))
         con.register("labels_export", labels_export)
 
-        labels_rel = con.sql(
-            """
-            SELECT
-                unique_id_r::VARCHAR AS unique_id,
-                unique_id_l::VARCHAR AS correct_unique_id
-            FROM labels_export
-            WHERE human_label = 1
-            """
-        )
-
         messy_data_rel = con.sql(
             """
             SELECT
@@ -107,6 +99,7 @@ def run_labels_accuracy() -> int:
         canonical_rel = con.read_parquet(str(canonical_path)).select(
             "unique_id::VARCHAR AS unique_id, address_concat, postcode"
         )
+        con.register("canonical_data", canonical_rel)
 
         messy_clean_rel = prepare_data_for_matching(messy_data_rel, con=con)
         canonical_clean_rel = prepare_data_for_matching(canonical_rel, con=con)
@@ -133,18 +126,35 @@ def run_labels_accuracy() -> int:
             ],
         )
 
-        evaluation_rel = evaluate_predictions_against_labels(
-            match_candidates=match_candidates_rel,
-            con=con,
-        )
-
         con.register("__match_candidates", match_candidates_rel)
-        wrong_predictions = con.sql(
+        stats_row = con.sql(
+            """
+            SELECT
+                COUNT(*) AS total_cases,
+                SUM(
+                    CASE
+                        WHEN resolved_canonical_id::VARCHAR = ukam_label::VARCHAR THEN 1
+                        ELSE 0
+                    END
+                )::BIGINT AS correct_matches
+            FROM __match_candidates
+            WHERE ukam_label IS NOT NULL
+            """
+        ).fetchone()
+
+        total_cases = int(stats_row[0] or 0)
+        correct_matches = int(stats_row[1] or 0)
+        match_rate = (correct_matches / total_cases) * 100.0 if total_cases > 0 else 0.0
+
+        mismatch_rows = con.sql(
             """
             SELECT
                 unique_id,
-                ukam_label::VARCHAR AS expected,
-                resolved_canonical_id::VARCHAR AS predicted
+                ukam_label::VARCHAR AS true_match_id,
+                resolved_canonical_id::VARCHAR AS predicted_match_id,
+                match_weight,
+                address_concat,
+                postcode
             FROM __match_candidates
             WHERE ukam_label IS NOT NULL
               AND (resolved_canonical_id IS NULL OR resolved_canonical_id::VARCHAR <> ukam_label::VARCHAR)
@@ -152,17 +162,68 @@ def run_labels_accuracy() -> int:
             """
         ).fetchall()
 
-        total_labelled = labels_rel.count("*").fetchone()[0]
-        evaluation_rows = evaluation_rel.fetchall()
+        mismatches = []
+        for (
+            unique_id,
+            true_match_id,
+            predicted_match_id,
+            match_weight,
+            messy_address,
+            messy_postcode,
+        ) in mismatch_rows:
+            true_match_row = con.sql(
+                f"""
+                SELECT address_concat, postcode
+                FROM canonical_data
+                WHERE unique_id::VARCHAR = '{true_match_id}'
+                LIMIT 1
+                """
+            ).fetchone()
+
+            false_match_row = (
+                con.sql(
+                    f"""
+                    SELECT address_concat, postcode
+                    FROM canonical_data
+                    WHERE unique_id::VARCHAR = '{predicted_match_id}'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if predicted_match_id is not None
+                else None
+            )
+
+            mismatches.append(
+                {
+                    "test_block_id": unique_id,
+                    "messy_address": messy_address,
+                    "messy_postcode": messy_postcode,
+                    "true_match_address": true_match_row[0]
+                    if true_match_row
+                    else "N/A",
+                    "true_match_postcode": true_match_row[1]
+                    if true_match_row
+                    else "N/A",
+                    "false_match_address": false_match_row[0]
+                    if false_match_row
+                    else "No match found",
+                    "false_match_postcode": false_match_row[1]
+                    if false_match_row
+                    else "N/A",
+                    "false_match_weight": float(match_weight)
+                    if match_weight is not None
+                    else None,
+                }
+            )
 
         _write_success_comment(
-            labels_repo_dir=labels_repo,
-            total_labelled=total_labelled,
-            evaluation_rows=evaluation_rows,
-            wrong_predictions=wrong_predictions,
+            total_cases=total_cases,
+            correct_matches=correct_matches,
+            match_rate=match_rate,
+            mismatches=mismatches,
         )
 
-        print(f"Completed labels accuracy run with {total_labelled} labelled records.")
+        print(f"Completed labels accuracy run with {total_cases} labelled records.")
         return 0
 
     except Exception as error:
