@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "uk_address_matcher/**"
+      - "tests/**"
 
 permissions:
   contents: read
@@ -37,11 +38,21 @@ jobs:
       run: uv run .github/workflows/run_address_test.py
       continue-on-error: true
 
+    - name: Ensure comment content exists
+      if: always()
+      run: |
+        if [ ! -s github-comment.md ]; then
+          cat > github-comment.md << 'EOF'
+          ## ❌ Address Matcher Test Failed
+
+          No results file was produced by the test step.
+          Please check the workflow logs for details.
+          EOF
+        fi
+
     - name: Comment on PR (sticky)
+      if: always()
       uses: marocchino/sticky-pull-request-comment@v2
       with:
         header: address-matcher-edge-cases
         path: github-comment.md
-        hide_and_recreate: true
-        hide_classify: OUTDATED
-        skip_unchanged: true
