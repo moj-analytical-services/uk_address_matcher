@@ -153,7 +153,7 @@ def run_labels_accuracy() -> int:
                 ukam_label::VARCHAR AS true_match_id,
                 resolved_canonical_id::VARCHAR AS predicted_match_id,
                 match_weight,
-                address_concat,
+                original_address_concat,
                 postcode
             FROM __match_candidates
             WHERE ukam_label IS NOT NULL
