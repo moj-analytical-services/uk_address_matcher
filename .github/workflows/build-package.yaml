@@ -1,0 +1,64 @@
+name: Build & package
+
+on:
+  pull_request:
+    paths:
+      - "uk_address_matcher/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "uk_address_matcher/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Build sdist + wheel
+        run: uv run python -m build
+
+      - name: Check package metadata
+        run: uv run python -m twine check dist/*
+
+      - name: Smoke test wheel installs and imports
+        run: |
+          uv venv -p 3.10
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+          python -c "import uk_address_matcher; print('Imported uk_address_matcher OK')"
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
