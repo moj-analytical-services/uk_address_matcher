@@ -7,6 +7,7 @@ class MatchReason(Enum):
     """Canonical set of match reason values shared between Python and DuckDB."""
 
     EXACT = "exact: full match"
+    EXACT_WITHOUT_POSTCODE = "exact_without_postcode: full match ignoring postcode"
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
 
