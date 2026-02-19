@@ -8,6 +8,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _normalise_abbreviations_and_units,
     _remove_duplicate_end_tokens,
     _rename_and_select_columns,
+    _strip_country_suffix,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "_canonicalise_postcode",
     "_upper_case_address_and_postcode",
     "_clean_address_string_first_pass",
+    "_strip_country_suffix",
     "_remove_duplicate_end_tokens",
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
