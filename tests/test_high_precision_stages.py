@@ -2,9 +2,11 @@ import pytest
 
 from uk_address_matcher import (
     ExactMatchStage,
+    ExactMatchWithoutPostcodeStage,
     PeeledAddressStage,
 )
 from uk_address_matcher.linking_model.matching.runner import _run_matching
+from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
 @pytest.fixture
@@ -123,6 +125,171 @@ def test_data(duck_con):
     )
 
     return df_fuzzy, df_canonical
+
+
+# -----------------------------------------------------------------------------
+# Exact match without postcode tests
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def exact_without_postcode_test_data(duck_con):
+    """Messy/canonical pairs that only match when ignoring the postcode."""
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    111,
+                    '2 HIGHFIELD ROAD',
+                    '2 HIGHFIELD ROAD',
+                    'AA1 1AA',
+                    CAST([] AS VARCHAR[]),
+                    99::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    2222,
+                    '2 HIGHFIELD ROAD',
+                    '2 HIGHFIELD ROAD',
+                    'BB2 2BB',
+                    CAST([] AS VARCHAR[]),
+                    42
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            ukam_address_id
+        )
+        """
+    )
+
+    return df_fuzzy, df_canonical
+
+
+def test_exact_match_without_postcode_matches_when_postcode_mismatch(
+    duck_con, exact_without_postcode_test_data
+):
+    """The dedicated stage should resolve addresses mismatched only by postcode."""
+    df_fuzzy, df_canonical = exact_without_postcode_test_data
+
+    results = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(), ExactMatchWithoutPostcodeStage()],
+    )
+
+    results_df = results.fetchdf()
+    matched = results_df[results_df["resolved_canonical_id"].notna()]
+
+    assert len(matched) == 1, (
+        "Only one fuzzy record should be resolved via the new stage"
+    )
+
+    record = matched.iloc[0]
+    assert record["resolved_canonical_id"] == 2222
+    assert record["match_reason"] == MatchReason.EXACT_WITHOUT_POSTCODE.value
+
+
+@pytest.fixture
+def exact_without_postcode_duplicate_canonical_test_data(duck_con):
+    """Postcode-free stage should skip ambiguous canonical concats."""
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    111,
+                    '2 HIGHFIELD ROAD',
+                    '2 HIGHFIELD ROAD',
+                    'AA1 1AA',
+                    CAST([] AS VARCHAR[]),
+                    99::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    2222,
+                    '2 HIGHFIELD ROAD',
+                    '2 HIGHFIELD ROAD',
+                    'BB2 2BB',
+                    CAST([] AS VARCHAR[]),
+                    42
+                ),
+                (
+                    3333,
+                    '2 HIGHFIELD ROAD',
+                    '2 HIGHFIELD ROAD',
+                    'CC3 3CC',
+                    CAST([] AS VARCHAR[]),
+                    43
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            ukam_address_id
+        )
+        """
+    )
+
+    return df_fuzzy, df_canonical
+
+
+def test_exact_match_without_postcode_skips_non_unique_canonical_clean_full_address(
+    duck_con, exact_without_postcode_duplicate_canonical_test_data
+):
+    """Ambiguous canonical clean_full_address values should not be matched."""
+    df_fuzzy, df_canonical = exact_without_postcode_duplicate_canonical_test_data
+
+    results = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(), ExactMatchWithoutPostcodeStage()],
+    )
+
+    results_df = results.fetchdf()
+    matched = results_df[results_df["resolved_canonical_id"].notna()]
+
+    assert len(matched) == 0, "Ambiguous canonical concats must be excluded"
 
 
 # -----------------------------------------------------------------------------
