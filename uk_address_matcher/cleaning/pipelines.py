@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -26,6 +27,7 @@ from uk_address_matcher.cleaning.steps import (
     _separate_unusual_tokens,
     _set_exploding_unique_ids_to_self,
     _split_numeric_tokens_to_cols,
+    _strip_country_suffix,
     _tokenise_address_without_numbers,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
@@ -36,6 +38,9 @@ from uk_address_matcher.cleaning.steps.term_frequencies import (
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
+
+logger = logging.getLogger("uk_address_matcher")
+ENABLE_COUNTRY_SUFFIX_STRIP_METRICS = False
 
 
 def _ensure_postcode_column(rel: DuckDBPyRelation) -> DuckDBPyRelation:
@@ -73,6 +78,7 @@ QUEUE_CLEAN_FULL_ADDRESS = [
     _upper_case_address_and_postcode,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
+    _strip_country_suffix,
     _normalise_abbreviations_and_units,
     _remove_duplicate_end_tokens,  # clean_full_address now completed
 ]
@@ -123,6 +129,27 @@ QUEUE_TRIGRAM_SELF = [
 ]
 
 
+def _log_country_suffix_strip_count(
+    result: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+) -> None:
+    if not ENABLE_COUNTRY_SUFFIX_STRIP_METRICS:
+        return
+
+    if "__country_suffix_stripped" not in result.columns:
+        return
+
+    con.register("__temp_country_strip_count", result)
+    changed = con.sql(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN __country_suffix_stripped THEN 1 ELSE 0 END), 0)
+        FROM __temp_country_strip_count
+        """
+    ).fetchone()[0]
+    logger.info("Country suffix stripped in %s rows", f"{changed:,}")
+
+
 def _clean_data_pre_term_frequencies(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
@@ -139,12 +166,15 @@ def _clean_data_pre_term_frequencies(
         pipeline_description="The cleaning pipeline pre the term frequency steps",
     )
     result = pipeline.run(debug_options)
+    _log_country_suffix_strip_count(result, con)
 
     exclude_columns = []
     if "source_dataset" in result.columns:
         exclude_columns.append("source_dataset")
     if "address_without_numbers" in result.columns:
         exclude_columns.append("address_without_numbers")
+    if "__country_suffix_stripped" in result.columns:
+        exclude_columns.append("__country_suffix_stripped")
 
     if exclude_columns:
         con.register("__temp_result_for_exclude", result)
@@ -194,12 +224,15 @@ def _clean_data_using_precomputed_rel_tok_freq(
         ),
     )
     result = pipeline.run(debug_options)
+    _log_country_suffix_strip_count(result, con)
 
     exclude_columns = []
     if "source_dataset" in result.columns:
         exclude_columns.append("source_dataset")
     if "address_without_numbers" in result.columns:
         exclude_columns.append("address_without_numbers")
+    if "__country_suffix_stripped" in result.columns:
+        exclude_columns.append("__country_suffix_stripped")
 
     if exclude_columns:
         con.register("__temp_result_for_exclude", result)
@@ -223,6 +256,7 @@ def get_numeric_term_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
+        _strip_country_suffix,
         _parse_out_flat_position_and_letter,
         _parse_out_numbers,
     ]
@@ -269,6 +303,7 @@ def get_address_token_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
+        _strip_country_suffix,
         _parse_out_flat_position_and_letter,
         _parse_out_numbers,
         _clean_address_string_second_pass,

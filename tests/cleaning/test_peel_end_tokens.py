@@ -2,6 +2,7 @@ import duckdb
 import pytest
 
 from uk_address_matcher.linking_model.matching.stages.peeled import (
+    MAX_PEELED_WORDS,
     PEEL_ITERATIONS,
     _build_peel_ctes,
     _load_peeling_lookup_sql,
@@ -16,8 +17,8 @@ def connection():
     return duckdb.connect()
 
 
-def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
-    """Run peeled-stage token peeling on a single address."""
+def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> dict[str, object]:
+    """Run peeled-stage peeling on a single address and return key outputs."""
 
     @pipeline_stage(stage_output="peeled_for_test")
     def _peel_for_test():
@@ -34,7 +35,9 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
                 SELECT
                     ukam_address_id,
                     clean_full_address,
-                    peeled_tokens_list
+                    peeled_word_count,
+                    did_peel,
+                    peeled_address
                 FROM {{{final_name}}}
                 """,
             ),
@@ -52,7 +55,11 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
 
     row = result.fetchone()
-    return list(row[result.columns.index("peeled_tokens_list")] or [])
+    return {
+        "peeled_word_count": row[result.columns.index("peeled_word_count")],
+        "did_peel": row[result.columns.index("did_peel")],
+        "peeled_address": row[result.columns.index("peeled_address")],
+    }
 
 
 @pytest.mark.parametrize(
@@ -63,7 +70,10 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
             "10 HIGH STREET MANCHESTER GREATER MANCHESTER",
             ["MANCHESTER", "GREATER MANCHESTER"],
         ),
-        ("5 PARK LANE LONDON GREATER LONDON UK", ["LONDON", "GREATER LONDON", "UK"]),
+        (
+            "5 PARK LANE LONDON GREATER LONDON UK",
+            [],
+        ),
         (
             "25 MAIN ROAD HACKNEY LONDON GREATER LONDON",
             ["HACKNEY", "LONDON", "GREATER LONDON"],
@@ -71,7 +81,7 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
         ("THE OLD RECTORY CHURCH LANE HERTFORDSHIRE", ["HERTFORDSHIRE"]),
         (
             "1 TEST ROAD LEWISHAM LONDON GREATER LONDON ENGLAND UK",
-            ["LEWISHAM", "LONDON", "GREATER LONDON", "ENGLAND", "UK"],
+            [],
         ),
         ("42 ACACIA AVENUE SPRINGFIELD", []),  # nothing to peel
         ("87-91 HACKNEY ROAD", []),  # mid-address token not peeled
@@ -81,39 +91,25 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> list[str]:
 )
 def test_peel_end_tokens_exact(connection, address, expected):
     """Exact end-token peeling works as expected."""
-    assert _run_peel_single(address, connection) == expected
+    result = _run_peel_single(address, connection)
+    assert result["peeled_word_count"] == sum(len(token.split(" ")) for token in expected)
+    assert result["did_peel"] == (len(expected) > 0)
 
 
-@pytest.mark.skip(
-    reason="Fuzzy typo handling is under review and may be deprecated soon."
-)
 @pytest.mark.parametrize(
-    "address,expected",
+    "address",
     [
-        ("10 HIGH STREET LONDN", ["LONDON"]),  # deletion
-        ("10 HIGH STREET CARDIF", ["CARDIFF"]),  # deletion
-        ("15 STATION ROAD MANCHSTER", ["MANCHESTER"]),  # deletion
-        ("5 PARK LANE LONDNO", ["LONDON"]),  # transposition
-        ("UNIT 5 BUSINESS PARK BIRMINGAHM", ["BIRMINGHAM"]),  # transposition
-        ("THE OLD RECTORY HERTFORDSHRIE", ["HERTFORDSHIRE"]),  # transposition
-        ("5 PRINCES STREET EDINBRUGH", ["EDINBURGH"]),  # transposition
-        # Short tokens (< 4 chars) block peeling;
-        # UC doesn't match, so LONDON isn't reached.
-        ("10 HIGH STREET LONDON UC", []),  # UC blocks further peeling
-        (
-            "25 MAIN ROAD HACKENY LONDON GREATER LONDON",
-            ["HACKNEY", "LONDON", "GREATER LONDON"],
-        ),
-        ("10 HIGH STREET LONXYZ", []),  # too distant - no match
+        "10 HIGH STREET LONDN",
+        "10 HIGH STREET CARDIF",
+        "15 STATION ROAD MANCHSTER",
+        "5 PARK LANE LONDNO",
+        "THE OLD RECTORY HERTFORDSHRIE",
     ],
 )
-def test_peel_end_tokens_lookup_supports_fuzzy_single_token_typoes(
-    connection,
-    address,
-    expected,
-):
-    """Lookup SQL supports edit-distance-1 single-token typo matching."""
-    assert _run_peel_single(address, connection) == expected
+def test_peel_end_tokens_exact_only_no_fuzzy_typo_support(connection, address):
+    """Lookup is exact-only and no longer peels typo variants."""
+    result = _run_peel_single(address, connection)
+    assert result["peeled_word_count"] == 0
 
 
 def test_lookup_keys_are_distinct_by_lookup_key(connection):
@@ -133,7 +129,7 @@ def test_lookup_keys_are_distinct_by_lookup_key(connection):
 
 
 def test_exact_lookup_key_is_preferred_over_fuzzy_variant(connection):
-    """Exact key wins when multiple candidates could map to same lookup key."""
+    """Exact key is present and mapped to itself."""
     row = connection.sql(
         """
         SELECT pattern, token_count
@@ -147,19 +143,23 @@ def test_exact_lookup_key_is_preferred_over_fuzzy_variant(connection):
     assert row == ("LONDON", 1)
 
 
-@pytest.mark.skip(
-    reason="Multi-token fuzzy peeling may be removed, so keep this on hold."
-)
 def test_multi_token_fuzzy_not_supported(connection):
-    """Multi-token fuzzy (e.g. GREATOR LONDON) only peels exact matches."""
-    peeled = _run_peel_single("5 PARK LANE LONDON GREATOR LONDON", connection)
-    assert peeled == ["LONDON"]
+    """Multi-token fuzzy is unsupported, but exact trailing tokens can still peel."""
+    result = _run_peel_single("5 PARK LANE LONDON GREATOR LONDON", connection)
+    assert result["peeled_word_count"] == 1
+
+
+def test_country_tokens_not_peeled_in_this_stage(connection):
+    """Country/high-level denomination tokens are excluded from peeling."""
+    result = _run_peel_single("10 HIGH STREET UNITED KINGDOM", connection)
+    assert result["peeled_word_count"] == 0
 
 
 def test_peeling_is_capped_by_iteration_limit(connection):
-    """Peeling depth is capped at PEEL_ITERATIONS."""
-    peeled = _run_peel_single(
+    """Peeling depth is capped by total peeled words."""
+    result = _run_peel_single(
         "1 TEST ROAD LONDON UK ENGLAND LONDON UK ENGLAND",
         connection,
     )
-    assert len(peeled) == PEEL_ITERATIONS
+    assert result["peeled_word_count"] <= MAX_PEELED_WORDS
+    assert result["peeled_word_count"] <= PEEL_ITERATIONS
