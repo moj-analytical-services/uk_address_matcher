@@ -216,82 +216,24 @@ def _clean_address_string_first_pass() -> str:
     ),
     tags=["cleaning", "normalisation"],
 )
-def _strip_country_suffix() -> list[CTEStep]:
+def _strip_country_suffix() -> str:
     suffix_regex = (
         r"(?:\s+(?:UNITED KINGDOM|GREAT BRITAIN|NORTHERN IRELAND|"
         r"UK|BRITAIN|ENGLAND|SCOTLAND|WALES))+$"
     )
-    base_sql = """
+    sql = f"""
     SELECT
-        *,
-        TRIM(clean_full_address) AS __clean_trim
-    FROM {input}
-    """
-
-    flagged_sql = """
-    SELECT
-        *,
-        (
-            __clean_trim IS NOT NULL
-            AND (
-                right(__clean_trim, 3) = ' UK'
-                OR right(__clean_trim, 8) = ' BRITAIN'
-                OR right(__clean_trim, 8) = ' ENGLAND'
-                OR right(__clean_trim, 9) = ' SCOTLAND'
-                OR right(__clean_trim, 6) = ' WALES'
-                OR right(__clean_trim, 15) = ' UNITED KINGDOM'
-                OR right(__clean_trim, 14) = ' GREAT BRITAIN'
-                OR right(__clean_trim, 17) = ' NORTHERN IRELAND'
-                OR __clean_trim IN (
-                    'UK',
-                    'BRITAIN',
-                    'ENGLAND',
-                    'SCOTLAND',
-                    'WALES',
-                    'UNITED KINGDOM',
-                    'GREAT BRITAIN',
-                    'NORTHERN IRELAND'
-                )
+        * EXCLUDE (clean_full_address),
+        TRIM(
+            regexp_replace(
+                ' ' || TRIM(clean_full_address),
+                '{suffix_regex}',
+                ''
             )
-        ) AS __likely_has_country_suffix
-    FROM {base}
+        ) AS clean_full_address
+    FROM {{input}}
     """
-
-    stripped_sql = f"""
-    SELECT
-        *,
-        CASE
-            WHEN __likely_has_country_suffix THEN
-                TRIM(
-                    regexp_replace(
-                        ' ' || __clean_trim,
-                        '{suffix_regex}',
-                        ''
-                    )
-                )
-            ELSE __clean_trim
-        END AS __stripped_address
-    FROM {{flagged}}
-    """
-
-    final_sql = """
-    SELECT
-        * EXCLUDE (
-            __clean_trim,
-            __likely_has_country_suffix,
-            __stripped_address,
-            clean_full_address
-        ),
-        __stripped_address AS clean_full_address
-    FROM {stripped}
-    """
-
-    return [
-        CTEStep("base", base_sql),
-        CTEStep("flagged", flagged_sql),
-        CTEStep("stripped", stripped_sql),
-        CTEStep("with_cleaned_address", final_sql),
-    ]
+    return sql
 
 
 @pipeline_stage(
