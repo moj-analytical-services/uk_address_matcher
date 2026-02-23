@@ -58,7 +58,7 @@ def test_common_end_tokens_excludes_country_suffixes(pytestconfig):
         Path(pytestconfig.rootpath)
         / "uk_address_matcher"
         / "data"
-        / "common_end_tokens.json"
+        / "common_uk_end_tokens.json"
     )
 
     with json_path.open("r", encoding="utf-8") as f:
