@@ -1,3 +1,4 @@
+import re
 import tempfile
 from pathlib import Path
 
@@ -204,3 +205,45 @@ def test_available_stages_prints_human_guidance():
     assert "UniqueTrigramStage" in text
     assert "Usage:" in text
     assert "from uk_address_matcher import" in text
+
+
+def _normalise_hash_suffix(name: str) -> str:
+    """Normalise dynamic hash-like suffixes used in DuckDB temp object names."""
+    return re.sub(r"_[a-z0-9]{8,32}$", "", name)
+
+
+def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_data):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage(), SplinkStage()],
+    )
+    matcher.match()
+
+    table_names = [
+        row[0] for row in con.execute("SELECT table_name FROM duckdb_tables()").fetchall()
+    ]
+
+    unnamed_relations = [
+        name for name in table_names if re.fullmatch(r"unnamed_relation_[0-9a-f]+", name)
+    ]
+    assert not unnamed_relations, (
+        "Unexpected unnamed_relation tables leaked into the connection: "
+        f"{sorted(unnamed_relations)}"
+    )
+
+    splink_numeric_tf = [
+        name for name in table_names if name.startswith("__splink__df_tf_numeric_token_")
+    ]
+    normalised = {_normalise_hash_suffix(name) for name in splink_numeric_tf}
+    assert len(normalised) == len(splink_numeric_tf), (
+        "Splink numeric TF table signatures collided after hash normalisation: "
+        f"raw={sorted(splink_numeric_tf)}, normalised={sorted(normalised)}"
+    )
+
+    root_tables = [name for name in table_names if re.fullmatch(r"root_[a-z0-9]+", name)]
+    assert len(root_tables) <= 2, (
+        "Expected at most two root_* tables for canonical/messy inputs, "
+        f"found {len(root_tables)}: {sorted(root_tables)}"
+    )

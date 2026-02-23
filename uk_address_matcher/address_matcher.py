@@ -11,6 +11,7 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.match_result import MatchResult
+from uk_address_matcher.sql_pipeline.helpers import _duckdb_table_exists, _uid
 
 if TYPE_CHECKING:
     import duckdb
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+
+_CON_INPUT_RELATION_ALIAS_CACHE: dict[int, dict[str, str]] = {}
 
 
 def _ensure_splink_udfs(con: duckdb.DuckDBPyConnection) -> None:
@@ -141,14 +145,55 @@ class AddressMatcher:
         self.stages = stages if stages is not None else _default_stages()
         self.debug_options = debug_options
 
-        self._raw_canonical = canonical_addresses
-        self._raw_messy = self._coerce_addresses_to_match(addresses_to_match)
+        if isinstance(canonical_addresses, (str, Path)):
+            self._raw_canonical = canonical_addresses
+        else:
+            self._raw_canonical = self._register_input_relation_once(
+                canonical_addresses,
+                role="canonical",
+            )
+
+        coerced_messy = self._coerce_addresses_to_match(addresses_to_match)
+        self._raw_messy = self._register_input_relation_once(
+            coerced_messy,
+            role="messy",
+        )
 
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
         self._tf_table: duckdb.DuckDBPyRelation | None = None
         self._inverted_index: duckdb.DuckDBPyRelation | None = None
         self._messy_clean: duckdb.DuckDBPyRelation | None = None
+
+    def _register_input_relation_once(
+        self,
+        relation: duckdb.DuckDBPyRelation,
+        *,
+        role: str,
+    ) -> duckdb.DuckDBPyRelation:
+        registration_cache = _CON_INPUT_RELATION_ALIAS_CACHE.setdefault(id(self.con), {})
+
+        relation_sql = relation.sql_query()
+        cached_alias = registration_cache.get(relation_sql)
+        if cached_alias and _duckdb_table_exists(self.con, cached_alias):
+            return self.con.table(cached_alias)
+
+        relation_alias = getattr(relation, "alias", None)
+        if (
+            relation_alias
+            and not str(relation_alias).startswith("unnamed_relation_")
+            and _duckdb_table_exists(self.con, relation_alias)
+        ):
+            registration_cache[relation_sql] = str(relation_alias)
+            return self.con.table(str(relation_alias))
+
+        alias = f"__ukam_input_{role}_{_uid()}"
+        while _duckdb_table_exists(self.con, alias):
+            alias = f"__ukam_input_{role}_{_uid()}"
+
+        self.con.register(alias, relation)
+        registration_cache[relation_sql] = alias
+        return self.con.table(alias)
 
     def _resolve_canonical_data(self) -> None:
         """Loads or cleans canonical data depending on the input type."""

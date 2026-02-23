@@ -68,9 +68,6 @@ class _SplinkInspector:
             return predictions
         conditions: list[str] = []
 
-        pred_view = f"__ukam_tmp_pred_{id(predictions)}"
-        self._con.register(pred_view, predictions)
-
         if ukam_ids:
             id_column = _resolve_predictions_id_column(predictions)
             id_values = ", ".join(_sql_literal(value) for value in ukam_ids)
@@ -89,7 +86,8 @@ class _SplinkInspector:
             limit_clause = f"LIMIT {limit}"
 
         query = (
-            f"SELECT * FROM {pred_view} AS pred {where_clause} {limit_clause}"
+            "SELECT * "
+            f"FROM ({predictions.sql_query()}) AS pred {where_clause} {limit_clause}"
         ).strip()
         return self._con.sql(query)
 

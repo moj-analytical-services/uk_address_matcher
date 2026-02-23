@@ -29,6 +29,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uk_address_matcher")
 
 
+def _materialise_relation(
+    con: DuckDBPyConnection,
+    relation: DuckDBPyRelation,
+    table_name: str,
+) -> DuckDBPyRelation:
+    con.execute(f"DROP VIEW IF EXISTS {table_name}")
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    relation.create(table_name)
+    return con.table(table_name)
+
+
 def _format_elapsed(elapsed_seconds: float) -> str:
     total_seconds = int(round(max(0.0, elapsed_seconds)))
     minutes, seconds = divmod(total_seconds, 60)
@@ -110,11 +121,13 @@ def clean_data_pre_term_frequencies(
 
     for chunk_index in range(total_chunks):
         chunk_started_at = time.perf_counter()
-        chunk = con.sql(f"""
+        chunk_query = con.sql(f"""
         SELECT *
             FROM {input_name}
             WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
         """)
+        chunk_table = f"__ukam_chunk_input_{uid}_{chunk_index}"
+        chunk = _materialise_relation(con, chunk_query, chunk_table)
 
         # Process the chunk without address ID,
         # applying debug options only on first iteration.
@@ -137,6 +150,11 @@ def clean_data_pre_term_frequencies(
             total_chunks=total_chunks,
             chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
         )
+
+        con.execute(f"DROP TABLE IF EXISTS {chunk_table}")
+
+    con.execute(f"DROP VIEW IF EXISTS {input_name}")
+    con.execute(f"DROP TABLE IF EXISTS {input_name}")
 
     return con.table(f"__ukam_chunked_addresses_{uid}")
 
@@ -197,11 +215,13 @@ def derive_term_frequencies_table(
     # Process in chunks using minimal pipeline (clean + tokenise only)
     for chunk_index in range(total_chunks):
         chunk_started_at = time.perf_counter()
-        chunk = con.sql(f"""
+        chunk_query = con.sql(f"""
             SELECT *
             FROM {input_name}
             WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
         """)
+        chunk_table = f"__ukam_tf_chunk_input_{uid}_{chunk_index}"
+        chunk = _materialise_relation(con, chunk_query, chunk_table)
 
         pipeline = create_sql_pipeline(
             con,
@@ -226,6 +246,8 @@ def derive_term_frequencies_table(
             chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
         )
 
+        con.execute(f"DROP TABLE IF EXISTS {chunk_table}")
+
     # Compute token frequencies from clean_full_address tokens
     tf_sql = f"""
     WITH unnested AS (
@@ -247,6 +269,8 @@ def derive_term_frequencies_table(
 
     # Clean up intermediate table
     con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
+    con.execute(f"DROP VIEW IF EXISTS {input_name}")
+    con.execute(f"DROP TABLE IF EXISTS {input_name}")
 
     return con.table(result_table)
 
@@ -412,11 +436,13 @@ def prepare_data_for_matching(
     # Apply term frequencies and trigram blocking to cleaned chunks
     for chunk_index in range(total_chunks):
         chunk_started_at = time.perf_counter()
-        chunk = con.sql(f"""
+        chunk_query = con.sql(f"""
         SELECT *
             FROM {cleaned_table_name}
             WHERE (abs(hash(original_address_concat)) % {total_chunks}) = {chunk_index}
         """)
+        chunk_table = f"__ukam_post_tf_chunk_input_{uid}_{chunk_index}"
+        chunk = _materialise_relation(con, chunk_query, chunk_table)
 
         # Process chunk: apply term frequencies + trigram blocking in one pass
         processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
@@ -450,6 +476,8 @@ def prepare_data_for_matching(
             total_chunks=total_chunks,
             chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
         )
+
+        con.execute(f"DROP TABLE IF EXISTS {chunk_table}")
 
     # Verify the intermediate table is now empty (all chunks processed)
     remaining_rows = con.sql(f"SELECT COUNT(*) FROM {cleaned_table_name}").fetchone()[0]

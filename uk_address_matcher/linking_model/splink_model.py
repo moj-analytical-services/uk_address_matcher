@@ -189,13 +189,16 @@ def _get_linker(
     con.register("df_addresses_to_match_fix", df_addresses_to_match)
     con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
 
+    df_addresses_to_match_fix = con.table("df_addresses_to_match_fix")
+    df_addresses_to_search_within_fix = con.table("df_addresses_to_search_within_fix")
+
     # Drop stale Splink views/tables from any prior linker on this connection.
     for tbl in ("m_", "c_"):
         con.execute(f"DROP VIEW IF EXISTS {tbl}")
         con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
     linker = Linker(
-        [df_addresses_to_match, df_addresses_to_search_within],
+        [df_addresses_to_match_fix, df_addresses_to_search_within_fix],
         settings=settings,
         db_api=db_api,
         input_table_aliases=["m_", "c_"],
@@ -221,10 +224,10 @@ def _get_linker(
 
     sql = f"""
     select {select_expr}, 'm_' as source_dataset
-    from df_addresses_to_match
+    from df_addresses_to_match_fix
     UNION ALL
     select {select_expr}, 'c_' as source_dataset
-    from df_addresses_to_search_within
+    from df_addresses_to_search_within_fix
 
     """
 

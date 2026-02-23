@@ -38,6 +38,9 @@ StageFactory = Callable[[], Stage]
 StageLike = Union[Stage, StageFactory]
 
 
+_CON_RELATION_ALIAS_CACHE: dict[int, dict[str, str]] = {}
+
+
 class InputBinding(NamedTuple):
     name: str
     relation: duckdb.DuckDBPyRelation
@@ -57,17 +60,36 @@ class InputBinding(NamedTuple):
         con: duckdb.DuckDBPyConnection,
         registered_aliases: set[str],
     ) -> str:
-        alias_candidate = getattr(self.relation, "alias", None) or self.name
+        registration_cache = _CON_RELATION_ALIAS_CACHE.setdefault(id(con), {})
+
+        relation_sql = self.relation.sql_query()
+        cached_alias = registration_cache.get(relation_sql)
+        if cached_alias and _duckdb_table_exists(con, cached_alias):
+            registered_aliases.add(cached_alias)
+            return cached_alias
+
+        relation_alias = getattr(self.relation, "alias", None)
+        use_relation_alias = bool(
+            relation_alias and not str(relation_alias).startswith("unnamed_relation_")
+        )
+        alias_candidate = relation_alias if use_relation_alias else self.name
         alias_candidate = _slug(alias_candidate) or self.normalised_placeholder()
         if alias_candidate[0].isdigit():
             alias_candidate = f"t_{alias_candidate}"
+        if alias_candidate == "root":
+            alias_candidate = f"root_{_uid(4)}"
+
+        if use_relation_alias and _duckdb_table_exists(con, alias_candidate):
+            registration_cache[relation_sql] = alias_candidate
+            registered_aliases.add(alias_candidate)
+            return alias_candidate
 
         alias = alias_candidate
-        while alias in registered_aliases:
+        while alias in registered_aliases or _duckdb_table_exists(con, alias):
             alias = f"{alias_candidate}_{_uid(4)}"
 
-        if not _duckdb_table_exists(con, alias):
-            con.register(alias, self.relation)
+        con.register(alias, self.relation)
+        registration_cache[relation_sql] = alias
 
         registered_aliases.add(alias)
         return alias
