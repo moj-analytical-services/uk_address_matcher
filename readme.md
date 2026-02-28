@@ -1,4 +1,4 @@
-# High performance UK addresses matcher (geocoder)
+# High performance address matcher
 
 Fast, simple address matching (geocoding) in Python.
 
@@ -33,7 +33,7 @@ Generally one dataset will be a dataset of 'messy addresses' which need matching
 
 ### Basic Matching
 
-> [!NOTE]
+> [!NOTE]`
 > Two runnable examples with live sample data are included for experimentation:
 > - [`examples/example_matching.py`](./examples/example_matching.py): End-to-end matching example, including loading data, running the matcher, and previewing results.
 > - [`examples/example_prepare_canonical.py`](./examples/example_prepare_canonical.py): Example of preparing a canonical dataset for repeated use, demonstrating how to persist prepared data to disk and load it for matching.

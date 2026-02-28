@@ -1,0 +1,51 @@
+site_name: UK Address Matcher
+site_url: https://moj-analytical-services.github.io/uk_address_matcher/
+repo_url: https://github.com/moj-analytical-services/uk_address_matcher
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.code.annotate
+    - content.code.copy
+    - content.action.edit
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to light mode
+
+plugins:
+  - search
+
+exclude_docs: |
+  adr/
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - tables
+  - footnotes
+
+nav:
+  - Home: index.md
+  - Ordnance Survey Data Guide: building_ordnance_survey_data.md
