@@ -114,9 +114,7 @@ def _build_final_output(
         "canonical_ukam_address_id",
         "match_reason",
     }
-    additional_columns = [
-        column for column in results_columns if column not in excluded
-    ]
+    additional_columns = [column for column in results_columns if column not in excluded]
     additional_projection = "".join(
         f",\n            results.{column}" for column in additional_columns
     )
