@@ -1,10 +1,14 @@
 import importlib.resources as pkg_resources
 import json
+import logging
+from contextlib import contextmanager
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from splink import DuckDBAPI, Linker, SettingsCreator
 
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
+
+_SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
 
 
 def _get_model_settings_dict():
@@ -52,6 +56,17 @@ def _sanitise_null_comparison_levels(settings_as_dict: dict) -> dict:
             level.pop("u_probability", None)
 
     return settings_as_dict
+
+
+@contextmanager
+def _suppress_known_splink_warnings():
+    logger = logging.getLogger(_SPLINK_SETTINGS_LOGGER)
+    original_level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(original_level)
 
 
 def _get_precomputed_numeric_tf_table(con: DuckDBPyConnection):
@@ -188,13 +203,14 @@ def _get_linker(
         con.execute(f"DROP VIEW IF EXISTS {tbl}")
         con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
-    linker = Linker(
-        [df_addresses_to_match_fix, df_addresses_to_search_within_fix],
-        settings=settings,
-        db_api=db_api,
-        input_table_aliases=[messy_name, canonical_name],
-        set_up_basic_logging=False,
-    )
+    with _suppress_known_splink_warnings():
+        linker = Linker(
+            [df_addresses_to_match_fix, df_addresses_to_search_within_fix],
+            settings=settings,
+            db_api=db_api,
+            input_table_aliases=[messy_name, canonical_name],
+            set_up_basic_logging=False,
+        )
 
     if precomputed_numeric_tf_table is None:
         precomputed_numeric_tf_table = _get_precomputed_numeric_tf_table(con)

@@ -1,3 +1,4 @@
+import logging
 import re
 import tempfile
 from pathlib import Path
@@ -94,6 +95,33 @@ def test_match_with_explicit_stages(con, canonical_data, messy_data):
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
     assert result.matches().count("*").fetchone()[0] > 0
+
+
+def test_stage_timing_logs_at_debug_level(con, canonical_data, messy_data, caplog):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        matcher.match()
+
+    debug_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+    ]
+    timing_messages = [
+        message for message in debug_messages if message.startswith("Stage '")
+    ]
+
+    assert timing_messages, "Expected at least one stage timing debug message"
+    assert any(
+        re.fullmatch(r"Stage '.+' completed in \d+m \d{2}s\.", message)
+        for message in timing_messages
+    )
 
 
 def test_match_with_relations_from_different_connection(con):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
@@ -14,6 +15,13 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+
+def _format_elapsed(elapsed_seconds: float) -> str:
+    total_seconds = int(round(max(0.0, elapsed_seconds)))
+    # We shouldn't need to worry about hours here...
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}m {seconds:02d}s"
 
 
 def _relation_sql(relation: duckdb.DuckDBPyRelation) -> str:
@@ -202,6 +210,7 @@ def _run_matching(
 
         df_unmatched = _get_unmatched(con, df_messy_clean, results_table)
 
+        started_at = time.perf_counter()
         stage.run(
             con=con,
             stage_name=stage_name,
@@ -210,6 +219,12 @@ def _run_matching(
             df_canonical=df_canonical_clean,
             debug_options=debug_options,
             explain=explain,
+        )
+        elapsed_seconds = time.perf_counter() - started_at
+        logger.debug(
+            "Stage '%s' completed in %s.",
+            stage_name,
+            _format_elapsed(elapsed_seconds),
         )
 
         if explain:
