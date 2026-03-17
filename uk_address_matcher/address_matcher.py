@@ -38,23 +38,30 @@ def _ensure_splink_udfs(con: duckdb.DuckDBPyConnection) -> None:
         con.execute("LOAD splink_udfs")
 
 
-def _is_fully_prepared(rel: duckdb.DuckDBPyRelation) -> bool:
-    """True when a relation has been through `prepare_data_for_matching`.
-
-    The full pipeline adds term-frequency columns (e.g. `tf_numeric_token_1`)
-    and `exploding_unique_ids`, which distinguish it from the lighter output
-    of `clean_data_pre_term_frequencies`.
-    """
-    cols = set(rel.columns)
-    return "tf_numeric_token_1" in cols and "exploding_unique_ids" in cols
-
-
 def _default_stages() -> list[MatchingStage]:
     """Return the default stage sequence: exact match then Splink."""
     from uk_address_matcher.linking_model.matching.stages import ExactMatchStage
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
     return [ExactMatchStage(), SplinkStage()]
+
+
+def _normalise_and_validate_raw_canonical(
+    rel: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    """Normalise and validate required columns for raw canonical input."""
+    if "address_concat" not in rel.columns and "original_address_concat" in rel.columns:
+        rel = rel.project("*, original_address_concat AS address_concat")
+
+    required = {"unique_id", "address_concat"}
+    missing = sorted(required.difference(rel.columns))
+    if missing:
+        raise ValueError(
+            "canonical_addresses relation is missing required columns: "
+            f"{missing}. Expected at least ['address_concat', 'unique_id']."
+        )
+
+    return rel
 
 
 class AddressMatcher:
@@ -196,24 +203,23 @@ class AddressMatcher:
             self._tf_table = prepared.term_frequencies
             self._inverted_index = prepared.inverted_index
 
-        elif _is_fully_prepared(self._raw_canonical):
-            logger.debug("Canonical data already fully prepared; skipping.")
-            self._canonical_clean = self._raw_canonical
-
         else:
+            canonical_for_preparation = _normalise_and_validate_raw_canonical(
+                self._raw_canonical
+            )
             # Data is either raw or only pre-cleaned.  In both cases we need
             # term frequencies and the inverted index.  `prepare_data_for_matching`
             # handles pre-cleaned input correctly (it checks internally).
             logger.debug("Deriving term frequencies from canonical data")
             self._tf_table = derive_term_frequencies_table(
-                self._raw_canonical,
+                canonical_for_preparation,
                 con=self.con,
                 debug_options=self.debug_options,
             )
 
             logger.debug("Cleaning canonical data")
             self._canonical_clean = prepare_data_for_matching(
-                self._raw_canonical,
+                canonical_for_preparation,
                 con=self.con,
                 term_frequency_lookup=self._tf_table,
                 dataset_role="canonical",
@@ -230,20 +236,16 @@ class AddressMatcher:
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
 
-        if _is_fully_prepared(self._raw_messy):
-            logger.debug("Messy data already fully prepared; skipping.")
-            self._messy_clean = self._raw_messy
-        else:
-            logger.debug("Cleaning messy data")
-            self._messy_clean = prepare_data_for_matching(
-                self._raw_messy,
-                con=self.con,
-                # If nothing was loaded from disk, these will be None — but that's fine,
-                term_frequency_lookup=self._tf_table,
-                inverted_index=self._inverted_index,
-                dataset_role="messy",
-                debug_options=self.debug_options,
-            )
+        logger.debug("Cleaning messy data")
+        self._messy_clean = prepare_data_for_matching(
+            self._raw_messy,
+            con=self.con,
+            # If nothing was loaded from disk, these will be None — but that's fine,
+            term_frequency_lookup=self._tf_table,
+            inverted_index=self._inverted_index,
+            dataset_role="messy",
+            debug_options=self.debug_options,
+        )
 
     def _coerce_addresses_to_match(
         self,
