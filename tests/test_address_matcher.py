@@ -1,4 +1,5 @@
 import re
+import logging
 import tempfile
 from pathlib import Path
 
@@ -94,6 +95,33 @@ def test_match_with_explicit_stages(con, canonical_data, messy_data):
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
     assert result.matches().count("*").fetchone()[0] > 0
+
+
+def test_stage_timing_logs_at_debug_level(con, canonical_data, messy_data, caplog):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        matcher.match()
+
+    debug_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+    ]
+    timing_messages = [
+        message for message in debug_messages if message.startswith("Stage '")
+    ]
+
+    assert timing_messages, "Expected at least one stage timing debug message"
+    assert any(
+        re.fullmatch(r"Stage '.+' completed in \d+m \d{2}s\.", message)
+        for message in timing_messages
+    )
 
 
 def test_match_with_relations_from_different_connection(con):
@@ -337,9 +365,12 @@ def test_stage_repr_is_concise_and_informative():
     assert peeled_repr.startswith("PeeledAddressStage()")
     assert "\n  Purpose:" in peeled_repr
     assert (
-        "Deterministic matching after peeling common UK locality suffixes." in peeled_repr
+        "Deterministic matching after peeling common UK locality suffixes."
+        in peeled_repr
     )  # noqa: E501
-    assert "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
+    assert (
+        "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
+    )
 
     assert splink_repr.startswith("SplinkStage(final_match_weight_threshold=7.0)")
     assert "\n  Purpose:" in splink_repr
@@ -360,7 +391,9 @@ def test_stage_repr_is_concise_and_informative():
 def test_available_stages_prints_human_guidance():
     text = str(AddressMatcher.available_stages())
 
-    assert text.startswith("Available matching stages (import from uk_address_matcher):")
+    assert text.startswith(
+        "Available matching stages (import from uk_address_matcher):"
+    )
     assert "ExactMatchStage" in text
     assert "PeeledAddressStage" in text
     assert "SplinkStage" in text
@@ -384,11 +417,14 @@ def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_dat
     matcher.match()
 
     table_names = [
-        row[0] for row in con.execute("SELECT table_name FROM duckdb_tables()").fetchall()
+        row[0]
+        for row in con.execute("SELECT table_name FROM duckdb_tables()").fetchall()
     ]
 
     unnamed_relations = [
-        name for name in table_names if re.fullmatch(r"unnamed_relation_[0-9a-f]+", name)
+        name
+        for name in table_names
+        if re.fullmatch(r"unnamed_relation_[0-9a-f]+", name)
     ]
     assert not unnamed_relations, (
         "Unexpected unnamed_relation tables leaked into the connection: "
@@ -396,7 +432,9 @@ def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_dat
     )
 
     splink_numeric_tf = [
-        name for name in table_names if name.startswith("__splink__df_tf_numeric_token_")
+        name
+        for name in table_names
+        if name.startswith("__splink__df_tf_numeric_token_")
     ]
     normalised = {_normalise_hash_suffix(name) for name in splink_numeric_tf}
     assert len(normalised) == len(splink_numeric_tf), (
@@ -404,7 +442,9 @@ def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_dat
         f"raw={sorted(splink_numeric_tf)}, normalised={sorted(normalised)}"
     )
 
-    root_tables = [name for name in table_names if re.fullmatch(r"root_[a-z0-9]+", name)]
+    root_tables = [
+        name for name in table_names if re.fullmatch(r"root_[a-z0-9]+", name)
+    ]
     assert len(root_tables) <= 2, (
         "Expected at most two root_* tables for canonical/messy inputs, "
         f"found {len(root_tables)}: {sorted(root_tables)}"
@@ -413,7 +453,9 @@ def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_dat
     processed_tables = [
         name
         for name in table_names
-        if re.fullmatch(r"(?:__ukam__|ukam__)processed_(messy|canonical)_[a-z0-9]+", name)
+        if re.fullmatch(
+            r"(?:__ukam__|ukam__)processed_(messy|canonical)_[a-z0-9]+", name
+        )
     ]
     assert len(processed_tables) == 2, (
         "Expected one processed table each for messy/canonical inputs, "
