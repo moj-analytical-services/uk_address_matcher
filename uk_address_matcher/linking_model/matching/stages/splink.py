@@ -138,21 +138,18 @@ class SplinkStage(MatchingStage):
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
-        df_predict_ddb = df_predict.as_duckdbpyrelation()
 
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
             "CREATE OR REPLACE TEMP VIEW "
             + table_name
-            + " AS SELECT * FROM ("
-            + df_predict_ddb.sql_query()
-            + ")"
+            + f" AS SELECT * FROM {df_predict.physical_name}"
         )
         self.predictions_table = table_name
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(
-            df_predict=df_predict_ddb,
+            df_predict=df_predict.as_duckdbpyrelation(),
             con=con,
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
@@ -160,13 +157,23 @@ class SplinkStage(MatchingStage):
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
 
+        self.improved_predictions_table = df_improved.alias
+
         # Step 4: Compute distinguishability and select best match per record
+        # This returns an unmaterialised relation
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
             con=con,
-            best_match_only=True,
+            best_match_only=False,
         )
+
+        df_best_name = f"__ukam__splink__best_matches__{_uid()}"
+        df_best.create(df_best_name)
+        self.best_matches_table = df_best_name
+
+        # No longer needed once best matches are computed and persisted
+        con.execute(f"DROP TABLE {df_improved.alias}")
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value
@@ -180,14 +187,21 @@ class SplinkStage(MatchingStage):
 
         return con.sql(f"""
             SELECT
-                ukam_address_id_r AS ukam_address_id,
-                unique_id_l AS resolved_canonical_id,
-                ukam_address_id_l AS canonical_ukam_address_id,
+                best_match.ukam_address_id_r AS ukam_address_id,
+                best_match.unique_id_l AS resolved_canonical_id,
+                best_match.ukam_address_id_l AS canonical_ukam_address_id,
                 '{splink_label}' AS match_reason,
-                match_weight,
-                distinguishability
-            FROM ({df_best.sql_query()})
-            WHERE match_weight >= {self.final_match_weight_threshold}
+                best_match.match_weight,
+                best_match.distinguishability
+            FROM (
+                SELECT *
+                FROM {df_best_name}
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY unique_id_r
+                    ORDER BY match_weight DESC, unique_id_l
+                ) = 1
+            ) AS best_match
+            WHERE best_match.match_weight >= {self.final_match_weight_threshold}
             {dist_filter}
-            AND unique_id_l IS NOT NULL
+            AND best_match.unique_id_l IS NOT NULL
         """)

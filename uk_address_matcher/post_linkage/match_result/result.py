@@ -191,7 +191,7 @@ class MatchResult:
             )
         return _SplinkInspector(con=self.con, linker=self._splink_linker)
 
-    def splink_predictions(
+    def _splink_predictions(
         self,
         limit: int | None = None,
         ukam_ids: list[str | int] | None = None,
