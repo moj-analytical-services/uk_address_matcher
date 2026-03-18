@@ -105,7 +105,7 @@ def run_single_dataset(
         canonical_relation = getattr(match_result, "_canonical_relation", None)
         splink_predictions = None
         try:
-            splink_predictions = match_result.splink_predictions()
+            splink_predictions = match_result._splink_predictions()
         except ValueError:
             splink_predictions = None
 

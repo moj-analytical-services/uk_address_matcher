@@ -91,6 +91,7 @@ class SplinkStage(MatchingStage):
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
     predictions_table: str | None = field(default=None, init=False, repr=False)
+    best_matches_table: str | None = field(default=None, init=False, repr=False)
 
     def find_matches(
         self,
@@ -156,8 +157,6 @@ class SplinkStage(MatchingStage):
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
-
-        self.improved_predictions_table = df_improved.alias
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation

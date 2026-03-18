@@ -315,8 +315,8 @@ class AddressMatcher:
             debug_options=self.debug_options,
         )
 
-        splink_linker = next(
-            (stage.linker for stage in self.stages if isinstance(stage, SplinkStage)),
+        splink_stage = next(
+            (stage for stage in self.stages if isinstance(stage, SplinkStage)),
             None,
         )
 
@@ -325,7 +325,7 @@ class AddressMatcher:
         return MatchResult(
             result,
             con=self.con,
-            _splink_linker=splink_linker,
+            _splink_stage=splink_stage,
             _canonical_relation=self._canonical_clean,
         )
 

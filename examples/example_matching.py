@@ -95,5 +95,5 @@ match_result.match_metrics().show()
 # Splink inspection helpers (available when a Splink stage runs)
 # -----------------------------------------------------------------------------
 print("\n=== Splink predictions sample ===")
-splink_results = match_result.splink_predictions(limit=5)
+splink_results = match_result._splink_predictions(limit=5)
 splink_results.show(max_width=500)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
+
+if TYPE_CHECKING:
+    from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
 
 def _resolve_predictions_id_column(predictions: DuckDBPyRelation) -> str:
@@ -38,10 +41,10 @@ class _SplinkInspector:
         self,
         *,
         con: DuckDBPyConnection,
-        linker: Any,
+        stage: SplinkStage,
     ) -> None:
         self._con = con
-        self._linker = linker
+        self._stage = stage
 
     def predictions(
         self,
@@ -91,25 +94,10 @@ class _SplinkInspector:
         ).strip()
         return self._con.sql(query)
 
-    def _get_predictions_relation(self) -> DuckDBPyRelation | None:
-        predictions = self._find_cached_table("__splink__df_predict")
-        if predictions is None:
-            predictions = self._find_cached_table("df_predict")
-        return predictions
-
-    def _find_cached_table(self, table_hint: str) -> DuckDBPyRelation | None:
-        try:
-            cache = self._linker._intermediate_table_cache
-        except AttributeError:
-            raise AttributeError(
-                "Splink linker does not have an intermediate table cache. "
-                "Splink inspection helpers require a compatible Splink version."
-            )
-
-        matches = [value for name, value in cache.items() if table_hint in str(name)]
-        if len(matches) > 1:
-            raise ValueError(f"Multiple cached tables matched the hint {table_hint!r}.")
-        if not matches:
-            raise ValueError(f"No cached table found matching the hint {table_hint!r}.")
-
-        return matches[0].as_duckdbpyrelation()
+    def _get_predictions_relation(self) -> DuckDBPyRelation:
+        if self._stage.predictions_table is not None:
+            return self._con.table(self._stage.predictions_table)
+        raise ValueError(
+            "SplinkStage has no predictions table. "
+            "The stage may not have run far enough to produce predictions."
+        )

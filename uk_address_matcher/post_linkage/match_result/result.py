@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Literal
+from typing import TYPE_CHECKING, Any, List, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
@@ -9,6 +9,9 @@ from uk_address_matcher.post_linkage.analyse_results import _calculate_match_met
 from uk_address_matcher.post_linkage.match_result.splink_inspector import (
     _SplinkInspector,
 )
+
+if TYPE_CHECKING:
+    from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
 _SPLINK_MATCH_REASON = "splink: probabilistic match"
 
@@ -137,7 +140,7 @@ class MatchResult:
 
     _relation: DuckDBPyRelation
     con: DuckDBPyConnection
-    _splink_linker: Any | None = None
+    _splink_stage: SplinkStage | None = None
     _canonical_relation: DuckDBPyRelation | None = None
 
     def __repr__(self) -> str:
@@ -180,16 +183,44 @@ class MatchResult:
         return _calculate_match_metrics(self._relation, order=order)
 
     def _has_splink(self) -> bool:
-        """True when a Splink stage ran and inspection helpers are available."""
-        return self._splink_linker is not None
+        """True when a Splink stage was configured in the pipeline."""
+        return self._splink_stage is not None
+
+    def _require_splink_stage(self) -> SplinkStage:
+        """Return the configured SplinkStage or raise if unavailable."""
+        if self._splink_stage is None:
+            raise ValueError(
+                "No SplinkStage was configured in the matching pipeline. "
+                "Include a SplinkStage in your stages list to enable "
+                "Splink inspection."
+            )
+        return self._splink_stage
 
     def _require_splink(self) -> _SplinkInspector:
         """Return the Splink inspector or raise if unavailable."""
-        if self._splink_linker is None:
+        stage = self._require_splink_stage()
+        if stage.linker is None:
             raise ValueError(
-                "Splink inspection is unavailable. Run a Splink stage to enable it."
+                "SplinkStage is configured but did not run. "
+                "This can happen when earlier stages matched all records."
             )
-        return _SplinkInspector(con=self.con, linker=self._splink_linker)
+        return _SplinkInspector(con=self.con, stage=stage)
+
+    def _splink_best_matches_table(self) -> str:
+        """Return the name of the DuckDB table holding Splink best matches.
+
+        Raises:
+            ValueError: When no SplinkStage was configured, or when the stage
+                was configured but did not run far enough to create the table.
+        """
+        stage = self._require_splink_stage()
+        if stage.best_matches_table is None:
+            raise ValueError(
+                "SplinkStage is configured but did not produce a best-matches "
+                "table. This can happen when earlier stages matched all "
+                "records before the Splink stage ran."
+            )
+        return stage.best_matches_table
 
     def _splink_predictions(
         self,
@@ -368,11 +399,11 @@ class MatchResult:
         ``SplinkStage`` so that the comparison-vector columns needed by the
         waterfall are present in the predictions table.
         """
-        self._require_splink()
+        stage = self._require_splink_stage()
         record_dicts = _ensure_record_dicts(records)
 
         try:
-            return self._splink_linker.visualisations.waterfall_chart(
+            return stage.linker.visualisations.waterfall_chart(
                 record_dicts,
                 filter_nulls=filter_nulls,
                 remove_sensitive_data=remove_sensitive_data,
