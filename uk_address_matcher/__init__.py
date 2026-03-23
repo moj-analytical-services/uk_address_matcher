@@ -13,6 +13,7 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 # === Matching stages and runner ===
 from uk_address_matcher.linking_model.matching import (
     ExactMatchStage,
+    NgramJaccardStage,
     PeeledAddressStage,
     SplinkStage,
     UniqueTrigramStage,
@@ -31,6 +32,7 @@ __all__ = [
     "ukam_datasets",
     # Matching stages and runner
     "ExactMatchStage",
+    "NgramJaccardStage",
     "UniqueTrigramStage",
     "PeeledAddressStage",
     "SplinkStage",

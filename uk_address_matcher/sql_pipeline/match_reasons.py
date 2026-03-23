@@ -7,6 +7,7 @@ class MatchReason(Enum):
     """Canonical set of match reason values shared between Python and DuckDB."""
 
     EXACT = "exact: full match"
+    NGRAM_JACCARD = "ngram_jaccard: rare-token indexed trigram shortlist match"
     PEELED_ADDRESS = "peeled_address: match after removing common UK end tokens"
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
@@ -19,6 +20,8 @@ class MatchReason(Enum):
         """Simplified stage name used in reporting tables."""
         if self is MatchReason.EXACT:
             return "exact_matches"
+        if self is MatchReason.NGRAM_JACCARD:
+            return "ngram_jaccard"
         if self is MatchReason.PEELED_ADDRESS:
             return "peeled_address"
         if self is MatchReason.SPLINK:
