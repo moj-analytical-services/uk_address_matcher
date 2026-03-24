@@ -54,7 +54,7 @@ class NgramJaccardStage(MatchingStage):
         - `candidate_cap_per_messy`:
             Maximum number of round-1 candidates retained per messy record before
             detailed scoring. This bounds worst-case work in round 2.
-        - `min_shared_rare_tokens`:
+        - `min_shared_phrase_tokens`:
             Minimum count of shared retained tokens required for a pair to remain a
             candidate after round 1.
         - `min_score_gap`:
@@ -67,8 +67,9 @@ class NgramJaccardStage(MatchingStage):
     num_of_chunks: int | None = None
     max_token_frequency: int = 800
     candidate_cap_per_messy: int = 60
-    min_shared_rare_tokens: int = 1
+    min_shared_phrase_tokens: int = 1
     min_score_gap: float | None = None
+    prioritise_primary_number_in_candidate_cap: bool = False
 
     def __post_init__(self) -> None:
         if self.min_jaccard < 0.0 or self.min_jaccard > 1.0:
@@ -79,8 +80,8 @@ class NgramJaccardStage(MatchingStage):
             raise ValueError("max_token_frequency must be at least 1.")
         if self.candidate_cap_per_messy < 1:
             raise ValueError("candidate_cap_per_messy must be at least 1.")
-        if self.min_shared_rare_tokens < 1:
-            raise ValueError("min_shared_rare_tokens must be at least 1.")
+        if self.min_shared_phrase_tokens < 1:
+            raise ValueError("min_shared_phrase_tokens must be at least 1.")
         if self.min_score_gap is not None and self.min_score_gap < 0.0:
             raise ValueError("min_score_gap must be >= 0.0 when provided.")
 
@@ -108,8 +109,11 @@ class NgramJaccardStage(MatchingStage):
                     min_jaccard=self.min_jaccard,
                     max_token_frequency=self.max_token_frequency,
                     candidate_cap_per_messy=self.candidate_cap_per_messy,
-                    min_shared_rare_tokens=self.min_shared_rare_tokens,
+                    min_shared_phrase_tokens=self.min_shared_phrase_tokens,
                     min_score_gap=self.min_score_gap,
+                    prioritise_primary_number_in_candidate_cap=(
+                        self.prioritise_primary_number_in_candidate_cap
+                    ),
                 ),
             ],
             stage_name=stage_name,
@@ -314,8 +318,9 @@ def _ngram_jaccard_matches(
     min_jaccard: float,
     max_token_frequency: int,
     candidate_cap_per_messy: int,
-    min_shared_rare_tokens: int,
+    min_shared_phrase_tokens: int,
     min_score_gap: float | None,
+    prioritise_primary_number_in_candidate_cap: bool,
 ) -> list[CTEStep]:
     if postcode_strategy not in {"exact", "drop_last_char"}:
         raise ValueError(
@@ -323,22 +328,9 @@ def _ngram_jaccard_matches(
             f"Got '{postcode_strategy}'."
         )
 
-    if postcode_strategy == "exact":
-        join_key_expr = "messy.postcode = canon.postcode"
-        block_label = "full_postcode"
-    else:
-        join_key_expr = """
-            CASE
-                WHEN messy.postcode IS NULL OR LENGTH(messy.postcode) <= 1 THEN NULL
-                ELSE LEFT(messy.postcode, LENGTH(messy.postcode) - 1)
-            END
-            =
-            CASE
-                WHEN canon.postcode IS NULL OR LENGTH(canon.postcode) <= 1 THEN NULL
-                ELSE LEFT(canon.postcode, LENGTH(canon.postcode) - 1)
-            END
-        """
-        block_label = "postcode_drop_last_char"
+    block_label = (
+        "postcode_exact" if postcode_strategy == "exact" else "postcode_drop_last_char"
+    )
 
     match_reason_value = MatchReason.NGRAM_JACCARD.value
     enum_values = str(MatchReason.enum_values())
@@ -462,10 +454,57 @@ def _ngram_jaccard_matches(
                         canonical_ukam_address_id ASC
                 ) AS rn
             FROM {{round1_candidate_pairs}}
-            WHERE shared_rare_token_count >= {min_shared_rare_tokens}
+            WHERE shared_rare_token_count >= {min_shared_phrase_tokens}
         ) AS ranked
         WHERE rn <= {candidate_cap_per_messy}
     """
+
+    candidate_pairs_with_cap_features_sql = f"""
+        SELECT
+            pair.messy_ukam_address_id,
+            pair.canonical_ukam_address_id,
+            pair.canonical_unique_id,
+            pair.shared_rare_token_count,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        = list_extract(canon.numeric_tokens, 1)
+                THEN 1
+                ELSE 0
+            END AS cap_primary_number_match
+        FROM {{round1_candidate_pairs}} AS pair
+        INNER JOIN {{__ukam__tmp_messy_addresses}} AS messy
+            ON pair.messy_ukam_address_id = messy.ukam_address_id
+        INNER JOIN {{canonical_addresses_restricted}} AS canon
+            ON pair.canonical_ukam_address_id = canon.ukam_address_id
+        WHERE pair.shared_rare_token_count >= {min_shared_phrase_tokens}
+    """
+
+    candidate_pairs_with_cap_sql = f"""
+        SELECT
+            messy_ukam_address_id,
+            canonical_ukam_address_id,
+            canonical_unique_id,
+            shared_rare_token_count
+        FROM (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY messy_ukam_address_id
+                    ORDER BY
+                        shared_rare_token_count DESC,
+                        cap_primary_number_match DESC,
+                        canonical_ukam_address_id ASC
+                ) AS rn
+            FROM {{candidate_pairs_with_cap_features}}
+        ) AS ranked
+        WHERE rn <= {candidate_cap_per_messy}
+    """
+
+    candidate_pairs_step_sql = candidates_sql
+    if prioritise_primary_number_in_candidate_cap:
+        candidate_pairs_step_sql = candidate_pairs_with_cap_sql
 
     candidate_messy_ids_sql = """
         SELECT DISTINCT messy_ukam_address_id AS ukam_address_id
@@ -529,54 +568,6 @@ def _ngram_jaccard_matches(
         FROM trigrams
     """
 
-    candidate_features_sql = """
-        SELECT
-            pair.messy_ukam_address_id,
-            pair.canonical_ukam_address_id,
-            pair.canonical_unique_id,
-            pair.shared_rare_token_count,
-            messy.postcode AS messy_postcode,
-            canon.postcode AS canonical_postcode,
-            list_extract(messy.numeric_tokens, 1) AS messy_primary_number,
-            list_extract(canon.numeric_tokens, 1) AS canonical_primary_number,
-            CASE
-                WHEN messy.postcode IS NOT NULL
-                    AND canon.postcode IS NOT NULL
-                    AND messy.postcode = canon.postcode
-                THEN 1
-                ELSE 0
-            END AS postcode_exact,
-            CASE
-                WHEN messy.postcode IS NOT NULL
-                    AND canon.postcode IS NOT NULL
-                    AND LENGTH(messy.postcode) > 1
-                    AND LENGTH(canon.postcode) > 1
-                    AND LEFT(messy.postcode, LENGTH(messy.postcode) - 1)
-                        = LEFT(canon.postcode, LENGTH(canon.postcode) - 1)
-                THEN 1
-                ELSE 0
-            END AS postcode_prefix,
-            CASE
-                WHEN messy.numeric_tokens IS NOT NULL
-                    AND canon.numeric_tokens IS NOT NULL
-                    AND array_length(messy.numeric_tokens) > 0
-                    AND array_length(canon.numeric_tokens) > 0
-                    AND list_extract(messy.numeric_tokens, 1) IS NOT NULL
-                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
-                    AND list_extract(messy.numeric_tokens, 1)
-                        != list_extract(canon.numeric_tokens, 1)
-                    AND list_sort(list_distinct(messy.numeric_tokens))
-                        != list_sort(list_distinct(canon.numeric_tokens))
-                THEN 1
-                ELSE 0
-            END AS numeric_set_mismatch
-        FROM {candidate_pairs} AS pair
-        INNER JOIN {__ukam__tmp_messy_addresses} AS messy
-            ON pair.messy_ukam_address_id = messy.ukam_address_id
-        INNER JOIN {canonical_addresses_restricted} AS canon
-            ON pair.canonical_ukam_address_id = canon.ukam_address_id
-    """
-
     messy_ngram_counts_sql = """
         SELECT
             ukam_address_id AS messy_ukam_address_id,
@@ -613,10 +604,10 @@ def _ngram_jaccard_matches(
 
     scored_pairs_sql = """
         SELECT
-            features.messy_ukam_address_id,
-            features.canonical_ukam_address_id,
-            features.canonical_unique_id,
-            features.shared_rare_token_count,
+            inter.messy_ukam_address_id,
+            inter.canonical_ukam_address_id,
+            inter.canonical_unique_id,
+            pair.shared_rare_token_count,
             inter.intersection_count,
             (messy_counts.messy_ngram_count + canon_counts.canonical_ngram_count
                 - inter.intersection_count
@@ -634,52 +625,255 @@ def _ngram_jaccard_matches(
                         - inter.intersection_count
                     )::DOUBLE
             END AS jaccard_similarity,
-            features.postcode_exact,
-            features.postcode_prefix,
-            features.messy_primary_number,
-            features.canonical_primary_number,
-            features.numeric_set_mismatch,
             CASE
-                WHEN features.messy_primary_number IS NOT NULL
-                    AND features.canonical_primary_number IS NOT NULL
-                    AND features.messy_primary_number = features.canonical_primary_number
+                WHEN messy.postcode IS NOT NULL
+                    AND canon.postcode IS NOT NULL
+                    AND messy.postcode = canon.postcode
+                THEN 1
+                ELSE 0
+            END AS postcode_exact,
+            CASE
+                WHEN messy.postcode IS NOT NULL
+                    AND canon.postcode IS NOT NULL
+                    AND LENGTH(messy.postcode) > 1
+                    AND LENGTH(canon.postcode) > 1
+                    AND LEFT(messy.postcode, LENGTH(messy.postcode) - 1)
+                        = LEFT(canon.postcode, LENGTH(canon.postcode) - 1)
+                THEN 1
+                ELSE 0
+            END AS postcode_prefix,
+            list_extract(messy.numeric_tokens, 1) AS messy_primary_number,
+            list_extract(canon.numeric_tokens, 1) AS canonical_primary_number,
+            CASE
+                WHEN messy.flat_number IS NOT NULL
+                    AND canon.flat_number IS NOT NULL
+                    AND CAST(messy.flat_number AS VARCHAR)
+                        = CAST(canon.flat_number AS VARCHAR)
+                THEN 1
+                ELSE 0
+            END AS flat_number_exact,
+            CASE
+                WHEN messy.flat_number IS NOT NULL
+                    AND canon.flat_number IS NOT NULL
+                    AND CAST(messy.flat_number AS VARCHAR)
+                        != CAST(canon.flat_number AS VARCHAR)
+                THEN 1
+                ELSE 0
+            END AS flat_number_conflict,
+            CASE
+                WHEN messy.flat_letter IS NOT NULL
+                    AND canon.flat_letter IS NOT NULL
+                    AND UPPER(CAST(messy.flat_letter AS VARCHAR))
+                        = UPPER(CAST(canon.flat_letter AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS flat_letter_exact,
+            CASE
+                WHEN messy.flat_letter IS NOT NULL
+                    AND canon.flat_letter IS NOT NULL
+                    AND UPPER(CAST(messy.flat_letter AS VARCHAR))
+                        != UPPER(CAST(canon.flat_letter AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS flat_letter_conflict,
+            CASE
+                WHEN messy.flat_positional IS NOT NULL
+                    AND canon.flat_positional IS NOT NULL
+                    AND UPPER(CAST(messy.flat_positional AS VARCHAR))
+                        = UPPER(CAST(canon.flat_positional AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS flat_positional_exact,
+            CASE
+                WHEN messy.flat_positional IS NOT NULL
+                    AND canon.flat_positional IS NOT NULL
+                    AND UPPER(CAST(messy.flat_positional AS VARCHAR))
+                        != UPPER(CAST(canon.flat_positional AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS flat_positional_conflict,
+            CASE
+                WHEN messy.flat_identity IS NOT NULL
+                    AND canon.flat_identity IS NOT NULL
+                    AND UPPER(CAST(messy.flat_identity AS VARCHAR))
+                        = UPPER(CAST(canon.flat_identity AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS flat_identity_exact,
+            CASE
+                WHEN messy.business_unit_id IS NOT NULL
+                    AND canon.business_unit_id IS NOT NULL
+                    AND UPPER(CAST(messy.business_unit_id AS VARCHAR))
+                        = UPPER(CAST(canon.business_unit_id AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS business_unit_id_exact,
+            CASE
+                WHEN messy.business_unit_type IS NOT NULL
+                    AND canon.business_unit_type IS NOT NULL
+                    AND UPPER(CAST(messy.business_unit_type AS VARCHAR))
+                        = UPPER(CAST(canon.business_unit_type AS VARCHAR))
+                THEN 1
+                ELSE 0
+            END AS business_unit_type_exact,
+            CASE
+                WHEN COALESCE(messy.has_flat_indicator, FALSE)
+                    OR COALESCE(messy.has_business_unit, FALSE)
+                    OR messy.flat_positional IS NOT NULL
+                THEN 1
+                ELSE 0
+            END AS messy_has_unit_info,
+            CASE
+                WHEN COALESCE(canon.has_flat_indicator, FALSE)
+                    OR COALESCE(canon.has_business_unit, FALSE)
+                    OR canon.flat_positional IS NOT NULL
+                THEN 1
+                ELSE 0
+            END AS canonical_has_unit_info,
+            CASE
+                WHEN COALESCE(messy.has_flat_indicator, FALSE)
+                THEN 1
+                ELSE 0
+            END AS messy_has_flat_indicator,
+            CASE
+                WHEN COALESCE(canon.has_flat_indicator, FALSE)
+                THEN 1
+                ELSE 0
+            END AS canonical_has_flat_indicator,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        = list_extract(canon.numeric_tokens, 1)
+                THEN 1
+                ELSE 0
+            END AS numeric_token_1_exact,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        != list_extract(canon.numeric_tokens, 1)
+                THEN 1
+                ELSE 0
+            END AS numeric_token_1_conflict,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        = list_extract(canon.numeric_tokens, 1)
+                    AND COALESCE(array_length(messy.numeric_tokens), 0) <= 1
+                    AND COALESCE(array_length(canon.numeric_tokens), 0) > 1
+                THEN 1
+                ELSE 0
+            END AS range_only_extra_on_canonical,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        = list_extract(canon.numeric_tokens, 1)
+                    AND COALESCE(array_length(messy.numeric_tokens), 0) > 1
+                    AND COALESCE(array_length(canon.numeric_tokens), 0) <= 1
+                THEN 1
+                ELSE 0
+            END AS range_only_extra_on_messy,
+            CASE
+                WHEN (
+                    COALESCE(messy.has_flat_indicator, FALSE)
+                    OR COALESCE(messy.has_business_unit, FALSE)
+                    OR messy.flat_positional IS NOT NULL
+                )
+                AND NOT (
+                    COALESCE(canon.has_flat_indicator, FALSE)
+                    OR COALESCE(canon.has_business_unit, FALSE)
+                    OR canon.flat_positional IS NOT NULL
+                )
+                THEN 1
+                ELSE 0
+            END AS candidate_looks_parent_like,
+            CASE
+                WHEN messy.numeric_tokens IS NOT NULL
+                    AND canon.numeric_tokens IS NOT NULL
+                    AND array_length(messy.numeric_tokens) > 0
+                    AND array_length(canon.numeric_tokens) > 0
+                    AND list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        != list_extract(canon.numeric_tokens, 1)
+                    AND list_sort(list_distinct(messy.numeric_tokens))
+                        != list_sort(list_distinct(canon.numeric_tokens))
+                THEN 1
+                ELSE 0
+            END AS numeric_set_mismatch,
+            CASE
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        = list_extract(canon.numeric_tokens, 1)
                 THEN 1
                 ELSE 0
             END AS primary_number_match,
             CASE
-                WHEN features.messy_primary_number IS NOT NULL
-                    AND features.canonical_primary_number IS NOT NULL
-                    AND features.messy_primary_number != features.canonical_primary_number
-                    AND features.numeric_set_mismatch = 1
+                WHEN list_extract(messy.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(canon.numeric_tokens, 1) IS NOT NULL
+                    AND list_extract(messy.numeric_tokens, 1)
+                        != list_extract(canon.numeric_tokens, 1)
+                    AND messy.numeric_tokens IS NOT NULL
+                    AND canon.numeric_tokens IS NOT NULL
+                    AND array_length(messy.numeric_tokens) > 0
+                    AND array_length(canon.numeric_tokens) > 0
+                    AND list_sort(list_distinct(messy.numeric_tokens))
+                        != list_sort(list_distinct(canon.numeric_tokens))
                 THEN 1
                 ELSE 0
             END AS primary_number_disagree
         FROM {pair_intersections} AS inter
-        INNER JOIN {candidate_features} AS features
-            ON inter.messy_ukam_address_id = features.messy_ukam_address_id
-            AND inter.canonical_ukam_address_id = features.canonical_ukam_address_id
+        INNER JOIN {candidate_pairs} AS pair
+            ON inter.messy_ukam_address_id = pair.messy_ukam_address_id
+            AND inter.canonical_ukam_address_id = pair.canonical_ukam_address_id
+            AND inter.canonical_unique_id = pair.canonical_unique_id
+        INNER JOIN {__ukam__tmp_messy_addresses} AS messy
+            ON inter.messy_ukam_address_id = messy.ukam_address_id
+        INNER JOIN {canonical_addresses_restricted} AS canon
+            ON inter.canonical_ukam_address_id = canon.ukam_address_id
         INNER JOIN {messy_ngram_counts} AS messy_counts
             ON inter.messy_ukam_address_id = messy_counts.messy_ukam_address_id
         INNER JOIN {canonical_ngram_counts} AS canon_counts
             ON inter.canonical_ukam_address_id = canon_counts.canonical_ukam_address_id
     """
 
-    scored_pairs_with_final_score_sql = """
+    final_score_expr = """
+        jaccard_similarity * 0.78
+        + (LEAST(shared_rare_token_count, 8)::DOUBLE / 8.0) * 0.10
+        + postcode_exact::DOUBLE * 0.04
+        + primary_number_match::DOUBLE * 0.04
+        + 0.04 * flat_number_exact
+        + 0.03 * flat_letter_exact
+        + 0.04 * flat_positional_exact
+        + 0.03 * flat_identity_exact
+        - 0.12 * flat_number_conflict
+        - 0.10 * flat_letter_conflict
+        - 0.10 * flat_positional_conflict
+        - 0.08 * numeric_token_1_conflict
+        - 0.14 * CASE
+            WHEN messy_has_unit_info = 1
+                AND candidate_looks_parent_like = 1
+            THEN 1
+            ELSE 0
+        END
+        - 0.04 * range_only_extra_on_canonical
+        - CASE
+            WHEN messy_primary_number IS NOT NULL
+                AND canonical_primary_number IS NULL
+            THEN 0.08
+            ELSE 0.0
+        END
+    """
+
+    scored_pairs_with_final_score_sql = f"""
         SELECT
             *,
-            (
-                jaccard_similarity * 0.80
-                + (LEAST(shared_rare_token_count, 8)::DOUBLE / 8.0) * 0.10
-                + postcode_exact::DOUBLE * 0.05
-                + primary_number_match::DOUBLE * 0.05
-                - CASE
-                    WHEN messy_primary_number IS NOT NULL
-                        AND canonical_primary_number IS NULL
-                    THEN 0.08
-                    ELSE 0.0
-                END
-            ) AS final_score
-        FROM {scored_pairs}
+            ({final_score_expr}) AS final_score
+        FROM {{scored_pairs}}
         WHERE NOT (
             numeric_set_mismatch = 1
             OR
@@ -699,14 +893,61 @@ def _ngram_jaccard_matches(
             *,
             ROW_NUMBER() OVER (
                 PARTITION BY messy_ukam_address_id
-                ORDER BY final_score DESC, jaccard_similarity DESC, canonical_ukam_address_id ASC
+                ORDER BY
+                    final_score DESC,
+                    jaccard_similarity DESC,
+                    canonical_ukam_address_id ASC
             ) AS rn,
             LEAD(final_score) OVER (
                 PARTITION BY messy_ukam_address_id
-                ORDER BY final_score DESC, jaccard_similarity DESC, canonical_ukam_address_id ASC
-            ) AS second_score
+                ORDER BY
+                    final_score DESC,
+                    jaccard_similarity DESC,
+                    canonical_ukam_address_id ASC
+            ) AS second_score,
+            LEAD(candidate_looks_parent_like) OVER (
+                PARTITION BY messy_ukam_address_id
+                ORDER BY
+                    final_score DESC,
+                    jaccard_similarity DESC,
+                    canonical_ukam_address_id ASC
+            ) AS second_candidate_looks_parent_like,
+            LEAD(flat_number_exact) OVER (
+                PARTITION BY messy_ukam_address_id
+                ORDER BY
+                    final_score DESC,
+                    jaccard_similarity DESC,
+                    canonical_ukam_address_id ASC
+            ) AS second_flat_number_exact,
+            LEAD(flat_letter_conflict) OVER (
+                PARTITION BY messy_ukam_address_id
+                ORDER BY
+                    final_score DESC,
+                    jaccard_similarity DESC,
+                    canonical_ukam_address_id ASC
+            ) AS second_flat_letter_conflict,
+            SUM(
+                CASE
+                    WHEN flat_number_exact = 1
+                        AND canonical_has_unit_info = 1
+                    THEN 1
+                    ELSE 0
+                END
+            ) OVER (
+                PARTITION BY messy_ukam_address_id
+            ) AS same_flat_number_unit_candidate_count
         FROM {{scored_pairs_with_final_score}}
         WHERE final_score >= {min_jaccard}
+    """
+
+    ambiguity_guard_sql = """
+        AND NOT (
+            messy_has_unit_info = 1
+            AND candidate_looks_parent_like = 1
+            AND second_candidate_looks_parent_like = 0
+            AND second_score IS NOT NULL
+            AND final_score - second_score < 0.05
+        )
     """
 
     final_matches_sql = f"""
@@ -719,14 +960,44 @@ def _ngram_jaccard_matches(
             union_count,
             jaccard_similarity,
             final_score,
+            (final_score - second_score) AS score_gap_to_second,
+            candidate_looks_parent_like,
+            flat_number_conflict,
+            flat_letter_conflict,
+            range_only_extra_on_canonical,
+            range_only_extra_on_messy,
+            same_flat_number_unit_candidate_count,
+            CASE
+                WHEN second_score IS NOT NULL
+                    AND (final_score - second_score) < 0.05
+                THEN 1
+                ELSE 0
+            END AS near_tie_flag,
+            CASE
+                WHEN same_flat_number_unit_candidate_count >= 2
+                    AND second_score IS NOT NULL
+                    AND second_flat_number_exact = 1
+                    AND (final_score - second_score) < 0.05
+                THEN 1
+                ELSE 0
+            END AS sibling_flat_competition_flag,
+            CASE
+                WHEN same_flat_number_unit_candidate_count >= 2
+                    AND second_score IS NOT NULL
+                    AND second_flat_letter_conflict = 1
+                    AND (final_score - second_score) < 0.05
+                THEN 1
+                ELSE 0
+            END AS sibling_flat_letter_conflict_competition_flag,
             '{block_label}'::VARCHAR AS blocking_strategy,
             '{match_reason_value}'::ENUM {enum_values} AS match_reason
         FROM {{ranked_pairs}}
         WHERE rn = 1
         {score_gap_predicate_sql}
+        {ambiguity_guard_sql}
     """
 
-    return [
+    steps: list[CTEStep] = [
         CTEStep("round1_messy_phrase_tokens", messy_phrase_tokens_sql),
         CTEStep("round1_canonical_phrase_tokens", canonical_phrase_tokens_sql),
         CTEStep("round1_messy_token_frequency", messy_token_frequency_sql),
@@ -734,17 +1005,31 @@ def _ngram_jaccard_matches(
         CTEStep("round1_rare_tokens", rare_tokens_sql),
         CTEStep("round1_joined_postings", joined_postings_sql),
         CTEStep("round1_candidate_pairs", round1_candidate_pairs_sql),
-        CTEStep("candidate_pairs", candidates_sql),
-        CTEStep("candidate_messy_ids", candidate_messy_ids_sql),
-        CTEStep("candidate_canonical_ids", candidate_canonical_ids_sql),
-        CTEStep("messy_char_ngrams", messy_char_ngrams_sql),
-        CTEStep("canonical_char_ngrams", canonical_char_ngrams_sql),
-        CTEStep("messy_ngram_counts", messy_ngram_counts_sql),
-        CTEStep("canonical_ngram_counts", canonical_ngram_counts_sql),
-        CTEStep("candidate_features", candidate_features_sql),
-        CTEStep("pair_intersections", pair_intersections_sql),
-        CTEStep("scored_pairs", scored_pairs_sql),
-        CTEStep("scored_pairs_with_final_score", scored_pairs_with_final_score_sql),
-        CTEStep("ranked_pairs", ranked_pairs_sql),
-        CTEStep("ngram_jaccard_matches", final_matches_sql),
     ]
+
+    if prioritise_primary_number_in_candidate_cap:
+        steps.append(
+            CTEStep(
+                "candidate_pairs_with_cap_features",
+                candidate_pairs_with_cap_features_sql,
+            )
+        )
+
+    steps.extend(
+        [
+            CTEStep("candidate_pairs", candidate_pairs_step_sql),
+            CTEStep("candidate_messy_ids", candidate_messy_ids_sql),
+            CTEStep("candidate_canonical_ids", candidate_canonical_ids_sql),
+            CTEStep("messy_char_ngrams", messy_char_ngrams_sql),
+            CTEStep("canonical_char_ngrams", canonical_char_ngrams_sql),
+            CTEStep("messy_ngram_counts", messy_ngram_counts_sql),
+            CTEStep("canonical_ngram_counts", canonical_ngram_counts_sql),
+            CTEStep("pair_intersections", pair_intersections_sql),
+            CTEStep("scored_pairs", scored_pairs_sql),
+            CTEStep("scored_pairs_with_final_score", scored_pairs_with_final_score_sql),
+            CTEStep("ranked_pairs", ranked_pairs_sql),
+            CTEStep("ngram_jaccard_matches", final_matches_sql),
+        ]
+    )
+
+    return steps
