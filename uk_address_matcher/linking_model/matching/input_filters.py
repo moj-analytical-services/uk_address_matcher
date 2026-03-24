@@ -44,6 +44,7 @@ def _restrict_canonical_to_messy_postcodes(
         "canon.flat_positional",
         "canon.flat_letter",
         "canon.flat_number",
+        "canon.flat_identity",
         "canon.has_business_unit",
         "canon.business_unit_type",
         "canon.business_unit_id",
