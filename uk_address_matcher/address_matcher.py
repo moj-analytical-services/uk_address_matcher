@@ -299,6 +299,11 @@ class AddressMatcher:
         subclass tree dynamically, so newly added stages are picked up
         automatically without maintaining a hard-coded list.
         """
+        # Ensure built-in stage subclasses are imported before discovery.
+        from uk_address_matcher.linking_model.matching import (
+            stages as _stages,  # noqa: F401
+        )
+
         return MatchingStage.available_stages()
 
     def match(self) -> MatchResult:
