@@ -19,12 +19,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, repr=False)
 class NgramJaccardStage(MatchingStage):
-    """Match residual records using rare-token retrieval plus trigram reranking.
+    """Match residual records using rare-word retrieval plus trigram reranking.
 
     This stage is designed for rows that remain unresolved after deterministic
     passes (for example exact and peeled matching). Within each postcode block it:
 
-    1. Retrieves candidate pairs from shared rare phrase tokens.
+    1. Retrieves candidate pairs from shared rare word tokens.
     2. Computes trigram-Jaccard and structural consistency features.
     3. Ranks candidates and returns one winner per messy address.
 
@@ -32,9 +32,11 @@ class NgramJaccardStage(MatchingStage):
     notably score thresholding and optional score-gap filtering.
 
     Args:
-        min_jaccard:
+        min_final_score:
             Minimum final score required for acceptance of the top ranked
             candidate.
+        min_jaccard:
+            Deprecated alias for `min_final_score`.
         use_postcode_fallback:
             Whether to run a second pass for unresolved rows using postcode with
             the final character dropped.
@@ -49,39 +51,53 @@ class NgramJaccardStage(MatchingStage):
         candidate_cap_per_messy:
             Maximum number of round-1 candidates retained per messy row before
             trigram scoring.
-        min_shared_phrase_tokens:
+        min_shared_rare_tokens:
             Minimum shared rare-token count required in round-1 retrieval.
         min_score_gap:
             Optional minimum gap between the best and second-best final scores;
             near ties are rejected when set.
-
-    Notes:
-                - Round-1 rare-token retrieval applies `max_token_frequency` on the
-                    pass-local token frequencies.
-        - A strict same-postcode primary/secondary-number reject guard is
-          applied to high-similarity sibling-style conflicts before final
-          winner selection.
     """
 
-    min_jaccard: float = 0.80
+    min_final_score: float | None = None
+    min_jaccard: float | None = None
     use_postcode_fallback: bool = False
     num_of_chunks: int | None = None
     max_token_frequency: int = 1000
     candidate_cap_per_messy: int = 60
-    min_shared_phrase_tokens: int = 2
+    min_shared_rare_tokens: int = 2
     min_score_gap: float | None = 0.05
 
+    def _effective_min_final_score(self) -> float:
+        if self.min_final_score is None and self.min_jaccard is None:
+            return 0.80
+        if self.min_jaccard is not None:
+            return self.min_jaccard
+        return self.min_final_score
+
     def __post_init__(self) -> None:
-        if self.min_jaccard < 0.0 or self.min_jaccard > 1.0:
-            raise ValueError("min_jaccard must be between 0.0 and 1.0 inclusive.")
+        if (
+            self.min_jaccard is not None
+            and self.min_final_score is not None
+            and self.min_jaccard != self.min_final_score
+        ):
+            raise ValueError(
+                "Provide only one of min_final_score or min_jaccard, "
+                "or give them the same value."
+            )
+
+        effective_min_final_score = self._effective_min_final_score()
+        if effective_min_final_score < 0.0 or effective_min_final_score > 1.0:
+            raise ValueError("min_final_score must be between 0.0 and 1.0 inclusive.")
+
         if self.num_of_chunks is not None and self.num_of_chunks < 1:
             raise ValueError("num_of_chunks must be at least 1 when provided.")
         if self.max_token_frequency < 1:
             raise ValueError("max_token_frequency must be at least 1.")
         if self.candidate_cap_per_messy < 1:
             raise ValueError("candidate_cap_per_messy must be at least 1.")
-        if self.min_shared_phrase_tokens < 1:
-            raise ValueError("min_shared_phrase_tokens must be at least 1.")
+        if self.min_shared_rare_tokens < 1:
+            raise ValueError("min_shared_rare_tokens must be at least 1.")
+
         if self.min_score_gap is not None and self.min_score_gap < 0.0:
             raise ValueError("min_score_gap must be >= 0.0 when provided.")
 
@@ -106,10 +122,10 @@ class NgramJaccardStage(MatchingStage):
                 _restrict_canonical_to_messy_postcodes(postcode_strategy),
                 _ngram_jaccard_matches(
                     postcode_strategy=postcode_strategy,
-                    min_jaccard=self.min_jaccard,
+                    min_final_score=self._effective_min_final_score(),
                     max_token_frequency=self.max_token_frequency,
                     candidate_cap_per_messy=self.candidate_cap_per_messy,
-                    min_shared_phrase_tokens=self.min_shared_phrase_tokens,
+                    min_shared_rare_tokens=self.min_shared_rare_tokens,
                     min_score_gap=self.min_score_gap,
                 ),
             ],
@@ -303,8 +319,8 @@ class NgramJaccardStage(MatchingStage):
 @pipeline_stage(
     name="ngram_jaccard_matches",
     description=(
-        "Score postcode-blocked candidates with character unigram+bigram "
-        "Jaccard similarity and keep top-1 deterministic match"
+        "Retrieve rare-token postcode-blocked candidates, rerank with "
+        "character trigram Jaccard, and keep top-1 deterministic match"
     ),
     tags=["phase_1", "matching", "ngram", "jaccard"],
     depends_on=["restrict_canonical_to_messy_postcodes"],
@@ -312,10 +328,10 @@ class NgramJaccardStage(MatchingStage):
 def _ngram_jaccard_matches(
     *,
     postcode_strategy: str,
-    min_jaccard: float,
+    min_final_score: float,
     max_token_frequency: int,
     candidate_cap_per_messy: int,
-    min_shared_phrase_tokens: int,
+    min_shared_rare_tokens: int,
     min_score_gap: float | None,
 ) -> list[CTEStep]:
     if postcode_strategy not in {"exact", "drop_last_char"}:
@@ -452,12 +468,10 @@ def _ngram_jaccard_matches(
                         canonical_ukam_address_id ASC
                 ) AS rn
             FROM {{round1_candidate_pairs}}
-            WHERE shared_rare_token_count >= {min_shared_phrase_tokens}
+            WHERE shared_rare_token_count >= {min_shared_rare_tokens}
         ) AS ranked
         WHERE rn <= {candidate_cap_per_messy}
     """
-
-    candidate_pairs_step_sql = candidates_sql
 
     candidate_messy_ids_sql = """
         SELECT DISTINCT messy_ukam_address_id AS ukam_address_id
@@ -585,16 +599,6 @@ def _ngram_jaccard_matches(
                 THEN 1
                 ELSE 0
             END AS postcode_exact,
-            CASE
-                WHEN messy.postcode IS NOT NULL
-                    AND canon.postcode IS NOT NULL
-                    AND LENGTH(messy.postcode) > 1
-                    AND LENGTH(canon.postcode) > 1
-                    AND LEFT(messy.postcode, LENGTH(messy.postcode) - 1)
-                        = LEFT(canon.postcode, LENGTH(canon.postcode) - 1)
-                THEN 1
-                ELSE 0
-            END AS postcode_prefix,
             messy.numeric_token_1 AS messy_primary_number,
             canon.numeric_token_1 AS canonical_primary_number,
             messy.numeric_token_2 AS messy_secondary_number,
@@ -656,22 +660,6 @@ def _ngram_jaccard_matches(
                 ELSE 0
             END AS flat_identity_exact,
             CASE
-                WHEN messy.business_unit_id IS NOT NULL
-                    AND canon.business_unit_id IS NOT NULL
-                    AND UPPER(CAST(messy.business_unit_id AS VARCHAR))
-                        = UPPER(CAST(canon.business_unit_id AS VARCHAR))
-                THEN 1
-                ELSE 0
-            END AS business_unit_id_exact,
-            CASE
-                WHEN messy.business_unit_type IS NOT NULL
-                    AND canon.business_unit_type IS NOT NULL
-                    AND UPPER(CAST(messy.business_unit_type AS VARCHAR))
-                        = UPPER(CAST(canon.business_unit_type AS VARCHAR))
-                THEN 1
-                ELSE 0
-            END AS business_unit_type_exact,
-            CASE
                 WHEN COALESCE(messy.has_flat_indicator, FALSE)
                     OR COALESCE(messy.has_business_unit, FALSE)
                     OR messy.flat_positional IS NOT NULL
@@ -695,13 +683,6 @@ def _ngram_jaccard_matches(
                 THEN 1
                 ELSE 0
             END AS canonical_has_flat_indicator,
-            CASE
-                WHEN messy.numeric_token_1 IS NOT NULL
-                    AND canon.numeric_token_1 IS NOT NULL
-                    AND messy.numeric_token_1 = canon.numeric_token_1
-                THEN 1
-                ELSE 0
-            END AS numeric_token_1_exact,
             CASE
                 WHEN messy.numeric_token_1 IS NOT NULL
                     AND canon.numeric_token_1 IS NOT NULL
@@ -742,19 +723,6 @@ def _ngram_jaccard_matches(
                 ELSE 0
             END AS candidate_looks_parent_like,
             CASE
-                WHEN messy.numeric_tokens IS NOT NULL
-                    AND canon.numeric_tokens IS NOT NULL
-                    AND array_length(messy.numeric_tokens) > 0
-                    AND array_length(canon.numeric_tokens) > 0
-                    AND messy.numeric_token_1 IS NOT NULL
-                    AND canon.numeric_token_1 IS NOT NULL
-                    AND messy.numeric_token_1 != canon.numeric_token_1
-                    AND list_sort(list_distinct(messy.numeric_tokens))
-                        != list_sort(list_distinct(canon.numeric_tokens))
-                THEN 1
-                ELSE 0
-            END AS numeric_set_mismatch,
-            CASE
                 WHEN messy.numeric_token_1 IS NOT NULL
                     AND canon.numeric_token_1 IS NOT NULL
                     AND messy.numeric_token_1 = canon.numeric_token_1
@@ -779,12 +747,6 @@ def _ngram_jaccard_matches(
                 WHEN messy.numeric_token_1 IS NOT NULL
                     AND canon.numeric_token_1 IS NOT NULL
                     AND messy.numeric_token_1 != canon.numeric_token_1
-                    AND messy.numeric_tokens IS NOT NULL
-                    AND canon.numeric_tokens IS NOT NULL
-                    AND array_length(messy.numeric_tokens) > 0
-                    AND array_length(canon.numeric_tokens) > 0
-                    AND list_sort(list_distinct(messy.numeric_tokens))
-                        != list_sort(list_distinct(canon.numeric_tokens))
                 THEN 1
                 ELSE 0
             END AS primary_number_disagree,
@@ -799,8 +761,7 @@ def _ngram_jaccard_matches(
                     )
                 THEN 1
                 ELSE 0
-            END AS messy_primary_number_in_canonical_anywhere,
-            0 AS severe_primary_number_mismatch
+            END AS messy_primary_number_in_canonical_anywhere
         FROM {pair_intersections} AS inter
         INNER JOIN {candidate_pairs} AS pair
             ON inter.messy_ukam_address_id = pair.messy_ukam_address_id
@@ -944,29 +905,7 @@ def _ngram_jaccard_matches(
                 PARTITION BY messy_ukam_address_id
             ) AS same_flat_number_unit_candidate_count
         FROM {scored_pairs_with_final_score}
-        WHERE severe_primary_number_mismatch = 0
-            AND strict_primary_number_reject_flag = 0
-    """
-
-    top_parent_candidates_sql = """
-        SELECT
-            messy_ukam_address_id,
-            canonical_unique_id AS parent_canonical_id
-        FROM (
-            SELECT
-                messy_ukam_address_id,
-                canonical_unique_id,
-                ROW_NUMBER() OVER (
-                    PARTITION BY messy_ukam_address_id
-                    ORDER BY
-                        final_score DESC,
-                        jaccard_similarity DESC,
-                        canonical_ukam_address_id ASC
-                ) AS parent_rn
-            FROM {ranked_pairs}
-            WHERE candidate_looks_parent_like = 1
-        ) AS ranked_parents
-        WHERE parent_rn = 1
+        WHERE strict_primary_number_reject_flag = 0
     """
 
     ambiguity_guard_sql = """
@@ -984,7 +923,6 @@ def _ngram_jaccard_matches(
             winner.messy_ukam_address_id AS ukam_address_id,
             winner.canonical_ukam_address_id,
             winner.canonical_unique_id AS resolved_canonical_id,
-            parent.parent_canonical_id,
             winner.shared_rare_token_count,
             winner.intersection_count,
             winner.union_count,
@@ -1022,10 +960,8 @@ def _ngram_jaccard_matches(
             '{block_label}'::VARCHAR AS blocking_strategy,
             '{match_reason_value}'::ENUM {enum_values} AS match_reason
         FROM {{ranked_pairs}} AS winner
-        LEFT JOIN {{top_parent_candidates}} AS parent
-            ON winner.messy_ukam_address_id = parent.messy_ukam_address_id
         WHERE winner.rn = 1
-            AND winner.final_score >= {min_jaccard}
+            AND winner.final_score >= {min_final_score}
         {score_gap_predicate_sql}
         {ambiguity_guard_sql}
     """
@@ -1042,7 +978,7 @@ def _ngram_jaccard_matches(
 
     steps.extend(
         [
-            CTEStep("candidate_pairs", candidate_pairs_step_sql),
+            CTEStep("candidate_pairs", candidates_sql),
             CTEStep("candidate_messy_ids", candidate_messy_ids_sql),
             CTEStep("candidate_canonical_ids", candidate_canonical_ids_sql),
             CTEStep("messy_char_ngrams", messy_char_ngrams_sql),
@@ -1053,7 +989,6 @@ def _ngram_jaccard_matches(
             CTEStep("scored_pairs", scored_pairs_sql),
             CTEStep("scored_pairs_with_final_score", scored_pairs_with_final_score_sql),
             CTEStep("ranked_pairs", ranked_pairs_sql),
-            CTEStep("top_parent_candidates", top_parent_candidates_sql),
             CTEStep("ngram_jaccard_matches", final_matches_sql),
         ]
     )
