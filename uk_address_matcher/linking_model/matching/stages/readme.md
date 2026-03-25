@@ -1,6 +1,6 @@
 # Exact Matching Strategies
 
-Three deterministic matching strategies that run before probabilistic (Splink) matching.
+Four matching strategies that run before probabilistic (Splink) matching.
 
 ---
 
@@ -93,6 +93,34 @@ Trigrams:  [FIRST, FLOOR, 25], [FLOOR, 25, ACACIA], [25, ACACIA, AVENUE]
 If [25, ACACIA, AVENUE] uniquely identifies one canonical address at SW1A 1AA
 with matching flat indicators → Match
 ```
+
+---
+
+## 4. Ngram Jaccard Matching
+
+**File:** [ngram_jaccard.py](ngram_jaccard.py)
+
+**Class:** `NgramJaccardStage`
+
+**Match reason:** `MatchReason.NGRAM_JACCARD` → `"ngram_jaccard: rare-token indexed trigram shortlist match"`
+
+Two-round fuzzy shortlist + scoring stage for residual unmatched rows.
+
+**Lightweight summary:**
+- Runs after deterministic stages for unresolved rows.
+- Uses postcode-restricted rare-token retrieval to build candidates.
+- Applies character trigram Jaccard plus structure-aware reranking.
+- Enforces strict number-conflict guards and optional score-gap ambiguity checks.
+- Supports optional postcode fallback and optional chunking for operational resilience.
+
+For full internal detail, including CTE-by-CTE behaviour, parameter guidance, and code line references, see:
+- [docs/internal/stages/ngram_jaccard.md](../../../../../docs/internal/stages/ngram_jaccard.md)
+
+Code reference:
+- [ngram_jaccard.py](ngram_jaccard.py)
+
+Paper reference:
+- https://arxiv.org/abs/1708.01402
 
 ---
 
