@@ -71,7 +71,11 @@ def test_example_analysis_outputs_render_on_dummy_data():
 
     # Ensure tabular rendering path executes in tests.
     match_result._accuracy_table().show(max_width=50000)
-    splink_matches = match_result._compare_splink_model_results(baseline_match_weight=10)
+    splink_matches = match_result._compare_splink_model_results(
+        baseline_match_weight=10,
+        splink_comparison_weights=[8],
+        precision_at_metrics=[1, 3, 5],
+    )
 
     headline_df = splink_matches.headline_table.df()
     delta_df = splink_matches.delta_table.df()
@@ -83,5 +87,9 @@ def test_example_analysis_outputs_render_on_dummy_data():
     assert "elapsed_seconds" in diagnostics_df.columns
     assert splink_matches.total_input_rows == 2
     assert "scenario" in headline_df.columns
-    assert "threshold" in headline_df.columns
+    assert "match_outcome" in headline_df.columns
+    assert "threshold" not in headline_df.columns
+    assert "precision_at_k" in headline_df.columns
+    assert "average_true_rank" in headline_df.columns
     assert "scenario" in delta_df.columns
+    assert "precision_at_k_delta" in delta_df.columns

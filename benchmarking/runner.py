@@ -34,6 +34,8 @@ class BenchmarkRunResult:
     diagnostics: DatasetDiagnostics | None = None
     accuracy_table: duckdb.DuckDBPyRelation | None = None
     stage_diagnostics_table: duckdb.DuckDBPyRelation | None = None
+    splink_predictions: duckdb.DuckDBPyRelation | None = None
+    splink_available: bool = False
 
 
 def resolve_dataset_selection(selection: str | list[str]) -> list[str]:
@@ -96,14 +98,15 @@ def run_single_dataset(
         total_input_rows=total_input_rows,
     )
 
+    splink_predictions = None
+    try:
+        splink_predictions = match_result._splink_predictions()
+    except ValueError:
+        splink_predictions = None
+
     diagnostics: DatasetDiagnostics | None = None
     if enable_diagnostics:
         canonical_relation = getattr(match_result, "_canonical_relation", None)
-        splink_predictions = None
-        try:
-            splink_predictions = match_result._splink_predictions()
-        except ValueError:
-            splink_predictions = None
 
         diagnostics = build_dataset_diagnostics(
             con,
@@ -127,6 +130,8 @@ def run_single_dataset(
         timings=timings,
         con=con,
         diagnostics=diagnostics,
+        splink_predictions=splink_predictions,
+        splink_available=splink_predictions is not None,
     )
 
 

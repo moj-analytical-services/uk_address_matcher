@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 if TYPE_CHECKING:
     import duckdb
@@ -37,6 +38,8 @@ def build_precision_recall_chart_definition(
     plot_records = _visual_chart_records(records)
     chart = _load_chart_definition("precision_recall.json")
     chart["data"]["values"] = plot_records
+    if chart.get("params"):
+        chart["params"][0]["name"] = f"grid_{uuid4().hex}"
     return chart
 
 

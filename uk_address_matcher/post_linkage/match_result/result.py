@@ -12,9 +12,9 @@ from uk_address_matcher.analysis.accuracy_analysis import (
     build_threshold_selection_chart_definition,
     render_chart_definition,
 )
-from uk_address_matcher.analysis.table_accuracy_metrics import (
+from uk_address_matcher.analysis.accuracy_table import build_accuracy_table
+from uk_address_matcher.analysis.splink_comparison_metrics import (
     SplinkModelComparisonOutput,
-    build_accuracy_table,
     build_splink_model_comparison,
 )
 from uk_address_matcher.analysis.table_stage_diagnostics import (
@@ -22,9 +22,10 @@ from uk_address_matcher.analysis.table_stage_diagnostics import (
     build_stage_diagnostics_table,
 )
 from uk_address_matcher.post_linkage.analyse_results import _calculate_match_metrics
-from uk_address_matcher.post_linkage.match_result.splink_inspector import (
-    _SplinkInspector,
+from uk_address_matcher.post_linkage.match_result.debug_tools import (
+    _MatchResultDebugTools,
 )
+from uk_address_matcher.post_linkage.match_result.splink_inspector import _SplinkInspector
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 if TYPE_CHECKING:
@@ -161,6 +162,7 @@ class MatchResult:
     con: DuckDBPyConnection
     _splink_stage: SplinkStage | None = None
     _canonical_relation: DuckDBPyRelation | None = None
+    _messy_relation: DuckDBPyRelation | None = None
     _stage_diagnostics: StageDiagnostics | None = None
 
     def __repr__(self) -> str:
@@ -177,8 +179,15 @@ class MatchResult:
             all_columns: When True, return every column. By default only the
                 key result columns are returned.
         """
+        relation_sql = self._relation.sql_query()
+        base_relation_sql = f"""
+        SELECT * REPLACE (
+            CAST(match_reason AS VARCHAR) AS match_reason
+        )
+        FROM ({relation_sql}) AS match_result
+        """
         if all_columns:
-            return self._relation
+            return self.con.sql(base_relation_sql)
         preferred = [
             "unique_id",
             "resolved_canonical_id",
@@ -191,7 +200,13 @@ class MatchResult:
         ]
         available = set(self._relation.columns)
         cols = [c for c in preferred if c in available]
-        return self._relation.select(*cols)
+        return self.con.sql(
+            f"""
+            SELECT
+                {", ".join(cols)}
+            FROM ({base_relation_sql}) AS match_result
+            """
+        )
 
     def match_metrics(
         self,
@@ -226,21 +241,26 @@ class MatchResult:
             )
         return _SplinkInspector(con=self.con, stage=stage)
 
-    def _splink_best_matches_table(self) -> str:
-        """Return the name of the DuckDB table holding Splink best matches.
+    def _debug_tools(self) -> _MatchResultDebugTools:
+        return _MatchResultDebugTools(self)
 
-        Raises:
-            ValueError: When no SplinkStage was configured, or when the stage
-                was configured but did not run far enough to create the table.
-        """
-        stage = self._require_splink_stage()
-        if stage.best_matches_table is None:
-            raise ValueError(
-                "SplinkStage is configured but did not produce a best-matches "
-                "table. This can happen when earlier stages matched all "
-                "records before the Splink stage ran."
-            )
-        return stage.best_matches_table
+    def _splink_results_for_messy_id(self, messy_id: str | int) -> DuckDBPyRelation:
+        """Return human-friendly Splink candidates for one messy-side record."""
+        return self._debug_tools().splink_results_for_messy_id(messy_id)
+
+    def _messy_id_report(
+        self,
+        messy_id: str | int,
+        *,
+        display_output: bool = True,
+        charts_as_text: bool = False,
+    ) -> dict[str, Any]:
+        """Return a human-readable ASCII report for one messy-side record."""
+        return self._debug_tools().messy_id_report(
+            messy_id,
+            display_output=display_output,
+            charts_as_text=charts_as_text,
+        )
 
     def _splink_predictions(
         self,
@@ -271,6 +291,8 @@ class MatchResult:
         Each row in the returned list corresponds to one threshold value and
         contains the confusion-matrix counts (tp, tn, fp, fn) plus the derived
         rates (tp_rate, fp_rate, precision, recall, f1).
+
+        Requires a ``ukam_label`` column in the match results relation.
 
         Important semantics: this uses top-1 outcome evaluation.  Wrong-ID rows
         are false positives at their emitted score; they are not score-floored.
@@ -304,11 +326,6 @@ class MatchResult:
             the canonical dataset; it is used to derive ``tn``, ``tn_rate``,
             and ``fp_rate``.
         """
-        if "ukam_label" not in self._relation.columns:
-            raise ValueError(
-                "accuracy_data requires a 'ukam_label' column in the match results. "
-                "Add a ground-truth label column to the input addresses_to_match data."
-            )
         if self._canonical_relation is None:
             raise ValueError(
                 "accuracy_data requires access to the canonical dataset to determine "
@@ -348,7 +365,7 @@ class MatchResult:
         """Generate an accuracy chart or table from labelled match results.
 
         Mirrors Splink's ``linker.evaluation.accuracy_analysis_from_labels_table``
-        API.  Requires a ``ukam_label`` column in the input addresses.
+        API. Requires a ``ukam_label`` column in the input addresses.
 
         Args:
             match_weight_round_to_nearest: Round splink match weights to this
@@ -423,18 +440,31 @@ class MatchResult:
         *,
         baseline_match_weight: float,
         splink_comparison_weights: list[float] | None = None,
+        precision_at_metrics: list[int] | None = None,
+        human_readable: bool = True,
     ) -> SplinkModelComparisonOutput:
         """Return compact Splink threshold comparisons for reporting.
 
         Returns two tables:
         - headline_table: key operational and quality metrics per threshold
         - delta_table: changes versus the baseline threshold
+
+        Requires a ``ukam_label`` column in the match results relation.
+
+        ``human_readable=False`` returns machine-friendly numeric delta fields.
         """
+        predictions_relation = None
+        if precision_at_metrics is not None:
+            predictions_relation = self._splink_predictions()
+
         return build_splink_model_comparison(
             self.con,
             self._relation,
             baseline_match_weight=baseline_match_weight,
             splink_comparison_weights=splink_comparison_weights,
+            predictions_relation=predictions_relation,
+            precision_at_metrics=precision_at_metrics,
+            human_readable=human_readable,
         )
 
     def _stage_diagnostics_table(

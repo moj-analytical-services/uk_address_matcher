@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import time
 import warnings
@@ -63,6 +64,136 @@ class _PreparedFolderLayout:
 
     folder: Path
     canonical_paths: list[Path]
+
+
+_URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
+def _is_remote_folder_reference(folder: str | Path) -> bool:
+    """Return True if the provided folder points to a remote URI."""
+    return isinstance(folder, str) and bool(_URI_SCHEME_RE.match(folder))
+
+
+def _join_remote_path(base: str, name: str) -> str:
+    """Join a remote base URI and relative artefact name."""
+    return f"{base.rstrip('/')}/{name}"
+
+
+def _is_permission_error(exc: Exception) -> bool:
+    """Best-effort check for credential/permission access failures."""
+    message = str(exc).lower()
+    markers = [
+        "access denied",
+        "accessdenied",
+        "forbidden",
+        "http 403",
+        "credential",
+        "expiredtoken",
+        "signaturedoesnotmatch",
+        "permission",
+        "unauthor",
+        "unauthorizedssotoken",
+        "sso session",
+    ]
+    return any(marker in message for marker in markers)
+
+
+def _rollback_if_needed(con: duckdb.DuckDBPyConnection) -> None:
+    """Best-effort rollback to clear aborted transaction state."""
+    try:
+        con.execute("ROLLBACK")
+    except Exception:
+        # Ignore when there is no active transaction.
+        pass
+
+
+def _load_prepared_canonical_data_remote(
+    folder_uri: str,
+    con: duckdb.DuckDBPyConnection,
+    canonical_address_filter: str | None,
+) -> _PreparedCanonical:
+    """Load prepared canonical artefacts from a remote folder URI via DuckDB."""
+    # A previous failed read on the same connection can leave DuckDB in an aborted
+    # transaction state. Clear it before attempting fallback reads.
+    _rollback_if_needed(con)
+
+    tf_uri = _join_remote_path(folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
+    idx_uri = _join_remote_path(folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
+    single_canonical_uri = _join_remote_path(folder_uri, PREPARED_ADDRESSES_FILENAME)
+    chunk_glob_uri = _join_remote_path(
+        folder_uri,
+        f"{PREPARED_ADDRESSES_CHUNK_DIRNAME}/*.parquet",
+    )
+    single_dataset_glob_uri = _join_remote_path(
+        folder_uri,
+        f"{PREPARED_ADDRESSES_FILENAME}/*.parquet",
+    )
+
+    try:
+        term_frequencies = con.read_parquet(tf_uri)
+        term_frequencies.limit(1).fetchone()
+        inverted_index = con.read_parquet(idx_uri)
+        inverted_index.limit(1).fetchone()
+    except Exception as exc:
+        _rollback_if_needed(con)
+        if _is_permission_error(exc):
+            raise PermissionError(
+                f"Cannot access prepared canonical data at '{folder_uri}'. "
+                "Check object-store credentials and permissions. "
+                f"Underlying error: {exc}"
+            ) from exc
+        raise FileNotFoundError(
+            f"Prepared canonical remote folder '{folder_uri}' is missing required "
+            "files or is inaccessible. Expected: "
+            f"{PREPARED_TERM_FREQUENCIES_FILENAME}, "
+            f"{PREPARED_INVERTED_INDEX_FILENAME}. "
+            f"Underlying error: {exc}"
+        ) from exc
+
+    addresses: duckdb.DuckDBPyRelation
+    address_candidates = [
+        chunk_glob_uri,
+        single_canonical_uri,
+        single_dataset_glob_uri,
+    ]
+    read_errors: list[Exception] = []
+    for candidate_uri in address_candidates:
+        try:
+            addresses = con.read_parquet(candidate_uri)
+            addresses.limit(1).fetchone()
+            break
+        except Exception as exc:
+            read_errors.append(exc)
+            _rollback_if_needed(con)
+    else:
+        permission_exc = next((e for e in read_errors if _is_permission_error(e)), None)
+        if permission_exc is not None:
+            raise PermissionError(
+                f"Cannot access canonical addresses in '{folder_uri}'. "
+                "Check object-store credentials and permissions. "
+                f"Underlying error: {permission_exc}"
+            ) from permission_exc
+
+        last_error = read_errors[-1] if read_errors else RuntimeError("Unknown error")
+        raise FileNotFoundError(
+            f"Prepared canonical remote folder '{folder_uri}' is missing "
+            "canonical addresses artefacts. Expected one of: "
+            f"{PREPARED_ADDRESSES_FILENAME}, "
+            f"{PREPARED_ADDRESSES_CHUNK_DIRNAME}/*.parquet, or "
+            f"{PREPARED_ADDRESSES_FILENAME}/*.parquet. "
+            f"Underlying error: {last_error}"
+        ) from last_error
+
+    if canonical_address_filter is not None:
+        addresses = addresses.filter(canonical_address_filter)
+
+    logger.debug("Loaded prepared canonical data from remote '%s'", folder_uri)
+
+    return _PreparedCanonical(
+        addresses=addresses,
+        term_frequencies=term_frequencies,
+        inverted_index=inverted_index,
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -481,6 +612,13 @@ def load_prepared_canonical_data(
         A `_PreparedCanonical` containing `addresses`, `term_frequencies`,
         and `inverted_index` relations.
     """
+    if _is_remote_folder_reference(folder):
+        return _load_prepared_canonical_data_remote(
+            folder,
+            con=con,
+            canonical_address_filter=canonical_address_filter,
+        )
+
     layout = _validate_prepared_folder(folder, con=con)
     _check_manifest(layout.folder)
 

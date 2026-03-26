@@ -409,6 +409,7 @@ def test_clean_output_lowercases_address_concat() -> None:
 def test_benchmark_output_options_defaults_match_expected_sections() -> None:
     options = BenchmarkOutputOptions()
 
+    assert options.show_splink_comparisons is True
     assert options.show_successful_matches is False
     assert options.show_incorrect_matches is True
     assert options.show_similarity_score_checks is True

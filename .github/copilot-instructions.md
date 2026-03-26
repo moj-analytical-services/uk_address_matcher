@@ -18,3 +18,4 @@
 - Core stack: Python + DuckDB SQL pipelines + Splink.
 - Key areas: `uk_address_matcher/cleaning/`, `uk_address_matcher/linking_model/`,
   `uk_address_matcher/sql_pipeline/`, plus `tests/`, `examples/`, `scripts/`, `example_data/`.
+- Always use `uv` to run Python commands: `uv sync` to refresh the environment, `uv run <command>` to execute scripts and tests (e.g. `uv run pytest`).

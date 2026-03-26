@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 # Optional Splink-only comparison table shown after benchmark summary.
 # Set to `None` to disable threshold-comparison output.
 SPLINK_BASELINE_WEIGHT: float | None = 10.0
-SPLINK_COMPARISON_WEIGHTS: list[float] | None = [8.0, 12.0]
+SPLINK_COMPARISON_WEIGHTS: list[float] | None = [6.0, 8.0, 12.0]
+TOP_K_PRECISION_AT_METRICS: list[int] = [1, 3, 5]
 
 # SELECTED_DATASETS: str | list[str] = "all"
 SELECTED_DATASETS: str | list[str] = "hackney"
@@ -81,4 +82,6 @@ print_benchmark_summary(
     results,
     splink_baseline_weight=SPLINK_BASELINE_WEIGHT,
     splink_comparison_weights=SPLINK_COMPARISON_WEIGHTS,
+    top_k_precision_at_metrics=TOP_K_PRECISION_AT_METRICS,
+    output_options=OUTPUT_OPTIONS,
 )

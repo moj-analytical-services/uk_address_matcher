@@ -8,87 +8,86 @@
     "right": 5,
     "bottom": 5
   },
-  "width": 420,
+  "width": 620,
   "height": 360,
   "data": {
     "values": []
   },
-  "layer": [
+  "params": [
     {
-      "mark": {
-        "type": "area",
-        "opacity": 0.12,
-        "color": "#4C78A8"
+      "name": "grid",
+      "select": {
+        "type": "interval",
+        "encodings": [
+          "y"
+        ]
       },
-      "encoding": {
-        "x": {
-          "field": "recall",
-          "type": "quantitative",
-          "title": "Recall",
-          "scale": {
-            "domain": [0, 1]
-          }
-        },
-        "y": {
-          "field": "precision",
-          "type": "quantitative",
-          "title": "Precision",
-          "scale": {
-            "domain": [0, 1]
-          }
-        }
-      }
+      "bind": "scales"
+    }
+  ],
+  "mark": {
+    "type": "area",
+    "fillOpacity": 0.12,
+    "color": "#4C78A8",
+    "line": {
+      "color": "#4C78A8"
     },
-    {
-      "mark": {
-        "type": "line",
-        "point": true,
-        "color": "#4C78A8"
+    "point": {
+      "filled": true
+    }
+  },
+  "encoding": {
+    "x": {
+      "field": "recall",
+      "type": "quantitative",
+      "title": "Recall",
+      "axis": {
+        "format": ".1%"
       },
-      "encoding": {
-        "x": {
-          "field": "recall",
-          "type": "quantitative",
-          "title": "Recall",
-          "scale": {
-            "domain": [0, 1]
-          }
-        },
-        "y": {
-          "field": "precision",
-          "type": "quantitative",
-          "title": "Precision",
-          "scale": {
-            "domain": [0, 1]
-          }
-        },
-        "tooltip": [
-          {
-            "field": "truth_threshold",
-            "type": "quantitative",
-            "title": "Match weight threshold",
-            "format": ".2f"
-          },
-          {
-            "field": "match_probability",
-            "type": "quantitative",
-            "title": "Match probability",
-            "format": ".4f"
-          },
-          {
-            "field": "precision",
-            "type": "quantitative",
-            "title": "Precision",
-            "format": ".4f"
-          },
-          {
-            "field": "recall",
-            "type": "quantitative",
-            "title": "Recall",
-            "format": ".4f"
-          }
+      "scale": {
+        "domain": [
+          0,
+          1
         ]
       }
-    }
-  ]
+    },
+    "y": {
+      "field": "precision",
+      "type": "quantitative",
+      "title": "Precision",
+      "axis": {
+        "format": ".1%"
+      },
+      "scale": {
+        "zero": false
+      },
+      "stack": false
+    },
+    "tooltip": [
+      {
+        "field": "truth_threshold",
+        "type": "quantitative",
+        "title": "Match weight threshold",
+        "format": ".2f"
+      },
+      {
+        "field": "match_probability",
+        "type": "quantitative",
+        "title": "Match probability",
+        "format": ".4f"
+      },
+      {
+        "field": "precision",
+        "type": "quantitative",
+        "title": "Precision",
+        "format": ".1%"
+      },
+      {
+        "field": "recall",
+        "type": "quantitative",
+        "title": "Recall",
+        "format": ".1%"
+      }
+    ]
+  }
 }

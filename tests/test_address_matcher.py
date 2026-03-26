@@ -269,6 +269,28 @@ def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data)
         assert result.matches().count("*").fetchone()[0] > 0
 
 
+def test_inverted_index_property_returns_registered_relation(
+    con,
+    canonical_data,
+    messy_data,
+):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+    )
+
+    assert matcher._inverted_index is None
+
+    matcher._resolve_canonical_data()
+    inverted_index = matcher._inverted_index
+
+    assert inverted_index is not None
+    assert {"key", "unique_ids", "index_strategy"}.issubset(inverted_index.columns)
+    assert inverted_index.count("*").fetchone()[0] > 0
+
+
 @pytest.mark.parametrize("output_chunk_count", [1, 5])
 def test_match_from_prepared_folder_e2e_chunked_output(
     con,

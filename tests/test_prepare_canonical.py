@@ -1,6 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import duckdb
 import pyarrow
@@ -298,3 +299,141 @@ def test_corrupt_parquet_raises(con, prepared_folder):
 
     with pytest.raises(FileNotFoundError, match="not a valid Parquet file"):
         load_prepared_canonical_data(prepared_folder, con=con)
+
+
+def test_load_remote_folder_reads_chunked_layout_and_applies_filter():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    filtered_addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+    addresses_rel.filter.return_value = filtered_addresses_rel
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(
+        folder_uri,
+        con=con,
+        canonical_address_filter="postcode = 'SW1A2AA'",
+    )
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is filtered_addresses_rel
+    assert result.term_frequencies is tf_rel
+    assert result.inverted_index is idx_rel
+    addresses_rel.filter.assert_called_once_with("postcode = 'SW1A2AA'")
+
+
+def test_load_remote_folder_reads_single_dataset_directory_layout():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            raise FileNotFoundError("No files found for chunk glob")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet":
+            raise FileNotFoundError("Path is a directory-like prefix")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet/*.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(folder_uri, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is addresses_rel
+
+
+def test_load_remote_folder_rolls_back_and_falls_back_to_single_file():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            raise FileNotFoundError("No files found for chunk glob")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(folder_uri, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is addresses_rel
+    con.execute.assert_any_call("ROLLBACK")
+
+
+def test_load_remote_folder_missing_required_files_raises_filenotfound():
+    folder_uri = "s3://test-bucket/prepared"
+
+    con = MagicMock()
+    con.read_parquet.side_effect = FileNotFoundError("No files found")
+
+    with pytest.raises(FileNotFoundError, match="missing required files"):
+        load_prepared_canonical_data(folder_uri, con=con)
+
+
+def test_load_remote_folder_permission_error_raises_permissionerror():
+    folder_uri = "s3://test-bucket/prepared"
+
+    con = MagicMock()
+    con.read_parquet.side_effect = RuntimeError("HTTP 403 Forbidden")
+
+    with pytest.raises(PermissionError, match="Cannot access prepared canonical data"):
+        load_prepared_canonical_data(folder_uri, con=con)

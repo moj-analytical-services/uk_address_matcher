@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from benchmarking.insights.types import BenchmarkOutputOptions
-from uk_address_matcher.post_linkage.match_result.result import MatchResult
+from uk_address_matcher.analysis.splink_comparison_metrics import (
+    build_splink_model_comparison,
+)
 
 if TYPE_CHECKING:
     from benchmarking.runner import BenchmarkRunResult
@@ -62,7 +64,11 @@ def print_benchmark_summary(
     *,
     splink_baseline_weight: float | None = None,
     splink_comparison_weights: list[float] | None = None,
+    top_k_precision_at_metrics: list[int] | None = None,
+    output_options: BenchmarkOutputOptions | None = None,
 ) -> None:
+    output_options = output_options or BenchmarkOutputOptions()
+
     print("\nBenchmark summary")
     for result in results:
         print(f"\nDataset: {result.dataset_key}")
@@ -81,29 +87,38 @@ def print_benchmark_summary(
             print("\nStage diagnostics:")
             _show_via_sql(result, result.stage_diagnostics_table)
 
-        if splink_baseline_weight is not None and splink_comparison_weights is not None:
+        if output_options.show_splink_comparisons and splink_baseline_weight is not None:
             table_name = f"simple_bench_matches_{result.dataset_key}"
             relation = result.con.table(table_name)
-            comparison_result = MatchResult(_relation=relation, con=result.con)
 
             print("\nSplink threshold comparison:")
-            comparison_output = comparison_result._compare_splink_model_results(
+
+            if not result.splink_available:
+                print("Splink not active for this run. Skipping Splink comparisons.")
+                continue
+
+            precision_metrics = top_k_precision_at_metrics
+            if precision_metrics is not None and result.splink_predictions is None:
+                print(
+                    "Splink predictions unavailable; showing top-1 threshold "
+                    "comparison only."
+                )
+                precision_metrics = None
+
+            splink_matches = build_splink_model_comparison(
+                result.con,
+                relation,
                 baseline_match_weight=splink_baseline_weight,
                 splink_comparison_weights=splink_comparison_weights,
+                predictions_relation=result.splink_predictions,
+                precision_at_metrics=precision_metrics,
             )
 
-            if comparison_output.total_input_rows is not None:
-                print(
-                    "Splink comparison input rows "
-                    "(constant across thresholds): "
-                    f"{comparison_output.total_input_rows}"
-                )
-
-            print("\nSplink headline performance table")
-            _show_via_sql(result, comparison_output.headline_table)
-
-            print("\nSplink change-vs-baseline table")
-            _show_via_sql(result, comparison_output.delta_table)
+            print("--- SPLINK Comparison: Headline ---")
+            _show_via_sql(result, splink_matches.headline_table)
+            print(splink_matches.total_input_rows)
+            print("--- SPLINK Comparison: Delta ---")
+            _show_via_sql(result, splink_matches.delta_table)
 
 
 def print_diagnostics(
@@ -160,6 +175,6 @@ def print_results(
     output_options: BenchmarkOutputOptions | None = None,
 ) -> None:
     output_options = output_options or BenchmarkOutputOptions()
-    print_benchmark_summary(results)
+    print_benchmark_summary(results, output_options=output_options)
     if output_options.enable_diagnostics():
         print_diagnostics(results, output_options=output_options)

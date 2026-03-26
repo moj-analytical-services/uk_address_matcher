@@ -91,6 +91,7 @@ class SplinkStage(MatchingStage):
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
     predictions_table: str | None = field(default=None, init=False, repr=False)
+    improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
 
     def find_matches(
@@ -160,6 +161,7 @@ class SplinkStage(MatchingStage):
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
+        self.improved_predictions_table = getattr(df_improved, "alias", None)
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
@@ -173,10 +175,6 @@ class SplinkStage(MatchingStage):
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
         df_best.create(df_best_name)
         self.best_matches_table = df_best_name
-
-        improved_alias = getattr(df_improved, "alias", None)
-        if improved_alias:
-            con.execute(f"DROP TABLE {improved_alias}")
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value

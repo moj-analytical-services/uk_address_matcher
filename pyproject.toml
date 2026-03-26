@@ -52,8 +52,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["uk_address_matcher*"]
-# See https://github.com/pypa/setuptools/issues/4759
-exclude = ["secret_data*", "_LICENSE.md"]
+exclude = ["secret_data*"]
 
 [tool.setuptools]
 include-package-data = true

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import duckdb
 import pyarrow as pa
 import pytest
@@ -26,6 +28,30 @@ def _run_threshold_metrics(
     cols = rel.columns
     rows = rel.fetchall()
     return {row[cols.index("truth_threshold")]: dict(zip(cols, row)) for row in rows}
+
+
+def _make_result_without_ukam_label() -> MatchResult:
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "match_weight": 12.0,
+                    "match_reason": "splink: probabilistic match",
+                }
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+
+    return MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +366,43 @@ def test_accuracy_analysis_rejects_roc_output_type():
 
     with pytest.raises(ValueError, match="Invalid output_type"):
         result.accuracy_analysis(output_type="roc")
+
+
+@pytest.mark.parametrize(
+    ("method_name", "kwargs"),
+    [
+        ("_accuracy_table", {}),
+        (
+            "_compare_splink_model_results",
+            {
+                "baseline_match_weight": 10.0,
+                "precision_at_metrics": None,
+            },
+        ),
+    ],
+)
+def test_match_result_analysis_methods_require_ukam_label(method_name, kwargs):
+    result = _make_result_without_ukam_label()
+    method = getattr(result, method_name)
+
+    with pytest.raises(
+        ValueError,
+        match=f"{method_name} requires a 'ukam_label' column",
+    ):
+        method(**kwargs)
+
+
+def test_compare_splink_model_results_requires_ukam_label_without_top_k_metrics():
+    result = _make_result_without_ukam_label()
+
+    with pytest.raises(
+        ValueError,
+        match="_compare_splink_model_results requires a 'ukam_label' column",
+    ):
+        result._compare_splink_model_results(
+            baseline_match_weight=10.0,
+            precision_at_metrics=None,
+        )
 
 
 def test_accuracy_table_supports_splink_threshold_override():
@@ -684,10 +747,11 @@ def test_compare_splink_model_results_returns_headline_and_delta_tables():
     assert comparison_output.total_input_rows == 3
 
     assert "scenario" in headline_df.columns
-    assert "threshold" in headline_df.columns
-    assert "match_rate" in headline_df.columns
-    assert "correct_matches" in headline_df.columns
-    assert "mismatched_matches" in headline_df.columns
+    assert "threshold" not in headline_df.columns
+    assert "match_outcome" in headline_df.columns
+    assert "match_rate" not in headline_df.columns
+    assert "correct_matches" not in headline_df.columns
+    assert "mismatched_matches" not in headline_df.columns
     assert "precision" in headline_df.columns
     assert "recall" in headline_df.columns
     assert "f1" in headline_df.columns
@@ -696,19 +760,652 @@ def test_compare_splink_model_results_returns_headline_and_delta_tables():
     assert "accuracy" not in headline_df.columns
 
     assert "scenario" in delta_df.columns
-    assert "delta_matched_rows" in delta_df.columns
-    assert "delta_correct_matches" in delta_df.columns
+    assert "delta_matched_rows" not in delta_df.columns
+    assert "delta_correct_matches" not in delta_df.columns
+    assert "delta_mismatched_matches" not in delta_df.columns
+    assert "delta_match_outcome" in delta_df.columns
     assert "precision_delta" in delta_df.columns
     assert "recall_delta" in delta_df.columns
     assert "f1_delta" in delta_df.columns
 
     baseline_rows = delta_df[delta_df["scenario"] == "weight_10.0 (baseline)"]
     assert not baseline_rows.empty
-    assert baseline_rows["delta_matched_rows"].eq("1").all()
-    assert baseline_rows["delta_correct_matches"].eq("1").all()
+    assert (
+        baseline_rows["delta_match_outcome"]
+        .str.contains(r"matched 1 \| correct 1 \| wrong 0", regex=True)
+        .all()
+    )
     assert baseline_rows["precision_delta"].eq("100.0%").all()
-    assert baseline_rows["recall_delta"].eq("33.3%").all()
+    assert baseline_rows["recall_delta"].eq("33.33%").all()
     assert baseline_rows["f1_delta"].eq("50.0%").all()
+
+
+def test_compare_splink_top_k_results_returns_headline_and_delta_tables():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+                {
+                    "unique_id": "b",
+                    "resolved_canonical_id": "2",
+                    "ukam_label": "2",
+                    "match_weight": 12.0,
+                    "match_reason": "splink: probabilistic match",
+                },
+                {
+                    "unique_id": "c",
+                    "resolved_canonical_id": None,
+                    "ukam_label": "3",
+                    "match_weight": None,
+                    "match_reason": None,
+                },
+            ]
+        ),
+    )
+    con.register(
+        "c",
+        pa.Table.from_pylist(
+            [{"unique_id": "1"}, {"unique_id": "2"}, {"unique_id": "3"}],
+        ),
+    )
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 12.0,
+                    "match_probability": 0.999,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "9",
+                    "match_weight": 11.0,
+                    "match_probability": 0.98,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "2",
+                    "match_weight": 9.0,
+                    "match_probability": 0.9,
+                },
+                {
+                    "unique_id_r": "c",
+                    "unique_id_l": "8",
+                    "match_weight": 7.0,
+                    "match_probability": 0.8,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    comparison_output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=[8.0, 10.0],
+        precision_at_metrics=[5, 1, 3],
+    )
+
+    headline_df = comparison_output.headline_table.df()
+    delta_df = comparison_output.delta_table.df()
+
+    assert comparison_output.total_input_rows == 3
+
+    assert "scenario" in headline_df.columns
+    assert "threshold" not in headline_df.columns
+    assert "match_outcome" in headline_df.columns
+    assert "rows_with_true_match" in headline_df.columns
+    assert "rows_with_predictions" in headline_df.columns
+    assert "precision_at_k" in headline_df.columns
+    assert "recall_at_k" in headline_df.columns
+    assert "mean_reciprocal_rank" in headline_df.columns
+    assert "average_true_rank" in headline_df.columns
+
+    assert "scenario" in delta_df.columns
+    assert "rows_with_predictions_delta" in delta_df.columns
+    assert "precision_at_k_delta" in delta_df.columns
+    assert "recall_at_k_delta" in delta_df.columns
+    assert "mrr_delta" in delta_df.columns
+    assert "average_true_rank_delta" in delta_df.columns
+
+    baseline_rows = headline_df[headline_df["scenario"] == "weight_10.0 (baseline)"]
+    assert not baseline_rows.empty
+    assert baseline_rows["rows_with_true_match"].eq(3).all()
+    assert baseline_rows["rows_with_predictions"].eq(2).all()
+    assert baseline_rows["match_outcome"].eq("matched 1 | correct 1 | wrong 0").all()
+    assert baseline_rows["precision_at_k"].str.contains("@1 50.0%", regex=False).all()
+    assert baseline_rows["precision_at_k"].str.contains("@3 50.0%", regex=False).all()
+    assert baseline_rows["precision_at_k"].str.contains("@5 50.0%", regex=False).all()
+    assert baseline_rows["recall_at_k"].str.contains("@1 33.33%", regex=False).all()
+    assert baseline_rows["recall_at_k"].str.contains("@3 33.33%", regex=False).all()
+    assert baseline_rows["recall_at_k"].str.contains("@5 33.33%", regex=False).all()
+    assert baseline_rows["mean_reciprocal_rank"].eq(0.333333).all()
+    assert baseline_rows["average_true_rank"].eq(1.0).all()
+
+    comparison_rows = delta_df[delta_df["scenario"] == "weight_8.0"]
+    assert not comparison_rows.empty
+    assert comparison_rows["rows_with_predictions_delta"].eq("0").all()
+    assert comparison_rows["precision_at_k_delta"].str.contains("@1 0.00 pp").all()
+    assert (
+        comparison_rows["precision_at_k_delta"]
+        .str.contains(
+            "@3 +50.00 pp",
+            regex=False,
+        )
+        .all()
+    )
+    assert (
+        comparison_rows["precision_at_k_delta"]
+        .str.contains(
+            "@5 +50.00 pp",
+            regex=False,
+        )
+        .all()
+    )
+    assert comparison_rows["recall_at_k_delta"].str.contains("@1 0.00 pp").all()
+    assert (
+        comparison_rows["recall_at_k_delta"]
+        .str.contains(
+            "@3 +33.33 pp",
+            regex=False,
+        )
+        .all()
+    )
+    assert (
+        comparison_rows["recall_at_k_delta"]
+        .str.contains(
+            "@5 +33.33 pp",
+            regex=False,
+        )
+        .all()
+    )
+    assert comparison_rows["mrr_delta"].eq("+0.167").all()
+    assert comparison_rows["average_true_rank_delta"].eq("+0.500").all()
+
+    baseline_delta_rows = delta_df[delta_df["scenario"] == "weight_10.0 (baseline)"]
+    assert not baseline_delta_rows.empty
+    assert baseline_delta_rows["rows_with_predictions_delta"].eq("2").all()
+    assert (
+        baseline_delta_rows["precision_at_k_delta"]
+        .str.contains("@1 50.0%", regex=False)
+        .all()
+    )
+    assert (
+        baseline_delta_rows["recall_at_k_delta"]
+        .str.contains("@1 33.33%", regex=False)
+        .all()
+    )
+    assert baseline_delta_rows["mrr_delta"].eq("0.333").all()
+    assert baseline_delta_rows["average_true_rank_delta"].eq("1.000").all()
+
+
+def test_compare_splink_top_k_results_supports_custom_precision_metrics():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 12.0,
+                    "match_probability": 0.999,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    comparison_output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=None,
+        precision_at_metrics=[5, 1],
+    )
+
+    headline_df = comparison_output.headline_table.df()
+    assert "precision_at_k" in headline_df.columns
+    assert "@1" in headline_df.iloc[0]["precision_at_k"]
+    assert "@5" in headline_df.iloc[0]["precision_at_k"]
+    assert "average_true_rank" in headline_df.columns
+
+
+def test_compare_splink_top_k_results_machine_readable_delta_columns():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+                {
+                    "unique_id": "b",
+                    "resolved_canonical_id": "2",
+                    "ukam_label": "2",
+                    "match_weight": 12.0,
+                    "match_reason": "splink: probabilistic match",
+                },
+                {
+                    "unique_id": "c",
+                    "resolved_canonical_id": None,
+                    "ukam_label": "3",
+                    "match_weight": None,
+                    "match_reason": None,
+                },
+            ]
+        ),
+    )
+    con.register(
+        "c",
+        pa.Table.from_pylist(
+            [{"unique_id": "1"}, {"unique_id": "2"}, {"unique_id": "3"}],
+        ),
+    )
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 12.0,
+                    "match_probability": 0.999,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "9",
+                    "match_weight": 11.0,
+                    "match_probability": 0.98,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "2",
+                    "match_weight": 9.0,
+                    "match_probability": 0.9,
+                },
+                {
+                    "unique_id_r": "c",
+                    "unique_id_l": "8",
+                    "match_weight": 7.0,
+                    "match_probability": 0.8,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=[8.0, 10.0],
+        precision_at_metrics=[1, 3, 5],
+        human_readable=False,
+    )
+
+    headline_df = output.headline_table.df()
+    delta_df = output.delta_table.df()
+
+    assert "precision_at_k" not in headline_df.columns
+    assert "recall_at_k" not in headline_df.columns
+    assert "precision_at_1" in headline_df.columns
+    assert "precision_at_3" in headline_df.columns
+    assert "precision_at_5" in headline_df.columns
+    assert "recall_at_1" in headline_df.columns
+    assert "recall_at_3" in headline_df.columns
+    assert "recall_at_5" in headline_df.columns
+
+    assert "delta_match_outcome" not in delta_df.columns
+    assert "matched_rows_delta" in delta_df.columns
+    assert "correct_matches_delta" in delta_df.columns
+    assert "mismatched_matches_delta" in delta_df.columns
+    assert "precision_delta" in delta_df.columns
+    assert "recall_delta" in delta_df.columns
+    assert "f1_delta" in delta_df.columns
+    assert "rows_with_predictions_delta" in delta_df.columns
+    assert "precision_at_1_delta" in delta_df.columns
+    assert "precision_at_3_delta" in delta_df.columns
+    assert "precision_at_5_delta" in delta_df.columns
+    assert "recall_at_1_delta" in delta_df.columns
+    assert "recall_at_3_delta" in delta_df.columns
+    assert "recall_at_5_delta" in delta_df.columns
+    assert "mrr_delta" in delta_df.columns
+    assert "average_true_rank_delta" in delta_df.columns
+
+    assert (
+        delta_df.loc[
+            delta_df["scenario"] == "weight_10.0 (baseline)", "matched_rows_delta"
+        ]
+        .isna()
+        .all()
+    )
+    assert (
+        delta_df.loc[delta_df["scenario"] == "weight_10.0 (baseline)", "precision_delta"]
+        .isna()
+        .all()
+    )
+
+
+def test_top_k_perfect_ranking_yields_unit_metrics():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+                {
+                    "unique_id": "b",
+                    "resolved_canonical_id": "2",
+                    "ukam_label": "2",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+                {
+                    "unique_id": "c",
+                    "resolved_canonical_id": "3",
+                    "ukam_label": "3",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 12.0,
+                    "match_probability": 0.99,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "2",
+                    "match_weight": 11.0,
+                    "match_probability": 0.98,
+                },
+                {
+                    "unique_id_r": "c",
+                    "unique_id_l": "3",
+                    "match_weight": 10.5,
+                    "match_probability": 0.97,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=None,
+        precision_at_metrics=[1, 3, 5],
+    )
+    df = output.headline_table.df()
+    row = df.loc[df["scenario"] == "weight_10.0 (baseline)"].iloc[0]
+
+    assert "@1 100.0%" in row["precision_at_k"]
+    assert "@3 100.0%" in row["precision_at_k"]
+    assert "@5 100.0%" in row["precision_at_k"]
+    assert "@1 100.0%" in row["recall_at_k"]
+    assert "@3 100.0%" in row["recall_at_k"]
+    assert "@5 100.0%" in row["recall_at_k"]
+    assert row["mean_reciprocal_rank"] == 1.0
+    assert row["average_true_rank"] == 1.0
+
+
+def test_top_k_worse_ranking_has_higher_average_rank_and_lower_mrr():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+                {
+                    "unique_id": "b",
+                    "resolved_canonical_id": "2",
+                    "ukam_label": "2",
+                    "match_weight": None,
+                    "match_reason": "exact: full match",
+                },
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "9",
+                    "match_weight": 12.0,
+                    "match_probability": 0.99,
+                },
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 11.0,
+                    "match_probability": 0.98,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "8",
+                    "match_weight": 12.0,
+                    "match_probability": 0.99,
+                },
+                {
+                    "unique_id_r": "b",
+                    "unique_id_l": "2",
+                    "match_weight": 11.0,
+                    "match_probability": 0.98,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=None,
+        precision_at_metrics=[1, 3, 5],
+    )
+    df = output.headline_table.df()
+    row = df.loc[df["scenario"] == "weight_10.0 (baseline)"].iloc[0]
+
+    assert "@1 0.0%" in row["precision_at_k"]
+    assert "@3 100.0%" in row["precision_at_k"]
+    assert "@5 100.0%" in row["precision_at_k"]
+    assert "@1 0.0%" in row["recall_at_k"]
+    assert "@3 100.0%" in row["recall_at_k"]
+    assert "@5 100.0%" in row["recall_at_k"]
+    assert row["mean_reciprocal_rank"] == 0.5
+    assert row["average_true_rank"] == 2.0
+
+
+def test_compare_splink_model_results_omits_top_k_when_no_precision_metrics():
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": 12.0,
+                    "match_reason": "splink: probabilistic match",
+                },
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+    )
+
+    comparison_output = result._compare_splink_model_results(
+        baseline_match_weight=10.0,
+        splink_comparison_weights=None,
+        precision_at_metrics=None,
+    )
+    headline_df = comparison_output.headline_table.df()
+    delta_df = comparison_output.delta_table.df()
+
+    assert "precision@1" not in headline_df.columns
+    assert "precision_at_k" not in headline_df.columns
+    assert "recall_at_k" not in headline_df.columns
+    assert "mean_reciprocal_rank" not in headline_df.columns
+    assert "average_true_rank" not in headline_df.columns
+    assert "precision_at_k_delta" not in delta_df.columns
+    assert "recall_at_k_delta" not in delta_df.columns
+    assert "mrr_delta" not in delta_df.columns
+    assert "average_true_rank_delta" not in delta_df.columns
+
+
+@pytest.mark.parametrize("precision_at_metrics", [[0], [-1], [11], [1, 12]])
+def test_compare_splink_model_results_enforces_top_k_bounds(precision_at_metrics):
+    con = duckdb.connect()
+    con.register(
+        "m",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id": "a",
+                    "resolved_canonical_id": "1",
+                    "ukam_label": "1",
+                    "match_weight": 12.0,
+                    "match_reason": "splink: probabilistic match",
+                },
+            ]
+        ),
+    )
+    con.register("c", pa.Table.from_pylist([{"unique_id": "1"}]))
+    con.register(
+        "splink_predictions",
+        pa.Table.from_pylist(
+            [
+                {
+                    "unique_id_r": "a",
+                    "unique_id_l": "1",
+                    "match_weight": 12.0,
+                    "match_probability": 0.99,
+                },
+            ]
+        ),
+    )
+
+    fake_splink_stage = SimpleNamespace(
+        predictions_table="splink_predictions",
+        linker=object(),
+    )
+    result = MatchResult(
+        _relation=con.table("m"),
+        con=con,
+        _canonical_relation=con.table("c"),
+        _splink_stage=fake_splink_stage,
+    )
+
+    with pytest.raises(ValueError, match="between 1 and 10 inclusive"):
+        result._compare_splink_model_results(
+            baseline_match_weight=10.0,
+            splink_comparison_weights=None,
+            precision_at_metrics=precision_at_metrics,
+        )
 
 
 def test_accuracy_table_is_quality_focused_without_flow_columns():

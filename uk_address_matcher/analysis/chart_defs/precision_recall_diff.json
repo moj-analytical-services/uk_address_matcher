@@ -1,0 +1,123 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.1.0.json",
+  "description": "Recall-aligned precision gap chart",
+  "width": 620,
+  "height": 180,
+  "data": {
+    "values": []
+  },
+  "layer": [
+    {
+      "mark": {
+        "type": "rule",
+        "color": "#9AA1A6",
+        "strokeDash": [
+          4,
+          4
+        ]
+      },
+      "encoding": {
+        "y": {
+          "datum": 0
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "line",
+        "strokeWidth": 2,
+        "point": {
+          "filled": true,
+          "size": 34
+        }
+      },
+      "encoding": {
+        "x": {
+          "field": "baseline_recall",
+          "type": "quantitative",
+          "title": "Baseline recall",
+          "axis": {
+            "format": ".1%"
+          },
+          "scale": {
+            "domain": [
+              0,
+              1
+            ]
+          }
+        },
+        "y": {
+          "field": "precision_gap_percentage_points",
+          "type": "quantitative",
+          "title": "Precision gap (percentage points)",
+          "axis": {
+            "format": "+.2f"
+          }
+        },
+        "order": {
+          "field": "baseline_recall",
+          "type": "quantitative"
+        },
+        "color": {
+          "field": "comparison_label",
+          "type": "nominal",
+          "title": "Comparison",
+          "scale": {
+            "range": [
+              "#F58518",
+              "#54A24B",
+              "#E45756",
+              "#72B7B2",
+              "#EECA3B",
+              "#B279A2",
+              "#FF9DA6"
+            ]
+          }
+        },
+        "tooltip": [
+          {
+            "field": "comparison_label",
+            "type": "nominal",
+            "title": "Comparison"
+          },
+          {
+            "field": "baseline_precision",
+            "type": "quantitative",
+            "title": "Baseline precision",
+            "format": ".2%"
+          },
+          {
+            "field": "baseline_fp",
+            "type": "quantitative",
+            "title": "Baseline false positives",
+            "format": ".0f"
+          },
+          {
+            "field": "baseline_recall",
+            "type": "quantitative",
+            "title": "Baseline recall",
+            "format": ".2%"
+          },
+          {
+            "field": "comparison_precision",
+            "type": "quantitative",
+            "title": "Interpolated comparison precision",
+            "format": ".2%"
+          },
+          {
+            "field": "comparison_fp",
+            "type": "quantitative",
+            "title": "Interpolated comparison false positives",
+            "format": ".0f"
+          },
+          {
+            "field": "precision_gap_percentage_points",
+            "type": "quantitative",
+            "title": "Precision gap (percentage points)",
+            "format": "+.2f"
+          }
+        ]
+      }
+    }
+  ]
+}

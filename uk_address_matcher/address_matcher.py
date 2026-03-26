@@ -18,6 +18,7 @@ from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _register_input_relation_once,
+    _uid,
 )
 
 if TYPE_CHECKING:
@@ -196,8 +197,39 @@ class AddressMatcher:
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
         self._tf_table: duckdb.DuckDBPyRelation | None = None
-        self._inverted_index: duckdb.DuckDBPyRelation | None = None
+        self._inverted_index_table_name: str | None = None
         self._messy_clean: duckdb.DuckDBPyRelation | None = None
+
+    def _register_inverted_index(
+        self,
+        inverted_index: duckdb.DuckDBPyRelation,
+    ) -> None:
+        """Materialise and register inverted index on this matcher's connection."""
+        if self._inverted_index_table_name is not None:
+            _drop_table_and_registered_aliases(self.con, self._inverted_index_table_name)
+
+        source_relation = _register_input_relation_once(
+            inverted_index,
+            con=self.con,
+            role="inverted_index_source",
+        )
+
+        table_name = f"__ukam__inverted_index_{_uid()}"
+        self.con.execute(
+            "CREATE TABLE "
+            + table_name
+            + " AS SELECT * FROM ("
+            + source_relation.sql_query()
+            + ")"
+        )
+        self._inverted_index_table_name = table_name
+
+    @property
+    def _inverted_index(self) -> duckdb.DuckDBPyRelation | None:
+        """Return the registered inverted index relation, if available."""
+        if self._inverted_index_table_name is None:
+            return None
+        return self.con.table(self._inverted_index_table_name)
 
     def _resolve_canonical_data(self) -> None:
         """Loads or cleans canonical data depending on the input type."""
@@ -211,7 +243,7 @@ class AddressMatcher:
             )
             self._canonical_clean = prepared.addresses
             self._tf_table = prepared.term_frequencies
-            self._inverted_index = prepared.inverted_index
+            self._register_inverted_index(prepared.inverted_index)
 
         else:
             canonical_for_preparation = _normalise_and_validate_raw_canonical(
@@ -239,11 +271,12 @@ class AddressMatcher:
             )
 
             logger.debug("Building inverted index from canonical data")
-            self._inverted_index = derive_inverted_index(
+            inverted_index = derive_inverted_index(
                 self._canonical_clean,
                 con=self.con,
                 debug_options=self.debug_options,
             )
+            self._register_inverted_index(inverted_index)
 
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
@@ -344,6 +377,7 @@ class AddressMatcher:
             con=self.con,
             _splink_stage=splink_stage,
             _canonical_relation=self._canonical_clean,
+            _messy_relation=self._messy_clean,
             _stage_diagnostics=stage_diagnostics,
         )
 
@@ -354,6 +388,7 @@ class AddressMatcher:
             getattr(result, "alias", None),
             getattr(self._canonical_clean, "alias", None),
             getattr(self._messy_clean, "alias", None),
+            self._inverted_index_table_name,
         }
         keep_names = {name for name in keep_names if isinstance(name, str) and name}
 

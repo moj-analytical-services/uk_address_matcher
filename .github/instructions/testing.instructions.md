@@ -1,8 +1,6 @@
 ---
 applyTo:
-  - "tests/**/*.py"
-  - "uk_address_matcher/**/*.py"
-  - "scripts/**/*.py"
+  - "**"
 ---
 
 # Testing expectations

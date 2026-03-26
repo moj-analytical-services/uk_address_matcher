@@ -22,6 +22,7 @@ class DatasetDiagnostics:
 
 @dataclass(frozen=True)
 class BenchmarkOutputOptions:
+    show_splink_comparisons: bool = True
     show_successful_matches: bool = False
     show_incorrect_matches: bool = True
     show_similarity_score_checks: bool = True
