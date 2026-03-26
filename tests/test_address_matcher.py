@@ -436,7 +436,7 @@ def test_stage_repr_is_concise_and_informative():
     assert exact_repr.startswith("ExactMatchStage()")
     assert "\n  Purpose:" in exact_repr
     assert (
-        "Deterministic exact matching on ``clean_full_address`` and ``postcode``."
+        "Deterministic exact matching on `clean_full_address` and `postcode`."
         in exact_repr
     )  # noqa: E501
     assert "\n  Import:  from uk_address_matcher import ExactMatchStage" in exact_repr
