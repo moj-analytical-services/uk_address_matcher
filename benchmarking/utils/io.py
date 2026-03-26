@@ -112,6 +112,8 @@ def load_duckdb_httpfs(con: duckdb.DuckDBPyConnection) -> None:
 def setup_connection() -> duckdb.DuckDBPyConnection:
     """Initialise DuckDB connection with required extensions for benchmarking."""
     con = duckdb.connect(database=":memory:")
+    memory_limit = os.getenv("UKAM_DUCKDB_MEMORY_LIMIT", "16GB")
+    con.execute(f"SET memory_limit='{memory_limit}';")
     con.execute("INSTALL splink_udfs FROM community; LOAD splink_udfs;")
     return con
 

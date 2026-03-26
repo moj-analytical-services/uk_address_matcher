@@ -27,6 +27,7 @@ class BenchmarkOutputOptions:
     show_incorrect_matches: bool = True
     show_similarity_score_checks: bool = True
     show_unmatched_records: bool = False
+    incorrect_match_sample_size: int = 10
 
     def enable_diagnostics(self) -> bool:
         return any(
