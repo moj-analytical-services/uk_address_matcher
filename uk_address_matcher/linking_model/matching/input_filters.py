@@ -19,6 +19,8 @@ POSTCODE_STRATEGIES: tuple[PostcodeStrategy, PostcodeStrategy] = (
 )
 def _restrict_canonical_to_messy_postcodes(
     postcode_strategy: PostcodeStrategy,
+    *,
+    include_structural_fields: bool = True,
 ) -> list[CTEStep]:
     """Filter canonical addresses to those matching messy input postcodes."""
     if postcode_strategy not in POSTCODE_STRATEGIES:
@@ -39,18 +41,24 @@ def _restrict_canonical_to_messy_postcodes(
         "canon.postcode",
         "canon.unique_id AS canonical_unique_id",
         "canon.ukam_address_id AS ukam_address_id",
-        "canon.numeric_tokens",
-        "canon.numeric_token_1",
-        "canon.numeric_token_2",
-        "canon.has_flat_indicator",
-        "canon.flat_positional",
-        "canon.flat_letter",
-        "canon.flat_number",
-        "canon.flat_identity",
-        "canon.has_business_unit",
-        "canon.business_unit_type",
-        "canon.business_unit_id",
     ]
+
+    if include_structural_fields:
+        canonical_select_fields.extend(
+            [
+                "canon.numeric_tokens",
+                "canon.numeric_token_1",
+                "canon.numeric_token_2",
+                "canon.has_flat_indicator",
+                "canon.flat_positional",
+                "canon.flat_letter",
+                "canon.flat_number",
+                "canon.flat_identity",
+                "canon.has_business_unit",
+                "canon.business_unit_type",
+                "canon.business_unit_id",
+            ]
+        )
 
     if postcode_strategy == "exact":
         messy_key_expr = "postcode"

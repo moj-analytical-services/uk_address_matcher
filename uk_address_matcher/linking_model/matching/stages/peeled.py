@@ -56,7 +56,10 @@ class PeeledAddressStage(MatchingStage):
         return run_sql_pipeline(
             con=con,
             pipeline_stages=[
-                _restrict_canonical_to_messy_postcodes("exact"),
+                _restrict_canonical_to_messy_postcodes(
+                    "exact",
+                    include_structural_fields=False,
+                ),
                 _peeled_address_matches,
             ],
             stage_name=stage_name,

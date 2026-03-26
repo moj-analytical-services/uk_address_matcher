@@ -51,7 +51,10 @@ class ExactMatchStage(MatchingStage):
         return run_sql_pipeline(
             con=con,
             pipeline_stages=[
-                _restrict_canonical_to_messy_postcodes("exact"),
+                _restrict_canonical_to_messy_postcodes(
+                    "exact",
+                    include_structural_fields=False,
+                ),
                 _exact_matches("__ukam__tmp_messy_addresses"),
             ],
             stage_name=stage_name,
