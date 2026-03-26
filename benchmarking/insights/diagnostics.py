@@ -241,7 +241,8 @@ def build_dataset_diagnostics(
                 {canonical_rollup_join_sql}
                 WHERE m.match_reason IS NOT NULL
                   AND m.resolved_canonical_id IS NOT NULL
-                  AND CAST(m.ukam_label AS VARCHAR) = CAST(m.resolved_canonical_id AS VARCHAR)
+                                    AND CAST(m.ukam_label AS VARCHAR)
+                                            = CAST(m.resolved_canonical_id AS VARCHAR)
             )
             SELECT
                 match_reason,
@@ -343,7 +344,14 @@ def build_dataset_diagnostics(
                     base.postcode,
                     base.original_address_concat,
                     base.cleaned_full_address,
-                    {("canonical_match.clean_full_address_canonical AS clean_full_address_canonical") if need_similarity_checks else "NULL::VARCHAR[] AS clean_full_address_canonical"},
+                    {
+                (
+                    "canonical_match.clean_full_address_canonical "
+                    "AS clean_full_address_canonical"
+                )
+                if need_similarity_checks
+                else "NULL::VARCHAR[] AS clean_full_address_canonical"
+            },
                     base.match_weight,
                     {similarity_score_sampled_expr} AS similarity_score,
                     ROW_NUMBER() OVER (
