@@ -166,89 +166,103 @@
             "comparison_description": "CustomComparison"
         },
         {
-            "output_column_name": "flat_identity",
+            "output_column_name": "numberic_letter_and_positional",
             "comparison_levels": [
                 {
-                    "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
-                    "label_for_charts": "One has flat indicator, other does not",
-                    "m_probability": 0.0009765625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\"flat_identity_l\" IS NULL AND \"flat_identity_r\" IS NULL",
-                    "label_for_charts": "Both null (no flat info)",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
+                    "sql_condition": "\"numberic_letter_and_positional_l\" IS NULL AND \"numberic_letter_and_positional_r\" IS NULL",
+                    "label_for_charts": "Both null",
                     "is_null_level": true
                 },
                 {
-                    "sql_condition": "flat_identity_l = flat_identity_r",
-                    "label_for_charts": "Exact match on flat identity",
-                    "m_probability": 95.00950852025916,
+                    "sql_condition": "(\n        list_reduce(\n            list_transform(\n                COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]),\n                token -> struct_pack(\n                    tok := token,\n                    right_match_pos := NULL::INTEGER,\n                    match_count := NULL::INTEGER,\n                    seen := NULL::VARCHAR[]\n                )\n            ),\n            (state, item) -> CASE\n                WHEN list_position(state.seen, item.tok) IS NOT NULL THEN state\n                WHEN list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok) IS NULL THEN state\n                ELSE struct_pack(\n                    tok := item.tok,\n                    right_match_pos := state.right_match_pos + list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok),\n                    match_count := state.match_count + 1,\n                    seen := list_concat(state.seen, [item.tok])\n                )\n            END,\n            struct_pack(\n                tok := NULL::VARCHAR,\n                right_match_pos := 0,\n                match_count := 0,\n                seen := []::VARCHAR[]\n            )\n        )\n    ).match_count >= 5",
+                    "label_for_charts": "5 shared elements in right order",
+                    "m_probability": 1048576,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_l = flat_positional_r",
-                    "label_for_charts": "Same positional, different letter/number",
-                    "m_probability": 0.25,
+                    "sql_condition": "length(list_intersect(COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]), COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))) >= 5",
+                    "label_for_charts": "5 shared elements in any order",
+                    "m_probability": 262144,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "(\n        (flat_positional_l IS NOT NULL AND flat_positional_r IS NULL)\n        OR\n        (flat_positional_r IS NOT NULL AND flat_positional_l IS NULL)\n    )\n    AND flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL",
-                    "label_for_charts": "Cross-type flat (positional vs letter/number)",
-                    "m_probability": 0.25,
+                    "sql_condition": "(\n        list_reduce(\n            list_transform(\n                COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]),\n                token -> struct_pack(\n                    tok := token,\n                    right_match_pos := NULL::INTEGER,\n                    match_count := NULL::INTEGER,\n                    seen := NULL::VARCHAR[]\n                )\n            ),\n            (state, item) -> CASE\n                WHEN list_position(state.seen, item.tok) IS NOT NULL THEN state\n                WHEN list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok) IS NULL THEN state\n                ELSE struct_pack(\n                    tok := item.tok,\n                    right_match_pos := state.right_match_pos + list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok),\n                    match_count := state.match_count + 1,\n                    seen := list_concat(state.seen, [item.tok])\n                )\n            END,\n            struct_pack(\n                tok := NULL::VARCHAR,\n                right_match_pos := 0,\n                match_count := 0,\n                seen := []::VARCHAR[]\n            )\n        )\n    ).match_count >= 4",
+                    "label_for_charts": "4 shared elements in right order",
+                    "m_probability": 65536,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "has_flat_indicator_l = TRUE\n    AND has_flat_indicator_r = TRUE\n    AND flat_identity_l IS NOT NULL\n    AND flat_identity_r IS NOT NULL\n    AND flat_identity_l != flat_identity_r\n    AND (\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_r AS INTEGER) IS NOT NULL\n            AND flat_number_l IS NULL\n            AND flat_letter_r IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_r AS INTEGER)\n        )\n        OR\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_l AS INTEGER) IS NOT NULL\n            AND flat_number_r IS NULL\n            AND flat_letter_l IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_l AS INTEGER)\n        )\n    )",
-                    "label_for_charts": "Fuzzy flat equivalence",
-                    "m_probability": 13,
+                    "sql_condition": "length(list_intersect(COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]), COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))) >= 4",
+                    "label_for_charts": "4 shared elements in any order",
+                    "m_probability": 16384,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_r IS NOT NULL\n    AND flat_positional_l != flat_positional_r",
-                    "label_for_charts": "Both positional but different floors",
-                    "m_probability": 0.00390625,
+                    "sql_condition": "(\n        list_reduce(\n            list_transform(\n                COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]),\n                token -> struct_pack(\n                    tok := token,\n                    right_match_pos := NULL::INTEGER,\n                    match_count := NULL::INTEGER,\n                    seen := NULL::VARCHAR[]\n                )\n            ),\n            (state, item) -> CASE\n                WHEN list_position(state.seen, item.tok) IS NOT NULL THEN state\n                WHEN list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok) IS NULL THEN state\n                ELSE struct_pack(\n                    tok := item.tok,\n                    right_match_pos := state.right_match_pos + list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok),\n                    match_count := state.match_count + 1,\n                    seen := list_concat(state.seen, [item.tok])\n                )\n            END,\n            struct_pack(\n                tok := NULL::VARCHAR,\n                right_match_pos := 0,\n                match_count := 0,\n                seen := []::VARCHAR[]\n            )\n        )\n    ).match_count >= 3",
+                    "label_for_charts": "3 shared elements in right order",
+                    "m_probability": 4096,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
-                    "label_for_charts": "Same number, letter one-sided",
-                    "m_probability": 0.25,
+                    "sql_condition": "length(list_intersect(COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]), COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))) >= 3",
+                    "label_for_charts": "3 shared elements in any order",
+                    "m_probability": 1024,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
-                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r",
-                    "label_for_charts": "Same number, letters both differ",
-                    "m_probability": 0.0009765625,
+                    "sql_condition": "(\n        list_reduce(\n            list_transform(\n                COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]),\n                token -> struct_pack(\n                    tok := token,\n                    right_match_pos := NULL::INTEGER,\n                    match_count := NULL::INTEGER,\n                    seen := NULL::VARCHAR[]\n                )\n            ),\n            (state, item) -> CASE\n                WHEN list_position(state.seen, item.tok) IS NOT NULL THEN state\n                WHEN list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok) IS NULL THEN state\n                ELSE struct_pack(\n                    tok := item.tok,\n                    right_match_pos := state.right_match_pos + list_position(list_slice(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), state.right_match_pos + 1, length(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))), item.tok),\n                    match_count := state.match_count + 1,\n                    seen := list_concat(state.seen, [item.tok])\n                )\n            END,\n            struct_pack(\n                tok := NULL::VARCHAR,\n                right_match_pos := 0,\n                match_count := 0,\n                seen := []::VARCHAR[]\n            )\n        )\n    ).match_count >= 2",
+                    "label_for_charts": "2 shared elements in right order",
+                    "m_probability": 256,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "length(list_intersect(COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]), COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))) >= 2",
+                    "label_for_charts": "2 shared elements in any order",
+                    "m_probability": 64,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "\n            list_reduce(\n                list_transform(\n                    COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]),\n                    (token, idx) -> COALESCE(\n                        token = list_extract(COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]), idx),\n                        FALSE\n                    )\n                ),\n                (state, is_match) -> state OR is_match,\n                FALSE\n            )\n        ",
+                    "label_for_charts": "1 shared elements in right order",
+                    "m_probability": 16,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "length(list_intersect(COALESCE(numberic_letter_and_positional_l, []::VARCHAR[]), COALESCE(numberic_letter_and_positional_r, []::VARCHAR[]))) >= 1",
+                    "label_for_charts": "1 shared elements in any order",
+                    "m_probability": 4,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 },
                 {
                     "sql_condition": "ELSE",
-                    "label_for_charts": "Flat identity differs (different number)",
+                    "label_for_charts": "No shared flat-related tokens",
                     "m_probability": 9.5367431640625e-07,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 }
             ],
-            "comparison_description": "Combined flat identity comparison"
+            "comparison_description": "Ordered flat-related token overlap comparison"
         },
         {
             "output_column_name": "numeric_token_1",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from numbers import Integral, Real
 from typing import TYPE_CHECKING, Any
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -23,14 +24,36 @@ def _resolve_predictions_id_column(predictions: DuckDBPyRelation) -> str:
     )
 
 
+def _coerce_sql_scalar(value: Any) -> None | bool | int | float | str:
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        return float(value)
+
+    message = (
+        "SQL literal values must be strings, numeric scalars, booleans, "
+        f"or None. Got {type(value).__name__}: {value!r}."
+    )
+    if callable(value):
+        message += (
+            " If you meant to pass a record ID, pass the actual value rather "
+            "than a function such as Python's built-in id."
+        )
+    raise TypeError(message)
+
+
 def _sql_literal(value: Any) -> str:
+    value = _coerce_sql_scalar(value)
+
     if value is None:
         return "NULL"
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
         return str(value)
-    escaped = str(value).replace("'", "''")
+    escaped = value.replace("'", "''")
     return f"'{escaped}'"
 
 

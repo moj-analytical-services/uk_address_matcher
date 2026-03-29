@@ -132,27 +132,27 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
 @pipeline_stage(
     name="parse_out_flat_position_and_letter",
-    description=(
-        "Extract flat positions and letters from address strings into separate columns"
-    ),
+    description="Extract ordered flat-related tokens from address strings",
     tags=["token_extraction", "flat_parsing"],
 )
 def _parse_out_flat_position_and_letter():
     """
-    Robustly extracts flat positions, letters, and numbers from address strings.
+    Extract an ordered list of floor words, flat letters, and numeric fragments.
 
-    Strategy:
-      - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
-      - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
-      - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
-      - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
+    This intentionally replaces the older split between ``flat_positional``,
+    ``flat_letter``, ``flat_number``, ``has_flat_indicator``, and
+    ``flat_identity`` with one simpler field:
+
+    ``numberic_letter_and_positional``
+
+    The list preserves the address order and keeps all values as strings so
+    leading zeroes remain intact, e.g. ``7.07`` -> ``['7', '07']``.
     """
 
-    # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
-    # others are paired with FLOOR/GROUND.
-    # BLOCK indicates a flat block (e.g., "BLOCK B STANNARD HALL")
-    standalone_floors = ["BASEMENT", "GARDEN", "BLOCK"]
-    floor_with_suffix = [
+    floor_tokens = [
+        "BASEMENT",
+        "GARDEN",
+        "REAR",
         "LOWER",
         "UPPER",
         "GROUND",
@@ -167,186 +167,70 @@ def _parse_out_flat_position_and_letter():
         "NINTH",
         "TOP",
     ]
-    # Build regex: standalone floors OR (prefix + FLOOR) OR
-    # (prefix + GROUND for LOWER/UPPER)
-    # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
-    # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
-    # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
-    multi_floor_pattern = (
-        r"(?:(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
-        r"SEVENTH|EIGHTH|NINTH|TOP),? ?|AND )*"
-        r"(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
-        r"SEVENTH|EIGHTH|NINTH|TOP) FLOORS"
-    )
-    floor_positions = (
+    relevant_token_pattern = (
         r"\b("
-        + "|".join(
-            standalone_floors
-            + [f"{f} FLOOR" for f in floor_with_suffix]
-            + [f"{f} GROUND" for f in ["LOWER", "UPPER"]]
-        )
-        + r"|"
-        + multi_floor_pattern
-        + r")\b"
+        r"FLAT\s+\d+\s*/\s*\d+|"
+        r"FLAT\s+\d+\s+[A-Za-z]|"
+        r"FLAT\s+\d+[A-Za-z]|"
+        r"FLAT\s+[A-Za-z]|"
+        r"BLOCK\s+[A-Za-z]|" + "|".join(floor_tokens) + r"|"
+        r"\d{1,5}[./-]\d{1,5}|"
+        r"[A-Za-z]\d{1,5}|"
+        r"\d{1,5}[A-Za-z]?"
+        r")\b"
     )
 
-    # Core token patterns (RE2-compatible; avoid lookbehind)
-    num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
-    leading_num_letter = (
-        r"^\s*(\d{1,4})([A-Za-z])\b"  # e.g., 11A ... (number=grp1, letter=grp2)
-    )
-    # Match all numbers (standalone digits, not part of ranges like 120-122)
-    count_numbers = r"\b(\d{1,5})\b"
-
-    flat_num_after_flat = (
-        r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/])"  # FLAT 12 / FLAT 12A / FLAT 12/2
-    )
-    flat_letter_after_num_after_flat = (
-        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
-    )
-    flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
-    block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
-
-    # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
-    scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
-
-    final_base_sql = f"""
+    sql = f"""
     SELECT
-        i.*,
-
-        -- 1) Positional/floor signal
+        * EXCLUDE (numberic_letter_and_positional_raw),
         CASE
-            WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
-                ''
-            ) = 'LOWER GROUND'
-                THEN 'GROUND FLOOR'
-            WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
-                ''
-            ) = 'LOWER FLOOR'
-                THEN 'LOWER FLOOR'
-            ELSE NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
-                ''
-            )
-        END AS flat_positional,
-
-        -- 2) flat_letter (priority:
-        -- FLAT 12A → A, FLAT A → A, BLOCK A → A,
-        -- 11A start → A, 15B anywhere → B)
-        COALESCE(
-            NULLIF(
-                regexp_extract(
-                    i.clean_full_address,
-                    '{flat_letter_after_num_after_flat}',
-                    1
-                ),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{block_letter}', 1),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{leading_num_letter}', 2),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2),
-                ''
-            )
-        ) AS flat_letter,
-
-        -- 3) flat_number (priority explained inline)
-        -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
-        -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
-        -- since "2" might be a building number, not a flat.
-        -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
-        -- we use NULLIF(..., '') to normalise non-matches.
-        CASE
-            -- Explicit "FLAT X" - extract if (multiple numbers) OR (BLOCK pattern)
-            -- OR (letter follows the number, e.g., "FLAT 12A")
-            -- OR (Scottish style FLAT X/Y pattern)
-            WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
-                ''
-            ) IS NOT NULL
-                 AND (
-                     COALESCE(
-                        length(
-                            regexp_extract_all(i.clean_full_address, '{count_numbers}')
-                        ),
-                        0
-                    ) >= 2
-                     OR NULLIF(
-                        regexp_extract(i.clean_full_address, '{block_letter}', 1),
-                        ''
-                    ) IS NOT NULL
-                     OR NULLIF(
-                        regexp_extract(
-                           i.clean_full_address,
-                           '{flat_letter_after_num_after_flat}',
-                           1
-                       ),
-                       ''
-                   ) IS NOT NULL
-                     OR NULLIF(
-                        regexp_extract(i.original_address_concat, '{scottish_flat}', 1),
-                        ''
-                    ) IS NOT NULL
-                 )
-            THEN COALESCE(
-                -- FLAT 3/2 → 2 (Scottish style)
-                NULLIF(
-                    regexp_extract(i.original_address_concat, '{scottish_flat}', 2),
-                    ''
-                ),
-                -- FLAT 12 → 12
-                NULLIF(
-                    regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
-                    ''
+            WHEN length(numberic_letter_and_positional_raw) = 0 THEN NULL
+            ELSE numberic_letter_and_positional_raw
+        END AS numberic_letter_and_positional
+    FROM (
+        SELECT
+            i.*,
+            flatten(
+                list_transform(
+                    regexp_extract_all(
+                        i.clean_full_address,
+                        '{relevant_token_pattern}'
+                    ),
+                    token -> CASE
+                        WHEN regexp_matches(token, '^FLAT\\s+\\d+\\s*/\\s*\\d+$')
+                            THEN regexp_extract_all(token, '\\d+')
+                        WHEN regexp_matches(token, '^FLAT\\s+\\d+\\s+[A-Za-z]$')
+                            THEN [
+                                regexp_extract(token, '(\\d+)', 1),
+                                UPPER(regexp_extract(token, '([A-Za-z])$', 1))
+                            ]
+                        WHEN regexp_matches(token, '^FLAT\\s+\\d+[A-Za-z]$')
+                            THEN [
+                                regexp_extract(token, '(\\d+)', 1),
+                                UPPER(regexp_extract(token, '([A-Za-z])$', 1))
+                            ]
+                        WHEN regexp_matches(token, '^(FLAT|BLOCK)\\s+[A-Za-z]$')
+                            THEN [UPPER(regexp_extract(token, '([A-Za-z])$', 1))]
+                        WHEN regexp_matches(token, '^\\d+[./-]\\d+$')
+                            THEN regexp_extract_all(token, '\\d+')
+                        WHEN regexp_matches(token, '^[A-Za-z]\\d+$')
+                            THEN [
+                                UPPER(regexp_extract(token, '^([A-Za-z])', 1)),
+                                regexp_extract(token, '(\\d+)$', 1)
+                            ]
+                        WHEN regexp_matches(token, '^\\d+[A-Za-z]$')
+                            THEN [
+                                regexp_extract(token, '^(\\d+)', 1),
+                                UPPER(regexp_extract(token, '([A-Za-z])$', 1))
+                            ]
+                        ELSE [UPPER(token)]
+                    END
                 )
-            )
-            ELSE NULL
-        END AS flat_number
-
-    FROM {{input}} i
+            ) AS numberic_letter_and_positional_raw
+        FROM {{input}} i
+    )
     """
-
-    # Final step: boolean indicator and composite flat identity
-    # (split out so we can refer to computed aliases)
-    # Also check for the word FLAT itself as a flat signal
-    final_sql = r"""
-    SELECT
-        *,
-        (
-            flat_letter IS NOT NULL
-            OR flat_number IS NOT NULL
-            OR flat_positional IS NOT NULL
-            OR regexp_matches(clean_full_address, '\bFLAT\b')
-        ) AS has_flat_indicator,
-        CASE
-            WHEN flat_number IS NOT NULL OR flat_letter IS NOT NULL
-                 OR flat_positional IS NOT NULL
-            THEN CONCAT_WS('_',
-                     COALESCE(flat_number, ''),
-                     COALESCE(flat_letter, ''),
-                     COALESCE(flat_positional, ''))
-            ELSE NULL
-        END AS flat_identity
-    FROM {final_base}
-    """
-
-    steps = [
-        CTEStep("final_base", final_base_sql),
-        CTEStep("final", final_sql),
-    ]
-    return steps
+    return sql
 
 
 @pipeline_stage(
@@ -435,9 +319,6 @@ def _parse_out_numbers():
     It also captures ranges like '1-2', '12-17', '98-102' as a single 'number', and
     matches patterns like '20A', 'A20', '20', and '20-21'.
 
-    Special case: If flat_letter is a number, the first number found will be ignored
-    as it's likely a duplicate of the flat number.
-
     Args:
         table_name (str): The name of the table to process.
         con (DuckDBPyConnection): The DuckDB connection.
@@ -460,12 +341,7 @@ def _parse_out_numbers():
             '',
             'g'
         ) AS address_without_numbers,
-        CASE
-            WHEN flat_letter IS NOT NULL AND flat_letter ~ '^\\d+$' THEN
-            regexp_extract_all(clean_full_address, '{regex_pattern}')[2:]
-            ELSE
-                regexp_extract_all(clean_full_address, '{regex_pattern}')
-        END AS numeric_tokens
+        regexp_extract_all(clean_full_address, '{regex_pattern}') AS numeric_tokens
     FROM {{input}}
     """
     return sql

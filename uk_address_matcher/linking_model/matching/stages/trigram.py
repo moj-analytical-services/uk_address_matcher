@@ -133,10 +133,7 @@ def _resolve_with_trigrams(
     supporting_text_select = ", supporting_trigram_texts" if include_trigram_text else ""
 
     unit_fields = """
-        has_flat_indicator,
-        flat_positional,
-        flat_letter,
-        flat_number,
+        numberic_letter_and_positional,
         has_business_unit,
         business_unit_type,
         business_unit_id
@@ -188,10 +185,7 @@ def _resolve_with_trigrams(
         ct.canonical_ukam_address_id,
         ct.canonical_unique_id,
         ct.numeric_tokens,
-        ct.has_flat_indicator,
-        ct.flat_positional,
-        ct.flat_letter,
-        ct.flat_number,
+        ct.numberic_letter_and_positional,
         ct.has_business_unit,
         ct.business_unit_type,
         ct.business_unit_id
@@ -239,11 +233,8 @@ def _resolve_with_trigrams(
             ON messy.postcode = unique_index.postcode
             AND messy.numeric_tokens = unique_index.numeric_tokens
             AND messy.trigram_hash = unique_index.trigram_hash
-            AND messy.has_flat_indicator IS NOT DISTINCT FROM
-                unique_index.has_flat_indicator
-            AND messy.flat_positional IS NOT DISTINCT FROM unique_index.flat_positional
-            AND messy.flat_letter IS NOT DISTINCT FROM unique_index.flat_letter
-            AND messy.flat_number IS NOT DISTINCT FROM unique_index.flat_number
+            AND messy.numberic_letter_and_positional IS NOT DISTINCT FROM
+                unique_index.numberic_letter_and_positional
             AND messy.has_business_unit IS NOT DISTINCT FROM
                 unique_index.has_business_unit
             AND messy.business_unit_type IS NOT DISTINCT FROM
