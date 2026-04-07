@@ -12,6 +12,7 @@ from uk_address_matcher.cleaning.steps import (
     _first_unusual_token,
     _generalised_token_aliases,
     _get_token_frequeny_table,
+    _join_excluding_with_next_token,
     _lookup_keys_in_inverted_index,
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
@@ -76,6 +77,7 @@ QUEUE_CLEAN_FULL_ADDRESS = [
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
+    _join_excluding_with_next_token,
     _strip_country_suffix,
     _remove_duplicate_end_tokens,  # clean_full_address now completed
 ]

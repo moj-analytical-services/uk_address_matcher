@@ -6,7 +6,6 @@ on:
       - "v*.*.*"
 
 permissions:
-  actions: read
   contents: read
 
 concurrency:
@@ -42,58 +41,31 @@ jobs:
             if (mainSha !== tagSha) {
               core.setFailed(
                 `Tag commit (${tagSha}) is not the latest commit on main (${mainSha}). ` +
-                'Create the release tag from current main HEAD to ensure the publish uses the newest built artifact.'
+                'Create the release tag from current main HEAD to ensure the publish uses the newest source.'
               );
               return;
             }
 
             core.setOutput('release_sha', tagSha);
 
-      - name: Find successful build artifact run
-        id: find_build
-        uses: actions/github-script@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          script: |
-            const { owner, repo } = context.repo;
-            const sha = '${{ steps.main_guard.outputs.release_sha }}';
-
-            const runs = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: 'build-package.yaml',
-              head_sha: sha,
-              event: 'push',
-              status: 'completed',
-              per_page: 50,
-            });
-
-            const run = runs.data.workflow_runs.find((r) => r.conclusion === 'success');
-
-            if (!run) {
-              core.setFailed(
-                `No successful Build & package run found for commit ${sha}. ` +
-                'Wait for the main build to pass, then re-run this release workflow.'
-              );
-              return;
-            }
-
-            core.info(`Using build run id ${run.id} from ${run.html_url}`);
-            core.setOutput('run_id', String(run.id));
-
-      - name: Download built dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          run-id: ${{ steps.find_build.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: dist
+          python-version: "3.12"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-      - name: Validate downloaded package metadata
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Build sdist + wheel
+        run: uv run --with build python -m build
+
+      - name: Validate built package metadata
         run: uv run --with twine python -m twine check dist/*
 
       - name: Publish to PyPI

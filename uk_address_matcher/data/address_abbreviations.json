@@ -90,6 +90,12 @@
   { "token": "GDN", "replacement": "GARDEN" },
   { "token": "GDNS", "replacement": "GARDENS" },
 
+  { "token": "EXC", "replacement": "EXCLUDING" },
+  { "token": "EXCL", "replacement": "EXCLUDING" },
+  
+  { "token": "LGND", "replacement": "LOWER GROUND"},
+  { "token": "UGND", "replacement": "UPPER GROUND"},
+
   { "token": "GRD", "replacement": "GROUND" },
   { "token": "GND", "replacement": "GROUND" },
 
@@ -167,6 +173,9 @@
   { "token": "PT", "replacement": "POINT" },
 
   { "token": "RD", "replacement": "ROAD" },
+
+  { "token": "RR", "replacement": "REAR" },
+  { "token": "R-O", "replacement": "REAR OF" },
 
   { "token": "RDG", "replacement": "RIDGE" },
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from importlib.resources import files
 from os import PathLike
@@ -17,6 +18,8 @@ _OVERLAY_COLOUR_RANGE = [
     "#B279A2",
     "#FF9DA6",
 ]
+
+_ALTAIR_SPEC_ASSIGNMENT_RE = re.compile(r"\b(?:var|const|let)\s+spec\s*=\s*")
 
 
 def _load_chart_definition(file_name: str) -> dict[str, Any]:
@@ -35,6 +38,23 @@ def _prepare_nested_chart_definition(
     return nested_chart_definition
 
 
+def _extract_chart_definition_from_altair_html(html_text: str) -> dict[str, Any]:
+    match = _ALTAIR_SPEC_ASSIGNMENT_RE.search(html_text)
+    if match is None:
+        raise ValueError("Could not find an embedded Vega/Vega-Lite spec in HTML")
+
+    decoder = json.JSONDecoder()
+    json_start = match.end()
+    while json_start < len(html_text) and html_text[json_start].isspace():
+        json_start += 1
+
+    chart_definition, _ = decoder.raw_decode(html_text, idx=json_start)
+    if not isinstance(chart_definition, dict):
+        raise ValueError("Embedded Vega/Vega-Lite spec must be a JSON object")
+
+    return chart_definition
+
+
 def _load_precision_recall_chart_input(
     chart: Any,
 ) -> dict[str, Any]:
@@ -44,7 +64,17 @@ def _load_precision_recall_chart_input(
     if isinstance(chart, (str, PathLike)):
         chart_path = Path(chart)
         with chart_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            chart_text = f.read()
+
+        try:
+            chart_definition = json.loads(chart_text)
+        except json.JSONDecodeError:
+            chart_definition = _extract_chart_definition_from_altair_html(chart_text)
+
+        if not isinstance(chart_definition, dict):
+            raise ValueError("Chart file must contain a Vega/Vega-Lite JSON object")
+
+        return chart_definition
 
     to_dict = getattr(chart, "to_dict", None)
     if callable(to_dict):
@@ -289,6 +319,8 @@ def _build_overlay_chart_definition(
     diff_records: list[dict[str, Any]],
     label_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    ordered_series_labels = [record["series_label"] for record in label_records]
+
     top_panel = _prepare_nested_chart_definition(
         _load_chart_definition("precision_recall.json")
     )
@@ -304,7 +336,10 @@ def _build_overlay_chart_definition(
         "field": "series_label",
         "type": "nominal",
         "title": "Curve",
-        "scale": {"range": _OVERLAY_COLOUR_RANGE},
+        "scale": {
+            "domain": ordered_series_labels,
+            "range": _OVERLAY_COLOUR_RANGE[: len(ordered_series_labels)],
+        },
     }
     top_panel["encoding"]["tooltip"] = [
         {
@@ -355,7 +390,10 @@ def _build_overlay_chart_definition(
                     "field": "series_label",
                     "type": "nominal",
                     "legend": None,
-                    "scale": {"range": _OVERLAY_COLOUR_RANGE},
+                    "scale": {
+                        "domain": ordered_series_labels,
+                        "range": _OVERLAY_COLOUR_RANGE[: len(ordered_series_labels)],
+                    },
                 },
             },
         },

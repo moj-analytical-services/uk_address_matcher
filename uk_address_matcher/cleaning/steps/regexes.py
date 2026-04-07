@@ -13,23 +13,6 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
-def replace_excluding_basement_terms(input: str):
-    out = (
-        "regexp_replace("
-        + input
-        + ", '\\bHSE\\s+EXC\\s+BST\\b', 'HOUSE EXCLUDING BASEMENT', 'gi')"
-    )
-
-    # Apply the longer phrase first to avoid partial replacement.
-    out = (
-        "regexp_replace("
-        + out
-        + ", '\\bEXCLUDING\\s+PART\\s+BASEMENT\\b', 'EXCL_PT_BSMT', 'gi')"
-    )
-    out = "regexp_replace(" + out + ", '\\bEXCLUDING\\s+BASEMENT\\b', 'EXCL_BSMT', 'gi')"
-    return out
-
-
 def standarise_num_dash_num(input: str):
     """
     Standardizes numeric ranges with dashes by removing spaces around the dash.

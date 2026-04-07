@@ -4,7 +4,10 @@ from typing import Dict, List, Set, Tuple
 
 import pytest
 
-from uk_address_matcher.cleaning.steps import _normalise_abbreviations_and_units
+from uk_address_matcher.cleaning.steps import (
+    _join_excluding_with_next_token,
+    _normalise_abbreviations_and_units,
+)
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
 
@@ -52,6 +55,41 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
     ]
     for row, expected in zip(rows, expected_addresses):
         assert row[clean_idx] == expected
+
+
+def test_excluding_token_is_joined_with_following_token(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('EXC BST 238 ALBION ROAD LONDON'),
+            ('HSE EXC BST 47 ALKHAM ROAD LONDON'),
+            ('SHOP EXCLUDING BASEMENT 1 TEST ROAD LONDON'),
+            ('SHOP (EXCLUDING BASEMENT) 2 TEST ROAD LONDON'),
+            ('HSE EXCL STUDIO 17 ASHTEAD ROAD LONDON'),
+            ('SHOP EXCLUDING GARAGE 1 TEST ROAD LONDON')
+        ) AS t(clean_full_address)
+    """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _normalise_abbreviations_and_units,
+            _join_excluding_with_next_token,
+        ],
+    )
+    result_rel = pipeline.run()
+    rows = [row[0] for row in result_rel.fetchall()]
+
+    assert rows == [
+        "EXCLUDINGBASEMENT 238 ALBION ROAD LONDON",
+        "HOUSE EXCLUDINGBASEMENT 47 ALKHAM ROAD LONDON",
+        "SHOP EXCLUDINGBASEMENT 1 TEST ROAD LONDON",
+        "SHOP (EXCLUDINGBASEMENT) 2 TEST ROAD LONDON",
+        "HOUSE EXCLUDINGSTUDIO 17 ASHTEAD ROAD LONDON",
+        "SHOP EXCLUDINGGARAGE 1 TEST ROAD LONDON",
+    ]
 
 
 ## Checks to confirm our abbreviations file doesn't break the following properties:

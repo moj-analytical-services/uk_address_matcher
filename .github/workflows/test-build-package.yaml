@@ -1,4 +1,4 @@
-name: Build & package
+name: Test build package
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-package-${{ github.ref }}
+  group: test-build-package-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -49,9 +49,3 @@ jobs:
           uv venv .venv-wheeltest -p 3.10 --clear
           uv pip install --python .venv-wheeltest/bin/python dist/*.whl
           .venv-wheeltest/bin/python -c "import uk_address_matcher; print('Imported uk_address_matcher OK')"
-
-      - name: Upload dist artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/*

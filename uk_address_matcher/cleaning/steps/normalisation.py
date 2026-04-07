@@ -8,7 +8,6 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_apostrophes,
     remove_commas_periods,
     remove_multiple_spaces,
-    replace_excluding_basement_terms,
     replace_fwd_slash_with_dash,
     separate_letter_num,
     standarise_num_letter,
@@ -183,7 +182,6 @@ def _clean_address_string_first_pass() -> str:
             remove_commas_periods,
             remove_apostrophes,
             remove_multiple_spaces,
-            replace_excluding_basement_terms,
             replace_fwd_slash_with_dash,
             # standarise_num_dash_num,  # left commented as in original
             separate_letter_num,
@@ -349,3 +347,26 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
         CTEStep("with_cleaned_address", cleaned_sql),
     ]
     return steps
+
+
+@pipeline_stage(
+    name="join_excluding_with_next_token",
+    description=(
+        "Join EXCLUDING with the following token to avoid false basement/studio "
+        "matches during tokenisation"
+    ),
+    tags=["normalisation", "cleaning"],
+)
+def _join_excluding_with_next_token() -> str:
+    sql = r"""
+    SELECT
+        * EXCLUDE (clean_full_address),
+        regexp_replace(
+            clean_full_address,
+            '(^|[ (])EXCLUDING +([^ )]+)',
+            '\1EXCLUDING\2',
+            'g'
+        ) AS clean_full_address
+    FROM {input}
+    """
+    return sql

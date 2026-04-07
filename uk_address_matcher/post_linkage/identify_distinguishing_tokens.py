@@ -92,8 +92,8 @@ def improve_predictions_using_distinguishing_tokens(
         FROM intermediate
     )
     SELECT
-        * EXCLUDE (original_address_concat_r, original_address_concat_l),
-        original_address_concat_l
+        *,
+        clean_full_address_l
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
@@ -106,9 +106,9 @@ def improve_predictions_using_distinguishing_tokens(
             ))
             .list_reverse()
             .array_to_string(' ')
-            as original_address_concat_l,
+            AS __token_address_l,
 
-        original_address_concat_r
+        clean_full_address_r
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
@@ -121,11 +121,11 @@ def improve_predictions_using_distinguishing_tokens(
             ))
             .list_reverse()
             .array_to_string(' ')
-            as original_address_concat_r
+                AS __token_address_r
 
     FROM enriched
 
-    """
+            """
     remove_common_end_tokens = con.sql(sql_remove_common_end_tokens)  # noqa: F841
 
     # Step 4: Create tokenise_r CTE
@@ -133,7 +133,7 @@ def improve_predictions_using_distinguishing_tokens(
     SELECT DISTINCT
         ukam_address_id_r,
 
-        concat_ws(' ', original_address_concat_r, postcode_r)
+        concat_ws(' ', __token_address_r, postcode_r)
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
@@ -152,7 +152,7 @@ def improve_predictions_using_distinguishing_tokens(
         -- TOKENS SECTION
         -----------------
 
-        concat_ws(' ', original_address_concat_l, postcode_l)
+        concat_ws(' ', __token_address_l, postcode_l)
                 .trim()
                 .upper()
                 .regexp_split_to_array('\\s+')
@@ -210,7 +210,7 @@ def improve_predictions_using_distinguishing_tokens(
         else ""
     }
 
-    FROM top_n_matches m
+    FROM remove_common_end_tokens m
     JOIN tokenise_r t USING (ukam_address_id_r)
     GROUP BY t.ukam_address_id_r, t.tokens_r
     """
@@ -234,7 +234,7 @@ def improve_predictions_using_distinguishing_tokens(
         -- TOKENS SECTION
         -----------------
 
-        concat_ws(' ', original_address_concat_l, postcode_l)
+        concat_ws(' ', __token_address_l, postcode_l)
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
@@ -311,7 +311,7 @@ def improve_predictions_using_distinguishing_tokens(
         postcode_l,
         postcode_r,
         {add_cols_select}
-    FROM top_n_matches m
+    FROM remove_common_end_tokens m
     LEFT JOIN tokens t USING (ukam_address_id_r)
     """
     intermediate = con.sql(sql_intermediate)  # noqa: F841

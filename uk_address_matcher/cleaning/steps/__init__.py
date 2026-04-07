@@ -14,6 +14,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _extract_postcode_from_address,
+    _join_excluding_with_next_token,
     _normalise_abbreviations_and_units,
     _preserve_original_address_concat,
     _remove_duplicate_end_tokens,
@@ -65,6 +66,7 @@ __all__ = [
     "_remove_duplicate_end_tokens",
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
+    "_join_excluding_with_next_token",
     "_preserve_original_address_concat",
     # tokenisation
     "_split_numeric_tokens_to_cols",

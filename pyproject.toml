@@ -1,6 +1,6 @@
 [project]
 name = "uk_address_matcher"
-version = "v1.0.1"
+version = "1.1.0"
 description = "A package for matching UK addresses using a pretrained Splink model"
 authors = [{name = "Robin Linacre", email = "robinlinacre@hotmail.com"}]
 readme = "readme.md"

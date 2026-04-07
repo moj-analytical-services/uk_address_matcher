@@ -32,6 +32,8 @@ def generate_test_data(
             "unique_id_r": "r1",
             "original_address_concat_l": canonical_address,
             "original_address_concat_r": messy_address,
+            "clean_full_address_l": canonical_address,
+            "clean_full_address_r": messy_address,
             "common_end_token": common_end_token,
             "postcode_l": "W1A",
             "postcode_r": "W1A",
@@ -66,6 +68,8 @@ def run_assertions(
                 unique_id_r varchar,
                 original_address_concat_l varchar,
                 original_address_concat_r varchar,
+                clean_full_address_l varchar,
+                clean_full_address_r varchar,
                 common_end_token varchar,
                 postcode_l varchar,
                 postcode_r varchar,
@@ -84,6 +88,8 @@ def run_assertions(
                 row["unique_id_r"],
                 row["original_address_concat_l"],
                 row["original_address_concat_r"],
+                row["clean_full_address_l"],
+                row["clean_full_address_r"],
                 row["common_end_token"],
                 row["postcode_l"],
                 row["postcode_r"],
@@ -95,7 +101,7 @@ def run_assertions(
         con.executemany(
             """
             insert into df values (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             rows,
