@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from benchmarking.constants import BENCHMARK_PROJECT_ROOT
 from benchmarking.insights.types import BenchmarkOutputOptions
 from uk_address_matcher.analysis.splink_comparison_metrics import (
     build_splink_model_comparison,
@@ -9,6 +11,20 @@ from uk_address_matcher.analysis.splink_comparison_metrics import (
 
 if TYPE_CHECKING:
     from benchmarking.runner import BenchmarkRunResult
+
+
+_REPO_ROOT = Path(BENCHMARK_PROJECT_ROOT)
+
+
+def _display_path(path_value: str | None) -> str | None:
+    if path_value is None:
+        return None
+
+    path = Path(path_value)
+    if path.is_absolute():
+        return path.as_posix()
+
+    return (_REPO_ROOT / path).as_posix()
 
 
 def _show_via_sql(result: BenchmarkRunResult, relation) -> None:
@@ -121,6 +137,46 @@ def print_benchmark_summary(
             _show_via_sql(result, splink_matches.delta_table)
 
 
+def print_run_persistence_summary(results: list[BenchmarkRunResult]) -> None:
+    persisted_results = [result for result in results if result.persisted_run is not None]
+    if not persisted_results:
+        return
+
+    print("\nRun persistence")
+    for result in persisted_results:
+        persisted = result.persisted_run
+        if persisted is None:
+            continue
+
+        print(f"\nDataset: {result.dataset_key}")
+        print(
+            f"hash={persisted.run_hash} "
+            f"deduplicated={persisted.deduplicated} "
+            f"manifest={_display_path(persisted.manifest_path)}"
+        )
+        if persisted.comparison_warning is not None:
+            print(f"Warning: {persisted.comparison_warning}")
+        if persisted.comparison is None:
+            continue
+
+        comparison = persisted.comparison
+        summary_path = _display_path(comparison.summary_path)
+        print(
+            "Compared against baseline "
+            f"{comparison.baseline_hash}. Summary: {summary_path}"
+        )
+        if comparison.markdown_report_path is not None:
+            print(f"PR markdown: {_display_path(comparison.markdown_report_path)}")
+        if comparison.notes:
+            print("Comparison notes:")
+            for note in comparison.notes:
+                print(f"- {note}")
+        if comparison.chart_paths:
+            print("Comparison charts:")
+            for path in comparison.chart_paths:
+                print(f"- {_display_path(path)}")
+
+
 def print_diagnostics(
     results: list[BenchmarkRunResult],
     output_options: BenchmarkOutputOptions | None = None,
@@ -168,13 +224,3 @@ def print_diagnostics(
                     print("Splink not active for this run.")
             else:
                 _show_via_sql(result, diagnostics.unmatched_top_splink)
-
-
-def print_results(
-    results: list[BenchmarkRunResult],
-    output_options: BenchmarkOutputOptions | None = None,
-) -> None:
-    output_options = output_options or BenchmarkOutputOptions()
-    print_benchmark_summary(results, output_options=output_options)
-    if output_options.enable_diagnostics():
-        print_diagnostics(results, output_options=output_options)

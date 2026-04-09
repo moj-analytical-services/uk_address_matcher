@@ -2,51 +2,48 @@ from __future__ import annotations
 
 import logging
 
-from benchmarking.config.datasets import (
-    get_dataset_definition,
-    list_dataset_keys,
+from benchmarking.constants import (
+    APPLY_CANONICAL_FILTER,
+    BENCHMARK_RESULTS_ROOT,
+    CLEANING_NUM_CHUNKS,
+    SPLINK_BASELINE_WEIGHT,
+    SPLINK_COMPARISON_WEIGHTS,
+    TOP_K_PRECISION_AT_METRICS,
 )
 from benchmarking.insights.reporting import (
     print_benchmark_summary,
+    print_run_persistence_summary,
 )
 from benchmarking.insights.types import BenchmarkOutputOptions
-from benchmarking.runner import run_selected_datasets
+from benchmarking.runner import print_available_datasets, run_selected_datasets
 from benchmarking.settings import (
     CANONICAL_FILTER_SQL,
     CANONICAL_PATH,
     SAMPLE_MODE,
 )
-from uk_address_matcher import (
-    ExactMatchStage,
-    PeeledAddressStage,
-    SplinkStage,
-)
+from uk_address_matcher import ExactMatchStage, PeeledAddressStage, SplinkStage
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-
-# Optional Splink-only comparison table shown after benchmark summary.
-# Set to `None` to disable threshold-comparison output.
-SPLINK_BASELINE_WEIGHT: float | None = 10.0
-SPLINK_COMPARISON_WEIGHTS: list[float] | None = [6.0, 8.0, 12.0]
-TOP_K_PRECISION_AT_METRICS: list[int] = [1, 3, 5]
-
 # SELECTED_DATASETS: str | list[str] = "all"
 SELECTED_DATASETS: str | list[str] = "hackney"
+# SELECTED_DATASETS: str | list[str] = "lambeth_llpg"
 STAGES = [
     ExactMatchStage(),
     PeeledAddressStage(),
     SplinkStage(final_match_weight_threshold=SPLINK_BASELINE_WEIGHT),
 ]
-APPLY_CANONICAL_FILTER = True
-CLEANING_NUM_CHUNKS = 1
+# Set to a persisted run hash to force a specific baseline, or use "latest"
+# to compare against the latest other persisted run for the same dataset.
+# Set to None to disable persisting results locally.
+COMPARISON_BASELINE_HASH: str | None = "latest"
 
 
-# Defaults: always print summary sections (timings, accuracy, diagnostics),
-# with selected diagnostics enabled and successful/unmatched diagnostics opt-in.
+# Defaults: print benchmark summaries and persistence output.
+# Diagnostics stay opt-in via the separate reporting helper.
 # OUTPUT_OPTIONS = BenchmarkOutputOptions()
 OUTPUT_OPTIONS = BenchmarkOutputOptions(
     show_incorrect_matches=False,
@@ -56,15 +53,6 @@ OUTPUT_OPTIONS = BenchmarkOutputOptions(
 )
 
 print(f"Applying canonical filter: {APPLY_CANONICAL_FILTER}")
-
-
-def print_available_datasets() -> None:
-    print("Available datasets:")
-    for key in list_dataset_keys():
-        definition = get_dataset_definition(key)
-        print(f"- {key}: {definition['label']} ({definition['s3_key']})")
-
-    print()
 
 
 print_available_datasets()
@@ -77,6 +65,10 @@ results = run_selected_datasets(
     canonical_address_filter=(CANONICAL_FILTER_SQL if APPLY_CANONICAL_FILTER else None),
     enable_diagnostics=OUTPUT_OPTIONS.enable_diagnostics(),
     cleaning_num_chunks=CLEANING_NUM_CHUNKS,
+    persist_results=True,
+    results_root=BENCHMARK_RESULTS_ROOT,
+    enable_comparison_charts=True,
+    comparison_baseline_hash=COMPARISON_BASELINE_HASH,
 )
 print_benchmark_summary(
     results,
@@ -85,3 +77,4 @@ print_benchmark_summary(
     top_k_precision_at_metrics=TOP_K_PRECISION_AT_METRICS,
     output_options=OUTPUT_OPTIONS,
 )
+print_run_persistence_summary(results)

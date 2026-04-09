@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import duckdb
@@ -38,3 +38,31 @@ class BenchmarkOutputOptions:
                 self.show_unmatched_records,
             )
         )
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonSummary:
+    baseline_hash: str
+    current_hash: str
+    overall_delta: dict[str, float | None]
+    stage_deltas: dict[str, dict[str, float | None]]
+    notes: list[str]
+    summary_path: str
+    chart_paths: list[str]
+    markdown_report_path: str | None = None
+    accuracy_comparison_rows: list[dict[str, Any]] | None = None
+    stage_diagnostics_comparison_rows: list[dict[str, Any]] | None = None
+
+
+@dataclass(frozen=True)
+class PersistedBenchmarkRun:
+    run_hash: str
+    group_key: str
+    created_at_utc: str
+    run_dir: str
+    manifest_path: str
+    history_path: str
+    deduplicated: bool
+    git_commit_hash: str | None
+    comparison: BenchmarkComparisonSummary | None = None
+    comparison_warning: str | None = None
