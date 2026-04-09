@@ -288,7 +288,6 @@ def _stage_name_for_instance(stage: MatchingStage) -> str:
     """Derive a human-readable stage name from a stage instance."""
     from uk_address_matcher.linking_model.matching.stages import (
         ExactMatchStage,
-        NgramJaccardStage,
         PeeledAddressStage,
         UniqueTrigramStage,
     )
@@ -296,7 +295,6 @@ def _stage_name_for_instance(stage: MatchingStage) -> str:
 
     _names = {
         ExactMatchStage: "exact_matches",
-        NgramJaccardStage: "ngram_jaccard",
         UniqueTrigramStage: "unique_trigram",
         PeeledAddressStage: "peeled_address",
         SplinkStage: "splink",

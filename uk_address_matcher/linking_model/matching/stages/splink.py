@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
+from uk_address_matcher.sql_pipeline.helpers import _uid
 
 if TYPE_CHECKING:
     import duckdb
@@ -110,7 +111,6 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
-        from uk_address_matcher.sql_pipeline.helpers import _uid
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:

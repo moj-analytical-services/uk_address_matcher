@@ -113,43 +113,43 @@
             "comparison_description": "ExactMatch"
         },
         {
-            "output_column_name": "address_without_numbers",
+            "output_column_name": "ngram_final_score",
             "comparison_levels": [
                 {
-                    "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL OR nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL",
-                    "label_for_charts": "address_without_numbers is NULL",
+                    "sql_condition": "ngram_final_score IS NULL",
+                    "label_for_charts": "ngram_final_score is NULL",
                     "fix_m_probability": false,
                     "fix_u_probability": false,
                     "is_null_level": true
                 },
                 {
-                    "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') = nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')",
-                    "label_for_charts": "Exact match on address_without_numbers",
-                    "m_probability": 15,
+                    "sql_condition": "ngram_final_score >= 0.92",
+                    "label_for_charts": "Ngram final score >= 0.92",
+                    "m_probability": 19.69831061,
                     "u_probability": 1,
                     "fix_m_probability": false,
                     "fix_u_probability": false
                 },
                 {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.95",
-                    "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
-                    "m_probability": 8,
+                    "sql_condition": "ngram_final_score >= 0.86",
+                    "label_for_charts": "Ngram final score >= 0.86",
+                    "m_probability": 9.84915531,
                     "u_probability": 1,
                     "fix_m_probability": false,
                     "fix_u_probability": false
                 },
                 {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.88",
-                    "label_for_charts": "Jaccard >= 0.88 on address_without_numbers",
-                    "m_probability": 4,
+                    "sql_condition": "ngram_final_score >= 0.78",
+                    "label_for_charts": "Ngram final score >= 0.78",
+                    "m_probability": 4.92457765,
                     "u_probability": 1,
                     "fix_m_probability": false,
                     "fix_u_probability": false
                 },
                 {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.80",
-                    "label_for_charts": "Jaccard >= 0.80 on address_without_numbers",
-                    "m_probability": 2,
+                    "sql_condition": "ngram_final_score >= 0.62",
+                    "label_for_charts": "Ngram final score >= 0.62",
+                    "m_probability": 2.46228883,
                     "u_probability": 1,
                     "fix_m_probability": false,
                     "fix_u_probability": false
@@ -163,7 +163,7 @@
                     "fix_u_probability": false
                 }
             ],
-            "comparison_description": "CustomComparison"
+            "comparison_description": "Ngram final score comparison"
         },
         {
             "output_column_name": "flat_identity",
