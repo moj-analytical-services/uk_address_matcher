@@ -2,13 +2,63 @@ import importlib.resources as pkg_resources
 import json
 import logging
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from splink import DuckDBAPI, Linker, SettingsCreator
 
+from uk_address_matcher.linking_model.matching.stages.splink_integrations import (
+    PreSplinkIntegration,
+    UpstreamNgramIntegration,
+    patch_linker_inference_predict,
+)
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
+if TYPE_CHECKING:
+    from splink.internals.linker import Linker as SplinkLinker
+
 _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
+
+
+def _build_default_pre_splink_integrations() -> list[PreSplinkIntegration]:
+    return [UpstreamNgramIntegration()]
+
+
+def _required_match_columns_for_integrations(
+    integrations: list[PreSplinkIntegration],
+) -> list[str]:
+    required_columns: list[str] = []
+    for integration in integrations:
+        for column in integration.required_match_columns:
+            if column not in required_columns:
+                required_columns.append(column)
+    return required_columns
+
+
+def _pop_integration_comparisons(
+    *,
+    settings_as_dict: dict,
+    integrations: list[PreSplinkIntegration],
+) -> dict[str, dict | None]:
+    return {
+        integration.name: integration.pop_comparison_dict(settings_as_dict)
+        for integration in integrations
+    }
+
+
+def _attach_integrations_to_linker(
+    *,
+    linker: SplinkLinker,
+    integrations: list[PreSplinkIntegration],
+    comparison_dicts: dict[str, dict | None],
+) -> None:
+    for integration in integrations:
+        integration.attach_to_linker(
+            linker=linker,
+            comparison_dict=comparison_dicts.get(integration.name),
+        )
+
+    linker._ukam_splink_integrations = integrations
 
 
 def _get_model_settings_dict():
@@ -137,28 +187,40 @@ def _get_linker(
         settings_as_dict = settings.create_settings_dict("duckdb")
 
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
+    pre_splink_integrations = _build_default_pre_splink_integrations()
+    integration_comparison_dicts = _pop_integration_comparisons(
+        settings_as_dict=settings_as_dict,
+        integrations=pre_splink_integrations,
+    )
 
+    retained_columns = list(settings_as_dict.get("additional_columns_to_retain", []))
     if additional_columns_to_retain:
-        settings_as_dict.setdefault("additional_columns_to_retain", [])
-        settings_as_dict["additional_columns_to_retain"] += additional_columns_to_retain
+        retained_columns.extend(additional_columns_to_retain)
 
     # Use ukam_address_id as unique_id column name
     # (created as part of our cleaning process).
     settings_as_dict["unique_id_column_name"] = "ukam_address_id"
     # Also make sure we now retain unique_id from both datasets...
 
-    settings_as_dict["additional_columns_to_retain"] += [
-        "unique_id",
-        "original_address_concat",
-    ]
+    retained_columns.extend(
+        [
+            "unique_id",
+            "original_address_concat",
+            *_required_match_columns_for_integrations(pre_splink_integrations),
+        ]
+    )
 
     # Auto-detect ukam_label: if present in messy data, retain it for accuracy testing.
     if "ukam_label" in df_addresses_to_match.columns:
-        settings_as_dict["additional_columns_to_retain"].append("ukam_label")
+        retained_columns.append("ukam_label")
         if "ukam_label" not in df_addresses_to_search_within.columns:
             df_addresses_to_search_within = df_addresses_to_search_within.select(
                 "*, NULL::VARCHAR AS ukam_label"
             )
+
+    settings_as_dict["additional_columns_to_retain"] = list(
+        dict.fromkeys(retained_columns)
+    )
 
     settings_as_dict["retain_intermediate_calculation_columns"] = (
         retain_intermediate_calculation_columns
@@ -212,6 +274,15 @@ def _get_linker(
             set_up_basic_logging=False,
         )
 
+    _attach_integrations_to_linker(
+        linker=linker,
+        integrations=pre_splink_integrations,
+        comparison_dicts=integration_comparison_dicts,
+    )
+
+    if pre_splink_integrations:
+        patch_linker_inference_predict(linker)
+
     if precomputed_numeric_tf_table is None:
         precomputed_numeric_tf_table = _get_precomputed_numeric_tf_table(con)
 
@@ -238,7 +309,6 @@ def _get_linker(
     UNION ALL
     select {select_expr}, 'c_' as source_dataset
     from ({canonical_subquery}) as df_addresses_to_search_within_fix
-
     """
 
     concat_with_tf = con.sql(sql)
