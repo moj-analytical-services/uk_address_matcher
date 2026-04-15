@@ -7,6 +7,7 @@ class MatchReason(Enum):
     """Canonical set of match reason values shared between Python and DuckDB."""
 
     EXACT = "exact: full match"
+    EXACT_FLAT_RETRACTION = "exact_flat_retraction: match after removing FLAT keyword"
     PEELED_ADDRESS = "peeled_address: match after removing common UK end tokens"
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
@@ -19,6 +20,8 @@ class MatchReason(Enum):
         """Simplified stage name used in reporting tables."""
         if self is MatchReason.EXACT:
             return "exact_matches"
+        if self is MatchReason.EXACT_FLAT_RETRACTION:
+            return "exact_flat_retraction"
         if self is MatchReason.PEELED_ADDRESS:
             return "peeled_address"
         if self is MatchReason.SPLINK:

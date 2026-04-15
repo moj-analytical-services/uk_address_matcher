@@ -474,6 +474,789 @@ def test_run_matching_handles_non_identifier_uid(duck_con, peeled_test_data, mon
     assert results.count("*").fetchone()[0] == df_fuzzy.count("*").fetchone()[0]
 
 
+def test_exact_matching_can_ignore_flat_keyword(duck_con):
+    """Exact phase 2 should match with FLAT removal when flat fields align."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 10 KINGS ROAD',
+                    'FLAT 2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df.iloc[0]["resolved_canonical_id"] == 1000
+    assert (
+        results_df.iloc[0]["match_reason"]
+        == "exact_flat_retraction: match after removing FLAT keyword"
+    )
+
+
+def test_exact_matching_can_disable_flat_retraction_phase(duck_con):
+    """With phase 2 disabled, FLAT-only fallback matches are not emitted."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 10 KINGS ROAD',
+                    'FLAT 2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(enable_flat_retraction=False)],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df["resolved_canonical_id"].isna().all()
+    assert results_df["match_reason"].isna().all()
+
+
+def test_exact_matching_flat_retraction_requires_unique_candidate(duck_con):
+    """Exact phase 2 should not match when multiple canonical IDs are possible."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 10 KINGS ROAD',
+                    'FLAT 2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                ),
+                (
+                    1001,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    101::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df["resolved_canonical_id"].isna().all()
+    assert results_df["match_reason"].isna().all()
+
+
+def test_exact_matching_flat_retraction_can_require_unit_evidence(duck_con):
+    """Conservative phase 2 rejects FLAT + single-number shell addresses."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 126 SOUTH LAMBETH ROAD',
+                    'FLAT 126 SOUTH LAMBETH ROAD',
+                    'SW8 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['126']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '126 SOUTH LAMBETH ROAD',
+                    '126 SOUTH LAMBETH ROAD',
+                    'SW8 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['126']::VARCHAR[],
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    conservative_results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(enable_flat_retraction=True)],
+    )
+    conservative_df = conservative_results.fetchdf()
+    assert conservative_df["resolved_canonical_id"].isna().all()
+    assert conservative_df["match_reason"].isna().all()
+
+
+def test_exact_matching_flat_retraction_unit_evidence_can_use_numeric_tokens(duck_con):
+    """Conservative phase 2 can use parsed numeric token structure as unit evidence."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 126 SOUTH LAMBETH ROAD',
+                    'FLAT 2 126 SOUTH LAMBETH ROAD',
+                    'SW8 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '126']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 126 SOUTH LAMBETH ROAD',
+                    '2 126 SOUTH LAMBETH ROAD',
+                    'SW8 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '126']::VARCHAR[],
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(enable_flat_retraction=True)],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df.iloc[0]["resolved_canonical_id"] == 1000
+    assert (
+        results_df.iloc[0]["match_reason"]
+        == "exact_flat_retraction: match after removing FLAT keyword"
+    )
+
+
+def test_exact_matching_flat_retraction_allows_one_sided_flat_detail(duck_con):
+    """Exact phase 2 should allow one-sided flat detail when not contradictory."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 10 KINGS ROAD',
+                    'FLAT 2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df.iloc[0]["resolved_canonical_id"] == 1000
+    assert (
+        results_df.iloc[0]["match_reason"]
+        == "exact_flat_retraction: match after removing FLAT keyword"
+    )
+
+
+def test_exact_matching_flat_retraction_rejects_contradictory_flat_fields(duck_con):
+    """Exact phase 2 should reject explicit conflicts in parsed flat fields."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'FLAT 2 10 KINGS ROAD',
+                    'FLAT 2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '3 10 KINGS ROAD',
+                    '3 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['3', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '3',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
+
+    results_df = results.fetchdf()
+    assert results_df["resolved_canonical_id"].isna().all()
+    assert results_df["match_reason"].isna().all()
+
+
+def test_exact_matching_flat_retraction_does_not_strip_additional_tokens(duck_con):
+    """Phase 2 strips FLAT only and does not remove unrelated standalone tokens."""
+
+    df_fuzzy = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1,
+                    'THE FLAT 2 AT 10 KINGS ROAD',
+                    'THE FLAT 2 AT 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    TRUE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    '2',
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    1::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    df_canonical = duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                (
+                    1000,
+                    '2 10 KINGS ROAD',
+                    '2 10 KINGS ROAD',
+                    'SW1A 1AA',
+                    CAST([] AS VARCHAR[]),
+                    ARRAY['2', '10']::VARCHAR[],
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    FALSE,
+                    NULL::VARCHAR,
+                    NULL::VARCHAR,
+                    100::BIGINT
+                )
+        ) AS t(
+            unique_id,
+            original_address_concat,
+            clean_full_address,
+            postcode,
+            peeled_tokens_list,
+            numeric_tokens,
+            has_flat_indicator,
+            flat_positional,
+            flat_letter,
+            flat_number,
+            has_business_unit,
+            business_unit_type,
+            business_unit_id,
+            ukam_address_id
+        )
+        """
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_fuzzy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(enable_flat_retraction=True)],
+    )
+    results_df = results.fetchdf()
+    assert results_df["resolved_canonical_id"].isna().all()
+    assert results_df["match_reason"].isna().all()
+
+
 def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data):
     """Test that peeled address matching doesn't inflate or reduce row count."""
     df_fuzzy, df_canonical = peeled_test_data
