@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
@@ -93,6 +94,11 @@ class SplinkStage(MatchingStage):
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
+    substep_timings: dict[str, float] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def find_matches(
         self,
@@ -120,7 +126,10 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        self.substep_timings = {}
+
         # Step 1: Build linker
+        started_at = perf_counter()
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
             df_addresses_to_search_within=df_canonical,
@@ -133,13 +142,18 @@ class SplinkStage(MatchingStage):
             ),
             settings=self.settings,
         )
+        self.substep_timings["build_linker_seconds"] = perf_counter() - started_at
 
         self.linker = linker
 
         # Step 2: Predict
+        started_at = perf_counter()
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
+        self.substep_timings["predict_seconds"] = perf_counter() - started_at
+
+        started_at = perf_counter()
         df_predict_ddb = df_predict.as_duckdbpyrelation()
 
         table_name = f"__ukam__splink__predictions__{_uid()}"
@@ -151,8 +165,12 @@ class SplinkStage(MatchingStage):
             + ")"
         )
         self.predictions_table = table_name
+        self.substep_timings["materialise_predictions_seconds"] = (
+            perf_counter() - started_at
+        )
 
         # Step 3: Improve predictions using distinguishing tokens
+        started_at = perf_counter()
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_ddb,
             con=con,
@@ -162,9 +180,11 @@ class SplinkStage(MatchingStage):
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
+        self.substep_timings["improve_predictions_seconds"] = perf_counter() - started_at
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
+        started_at = perf_counter()
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
@@ -175,8 +195,10 @@ class SplinkStage(MatchingStage):
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
         df_best.create(df_best_name)
         self.best_matches_table = df_best_name
+        self.substep_timings["best_match_selection_seconds"] = perf_counter() - started_at
 
         # Step 5: Apply thresholds and project to standard columns
+        started_at = perf_counter()
         splink_label = MatchReason.SPLINK.value
 
         dist_filter = ""
@@ -186,7 +208,7 @@ class SplinkStage(MatchingStage):
                 f"OR distinguishability >= {self.final_distinguishability_threshold})"
             )
 
-        return con.sql(f"""
+        final_relation = con.sql(f"""
             SELECT
                 best_match.ukam_address_id_r AS ukam_address_id,
                 best_match.unique_id_l AS resolved_canonical_id,
@@ -203,3 +225,5 @@ class SplinkStage(MatchingStage):
             {dist_filter}
             AND best_match.unique_id_l IS NOT NULL
         """)
+        self.substep_timings["final_projection_seconds"] = perf_counter() - started_at
+        return final_relation
