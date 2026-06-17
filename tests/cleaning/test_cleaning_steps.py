@@ -1,5 +1,6 @@
 import duckdb
 
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps import (
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
@@ -264,6 +265,60 @@ def test_remove_duplicate_end_tokens():
         assert row[0] == expected, (
             f"Address '{address}' expected '{expected}' but got '{row[0]}'"
         )
+
+
+def test_supplied_postcode_does_not_strip_postcode_like_floor_tokens():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            ('a', 'FLAT D1 2ND FLR EXAMPLE HOUSE LONDON', 'SE1 2AB', '1'),
+            ('b', 'UNIT Q3 2ND FLR EXAMPLE WORKS LONDON', 'SE1 2AB', '2'),
+            ('c', 'FLAT A 3RD FLR EXAMPLE HOUSE LONDON', 'SE1 2AB', '3'),
+            ('d', '10 DOWNING STREET SW1A 2AA', 'SW1A 2AA', '4'),
+            ('e', '10 DOWNING STREET SW1A 2AA', NULL, '5')
+        ) AS t(unique_id, address_concat, postcode, ukam_label)
+        """
+    )
+
+    cleaned = prepare_data_for_matching(
+        input_relation,
+        con=connection,
+        num_of_chunks=1,
+        dataset_role="messy",
+    )
+
+    actual = (
+        cleaned.project(
+            """
+            unique_id,
+            postcode,
+            clean_full_address
+            """
+        )
+        .order("unique_id")
+        .fetchall()
+    )
+
+    assert actual == [
+        (
+            "a",
+            "SE1 2AB",
+            "FLAT D 1 SECOND FLOOR EXAMPLE HOUSE LONDON",
+        ),
+        (
+            "b",
+            "SE1 2AB",
+            "UNIT Q 3 SECOND FLOOR EXAMPLE WORKS LONDON",
+        ),
+        (
+            "c",
+            "SE1 2AB",
+            "FLAT A THIRD FLOOR EXAMPLE HOUSE LONDON",
+        ),
+        ("d", "SW1A 2AA", "10 DOWNING STREET"),
+        ("e", "SW1A 2AA", "10 DOWNING STREET"),
+    ]
 
 
 def test_parse_out_business_unit():

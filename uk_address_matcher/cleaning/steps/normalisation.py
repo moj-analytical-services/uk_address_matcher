@@ -55,27 +55,47 @@ def _extract_postcode_from_address() -> str:
     # UK postcode regex: matches standard formats and GIR 0AA
     uk_postcode_regex = r"\b(?:GIR ?0AA|[A-Z][A-HJ-Y]?\d[A-Z\d]? ?\d[A-Z]{2})\b"
 
-    # Extract postcode from address and remove it from address_concat
-
-    # - Use COALESCE to prefer existing postcode over extracted
-    # - Always remove postcode from  address_concat to avoid duplication
+    # Extract postcode from address only when one has not been supplied.
+    # When a postcode is supplied, strip postcode-like suffixes only. Running
+    # the broad regex over the whole address can remove valid fragments such as
+    # "D1 2ND" before floor normalisation runs.
     return f"""
+    WITH prepared AS (
+        SELECT
+            *,
+            NULLIF(TRIM(CAST(postcode AS VARCHAR)), '') AS __existing_postcode
+        FROM {{input}}
+    )
     SELECT
-        * EXCLUDE (postcode, address_concat),
-        TRIM(regexp_replace(
+        * EXCLUDE (
+            postcode,
             address_concat,
-            '{uk_postcode_regex}',
-            '',
-            'gi'
-        )) AS address_concat,
-        COALESCE(
-            NULLIF(TRIM(postcode), ''),
-            NULLIF(
+            __existing_postcode
+        ),
+        TRIM(
+            CASE
+                WHEN __existing_postcode IS NOT NULL THEN regexp_replace(
+                    address_concat,
+                    '\\s+{uk_postcode_regex}$',
+                    '',
+                    'gi'
+                )
+                ELSE regexp_replace(
+                    address_concat,
+                    '{uk_postcode_regex}',
+                    '',
+                    'gi'
+                )
+            END
+        ) AS address_concat,
+        CASE
+            WHEN __existing_postcode IS NOT NULL THEN __existing_postcode
+            ELSE NULLIF(
                 UPPER(regexp_extract(UPPER(address_concat), '{uk_postcode_regex}')),
                 ''
             )
-        ) AS postcode
-    FROM {{input}}
+        END AS postcode
+    FROM prepared
     """
 
 
