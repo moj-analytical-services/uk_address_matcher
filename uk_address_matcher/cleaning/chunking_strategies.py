@@ -598,6 +598,7 @@ def prepare_data_for_matching(
     num_of_chunks: int = 10,
     term_frequency_lookup: Optional[DuckDBPyRelation] = None,
     inverted_index: Optional[DuckDBPyRelation] = None,
+    inverted_index_n: Optional[int] = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
@@ -673,7 +674,9 @@ def prepare_data_for_matching(
     _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
 
     # Register inverted index table if provided (for use in pipeline stages)
-    inv_idx_table_name = _register_inverted_index_table(con, inverted_index)
+    inv_idx_table_name = _register_inverted_index_table(
+        con, inverted_index, inverted_index_n
+    )
 
     # Determine which inverted index stages to use as additional pipeline stages
     inverted_index_stages = (
