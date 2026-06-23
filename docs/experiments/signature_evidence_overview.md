@@ -38,8 +38,7 @@ lookup and the model layer:
 ### 2.1 The persisted inverted index
 
 After the rebuild, the on-disk file
-[ukam_inverted_index.parquet](/Users/thomas.hepworth/data/address_matcher/secret_data/os/ukam_prepared_canonical/ukam_inverted_index.parquet)
-has three columns:
+`ukam_inverted_index.parquet` has three columns:
 
 - `key` — one bigram or trigram derived from `clean_full_address`
 - `unique_ids` — the list of canonical `unique_id` values containing that key
@@ -61,7 +60,7 @@ which actually makes the file smaller (see Section 6).
 ### 2.2 The runtime scoring step
 
 During messy-side cleaning, in
-[inverted_index.py](/Users/thomas.hepworth/work_projects/address_matching/inverted_index_matching/uk_address_matcher/cleaning/steps/inverted_index.py),
+inverted_index.py](./uk_address_matcher/cleaning/steps/inverted_index.py),
 we derive a `signature_score_map` column. For each messy record:
 
 1. generate its bigram/trigram keys,
@@ -82,9 +81,9 @@ where `N` is the canonical row count and
 
 `N` is provided at match time via a small `__ukam_index_meta` table registered
 in
-[pipelines.py](/Users/thomas.hepworth/work_projects/address_matching/inverted_index_matching/uk_address_matcher/cleaning/pipelines.py),
+[pipelines.py](./uk_address_matcher/cleaning/pipelines.py),
 and the canonical row count is threaded through
-[address_matcher.py](/Users/thomas.hepworth/work_projects/address_matching/inverted_index_matching/uk_address_matcher/address_matcher.py).
+[address_matcher.py](./uk_address_matcher/address_matcher.py).
 
 The resulting map is keyed by canonical `unique_id` and holds the summed IDF
 evidence for that messy row against each candidate, e.g.:
@@ -100,7 +99,7 @@ evidence for that messy row against each candidate, e.g.:
 ### 2.3 The Splink comparison
 
 In
-[splink_model.json](/Users/thomas.hepworth/work_projects/address_matching/inverted_index_matching/uk_address_matcher/data/splink_model.json)
+[splink_model.json](./uk_address_matcher/data/splink_model.json)
 the `signature_evidence` comparison reads the score for the specific candidate
 pair:
 
@@ -218,7 +217,7 @@ Headline result: more correct matches, roughly flat precision.
 Live messy cleaning always emits `signature_score_map`, but a canonical
 prepared before this change does not. The linker concatenates the column set
 from both sides, which caused a binder error. Fix: in
-[splink_model.py](/Users/thomas.hepworth/work_projects/address_matching/inverted_index_matching/uk_address_matcher/linking_model/splink_model.py)
+[splink_model.py](./uk_address_matcher/linking_model/splink_model.py)
 we add an empty, type-compatible map to whichever side lacks the column, so we
 can run without rebuilding the full index.
 
