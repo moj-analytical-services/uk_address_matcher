@@ -34,22 +34,23 @@ class AddressRecord:
 
     @classmethod
     def from_dict(cls, data: dict) -> AddressRecord:
+        unique_id = data.get("unique_id")
+        if unique_id is None:
+            raise ValueError(
+                "AddressRecord dict inputs must include a non-null 'unique_id'."
+            )
+
         return cls(
             address_concat=data["address_concat"],
             postcode=data["postcode"],
-            unique_id=data.get("unique_id"),
+            unique_id=unique_id,
         )
 
     def as_duckdb_relation(
         self, con: duckdb.DuckDBPyConnection
     ) -> duckdb.DuckDBPyRelation:
         """Convert the record to a DuckDB relation for matching."""
-
-        return con.query(
-            "select '{}' as unique_id, '{}' as address_concat, '{}' as postcode".format(
-                self.unique_id, self.address_concat, self.postcode
-            )
-        )
+        return self.to_duckdb_relation([self], con)
 
     @staticmethod
     def to_duckdb_relation(
