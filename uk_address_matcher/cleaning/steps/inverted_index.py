@@ -170,8 +170,8 @@ def _build_inverted_index_from_keys(
         )
         SELECT
             key,
-            unique_ids,
-            '{strategy.name}' AS index_strategy
+                        unique_ids,
+                        '{strategy.name}' AS index_strategy
         FROM grouped
         WHERE count_unique_ids >= 1
           AND count_unique_ids <= {max_unique_ids_per_key}
@@ -204,7 +204,7 @@ def _lookup_keys_in_inverted_index(strategies=None):
         name="lookup_keys_in_inverted_index",
         description=(
             "Look up index keys in pre-registered inverted index "
-            "to populate exploding_unique_ids"
+            "to populate exploding_unique_ids and signature_score_map"
         ),
         tags="inverted_index",
     )
@@ -247,13 +247,63 @@ def _lookup_keys_in_inverted_index(strategies=None):
         GROUP BY __messy_uid
         """
 
-        # Join back to base and add exploding_unique_ids column
+        # Signature evidence scoring.
+        # For each messy record, weight every shared index key by its IDF
+        # (log2(N / posting_list_size)) and accumulate the IDF onto each
+        # candidate canonical id that the key points at.  The result is a
+        # MAP<canonical_id (VARCHAR) -> summed IDF> the Splink comparison reads
+        # via list_extract(map_extract(signature_score_map_r, unique_id_l), 1).
+        # Keys are de-duplicated per record first so a repeated bigram/trigram
+        # only contributes its IDF once.
+        distinct_keys_sql = """
+        SELECT DISTINCT __messy_uid, __key
+        FROM {unnested_keys}
+        WHERE __key IS NOT NULL
+        """
+
+        key_scores_sql = """
+        SELECT
+            dk.__messy_uid,
+            ii.unique_ids AS __cand_ids,
+            log2(
+                (SELECT n FROM __ukam_index_meta)::DOUBLE
+                / len(ii.unique_ids)
+            ) AS __key_idf
+        FROM {distinct_keys} AS dk
+        JOIN __ukam_inverted_index AS ii ON dk.__key = ii.key
+        WHERE ii.unique_ids IS NOT NULL
+          AND len(ii.unique_ids) > 0
+        """
+
+        cand_scores_sql = """
+        SELECT
+            __messy_uid,
+            CAST(cid AS VARCHAR) AS __cand_id,
+            SUM(__key_idf) AS __score
+        FROM {key_scores}, unnest(__cand_ids) AS t(cid)
+        GROUP BY __messy_uid, CAST(cid AS VARCHAR)
+        """
+
+        score_map_sql = """
+        SELECT
+            __messy_uid,
+            map(list(__cand_id), list(__score)) AS signature_score_map
+        FROM {cand_scores}
+        GROUP BY __messy_uid
+        """
+
+        # Join back to base and add the blocking + scoring columns
         final_sql = """
         SELECT
             base.* EXCLUDE (__tokens),
-            COALESCE(d.exploding_unique_ids, []) AS exploding_unique_ids
+            COALESCE(d.exploding_unique_ids, []) AS exploding_unique_ids,
+            COALESCE(
+                s.signature_score_map,
+                MAP([]::VARCHAR[], []::DOUBLE[])
+            ) AS signature_score_map
         FROM {base} AS base
         LEFT JOIN {deduplicated} AS d ON base.unique_id = d.__messy_uid
+        LEFT JOIN {score_map} AS s ON base.unique_id = s.__messy_uid
         """
 
         steps = [
@@ -261,6 +311,10 @@ def _lookup_keys_in_inverted_index(strategies=None):
             CTEStep("unnested_keys", unnested_keys_sql),
             CTEStep("matched", matched_sql),
             CTEStep("deduplicated", deduplicated_sql),
+            CTEStep("distinct_keys", distinct_keys_sql),
+            CTEStep("key_scores", key_scores_sql),
+            CTEStep("cand_scores", cand_scores_sql),
+            CTEStep("score_map", score_map_sql),
             CTEStep("final", final_sql),
         ]
 
@@ -290,7 +344,8 @@ def _set_exploding_unique_ids_to_self():
     sql = """
     SELECT
         *,
-        [unique_id] AS exploding_unique_ids
+        [unique_id] AS exploding_unique_ids,
+        MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map
     FROM {input}
     """
     return sql
