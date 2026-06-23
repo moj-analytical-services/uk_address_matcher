@@ -566,7 +566,15 @@ def _build_base_compared_relation(
                 {threshold_value}::DOUBLE AS threshold_match_weight,
                 {total_input_rows}::BIGINT AS total_input_rows,
                 {rows_entering_splink}::BIGINT AS rows_entering_splink,
-                *
+                stage,
+                rows_matched_in_stage,
+                correct_matches,
+                wrong_matches,
+                precision,
+                wrong_match_rate,
+                correct_share_of_total,
+                recall,
+                f1
             FROM ({rel_sql}) AS accuracy
             WHERE stage = 'splink'
             UNION ALL
