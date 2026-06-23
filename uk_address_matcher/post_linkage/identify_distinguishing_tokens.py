@@ -1,5 +1,11 @@
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+# Sub-premise positional descriptors (e.g. "FLAT LEFT" vs "FLAT RIGHT"). These survive
+# cleaning into clean_full_address, so they appear as tokens here. They are decisive for
+# discriminating otherwise-identical sibling candidates, so the reranker treats a
+# conflict on them as a structured penalty rather than a generic distinguishing token.
+_POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT', 'REAR')"
+
 
 def improve_predictions_using_distinguishing_tokens(
     *,
@@ -14,6 +20,7 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_REWARD_MULTIPLIER=3,
     BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
     MISSING_TOKEN_PENALTY=0.1,
+    POSITIONAL_CONFLICT_PENALTY=6.0,
 ):
     """
     Improve match predictions by identifying distinguishing tokens between addresses.
@@ -266,6 +273,15 @@ def improve_predictions_using_distinguishing_tokens(
         -- e.g. 'annex at'
         list_filter(tokens_l, t -> t NOT IN tokens_r) AS missing_tokens,
 
+        -- Sub-premise positional descriptors present on each side (e.g. LEFT / REAR).
+        -- Carried forward so the final scoring step can penalise a positional conflict.
+        list_distinct(
+            list_filter(tokens_l, tok -> tok IN {_POSITIONAL_TOKENS_SQL})
+        ) AS positional_tokens_l,
+        list_distinct(
+            list_filter(t.tokens_r, tok -> tok IN {_POSITIONAL_TOKENS_SQL})
+        ) AS positional_tokens_r,
+
         {
         '''
         -----------------
@@ -359,6 +375,8 @@ def improve_predictions_using_distinguishing_tokens(
         hist_overlapping_tokens_r_block_l,
         hist_all_tokens_in_block_l,
         missing_tokens,
+        positional_tokens_l,
+        positional_tokens_r,
 
         {
         '''
@@ -440,6 +458,17 @@ def improve_predictions_using_distinguishing_tokens(
 
         - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
 
+        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT).
+        -- Only fires when both sides carry a positional descriptor and they disagree;
+        -- silent otherwise so neutral/missing cases are unaffected.
+        - (CASE
+            WHEN len(positional_tokens_l) > 0
+                AND len(positional_tokens_r) > 0
+                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
+            THEN {POSITIONAL_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+
         -- Bigram-based adjustments
         {
         f'''
@@ -463,6 +492,8 @@ def improve_predictions_using_distinguishing_tokens(
         overlapping_tokens_this_l_and_r,
         tokens_elsewhere_in_block_but_not_this,
         missing_tokens,
+        positional_tokens_l,
+        positional_tokens_r,
 
         {
         '''
