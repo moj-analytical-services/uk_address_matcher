@@ -2,7 +2,6 @@
 # since we hard code all the values!
 
 import splink.comparison_level_library as cll
-import splink.comparison_library as cl
 from splink import SettingsCreator, block_on
 from splink.internals.misc import match_weight_to_bayes_factor
 
@@ -10,10 +9,6 @@ from .blocking import old_blocking_rules
 
 toggle_u_probability_fix = True
 toggle_m_probability_fix = True
-
-clean_full_address_comparison = cl.ExactMatch(
-    "clean_full_address",
-).configure(u_probabilities=[1, 2], m_probabilities=[15, 1])
 
 
 ADDRESS_WITHOUT_NUMERIC_REGEX_PATTERN = (
@@ -39,6 +34,7 @@ def create_address_without_numeric(expr: str) -> str:
 
 def get_address_without_numbers_comparison(
     WEIGHT_EXACT=15,
+    WEIGHT_PUNCT_SPACE=2**3.5,
     WEIGHT_JACCARD_HIGH=8,
     WEIGHT_JACCARD_MED=4,
     WEIGHT_JACCARD_LOW=2,
@@ -77,6 +73,17 @@ def get_address_without_numbers_comparison(
                 "sql_condition": f"{left_expr} = {right_expr}",
                 "label_for_charts": "Exact match on address_without_numbers",
                 "m_probability": WEIGHT_EXACT,
+                "u_probability": 1,
+            },
+            {
+                "sql_condition": (
+                    f"regexp_replace({left_expr}, '[^A-Za-z0-9]', '', 'g') = "
+                    f"regexp_replace({right_expr}, '[^A-Za-z0-9]', '', 'g')"
+                ),
+                "label_for_charts": (
+                    "Exact match on address_without_numbers (no punctuation/spaces)"
+                ),
+                "m_probability": WEIGHT_PUNCT_SPACE,
                 "u_probability": 1,
             },
             {
@@ -870,39 +877,6 @@ def get_token_rel_freq_arr_comparison(
     return token_rel_freq_arr_comparison
 
 
-arr_red_sql = array_reduce_by_freq("common_end_tokens_hist")
-
-common_end_tokens_comparison = {
-    "output_column_name": "common_end_tokens",
-    "comparison_levels": [
-        {
-            "sql_condition": (
-                '"common_end_tokens_hist_l" IS NULL OR "common_end_tokens_hist_r" IS NULL'
-            ),
-            "label_for_charts": "Null",
-            "is_null_level": True,
-        },
-        {
-            "sql_condition": f"{arr_red_sql} < 1e-2",
-            "label_for_charts": "<1e-2",
-            "m_probability": 4,
-            "u_probability": 1,
-            "fix_m_probability": toggle_m_probability_fix,
-            "fix_u_probability": toggle_u_probability_fix,
-        },
-        {
-            "sql_condition": "ELSE",
-            "label_for_charts": "All other comparisons",
-            "m_probability": 1,
-            "u_probability": 1.5,
-            "fix_m_probability": toggle_m_probability_fix,
-            "fix_u_probability": toggle_u_probability_fix,
-        },
-    ],
-    "comparison_description": "Array intersection",
-}
-
-
 postcode_comparison = {
     "output_column_name": "postcode",
     "comparison_levels": [
@@ -995,14 +969,12 @@ def get_settings_for_training(
     first_n_tokens_weights = first_n_tokens_weights or {}
 
     comparisons = [
-        clean_full_address_comparison,
         get_address_without_numbers_comparison(**address_without_numbers_weights),
         get_flat_identity_comparison(**flat_identity_weights),
         get_num_1_comparison(**num_1_weights),
         get_num_2_comparison(**num_2_weights),
         num_3_comparison,
         get_token_rel_freq_arr_comparison(**token_rel_freq_arr_weights),
-        common_end_tokens_comparison,
         postcode_comparison,
     ]
 
@@ -1016,5 +988,6 @@ def get_settings_for_training(
         comparisons=comparisons,
         retain_intermediate_calculation_columns=True,
         unique_id_column_name="ukam_address_id",
+        additional_columns_to_retain=["common_end_tokens_hist"],
     )
     return settings_for_training

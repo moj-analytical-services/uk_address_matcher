@@ -3,7 +3,9 @@
     "probability_two_random_records_match": 3e-08,
     "retain_matching_columns": true,
     "retain_intermediate_calculation_columns": true,
-    "additional_columns_to_retain": [],
+    "additional_columns_to_retain": [
+        "common_end_tokens_hist"
+    ],
     "sql_dialect": "duckdb",
     "linker_uid": "e5bphl9c",
     "em_convergence": 0.0001,
@@ -56,35 +58,6 @@
     ],
     "comparisons": [
         {
-            "output_column_name": "clean_full_address",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"clean_full_address_l\" IS NULL OR \"clean_full_address_r\" IS NULL",
-                    "label_for_charts": "clean_full_address is NULL",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\"clean_full_address_l\" = \"clean_full_address_r\"",
-                    "label_for_charts": "Exact match on clean_full_address",
-                    "m_probability": 15,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 2,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                }
-            ],
-            "comparison_description": "ExactMatch"
-        },
-        {
             "output_column_name": "address_without_numbers",
             "comparison_levels": [
                 {
@@ -101,6 +74,14 @@
                     "u_probability": 1,
                     "fix_m_probability": false,
                     "fix_u_probability": false
+                },
+                {
+                    "sql_condition": "regexp_replace(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), '[^A-Za-z0-9]', '', 'g') = regexp_replace(nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), '[^A-Za-z0-9]', '', 'g')",
+                    "label_for_charts": "Exact match on address_without_numbers (no punctuation/spaces)",
+                    "m_probability": 11.313708498984761,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
                 },
                 {
                     "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.95",
@@ -143,7 +124,7 @@
                 {
                     "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
                     "label_for_charts": "One has flat indicator, other does not",
-                    "m_probability": 0.0009765625,
+                    "m_probability": 0.05106352126896113,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -166,7 +147,7 @@
                 {
                     "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_l = flat_positional_r",
                     "label_for_charts": "Same positional, different letter/number",
-                    "m_probability": 0.25,
+                    "m_probability": 0.06121737931893529,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -190,7 +171,7 @@
                 {
                     "sql_condition": "flat_letter_l IS NOT NULL\n    AND flat_letter_l = flat_letter_r\n    AND (\n        (flat_number_l IS NULL AND flat_number_r IS NOT NULL)\n        OR (flat_number_l IS NOT NULL AND flat_number_r IS NULL)\n    )\n    AND flat_positional_l IS NULL\n    AND flat_positional_r IS NULL",
                     "label_for_charts": "Same letter, number one-sided",
-                    "m_probability": 4.0,
+                    "m_probability": 0.5471739094617537,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -206,7 +187,7 @@
                 {
                     "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
                     "label_for_charts": "Same number, letter one-sided",
-                    "m_probability": 0.25,
+                    "m_probability": 5.169290079064457,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -214,7 +195,7 @@
                 {
                     "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r",
                     "label_for_charts": "Same number, letters both differ",
-                    "m_probability": 0.0009765625,
+                    "m_probability": 0.06605693988147546,
                     "u_probability": 1,
                     "fix_m_probability": true,
                     "fix_u_probability": true
@@ -229,43 +210,6 @@
                 }
             ],
             "comparison_description": "Combined flat identity comparison"
-        },
-        {
-            "output_column_name": "sub_premise_location",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"sub_premise_location_l\" IS NULL AND \"sub_premise_location_r\" IS NULL",
-                    "label_for_charts": "Both null (no sub-premise location info)",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "sub_premise_location_l = sub_premise_location_r",
-                    "label_for_charts": "Exact match on sub-premise location",
-                    "m_probability": 8.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "(sub_premise_location_l IS NULL AND sub_premise_location_r IS NOT NULL) OR (sub_premise_location_l IS NOT NULL AND sub_premise_location_r IS NULL)",
-                    "label_for_charts": "One-sided sub-premise location info",
-                    "m_probability": 1,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "Sub-premise location differs",
-                    "m_probability": 0.125,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "Sub-premise location comparison"
         },
         {
             "output_column_name": "numeric_token_1",
@@ -708,35 +652,6 @@
                     "label_for_charts": "All other comparisons",
                     "m_probability": 1,
                     "u_probability": 256,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
-        },
-        {
-            "output_column_name": "common_end_tokens",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"common_end_tokens_hist_l\" IS NULL OR \"common_end_tokens_hist_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(common_end_tokens_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(common_end_tokens_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, common_end_tokens_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-2",
-                    "label_for_charts": "<1e-2",
-                    "m_probability": 4,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 1.5,
                     "fix_m_probability": true,
                     "fix_u_probability": true
                 }
