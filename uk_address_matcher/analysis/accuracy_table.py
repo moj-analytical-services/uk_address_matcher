@@ -222,9 +222,19 @@ def _build_threshold_summary(
                         AS tp,
                     SUM(CASE WHEN is_accepted AND is_true_positive = 0 THEN 1 ELSE 0 END)
                         AS fp,
-                    SUM(CASE WHEN NOT is_accepted AND clerical_positive = 1 THEN 1 ELSE 0 END)
+                    SUM(
+                        CASE
+                            WHEN NOT is_accepted AND clerical_positive = 1 THEN 1
+                            ELSE 0
+                        END
+                    )
                         AS fn,
-                    SUM(CASE WHEN NOT is_accepted AND clerical_positive = 0 THEN 1 ELSE 0 END)
+                    SUM(
+                        CASE
+                            WHEN NOT is_accepted AND clerical_positive = 0 THEN 1
+                            ELSE 0
+                        END
+                    )
                         AS tn,
                     SUM(CASE
                         WHEN is_accepted
@@ -233,7 +243,12 @@ def _build_threshold_summary(
                         THEN 1
                         ELSE 0
                     END) AS wrong_canonical_id_count,
-                    SUM(CASE WHEN NOT is_accepted AND clerical_positive = 1 THEN 1 ELSE 0 END)
+                    SUM(
+                        CASE
+                            WHEN NOT is_accepted AND clerical_positive = 1 THEN 1
+                            ELSE 0
+                        END
+                    )
                         AS true_match_predicted_no_match_count,
                     SUM(CASE WHEN is_accepted AND clerical_positive = 0 THEN 1 ELSE 0 END)
                         AS true_no_match_forced_to_canonical_id_count,
@@ -242,7 +257,10 @@ def _build_threshold_summary(
                 FROM scored
             )
             SELECT
-                CASE WHEN tp + fp = 0 THEN 1.0 ELSE tp::DOUBLE / (tp + fp) END AS precision,
+                CASE
+                    WHEN tp + fp = 0 THEN 1.0
+                    ELSE tp::DOUBLE / (tp + fp)
+                END AS precision,
                 tp::DOUBLE / NULLIF(p::DOUBLE, 0.0) AS recall,
                 fp::DOUBLE / NULLIF((tp + fp)::DOUBLE, 0.0) AS false_match_rate,
                 fn::DOUBLE / NULLIF(p::DOUBLE, 0.0) AS missed_match_rate,
@@ -500,19 +518,23 @@ def build_accuracy_table(
                 ELSE NULL
             END AS default_threshold_recall,
             CASE
-                WHEN a.stage = 'overall' THEN ROUND(ts.default_threshold_false_match_rate, 6)
+                WHEN a.stage = 'overall'
+                    THEN ROUND(ts.default_threshold_false_match_rate, 6)
                 ELSE NULL
             END AS default_threshold_false_match_rate,
             CASE
-                WHEN a.stage = 'overall' THEN ROUND(ts.default_threshold_missed_match_rate, 6)
+                WHEN a.stage = 'overall'
+                    THEN ROUND(ts.default_threshold_missed_match_rate, 6)
                 ELSE NULL
             END AS default_threshold_missed_match_rate,
             CASE
-                WHEN a.stage = 'overall' THEN ROUND(ts.default_threshold_true_no_match_rejection_rate, 6)
+                WHEN a.stage = 'overall'
+                    THEN ROUND(ts.default_threshold_true_no_match_rejection_rate, 6)
                 ELSE NULL
             END AS default_threshold_true_no_match_rejection_rate,
             CASE
-                WHEN a.stage = 'overall' THEN ROUND(ts.default_threshold_predicted_no_match_npv, 6)
+                WHEN a.stage = 'overall'
+                    THEN ROUND(ts.default_threshold_predicted_no_match_npv, 6)
                 ELSE NULL
             END AS default_threshold_predicted_no_match_npv,
             CASE
@@ -524,7 +546,8 @@ def build_accuracy_table(
                 ELSE NULL
             END AS true_match_predicted_no_match_count,
             CASE
-                WHEN a.stage = 'overall' THEN ts.true_no_match_forced_to_canonical_id_count
+                WHEN a.stage = 'overall'
+                    THEN ts.true_no_match_forced_to_canonical_id_count
                 ELSE NULL
             END AS true_no_match_forced_to_canonical_id_count
         FROM all_rows AS a
