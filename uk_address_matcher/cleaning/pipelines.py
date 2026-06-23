@@ -347,6 +347,7 @@ def _create_term_frequency_tables(
 def _register_inverted_index_table(
     con: DuckDBPyConnection,
     inverted_index: Optional[DuckDBPyRelation] = None,
+    inverted_index_n: Optional[int] = None,
 ) -> Optional[str]:
     """Register inverted index table for key lookups.
 
@@ -355,6 +356,9 @@ def _register_inverted_index_table(
         inverted_index: Pre-computed inverted index table with 'key',
             'unique_ids', and 'index_strategy' columns. If None, no
             table is registered.
+        inverted_index_n: Number of canonical addresses the index was built
+            over (``N`` for IDF weighting of signature evidence). When ``None``
+            a fallback is derived from the distinct ids present in the index.
 
     Returns:
         The registered table name, or None if no inverted_index provided.
@@ -368,9 +372,30 @@ def _register_inverted_index_table(
         con.execute(
             f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
         )
-        return "__ukam_inverted_index"
+    else:
+        # Materialise to avoid lazy evaluation issues
+        con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
+        inverted_index.create("__ukam_inverted_index")
 
-    # Materialise to avoid lazy evaluation issues
-    con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
-    inverted_index.create("__ukam_inverted_index")
+    _register_inverted_index_meta(con, inverted_index_n)
     return "__ukam_inverted_index"
+
+
+def _register_inverted_index_meta(
+    con: DuckDBPyConnection,
+    inverted_index_n: Optional[int],
+) -> None:
+    """Register ``__ukam_index_meta`` holding ``N`` for IDF weighting.
+
+    ``N`` is the canonical address count the inverted index was built over.
+    When not supplied (e.g. when ``prepare_data_for_matching`` is called
+    directly in tests) it falls back to the distinct id count in the index.
+    """
+    if inverted_index_n is None:
+        inverted_index_n = con.sql(
+            "SELECT COUNT(DISTINCT u) "
+            "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
+        ).fetchone()[0]
+    n_value = max(int(inverted_index_n or 0), 1)
+    con.execute("DROP TABLE IF EXISTS __ukam_index_meta")
+    con.execute(f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n")

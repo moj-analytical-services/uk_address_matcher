@@ -152,6 +152,26 @@ def _get_linker(
         "original_address_concat",
     ]
 
+    # Align the signature evidence score map across both inputs. Live messy
+    # cleaning always emits `signature_score_map`, but a prepared canonical
+    # built before this column existed will not have it. The linker concat
+    # selects the messy column set from BOTH frames, so add an empty,
+    # type-compatible map to whichever side is missing it to avoid binder
+    # errors. Only retain it for the comparison when present on the messy side.
+    _empty_score_map = "MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map"
+    messy_has_score_map = "signature_score_map" in df_addresses_to_match.columns
+    canonical_has_score_map = (
+        "signature_score_map" in df_addresses_to_search_within.columns
+    )
+    if messy_has_score_map and not canonical_has_score_map:
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            f"*, {_empty_score_map}"
+        )
+    elif canonical_has_score_map and not messy_has_score_map:
+        df_addresses_to_match = df_addresses_to_match.select(f"*, {_empty_score_map}")
+    if messy_has_score_map or canonical_has_score_map:
+        settings_as_dict["additional_columns_to_retain"].append("signature_score_map")
+
     # Auto-detect ukam_label: if present in messy data, retain it for accuracy testing.
     if "ukam_label" in df_addresses_to_match.columns:
         settings_as_dict["additional_columns_to_retain"].append("ukam_label")

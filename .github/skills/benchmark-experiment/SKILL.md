@@ -16,7 +16,7 @@ Use this skill for recurring benchmark workflows in `uk_address_matcher`.
 - The correct benchmark workflow is chosen.
 - Persisted artefacts are used before reruns where they already answer the question.
 - Rebuilds and reruns only happen when there is a concrete evidence gap.
-- Reports include run IDs, output paths, changed settings, and validation evidence.
+- Reports include run IDs, output paths, changed settings, PR-AUC / area-under-the-curve evidence, and validation evidence.
 
 ## Start Here
 
@@ -52,7 +52,9 @@ Start from persisted run artefacts whenever the request can be answered from exi
 
 - Prefer `uv run python -m ...` for benchmark entrypoints that rely on package imports.
 - Prefer persisted artefacts over console summaries.
-- Report run IDs, output directories, exact changed settings, and overlay chart paths.
+- Use PR-AUC / area under the precision-recall curve as a primary threshold-independent decision aid, not just fixed-threshold precision/recall.
+- Treat the overlay precision-recall chart plus PR-AUC as the minimum pair for deciding whether a variant is broadly better.
+- Report run IDs, output directories, exact changed settings, PR-AUC findings, and overlay chart paths.
 - If a workflow question is already answered in this skill, do not reopen broad repo exploration.
 
 ## Stop Rules

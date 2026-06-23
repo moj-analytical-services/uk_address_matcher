@@ -724,6 +724,49 @@
                 }
             ],
             "comparison_description": "CustomComparison"
+        },
+        {
+            "output_column_name": "signature_evidence",
+            "comparison_levels": [
+                {
+                    "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) IS NULL",
+                    "label_for_charts": "No signature overlap",
+                    "is_null_level": true
+                },
+                {
+                    "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 40",
+                    "label_for_charts": "Signature IDF sum >= 40 (very strong)",
+                    "m_probability": 8,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 20",
+                    "label_for_charts": "Signature IDF sum >= 20 (strong)",
+                    "m_probability": 3,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 8",
+                    "label_for_charts": "Signature IDF sum >= 8 (weak)",
+                    "m_probability": 1.5,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                },
+                {
+                    "sql_condition": "ELSE",
+                    "label_for_charts": "Signature IDF sum < 8 (negligible)",
+                    "m_probability": 1,
+                    "u_probability": 1,
+                    "fix_m_probability": true,
+                    "fix_u_probability": true
+                }
+            ],
+            "comparison_description": "Bigram/trigram inverted-index signature overlap (IDF-weighted)"
         }
     ]
 }
