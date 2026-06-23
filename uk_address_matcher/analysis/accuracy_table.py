@@ -257,15 +257,33 @@ def _build_threshold_summary(
 
         summary.update(
             {
-                "default_precision": float(threshold_row[0]) if threshold_row[0] is not None else None,
-                "default_recall": float(threshold_row[1]) if threshold_row[1] is not None else None,
-                "default_false_match_rate": float(threshold_row[2]) if threshold_row[2] is not None else None,
-                "default_missed_match_rate": float(threshold_row[3]) if threshold_row[3] is not None else None,
-                "default_true_no_match_rejection_rate": float(threshold_row[4]) if threshold_row[4] is not None else None,
-                "default_predicted_no_match_npv": float(threshold_row[5]) if threshold_row[5] is not None else None,
-                "wrong_canonical_id_count": int(threshold_row[6]) if threshold_row[6] is not None else None,
-                "true_match_predicted_no_match_count": int(threshold_row[7]) if threshold_row[7] is not None else None,
-                "true_no_match_forced_to_canonical_id_count": int(threshold_row[8]) if threshold_row[8] is not None else None,
+                "default_precision": float(threshold_row[0])
+                if threshold_row[0] is not None
+                else None,
+                "default_recall": float(threshold_row[1])
+                if threshold_row[1] is not None
+                else None,
+                "default_false_match_rate": float(threshold_row[2])
+                if threshold_row[2] is not None
+                else None,
+                "default_missed_match_rate": float(threshold_row[3])
+                if threshold_row[3] is not None
+                else None,
+                "default_true_no_match_rejection_rate": float(threshold_row[4])
+                if threshold_row[4] is not None
+                else None,
+                "default_predicted_no_match_npv": float(threshold_row[5])
+                if threshold_row[5] is not None
+                else None,
+                "wrong_canonical_id_count": int(threshold_row[6])
+                if threshold_row[6] is not None
+                else None,
+                "true_match_predicted_no_match_count": int(threshold_row[7])
+                if threshold_row[7] is not None
+                else None,
+                "true_no_match_forced_to_canonical_id_count": int(threshold_row[8])
+                if threshold_row[8] is not None
+                else None,
             }
         )
         return summary
@@ -327,38 +345,38 @@ def build_accuracy_table(
     )
     threshold_summary_sql = f"""
         SELECT
-            {_sql_double_literal(threshold_summary['pr_auc'])} AS pr_auc,
-            {_sql_double_literal(threshold_summary['threshold_at_precision_99_5'])}
+            {_sql_double_literal(threshold_summary["pr_auc"])} AS pr_auc,
+            {_sql_double_literal(threshold_summary["threshold_at_precision_99_5"])}
                 AS threshold_at_precision_99_5,
-            {_sql_double_literal(threshold_summary['recall_at_precision_99_5'])}
+            {_sql_double_literal(threshold_summary["recall_at_precision_99_5"])}
                 AS recall_at_precision_99_5,
-            {_sql_double_literal(threshold_summary['threshold_at_precision_99_0'])}
+            {_sql_double_literal(threshold_summary["threshold_at_precision_99_0"])}
                 AS threshold_at_precision_99_0,
-            {_sql_double_literal(threshold_summary['recall_at_precision_99_0'])}
+            {_sql_double_literal(threshold_summary["recall_at_precision_99_0"])}
                 AS recall_at_precision_99_0,
-            {_sql_double_literal(threshold_summary['threshold_at_precision_98_0'])}
+            {_sql_double_literal(threshold_summary["threshold_at_precision_98_0"])}
                 AS threshold_at_precision_98_0,
-            {_sql_double_literal(threshold_summary['recall_at_precision_98_0'])}
+            {_sql_double_literal(threshold_summary["recall_at_precision_98_0"])}
                 AS recall_at_precision_98_0,
-            {_sql_double_literal(threshold_summary['default_threshold'])}
+            {_sql_double_literal(threshold_summary["default_threshold"])}
                 AS default_threshold,
-            {_sql_double_literal(threshold_summary['default_precision'])}
+            {_sql_double_literal(threshold_summary["default_precision"])}
                 AS default_threshold_precision,
-            {_sql_double_literal(threshold_summary['default_recall'])}
+            {_sql_double_literal(threshold_summary["default_recall"])}
                 AS default_threshold_recall,
-            {_sql_double_literal(threshold_summary['default_false_match_rate'])}
+            {_sql_double_literal(threshold_summary["default_false_match_rate"])}
                 AS default_threshold_false_match_rate,
-            {_sql_double_literal(threshold_summary['default_missed_match_rate'])}
+            {_sql_double_literal(threshold_summary["default_missed_match_rate"])}
                 AS default_threshold_missed_match_rate,
-            {_sql_double_literal(threshold_summary['default_true_no_match_rejection_rate'])}
+            {_sql_double_literal(threshold_summary["default_true_no_match_rejection_rate"])}
                 AS default_threshold_true_no_match_rejection_rate,
-            {_sql_double_literal(threshold_summary['default_predicted_no_match_npv'])}
+            {_sql_double_literal(threshold_summary["default_predicted_no_match_npv"])}
                 AS default_threshold_predicted_no_match_npv,
-            {_sql_bigint_literal(threshold_summary['wrong_canonical_id_count'])}
+            {_sql_bigint_literal(threshold_summary["wrong_canonical_id_count"])}
                 AS wrong_canonical_id_count,
-            {_sql_bigint_literal(threshold_summary['true_match_predicted_no_match_count'])}
+            {_sql_bigint_literal(threshold_summary["true_match_predicted_no_match_count"])}
                 AS true_match_predicted_no_match_count,
-            {_sql_bigint_literal(threshold_summary['true_no_match_forced_to_canonical_id_count'])}
+            {_sql_bigint_literal(threshold_summary["true_no_match_forced_to_canonical_id_count"])}
                 AS true_no_match_forced_to_canonical_id_count
     """
 

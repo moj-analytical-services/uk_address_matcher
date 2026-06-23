@@ -27,14 +27,15 @@ from uk_address_matcher.post_linkage.match_result.debug_tools import (
     _MatchResultDebugTools,
 )
 from uk_address_matcher.post_linkage.match_result.splink_inspector import _SplinkInspector
-from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 if TYPE_CHECKING:
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
+
 def _build_threshold_metrics_sql(rounding_expr: str) -> str:
     """Backward-compatible wrapper for threshold-metrics SQL generation."""
     return build_threshold_metrics_sql(rounding_expr)
+
 
 @dataclass
 class MatchResult:
