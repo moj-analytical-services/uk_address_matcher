@@ -452,12 +452,11 @@ class DuckDBPipeline(CTEPipeline):
 
     def add_step(self, step: Stage, *, explain: bool = False) -> None:
         signature = self._stage_signature(step)
-        # TODO(ThomasHepworth): Temporarily disable duplicate stage detection
-        # if signature in self._stage_signatures:
-        #     raise ValueError(
-        #         "Duplicate stage detected: "
-        #         f"stage '{step.name}' has already been added to pipeline '{self.name}'."
-        #     )
+        if signature in self._stage_signatures:
+            raise ValueError(
+                "Duplicate stage detected: "
+                f"stage '{step.name}' has already been added to pipeline '{self.name}'."
+            )
         # run any preludes / registers
         if step.registers:
             for k, rel in step.registers.items():
