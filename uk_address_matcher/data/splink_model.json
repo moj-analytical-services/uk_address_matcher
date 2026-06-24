@@ -187,7 +187,7 @@
         {
           "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
           "label_for_charts": "Same number, letter one-sided",
-          "m_probability": 5.169290079064457,
+          "m_probability": 5.17,
           "u_probability": 1,
           "fix_m_probability": true,
           "fix_u_probability": true
