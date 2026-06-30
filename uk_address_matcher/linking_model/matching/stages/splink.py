@@ -82,6 +82,14 @@ class SplinkStage(MatchingStage):
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
 
+    # Reranker (improve_predictions) scoring knobs. Defaults match the library
+    # defaults so behaviour is unchanged unless explicitly overridden.
+    improve_reward_multiplier: float = 3.0
+    improve_punishment_multiplier: float = 1.5
+    improve_missing_token_penalty: float = 0.1
+    improve_positional_conflict_penalty: float = 6.0
+    improve_business_unit_conflict_penalty: float = 6.0
+
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
     final_distinguishability_threshold: Optional[float] = 0.0
@@ -178,6 +186,11 @@ class SplinkStage(MatchingStage):
             top_n_matches=self.improve_top_n_matches,
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=effective_columns_to_retain,
+            REWARD_MULTIPLIER=self.improve_reward_multiplier,
+            PUNISHMENT_MULTIPLIER=self.improve_punishment_multiplier,
+            MISSING_TOKEN_PENALTY=self.improve_missing_token_penalty,
+            POSITIONAL_CONFLICT_PENALTY=self.improve_positional_conflict_penalty,
+            BUSINESS_UNIT_CONFLICT_PENALTY=self.improve_business_unit_conflict_penalty,
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
