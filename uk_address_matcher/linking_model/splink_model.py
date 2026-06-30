@@ -176,12 +176,8 @@ def _get_linker(
     # candidate canonical id, the number of shared inverted-index keys whose
     # posting list has size 1 (i.e. a key unique to that canonical) so the
     # signature comparison can reward unique rare-span hits.
-    _empty_hits_map = (
-        "MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map"
-    )
-    messy_has_hits_map = (
-        "signature_unique_hits_map" in df_addresses_to_match.columns
-    )
+    _empty_hits_map = "MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map"
+    messy_has_hits_map = "signature_unique_hits_map" in df_addresses_to_match.columns
     canonical_has_hits_map = (
         "signature_unique_hits_map" in df_addresses_to_search_within.columns
     )
