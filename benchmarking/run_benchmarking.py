@@ -28,7 +28,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # SELECTED_DATASETS: str | list[str] = "all"
-SELECTED_DATASETS: str | list[str] = "hackney"
+SELECTED_DATASETS: str | list[str] = "pooled_councils"
+# SELECTED_DATASETS: str | list[str] = "hackney"
 # SELECTED_DATASETS: str | list[str] = "aberdeenshire"
 # SELECTED_DATASETS: str | list[str] = "lambeth_llpg"
 STAGES = [
@@ -39,7 +40,7 @@ STAGES = [
 # Set to a persisted run hash to force a specific baseline, or use "latest"
 # to compare against the latest other persisted run for the same dataset.
 # Run IDs are preferred; internal dedupe hashes are still accepted for older runs.
-COMPARISON_BASELINE_RUN_ID: str | None = "bc216071cb56fb21"
+COMPARISON_BASELINE_RUN_ID: str | None = "192e02e409b7f100"
 
 
 # Defaults: print benchmark summaries and persistence output.

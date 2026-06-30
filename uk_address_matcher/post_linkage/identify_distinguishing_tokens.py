@@ -21,6 +21,7 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
     MISSING_TOKEN_PENALTY=0.1,
     POSITIONAL_CONFLICT_PENALTY=6.0,
+    BUSINESS_UNIT_CONFLICT_PENALTY=6.0,
 ):
     """
     Improve match predictions by identifying distinguishing tokens between addresses.
@@ -436,6 +437,55 @@ def improve_predictions_using_distinguishing_tokens(
 
     windowed_tokens = con.sql(sql_final)  # noqa: F841
 
+    # Structured discriminant conflict penalties (stage-2 reranking).
+    # Prefer the parsed `sub_premise_location` column when it has been retained
+    # through prediction; otherwise fall back to the token-derived positional
+    # descriptors. Penalties only fire when BOTH sides carry the signal and they
+    # disagree, so coarser records that simply lack the finer descriptor are not
+    # punished.
+    predict_columns = set(df_predict.columns)
+
+    if {"sub_premise_location_l", "sub_premise_location_r"} <= predict_columns:
+        positional_conflict_sql = f"""
+        - (CASE
+            WHEN sub_premise_location_l IS NOT NULL
+                AND sub_premise_location_r IS NOT NULL
+                AND sub_premise_location_l <> sub_premise_location_r
+            THEN {POSITIONAL_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+    else:
+        positional_conflict_sql = f"""
+        - (CASE
+            WHEN len(positional_tokens_l) > 0
+                AND len(positional_tokens_r) > 0
+                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
+            THEN {POSITIONAL_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+
+    business_unit_conflict_sql = ""
+    if {"business_unit_id_l", "business_unit_id_r"} <= predict_columns:
+        business_unit_type_clause = ""
+        if {"business_unit_type_l", "business_unit_type_r"} <= predict_columns:
+            business_unit_type_clause = (
+                "OR business_unit_type_l IS DISTINCT FROM business_unit_type_r"
+            )
+        business_unit_conflict_sql = f"""
+        - (CASE
+            WHEN business_unit_id_l IS NOT NULL
+                AND business_unit_id_r IS NOT NULL
+                AND (
+                    business_unit_id_l <> business_unit_id_r
+                    {business_unit_type_clause}
+                )
+            THEN {BUSINESS_UNIT_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+
     # Calculate new match weights based on distinguishing tokens and bigrams
 
     sql = f"""
@@ -458,16 +508,12 @@ def improve_predictions_using_distinguishing_tokens(
 
         - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
 
-        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT).
-        -- Only fires when both sides carry a positional descriptor and they disagree;
-        -- silent otherwise so neutral/missing cases are unaffected.
-        - (CASE
-            WHEN len(positional_tokens_l) > 0
-                AND len(positional_tokens_r) > 0
-                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
-            THEN {POSITIONAL_CONFLICT_PENALTY}
-            ELSE 0
-          END)
+        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT)
+        -- and business-unit conflict (e.g. messy says UNIT 5, candidate says UNIT 6).
+        -- Only fire when both sides carry the signal and they disagree; silent
+        -- otherwise so neutral/missing cases are unaffected.
+        {positional_conflict_sql}
+        {business_unit_conflict_sql}
 
         -- Bigram-based adjustments
         {

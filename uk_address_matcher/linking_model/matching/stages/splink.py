@@ -12,6 +12,17 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
+# Sub-premise / business-unit discriminants consumed by the stage-2 reranker.
+# The Splink model deliberately does not score these; instead they are retained
+# through prediction so the distinguishing-token step can apply structured
+# conflict penalties (e.g. sub-premise LEFT vs RIGHT, business UNIT 5 vs UNIT 6).
+_RERANK_DISCRIMINANT_COLUMNS = (
+    "sub_premise_location",
+    "business_unit_type",
+    "business_unit_id",
+)
+
+
 @dataclass(repr=False)
 class SplinkStage(MatchingStage):
     """Probabilistic matching stage built on Splink.
@@ -120,6 +131,13 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        # Retain the reranker discriminants through prediction in addition to any
+        # caller-supplied columns, de-duplicated to avoid Splink retain conflicts.
+        effective_columns_to_retain = list(self.additional_columns_to_retain or [])
+        for _discriminant in _RERANK_DISCRIMINANT_COLUMNS:
+            if _discriminant not in effective_columns_to_retain:
+                effective_columns_to_retain.append(_discriminant)
+
         # Step 1: Build linker
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
@@ -127,7 +145,7 @@ class SplinkStage(MatchingStage):
             con=con,
             include_full_postcode_block=self.include_full_postcode_block,
             include_outside_postcode_block=self.include_outside_postcode_block,
-            additional_columns_to_retain=self.additional_columns_to_retain,
+            additional_columns_to_retain=effective_columns_to_retain,
             retain_intermediate_calculation_columns=(
                 self.retain_intermediate_calculation_columns
             ),
@@ -159,7 +177,7 @@ class SplinkStage(MatchingStage):
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
             use_bigrams=self.improve_use_bigrams,
-            additional_columns_to_retain=self.additional_columns_to_retain,
+            additional_columns_to_retain=effective_columns_to_retain,
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
