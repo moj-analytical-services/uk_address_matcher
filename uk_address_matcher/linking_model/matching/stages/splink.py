@@ -103,6 +103,27 @@ class SplinkStage(MatchingStage):
         debug_options: Optional[DebugOptions] = None,
         explain: bool = False,
     ) -> Optional[duckdb.DuckDBPyRelation]:
+        """Score and select canonical matches in two stages.
+
+        Stage 1 (Splink probabilistic scoring). Build a Splink linker over the
+        unmatched messy records and the canonical gazetteer, use postcode-based
+        blocking to generate candidate pairs, and score every pair with the
+        trained probabilistic model. The output is a ``match_weight`` for each
+        (messy, canonical) candidate pair.
+
+        Stage 2 (distinguishing-token reranking and selection). Keep the top
+        ``improve_top_n_matches`` candidates per messy record and adjust each
+        candidate's ``match_weight`` using token-level evidence drawn from that
+        shortlist: reward shared tokens that are rare across the shortlist,
+        punish tokens the messy record carries that this candidate lacks but a
+        rival candidate supplies, and apply a structured penalty when sub-premise
+        positional descriptors (for example LEFT versus RIGHT) conflict.
+        ``distinguishability`` (the match-weight gap to the next-best candidate)
+        is then recomputed, the top-ranked candidate per messy record is
+        selected, and it is emitted only if it clears
+        ``final_match_weight_threshold`` and
+        ``final_distinguishability_threshold``.
+        """
         from uk_address_matcher.linking_model.splink_model import _get_linker
         from uk_address_matcher.post_linkage.analyse_results import (
             best_matches_with_distinguishability,
@@ -120,7 +141,10 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
-        # Step 1: Build linker
+        # Stage 1 - Splink probabilistic scoring.
+        # Build a linker over the unmatched messy records and the canonical
+        # gazetteer. Postcode-based blocking proposes candidate pairs and the
+        # trained model scores each pair, producing a match_weight per pair.
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
             df_addresses_to_search_within=df_canonical,
@@ -136,7 +160,8 @@ class SplinkStage(MatchingStage):
 
         self.linker = linker
 
-        # Step 2: Predict
+        # Score every blocked candidate pair and keep those above the permissive
+        # predict threshold so Stage 2 has a full shortlist to rerank.
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
@@ -152,7 +177,11 @@ class SplinkStage(MatchingStage):
         )
         self.predictions_table = table_name
 
-        # Step 3: Improve predictions using distinguishing tokens
+        # Stage 2 - distinguishing-token reranking and selection.
+        # Take the top-N candidates per messy record and adjust each
+        # candidate's match_weight using token-level evidence from the
+        # shortlist (rewarding rare shared tokens, punishing tokens a rival
+        # candidate explains better, and penalising positional conflicts).
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_ddb,
             con=con,
@@ -163,8 +192,9 @@ class SplinkStage(MatchingStage):
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
-        # Step 4: Compute distinguishability and select best match per record
-        # This returns an unmaterialised relation
+        # Recompute distinguishability (the match-weight gap to the next-best
+        # candidate) on the reranked weights and rank candidates per record.
+        # This returns an unmaterialised relation.
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
@@ -176,7 +206,8 @@ class SplinkStage(MatchingStage):
         df_best.create(df_best_name)
         self.best_matches_table = df_best_name
 
-        # Step 5: Apply thresholds and project to standard columns
+        # Emit the top-ranked candidate per record, keeping only matches that
+        # clear the final match-weight and distinguishability thresholds.
         splink_label = MatchReason.SPLINK.value
 
         dist_filter = ""
