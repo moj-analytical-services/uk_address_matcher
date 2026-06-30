@@ -1,3 +1,5 @@
+import re
+
 import duckdb
 
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
@@ -131,6 +133,30 @@ def test_parse_out_flat_positional():
             None,
             None,
         ),
+        # --- Flat keyword synonyms (APARTMENT / MAISONETTE / PENTHOUSE) ---
+        # APARTMENT is not normalised to FLAT upstream, so it must be parsed here.
+        ("APARTMENT 3 5 REGENT TERRACE LONDON", None, None, "3"),
+        ("MEADOWSIDE APARTMENTS 1C DAYSBROOK ROAD", None, "C", None),
+        ("MAISONETTE 2 78 STRATHLEVEN ROAD LONDON", None, None, "2"),
+        # Single number after the keyword is treated as a house number (NULL).
+        ("MAISONETTE 188 SUNNYHILL ROAD LONDON", None, None, None),
+        ("MAISONETTE GROUND AND FIRST FLOOR 16 CALAIS STREET", "FIRST FLOOR", None, None),
+        ("PENTHOUSE 2 STANNARY STREET LONDON", "TOP FLOOR", None, None),
+        ("PENTHOUSE FLAT 10 2 CARPENTERS PLACE LONDON", "TOP FLOOR", None, "10"),
+        # --- Bare floor descriptors adjacent to a flat keyword ---
+        ("TOP FLAT 4 GLENELDON ROAD LONDON", "TOP FLOOR", None, None),
+        ("UPPER FLAT 105 BARROW ROAD LONDON", "UPPER FLOOR", None, None),
+        ("LOWER FLAT 37 SHANDON ROAD LONDON", "LOWER FLOOR", None, None),
+        ("FLAT GROUND 102 CAMBRAY ROAD LONDON", "GROUND FLOOR", None, None),
+        ("FLAT FIRST 87 KNATCHBULL ROAD LONDON", "FIRST FLOOR", None, None),
+        ("ATTIC FLAT 22 LAMBERT ROAD LONDON", "TOP FLOOR", None, None),
+        # --- "FLAT NO" / "FLAT NUMBER" filler before the number ---
+        ("FLAT NO 1 23 HIGH STREET LONDON", None, None, "1"),
+        ("FLAT NUMBER 4 12 MARKET ROAD LONDON", None, None, "4"),
+        # --- Negative cases: floor words inside street names must NOT match ---
+        # (no flat keyword is adjacent, so these stay NULL)
+        ("212 UPPER TULSE HILL LONDON", None, None, None),
+        ("85 LOWER MARSH LONDON", None, None, None),
     ]
 
     input_relation = connection.sql(
@@ -171,13 +197,14 @@ def test_parse_out_flat_positional():
             f"but got '{row[number_idx]}'"
         )
         # has_flat_indicator is True if any of the three fields are set,
-        # OR if the word FLAT appears in the address
+        # OR if a flat keyword (FLAT/APARTMENT/MAISONETTE/PENTHOUSE) appears
         expected_indicator = (
             any(
                 value is not None
                 for value in (expected_pos, expected_letter, expected_number)
             )
-            or "FLAT" in address
+            or re.search(r"\b(FLAT|APARTMENT|MAISONETTE|PENTHOUSE)\b", address)
+            is not None
         )
         assert row[indicator_idx] == expected_indicator, (
             f"Address '{address}' expected has_flat_indicator '{expected_indicator}' "

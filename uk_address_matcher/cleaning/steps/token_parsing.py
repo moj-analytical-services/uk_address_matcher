@@ -143,8 +143,13 @@ def _parse_out_flat_position_and_letter():
 
     Strategy:
       - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
+      - Treat APARTMENT, MAISONETTE and PENTHOUSE as flat keywords too, since
+        they are not normalised to FLAT upstream
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
-      - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
+      - Only extract flat_number from explicit flat keyword markers (e.g., FLAT 12,
+        APARTMENT 3, FLAT NO 1)
+      - Recognise bare floor descriptors when adjacent to a flat keyword
+        (e.g. TOP FLAT, FLAT GROUND) as well as PENTHOUSE and numeric ordinals
       - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
     """
 
@@ -194,6 +199,14 @@ def _parse_out_flat_position_and_letter():
         r"^\s*(GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
         r"SEVENTH|EIGHTH|NINTH|TENTH|TOP)\s+\d"
     )
+    # Synonyms that introduce a sub-premise the same way FLAT does. APARTMENT is
+    # not normalised to FLAT upstream, so it (and friends) must be recognised
+    # here or their unit numbers/letters are lost entirely.
+    flat_keyword = r"(?:FLAT|APARTMENT|MAISONETTE|PENTHOUSE)"
+    # Optional "NO"/"NUMBER" filler between the keyword and the number, e.g.
+    # "FLAT NO 1", "APARTMENT NUMBER 3".
+    flat_number_filler = r"(?:NO\.?\s+|NUMBER\s+)?"
+
     # Core token patterns (RE2-compatible; avoid lookbehind)
     num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
     leading_num_letter = (
@@ -202,17 +215,35 @@ def _parse_out_flat_position_and_letter():
     # Match all numbers (standalone digits, not part of ranges like 120-122)
     count_numbers = r"\b(\d{1,5})\b"
 
+    # FLAT 12 / FLAT 12A / FLAT 12/2 / APARTMENT 12 / FLAT NO 1
     flat_num_after_flat = (
-        r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/])"  # FLAT 12 / FLAT 12A / FLAT 12/2
+        rf"\b{flat_keyword}\s+{flat_number_filler}(\d{{1,4}})(?:\s|[A-Za-z/])"
     )
+    # FLAT 12A / FLAT 12 A / APARTMENT 12A
     flat_letter_after_num_after_flat = (
-        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+        rf"\b{flat_keyword}\s+{flat_number_filler}\d{{1,4}}\s*([A-Za-z])\b"
     )
-    flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
+    flat_letter_after_flat = rf"\b{flat_keyword}\s+([A-Za-z])\b"  # FLAT A
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
     scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
+
+    # Bare floor descriptors that only appear next to a flat keyword. Gating on
+    # keyword adjacency avoids matching street names such as "UPPER TULSE HILL"
+    # or "LOWER MARSH" where the floor word is part of the thoroughfare.
+    adjacent_floor_word = (
+        r"(?:BASEMENT|GARDEN|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
+        r"SEVENTH|EIGHTH|NINTH|TENTH|TOP|UPPER|LOWER|ATTIC|LOFT)"
+    )
+    # "FLAT GROUND", "FLAT FIRST", "APARTMENT UPPER"
+    floor_word_after_flat = rf"\b{flat_keyword}\s+({adjacent_floor_word})\b"
+    # "TOP FLAT", "UPPER FLAT", "GROUND FLAT", "BASEMENT MAISONETTE"
+    floor_word_before_flat = rf"\b({adjacent_floor_word})\s+{flat_keyword}\b"
+    # Numeric ordinal floors, e.g. "1ST FLOOR", "2ND FLOORS", "1ST-2ND FLOOR".
+    ordinal_floor = r"\b([1-9])(?:ST|ND|RD|TH)\s*-?\s*(?:\d(?:ST|ND|RD|TH)\s+)?FLOORS?\b"
+    # PENTHOUSE doubles as a top-floor positional even without the word FLOOR.
+    penthouse_signal = r"\b(PENTHOUSE)\b"
 
     final_base_sql = f"""
     SELECT
@@ -253,7 +284,30 @@ def _parse_out_flat_position_and_letter():
                 regexp_extract(i.clean_full_address, '{floor_positions}', 1),
                 ''
             )
-        END AS flat_positional,
+        END AS flat_positional_explicit,
+
+        -- 1b) Bare floor descriptors that only count when next to a flat
+        -- keyword, plus numeric ordinal floors and the PENTHOUSE signal.
+        -- These are mapped to canonical labels in the next step and only used
+        -- when no explicit floor descriptor was found.
+        COALESCE(
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{floor_word_after_flat}', 1),
+                ''
+            ),
+            NULLIF(
+                regexp_extract(i.clean_full_address, '{floor_word_before_flat}', 1),
+                ''
+            )
+        ) AS __adjacent_floor_word,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{ordinal_floor}', 1),
+            ''
+        ) AS __ordinal_floor_digit,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{penthouse_signal}', 1),
+            ''
+        ) AS __penthouse_signal,
 
         -- 2) flat_letter (priority:
         -- FLAT 12A → A, FLAT A → A, BLOCK A → A,
@@ -341,9 +395,60 @@ def _parse_out_flat_position_and_letter():
     FROM {{input}} i
     """
 
+    # Map the keyword-adjacent floor words, numeric ordinals and PENTHOUSE
+    # signal onto canonical positional labels, preferring an explicit floor
+    # descriptor when one was found.
+    with_positional_sql = r"""
+    SELECT
+        * EXCLUDE (
+            flat_positional_explicit,
+            __adjacent_floor_word,
+            __ordinal_floor_digit,
+            __penthouse_signal
+        ),
+        COALESCE(
+            flat_positional_explicit,
+            CASE __adjacent_floor_word
+                WHEN 'BASEMENT' THEN 'BASEMENT'
+                WHEN 'GARDEN'   THEN 'GARDEN'
+                WHEN 'GROUND'   THEN 'GROUND FLOOR'
+                WHEN 'FIRST'    THEN 'FIRST FLOOR'
+                WHEN 'SECOND'   THEN 'SECOND FLOOR'
+                WHEN 'THIRD'    THEN 'THIRD FLOOR'
+                WHEN 'FOURTH'   THEN 'FOURTH FLOOR'
+                WHEN 'FIFTH'    THEN 'FIFTH FLOOR'
+                WHEN 'SIXTH'    THEN 'SIXTH FLOOR'
+                WHEN 'SEVENTH'  THEN 'SEVENTH FLOOR'
+                WHEN 'EIGHTH'   THEN 'EIGHTH FLOOR'
+                WHEN 'NINTH'    THEN 'NINTH FLOOR'
+                WHEN 'TENTH'    THEN 'TENTH FLOOR'
+                WHEN 'TOP'      THEN 'TOP FLOOR'
+                WHEN 'UPPER'    THEN 'UPPER FLOOR'
+                WHEN 'LOWER'    THEN 'LOWER FLOOR'
+                WHEN 'ATTIC'    THEN 'TOP FLOOR'
+                WHEN 'LOFT'     THEN 'TOP FLOOR'
+                ELSE NULL
+            END,
+            CASE WHEN __penthouse_signal IS NOT NULL THEN 'TOP FLOOR' END,
+            CASE __ordinal_floor_digit
+                WHEN '1' THEN 'FIRST FLOOR'
+                WHEN '2' THEN 'SECOND FLOOR'
+                WHEN '3' THEN 'THIRD FLOOR'
+                WHEN '4' THEN 'FOURTH FLOOR'
+                WHEN '5' THEN 'FIFTH FLOOR'
+                WHEN '6' THEN 'SIXTH FLOOR'
+                WHEN '7' THEN 'SEVENTH FLOOR'
+                WHEN '8' THEN 'EIGHTH FLOOR'
+                WHEN '9' THEN 'NINTH FLOOR'
+                ELSE NULL
+            END
+        ) AS flat_positional
+    FROM {final_base}
+    """
+
     # Final step: boolean indicator and composite flat identity
     # (split out so we can refer to computed aliases)
-    # Also check for the word FLAT itself as a flat signal
+    # Also check for a flat keyword itself as a flat signal
     final_sql = r"""
     SELECT
         *,
@@ -351,7 +456,9 @@ def _parse_out_flat_position_and_letter():
             flat_letter IS NOT NULL
             OR flat_number IS NOT NULL
             OR flat_positional IS NOT NULL
-            OR regexp_matches(clean_full_address, '\bFLAT\b')
+            OR regexp_matches(
+                clean_full_address, '\b(FLAT|APARTMENT|MAISONETTE|PENTHOUSE)\b'
+            )
         ) AS has_flat_indicator,
         CASE
             WHEN flat_number IS NOT NULL OR flat_letter IS NOT NULL
@@ -362,11 +469,12 @@ def _parse_out_flat_position_and_letter():
                      COALESCE(flat_positional, ''))
             ELSE NULL
         END AS flat_identity
-    FROM {final_base}
+    FROM {with_positional}
     """
 
     steps = [
         CTEStep("final_base", final_base_sql),
+        CTEStep("with_positional", with_positional_sql),
         CTEStep("final", final_sql),
     ]
     return steps
