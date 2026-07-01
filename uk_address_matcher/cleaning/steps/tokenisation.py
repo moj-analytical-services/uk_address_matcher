@@ -15,18 +15,9 @@ def _split_numeric_tokens_to_cols():
     sql = """
     SELECT
         *,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[1] as numeric_token_1,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[2] as numeric_token_2,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[3] as numeric_token_3
+        numeric_tokens[1] as numeric_token_1,
+        numeric_tokens[2] as numeric_token_2,
+        numeric_tokens[3] as numeric_token_3
     FROM {input}
     """
     return sql
