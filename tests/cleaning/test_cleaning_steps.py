@@ -6,8 +6,10 @@ from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_mat
 from uk_address_matcher.cleaning.steps import (
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
+    _parse_out_numbers,
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
+    _split_numeric_tokens_to_cols,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
@@ -32,7 +34,7 @@ def test_parse_out_flat_positional():
     # only the LETTER is a flat determinant.
     # The number is the building/house number, not a flat identifier
     test_cases = [
-        ("11A SPITFIRE COURT BIRMINGHAM", None, "A", None),
+        ("11A SPITFIRE COURT BIRMINGHAM", None, None, None),
         ("FLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("BASEMENT FLAT A 11 SPITFIRE COURT BIRMINGHAM", "BASEMENT", "A", None),
         (
@@ -71,18 +73,14 @@ def test_parse_out_flat_positional():
             "B",
             "2",
         ),
-        (
-            "15B LONDON ROAD",
-            None,
-            "B",
-            None,
-        ),  # digit+letter: letter is flat determinant, not the number
+        ("15B LONDON ROAD", None, None, None),
         (
             "BASEMENT 15B LONDON ROAD",
             "BASEMENT",
             "B",
             None,
         ),  # floor + digit+letter
+        ("18A CHURCH ROAD GATLEY CHEADLE", None, None, None),
         (
             "FLAT A MY HOUSE 120-122 SOME ROAD",
             None,
@@ -219,6 +217,8 @@ def test_parse_out_sub_premise_location():
         ("GROUND FLOOR RIGHT FLAT 4 UFTON ROAD LONDON", "RIGHT"),
         ("GROUND FLOOR LEFT FLAT 4 UFTON ROAD LONDON", "LEFT"),
         ("FLAT SECOND FLOOR CENTRE 5 MORESBY ROAD LONDON", "CENTRE"),
+        ("APARTMENT REAR 10 EXAMPLE ROAD LONDON", "REAR"),
+        ("UNIT 2 LEFT 8 TEST STREET LONDON", "LEFT"),
         ("FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON", "FRONT"),
         ("FLAT FIRST FLOOR REAR 176 LOWER CLAPTON ROAD LONDON", "REAR"),
         (
@@ -381,6 +381,10 @@ def test_parse_out_business_unit():
         # STUDIO patterns (common for creative/media businesses)
         ("STUDIO 4 CREATIVE QUARTER", "STUDIO", "4", True),
         ("STUDIO B ARTS COMPLEX", "STUDIO", "B", True),
+        ("STUDIO 10001 WORKS HOUSE 45 BRUNSWICK PLACE", "STUDIO", "10001", True),
+        # Residential UNIT/STUDIO shells should not be classified as business units
+        ("UNIT 2 FIRST FLOOR LEFT 8 TEST STREET", None, None, False),
+        ("STUDIO 4 10 HIGH STREET", None, None, False),
         # Non-business addresses (should not match)
         ("FLAT A 15 HIGH STREET", None, None, False),
         ("123 MAIN ROAD LONDON", None, None, False),
@@ -417,3 +421,63 @@ def test_parse_out_business_unit():
             f"Address '{address}' expected has_business_unit={expected_indicator} "
             f"but got {row[indicator_idx]}"
         )
+
+
+def test_bare_alphanumeric_house_numbers_do_not_create_flat_signals():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            ('154A ASHLEY ROAD HALE', '154A ASHLEY ROAD HALE'),
+            ('18A CHURCH ROAD GATLEY CHEADLE', '18A CHURCH ROAD GATLEY CHEADLE'),
+            (
+                'UNIT 18A SLOUGH BUSINESS PARK 94 FARNHAM ROAD SLOUGH',
+                'UNIT 18A SLOUGH BUSINESS PARK 94 FARNHAM ROAD SLOUGH'
+            )
+        ) AS t(clean_full_address, original_address_concat)
+        """
+    )
+
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(_parse_out_flat_position_and_letter())
+    pipeline.add_step(_parse_out_business_unit())
+    pipeline.add_step(_parse_out_numbers())
+    pipeline.add_step(_split_numeric_tokens_to_cols())
+    result = pipeline.run(DebugOptions(pretty_print_sql=False))
+
+    actual = result.project(
+        """
+        clean_full_address,
+        flat_letter,
+        flat_number,
+        has_flat_indicator,
+        business_unit_type,
+        business_unit_id,
+        numeric_token_1,
+        numeric_token_2
+        """
+    ).fetchall()
+
+    assert actual == [
+        ("154A ASHLEY ROAD HALE", None, None, False, None, None, "154A", None),
+        (
+            "18A CHURCH ROAD GATLEY CHEADLE",
+            None,
+            None,
+            False,
+            None,
+            None,
+            "18A",
+            None,
+        ),
+        (
+            "UNIT 18A SLOUGH BUSINESS PARK 94 FARNHAM ROAD SLOUGH",
+            None,
+            None,
+            False,
+            "UNIT",
+            "18A",
+            "18A",
+            "94",
+        ),
+    ]

@@ -229,6 +229,8 @@ def _parse_out_flat_position_and_letter():
     )
     flat_letter_after_flat = rf"\b{flat_keyword_with_plural}\s+([A-Za-z])\b"  # FLAT A
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
+    explicit_sub_premise_signal = r"\b(FLAT|MAISONETTE|ROOM)\b"
+    business_unit_signal = r"^\s*(UNIT|SUITE|OFFICE|WORKSHOP|WAREHOUSE|STUDIO)S?\b"
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
     scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
@@ -313,6 +315,16 @@ def _parse_out_flat_position_and_letter():
             ''
         ) AS __penthouse_signal,
 
+        regexp_matches(
+            i.clean_full_address,
+            '{explicit_sub_premise_signal}'
+        ) AS has_explicit_sub_premise_signal,
+
+        regexp_matches(
+            i.clean_full_address,
+            '{business_unit_signal}'
+        ) AS starts_with_business_unit_signal,
+
         -- 2) flat_letter (priority:
         -- FLAT 12A → A, FLAT A → A, BLOCK A → A,
         -- 11A start → A, 15B anywhere → B)
@@ -333,14 +345,50 @@ def _parse_out_flat_position_and_letter():
                 regexp_extract(i.clean_full_address, '{block_letter}', 1),
                 ''
             ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{leading_num_letter}', 2),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2),
-                ''
-            )
+            CASE
+                WHEN (
+                    regexp_matches(i.clean_full_address, '{explicit_sub_premise_signal}')
+                    OR NULLIF(
+                        regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+                        ''
+                    ) IS NOT NULL
+                    OR NULLIF(
+                        regexp_extract(
+                            i.clean_full_address,
+                            '{leading_bare_floor_position}',
+                            1
+                        ),
+                        ''
+                    ) IS NOT NULL
+                )
+                AND NOT regexp_matches(i.clean_full_address, '{business_unit_signal}')
+                THEN NULLIF(
+                    regexp_extract(i.clean_full_address, '{leading_num_letter}', 2),
+                    ''
+                )
+            END,
+            CASE
+                WHEN (
+                    regexp_matches(i.clean_full_address, '{explicit_sub_premise_signal}')
+                    OR NULLIF(
+                        regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+                        ''
+                    ) IS NOT NULL
+                    OR NULLIF(
+                        regexp_extract(
+                            i.clean_full_address,
+                            '{leading_bare_floor_position}',
+                            1
+                        ),
+                        ''
+                    ) IS NOT NULL
+                )
+                AND NOT regexp_matches(i.clean_full_address, '{business_unit_signal}')
+                THEN NULLIF(
+                    regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2),
+                    ''
+                )
+            END
         ) AS flat_letter,
 
         -- 3) flat_number (priority explained inline)
@@ -455,7 +503,7 @@ def _parse_out_flat_position_and_letter():
     # Also check for a flat keyword itself as a flat signal
     final_sql = r"""
     SELECT
-        *,
+        * EXCLUDE (has_explicit_sub_premise_signal, starts_with_business_unit_signal),
         (
             flat_letter IS NOT NULL
             OR flat_number IS NOT NULL
@@ -545,7 +593,10 @@ def _parse_out_sub_premise_location():
                 flat_positional IS NOT NULL
                 OR flat_letter IS NOT NULL
                 OR flat_number IS NOT NULL
-                OR regexp_matches(clean_full_address, '\b(FLAT|MAISONETTE)\b')
+                OR regexp_matches(
+                    clean_full_address,
+                    '\b(FLAT|MAISONETTE|APARTMENT|PENTHOUSE|ROOM|UNIT|STUDIO)\b'
+                )
             ) THEN NULL
             WHEN regexp_matches(
                 sub_premise_location_prefix, '\bRIGHT HAND SIDE\b'
@@ -610,44 +661,105 @@ def _parse_out_business_unit():
       - business_unit_id: The identifier (letter, number, or alphanumeric)
       - has_business_unit: Boolean indicator
     """
-    # Business unit keywords - these indicate commercial/industrial premises
-    # Note: UNIT is normalised FROM residential APARTMENT in earlier cleaning,
-    # but raw UNIT in business contexts (UNIT C, UNIT 5) remains
+    # Business unit keywords - these indicate commercial/industrial premises.
+    # UNIT and STUDIO can also appear in residential shells, so those need
+    # extra gating against nearby residential evidence.
     business_keywords = ["UNIT", "SUITE", "OFFICE", "WORKSHOP", "WAREHOUSE", "STUDIO"]
 
     # Build pattern: (UNIT|SUITE|...) followed by identifier
-    # Identifier can be: letter (A-Z), number (1-999), or alphanumeric (5A, A5)
+    # Identifier can be: letter (A-Z), number, or alphanumeric (5A, A5).
+    # We allow up to 5 digits because real commercial studio/unit identifiers
+    # can exceed 4 digits (e.g. STUDIO 10001 WORKS HOUSE ...).
     # Also handle plural forms like "UNITS 1-3" or "UNITS A AND B"
     keywords_pattern = "|".join(business_keywords)
 
     # Pattern for singular: UNIT A, UNIT 5, UNIT 5A, UNIT A5
     singular_pattern = (
-        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
+        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,5}}[A-Za-z]?|[A-Za-z])\b"
     )
+    residential_shell_pattern = r"\b(FLAT|MAISONETTE|APARTMENT|PENTHOUSE|ROOM)\b"
+    residential_context_pattern = r"\b(LEFT|RIGHT|FRONT|REAR|FLOOR|BASEMENT|GARDEN)\b"
+    studio_residential_pattern = r"^\s*STUDIO\s+[A-Za-z]?\d{1,5}[A-Za-z]?\s+\d"
 
     sql = f"""
+    WITH business_unit_raw AS (
     SELECT
         i.*,
 
-        -- Extract the business unit type (UNIT, SUITE, OFFICE, etc.)
         NULLIF(
             UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 1)),
             ''
-        ) AS business_unit_type,
+        ) AS __business_unit_type,
 
-        -- Extract the business unit identifier (A, 5, 5A, etc.)
         NULLIF(
             UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 2)),
             ''
-        ) AS business_unit_id,
+        ) AS __business_unit_id,
 
-        -- Boolean indicator for having a business unit
+        (
+            regexp_matches(i.clean_full_address, '{residential_shell_pattern}')
+            OR regexp_matches(i.clean_full_address, '{residential_context_pattern}')
+        ) AS __has_residential_context,
+
         regexp_matches(
             i.clean_full_address,
-            '\\b({keywords_pattern})S?\\s+([A-Za-z]?\\d{{1,4}}[A-Za-z]?|[A-Za-z])\\b'
-        ) AS has_business_unit
+            '{studio_residential_pattern}'
+        ) AS __looks_like_residential_studio,
+
+        -- Extract the business unit type (UNIT, SUITE, OFFICE, etc.)
+        CASE
+            WHEN __business_unit_type IN ('UNIT', 'STUDIO')
+                 AND (
+                    __has_residential_context
+                    OR (
+                        __business_unit_type = 'STUDIO'
+                        AND __looks_like_residential_studio
+                    )
+                 )
+                THEN NULL
+            ELSE __business_unit_type
+        END AS business_unit_type,
+
+        -- Extract the business unit identifier (A, 5, 5A, etc.)
+        CASE
+            WHEN __business_unit_type IN ('UNIT', 'STUDIO')
+                 AND (
+                    __has_residential_context
+                    OR (
+                        __business_unit_type = 'STUDIO'
+                        AND __looks_like_residential_studio
+                    )
+                 )
+                THEN NULL
+            ELSE __business_unit_id
+        END AS business_unit_id,
+
+        -- Boolean indicator for having a business unit
+        CASE
+            WHEN __business_unit_type IN ('UNIT', 'STUDIO')
+                 AND (
+                    __has_residential_context
+                    OR (
+                        __business_unit_type = 'STUDIO'
+                        AND __looks_like_residential_studio
+                    )
+                 )
+                THEN FALSE
+            ELSE regexp_matches(
+                i.clean_full_address,
+                '\\b({keywords_pattern})S?\\s+([A-Za-z]?\\d{{1,5}}[A-Za-z]?|[A-Za-z])\\b'
+            )
+        END AS has_business_unit
 
     FROM {{input}} i
+    )
+    SELECT * EXCLUDE (
+        __business_unit_type,
+        __business_unit_id,
+        __has_residential_context,
+        __looks_like_residential_studio
+    )
+    FROM business_unit_raw
     """
     return sql
 

@@ -12,6 +12,17 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 
+# Sub-premise / business-unit discriminants consumed by the stage-2 reranker.
+# The Splink model deliberately does not score these; instead they are retained
+# through prediction so the distinguishing-token step can apply structured
+# conflict penalties (e.g. sub-premise LEFT vs RIGHT, business UNIT 5 vs UNIT 6).
+_RERANK_DISCRIMINANT_COLUMNS = (
+    "sub_premise_location",
+    "business_unit_type",
+    "business_unit_id",
+)
+
+
 @dataclass(repr=False)
 class SplinkStage(MatchingStage):
     """Probabilistic matching stage built on Splink.
@@ -71,6 +82,14 @@ class SplinkStage(MatchingStage):
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
 
+    # Reranker (improve_predictions) scoring knobs. Defaults match the library
+    # defaults so behaviour is unchanged unless explicitly overridden.
+    improve_reward_multiplier: float = 3.0
+    improve_punishment_multiplier: float = 1.5
+    improve_missing_token_penalty: float = 0.1
+    improve_positional_conflict_penalty: float = 6.0
+    improve_business_unit_conflict_penalty: float = 6.0
+
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
     final_distinguishability_threshold: Optional[float] = 0.0
@@ -103,6 +122,27 @@ class SplinkStage(MatchingStage):
         debug_options: Optional[DebugOptions] = None,
         explain: bool = False,
     ) -> Optional[duckdb.DuckDBPyRelation]:
+        """Score and select canonical matches in two stages.
+
+        Stage 1 (Splink probabilistic scoring). Build a Splink linker over the
+        unmatched messy records and the canonical gazetteer, use postcode-based
+        blocking to generate candidate pairs, and score every pair with the
+        trained probabilistic model. The output is a ``match_weight`` for each
+        (messy, canonical) candidate pair.
+
+        Stage 2 (distinguishing-token reranking and selection). Keep the top
+        ``improve_top_n_matches`` candidates per messy record and adjust each
+        candidate's ``match_weight`` using token-level evidence drawn from that
+        shortlist: reward shared tokens that are rare across the shortlist,
+        punish tokens the messy record carries that this candidate lacks but a
+        rival candidate supplies, and apply a structured penalty when sub-premise
+        positional descriptors (for example LEFT versus RIGHT) conflict.
+        ``distinguishability`` (the match-weight gap to the next-best candidate)
+        is then recomputed, the top-ranked candidate per messy record is
+        selected, and it is emitted only if it clears
+        ``final_match_weight_threshold`` and
+        ``final_distinguishability_threshold``.
+        """
         from uk_address_matcher.linking_model.splink_model import _get_linker
         from uk_address_matcher.post_linkage.analyse_results import (
             best_matches_with_distinguishability,
@@ -120,6 +160,17 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        # Stage 1 - Splink probabilistic scoring.
+        # Build a linker over the unmatched messy records and the canonical
+        # gazetteer. Postcode-based blocking proposes candidate pairs and the
+        # trained model scores each pair, producing a match_weight per pair.
+        # Retain the reranker discriminants through prediction in addition to any
+        # caller-supplied columns, de-duplicated to avoid Splink retain conflicts.
+        effective_columns_to_retain = list(self.additional_columns_to_retain or [])
+        for _discriminant in _RERANK_DISCRIMINANT_COLUMNS:
+            if _discriminant not in effective_columns_to_retain:
+                effective_columns_to_retain.append(_discriminant)
+
         # Step 1: Build linker
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
@@ -127,7 +178,7 @@ class SplinkStage(MatchingStage):
             con=con,
             include_full_postcode_block=self.include_full_postcode_block,
             include_outside_postcode_block=self.include_outside_postcode_block,
-            additional_columns_to_retain=self.additional_columns_to_retain,
+            additional_columns_to_retain=effective_columns_to_retain,
             retain_intermediate_calculation_columns=(
                 self.retain_intermediate_calculation_columns
             ),
@@ -136,7 +187,8 @@ class SplinkStage(MatchingStage):
 
         self.linker = linker
 
-        # Step 2: Predict
+        # Score every blocked candidate pair and keep those above the permissive
+        # predict threshold so Stage 2 has a full shortlist to rerank.
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
@@ -152,19 +204,29 @@ class SplinkStage(MatchingStage):
         )
         self.predictions_table = table_name
 
-        # Step 3: Improve predictions using distinguishing tokens
+        # Stage 2 - distinguishing-token reranking and selection.
+        # Take the top-N candidates per messy record and adjust each
+        # candidate's match_weight using token-level evidence from the
+        # shortlist (rewarding rare shared tokens, punishing tokens a rival
+        # candidate explains better, and penalising positional conflicts).
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_ddb,
             con=con,
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
             use_bigrams=self.improve_use_bigrams,
-            additional_columns_to_retain=self.additional_columns_to_retain,
+            additional_columns_to_retain=effective_columns_to_retain,
+            REWARD_MULTIPLIER=self.improve_reward_multiplier,
+            PUNISHMENT_MULTIPLIER=self.improve_punishment_multiplier,
+            MISSING_TOKEN_PENALTY=self.improve_missing_token_penalty,
+            POSITIONAL_CONFLICT_PENALTY=self.improve_positional_conflict_penalty,
+            BUSINESS_UNIT_CONFLICT_PENALTY=self.improve_business_unit_conflict_penalty,
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
-        # Step 4: Compute distinguishability and select best match per record
-        # This returns an unmaterialised relation
+        # Recompute distinguishability (the match-weight gap to the next-best
+        # candidate) on the reranked weights and rank candidates per record.
+        # This returns an unmaterialised relation.
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
@@ -176,7 +238,8 @@ class SplinkStage(MatchingStage):
         df_best.create(df_best_name)
         self.best_matches_table = df_best_name
 
-        # Step 5: Apply thresholds and project to standard columns
+        # Emit the top-ranked candidate per record, keeping only matches that
+        # clear the final match-weight and distinguishability thresholds.
         splink_label = MatchReason.SPLINK.value
 
         dist_filter = ""

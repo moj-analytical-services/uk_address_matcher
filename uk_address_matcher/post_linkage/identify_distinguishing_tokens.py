@@ -6,6 +6,12 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 # conflict on them as a structured penalty rather than a generic distinguishing token.
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT', 'REAR')"
 
+# A pure-digit token (e.g. a building or flat number). In UK addressing the premise
+# number is the single most decisive within-postcode discriminator, so the reranker
+# scores a numeric conflict separately from generic word tokens. A full match on digits
+# only keeps postcode fragments (always alphanumeric, e.g. "1AA") out of scope.
+_NUMERIC_TOKEN_REGEX = "[0-9]+"
+
 
 def improve_predictions_using_distinguishing_tokens(
     *,
@@ -17,10 +23,12 @@ def improve_predictions_using_distinguishing_tokens(
     additional_columns_to_retain: list[str] | None = None,
     REWARD_MULTIPLIER=3,
     PUNISHMENT_MULTIPLIER=1.5,
+    NUMERIC_PUNISHMENT_MULTIPLIER=4.0,
     BIGRAM_REWARD_MULTIPLIER=3,
     BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
     MISSING_TOKEN_PENALTY=0.1,
     POSITIONAL_CONFLICT_PENALTY=6.0,
+    BUSINESS_UNIT_CONFLICT_PENALTY=6.0,
 ):
     """
     Improve match predictions by identifying distinguishing tokens between addresses.
@@ -436,6 +444,55 @@ def improve_predictions_using_distinguishing_tokens(
 
     windowed_tokens = con.sql(sql_final)  # noqa: F841
 
+    # Structured discriminant conflict penalties (stage-2 reranking).
+    # Prefer the parsed `sub_premise_location` column when it has been retained
+    # through prediction; otherwise fall back to the token-derived positional
+    # descriptors. Penalties only fire when BOTH sides carry the signal and they
+    # disagree, so coarser records that simply lack the finer descriptor are not
+    # punished.
+    predict_columns = set(df_predict.columns)
+
+    if {"sub_premise_location_l", "sub_premise_location_r"} <= predict_columns:
+        positional_conflict_sql = f"""
+        - (CASE
+            WHEN sub_premise_location_l IS NOT NULL
+                AND sub_premise_location_r IS NOT NULL
+                AND sub_premise_location_l <> sub_premise_location_r
+            THEN {POSITIONAL_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+    else:
+        positional_conflict_sql = f"""
+        - (CASE
+            WHEN len(positional_tokens_l) > 0
+                AND len(positional_tokens_r) > 0
+                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
+            THEN {POSITIONAL_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+
+    business_unit_conflict_sql = ""
+    if {"business_unit_id_l", "business_unit_id_r"} <= predict_columns:
+        business_unit_type_clause = ""
+        if {"business_unit_type_l", "business_unit_type_r"} <= predict_columns:
+            business_unit_type_clause = (
+                "OR business_unit_type_l IS DISTINCT FROM business_unit_type_r"
+            )
+        business_unit_conflict_sql = f"""
+        - (CASE
+            WHEN business_unit_id_l IS NOT NULL
+                AND business_unit_id_r IS NOT NULL
+                AND (
+                    business_unit_id_l <> business_unit_id_r
+                    {business_unit_type_clause}
+                )
+            THEN {BUSINESS_UNIT_CONFLICT_PENALTY}
+            ELSE 0
+          END)
+        """
+
     # Calculate new match weights based on distinguishing tokens and bigrams
 
     sql = f"""
@@ -452,22 +509,32 @@ def improve_predictions_using_distinguishing_tokens(
             .list_transform(x -> 1/(x^2))
             .list_sum() *  {REWARD_MULTIPLIER}, 0)
 
-        -  ifnull(map_values(tokens_elsewhere_in_block_but_not_this)
-            .list_transform(x -> 1)
-            .list_sum() *  {PUNISHMENT_MULTIPLIER}, 0)
+        -- Generic (non-numeric) distinguishing tokens explained by a rival
+        -- candidate in the block but absent from this candidate.
+        - coalesce(len(
+            tokens_elsewhere_in_block_but_not_this
+                .map_entries()
+                .list_filter(e -> NOT regexp_full_match(e.key, '{_NUMERIC_TOKEN_REGEX}'))
+          ), 0) * {PUNISHMENT_MULTIPLIER}
+
+        -- Numeric distinguishing tokens (building / sub-premise numbers) that a
+        -- rival candidate in the block supplies but this candidate lacks. The
+        -- premise number is decisive in UK addressing, so this is penalised more
+        -- heavily than a generic word token.
+        - coalesce(len(
+            tokens_elsewhere_in_block_but_not_this
+                .map_entries()
+                .list_filter(e -> regexp_full_match(e.key, '{_NUMERIC_TOKEN_REGEX}'))
+          ), 0) * {NUMERIC_PUNISHMENT_MULTIPLIER}
 
         - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
 
-        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT).
-        -- Only fires when both sides carry a positional descriptor and they disagree;
-        -- silent otherwise so neutral/missing cases are unaffected.
-        - (CASE
-            WHEN len(positional_tokens_l) > 0
-                AND len(positional_tokens_r) > 0
-                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
-            THEN {POSITIONAL_CONFLICT_PENALTY}
-            ELSE 0
-          END)
+        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT)
+        -- and business-unit conflict (e.g. messy says UNIT 5, candidate says UNIT 6).
+        -- Only fire when both sides carry the signal and they disagree; silent
+        -- otherwise so neutral/missing cases are unaffected.
+        {positional_conflict_sql}
+        {business_unit_conflict_sql}
 
         -- Bigram-based adjustments
         {

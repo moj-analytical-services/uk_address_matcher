@@ -265,6 +265,7 @@ def _lookup_keys_in_inverted_index(strategies=None):
         SELECT
             dk.__messy_uid,
             ii.unique_ids AS __cand_ids,
+            len(ii.unique_ids) AS __posting_size,
             log2(
                 (SELECT n FROM __ukam_index_meta)::DOUBLE
                 / len(ii.unique_ids)
@@ -279,7 +280,8 @@ def _lookup_keys_in_inverted_index(strategies=None):
         SELECT
             __messy_uid,
             CAST(cid AS VARCHAR) AS __cand_id,
-            SUM(__key_idf) AS __score
+            SUM(__key_idf) AS __score,
+            SUM(CASE WHEN __posting_size = 1 THEN 1 ELSE 0 END) AS __unique_hits
         FROM {key_scores}, unnest(__cand_ids) AS t(cid)
         GROUP BY __messy_uid, CAST(cid AS VARCHAR)
         """
@@ -287,7 +289,14 @@ def _lookup_keys_in_inverted_index(strategies=None):
         score_map_sql = """
         SELECT
             __messy_uid,
-            map(list(__cand_id), list(__score)) AS signature_score_map
+            map(
+                list(__cand_id ORDER BY __cand_id),
+                list(__score ORDER BY __cand_id)
+            ) AS signature_score_map,
+            map(
+                list(__cand_id ORDER BY __cand_id),
+                list(__unique_hits ORDER BY __cand_id)
+            ) AS signature_unique_hits_map
         FROM {cand_scores}
         GROUP BY __messy_uid
         """
@@ -300,7 +309,11 @@ def _lookup_keys_in_inverted_index(strategies=None):
             COALESCE(
                 s.signature_score_map,
                 MAP([]::VARCHAR[], []::DOUBLE[])
-            ) AS signature_score_map
+            ) AS signature_score_map,
+            COALESCE(
+                s.signature_unique_hits_map,
+                MAP([]::VARCHAR[], []::BIGINT[])
+            ) AS signature_unique_hits_map
         FROM {base} AS base
         LEFT JOIN {deduplicated} AS d ON base.unique_id = d.__messy_uid
         LEFT JOIN {score_map} AS s ON base.unique_id = s.__messy_uid
@@ -345,7 +358,8 @@ def _set_exploding_unique_ids_to_self():
     SELECT
         *,
         [unique_id] AS exploding_unique_ids,
-        MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map
+        MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map,
+        MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map
     FROM {input}
     """
     return sql
