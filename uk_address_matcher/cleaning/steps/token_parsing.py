@@ -203,6 +203,10 @@ def _parse_out_flat_position_and_letter():
     # not normalised to FLAT upstream, so it (and friends) must be recognised
     # here or their unit numbers/letters are lost entirely.
     flat_keyword = r"(?:FLAT|APARTMENT|MAISONETTE|PENTHOUSE)"
+    # Common plural shells can still carry a sub-premise letter or floor cue,
+    # e.g. "APARTMENTS 1C", but should not by themselves promote the leading
+    # digit to flat_number.
+    flat_keyword_with_plural = r"(?:FLATS?|APARTMENTS?|MAISONETTES?|PENTHOUSES?)"
     # Optional "NO"/"NUMBER" filler between the keyword and the number, e.g.
     # "FLAT NO 1", "APARTMENT NUMBER 3".
     flat_number_filler = r"(?:NO\.?\s+|NUMBER\s+)?"
@@ -221,9 +225,9 @@ def _parse_out_flat_position_and_letter():
     )
     # FLAT 12A / FLAT 12 A / APARTMENT 12A
     flat_letter_after_num_after_flat = (
-        rf"\b{flat_keyword}\s+{flat_number_filler}\d{{1,4}}\s*([A-Za-z])\b"
+        rf"\b{flat_keyword_with_plural}\s+{flat_number_filler}\d{{1,4}}\s*([A-Za-z])\b"
     )
-    flat_letter_after_flat = rf"\b{flat_keyword}\s+([A-Za-z])\b"  # FLAT A
+    flat_letter_after_flat = rf"\b{flat_keyword_with_plural}\s+([A-Za-z])\b"  # FLAT A
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
@@ -237,9 +241,9 @@ def _parse_out_flat_position_and_letter():
         r"SEVENTH|EIGHTH|NINTH|TENTH|TOP|UPPER|LOWER|ATTIC|LOFT)"
     )
     # "FLAT GROUND", "FLAT FIRST", "APARTMENT UPPER"
-    floor_word_after_flat = rf"\b{flat_keyword}\s+({adjacent_floor_word})\b"
+    floor_word_after_flat = rf"\b{flat_keyword_with_plural}\s+({adjacent_floor_word})\b"
     # "TOP FLAT", "UPPER FLAT", "GROUND FLAT", "BASEMENT MAISONETTE"
-    floor_word_before_flat = rf"\b({adjacent_floor_word})\s+{flat_keyword}\b"
+    floor_word_before_flat = rf"\b({adjacent_floor_word})\s+{flat_keyword_with_plural}\b"
     # Numeric ordinal floors, e.g. "1ST FLOOR", "2ND FLOORS", "1ST-2ND FLOOR".
     ordinal_floor = r"\b([1-9])(?:ST|ND|RD|TH)\s*-?\s*(?:\d(?:ST|ND|RD|TH)\s+)?FLOORS?\b"
     # PENTHOUSE doubles as a top-floor positional even without the word FLOOR.
