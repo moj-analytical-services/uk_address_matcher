@@ -6,6 +6,12 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 # conflict on them as a structured penalty rather than a generic distinguishing token.
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT', 'REAR')"
 
+# A pure-digit token (e.g. a building or flat number). In UK addressing the premise
+# number is the single most decisive within-postcode discriminator, so the reranker
+# scores a numeric conflict separately from generic word tokens. A full match on digits
+# only keeps postcode fragments (always alphanumeric, e.g. "1AA") out of scope.
+_NUMERIC_TOKEN_REGEX = "[0-9]+"
+
 
 def improve_predictions_using_distinguishing_tokens(
     *,
@@ -17,6 +23,7 @@ def improve_predictions_using_distinguishing_tokens(
     additional_columns_to_retain: list[str] | None = None,
     REWARD_MULTIPLIER=3,
     PUNISHMENT_MULTIPLIER=1.5,
+    NUMERIC_PUNISHMENT_MULTIPLIER=4.0,
     BIGRAM_REWARD_MULTIPLIER=3,
     BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
     MISSING_TOKEN_PENALTY=0.1,
@@ -502,9 +509,23 @@ def improve_predictions_using_distinguishing_tokens(
             .list_transform(x -> 1/(x^2))
             .list_sum() *  {REWARD_MULTIPLIER}, 0)
 
-        -  ifnull(map_values(tokens_elsewhere_in_block_but_not_this)
-            .list_transform(x -> 1)
-            .list_sum() *  {PUNISHMENT_MULTIPLIER}, 0)
+        -- Generic (non-numeric) distinguishing tokens explained by a rival
+        -- candidate in the block but absent from this candidate.
+        - coalesce(len(
+            tokens_elsewhere_in_block_but_not_this
+                .map_entries()
+                .list_filter(e -> NOT regexp_full_match(e.key, '{_NUMERIC_TOKEN_REGEX}'))
+          ), 0) * {PUNISHMENT_MULTIPLIER}
+
+        -- Numeric distinguishing tokens (building / sub-premise numbers) that a
+        -- rival candidate in the block supplies but this candidate lacks. The
+        -- premise number is decisive in UK addressing, so this is penalised more
+        -- heavily than a generic word token.
+        - coalesce(len(
+            tokens_elsewhere_in_block_but_not_this
+                .map_entries()
+                .list_filter(e -> regexp_full_match(e.key, '{_NUMERIC_TOKEN_REGEX}'))
+          ), 0) * {NUMERIC_PUNISHMENT_MULTIPLIER}
 
         - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
 
