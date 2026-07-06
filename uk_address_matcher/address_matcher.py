@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -17,7 +18,16 @@ from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 from uk_address_matcher.post_linkage.match_result import MatchResult
-from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
+from uk_address_matcher.prepare_canonical import (
+    PREPARED_REALTIME_DUCKDB_FILENAME,
+    REALTIME_CANONICAL_TABLE,
+    REALTIME_INVERTED_INDEX_HASHED_TABLE,
+    REALTIME_INVERTED_INDEX_TABLE,
+    REALTIME_TERM_FREQUENCIES_TABLE,
+    _escape_sql_string,
+    load_prepared_canonical_data,
+    validate_realtime_prepared_folder,
+)
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _register_input_relation_once,
@@ -38,6 +48,36 @@ def _default_stages() -> list[MatchingStage]:
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
     return [ExactMatchStage(), SplinkStage()]
+
+
+def _default_realtime_stages() -> list[MatchingStage]:
+    """Return the realtime stage sequence: exact match then Splink."""
+    from uk_address_matcher.linking_model.matching.stages import ExactMatchStage
+
+    return [ExactMatchStage(), SplinkStage()]
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _to_realtime_stage(stage: MatchingStage) -> MatchingStage:
+    from uk_address_matcher.linking_model.matching.stages.realtime_splink import (
+        _RealTimeSplinkStage,
+    )
+
+    if isinstance(stage, _RealTimeSplinkStage):
+        return stage
+
+    if not isinstance(stage, SplinkStage):
+        return stage
+
+    stage_kwargs = {
+        field.name: getattr(stage, field.name)
+        for field in fields(SplinkStage)
+        if field.init
+    }
+    return _RealTimeSplinkStage(**stage_kwargs)
 
 
 class AddressMatcher:
@@ -370,3 +410,137 @@ class AddressMatcher:
                 continue
 
             _drop_table_and_registered_aliases(self.con, table_name)
+
+
+class RealTimeAddressMatcher(AddressMatcher):
+    """Realtime matcher backed by a prepared folder with ART-indexed blockers.
+
+    Unlike ``AddressMatcher``, this entry point requires canonical data to be
+    prepared by ``prepare_canonical_folder_for_realtime()``. That opt-in keeps
+    the normal batch path free of the extra DuckDB database and ART indexes.
+    """
+
+    def __init__(
+        self,
+        canonical_addresses: str | Path,
+        addresses_to_match: Union[
+            duckdb.DuckDBPyRelation,
+            list[AddressRecord],
+            list[dict],
+        ],
+        *,
+        canonical_address_filter: str | None = None,
+        con: duckdb.DuckDBPyConnection,
+        stages: Optional[list[MatchingStage]] = None,
+        debug_options: Optional[DebugOptions] = None,
+        cleaning_num_chunks: int = 10,
+    ):
+        if not isinstance(canonical_addresses, (str, Path)):
+            raise TypeError(
+                "RealTimeAddressMatcher requires a local folder created by "
+                "prepare_canonical_folder_for_realtime(). Use AddressMatcher for "
+                "raw canonical relations."
+            )
+
+        super().__init__(
+            canonical_addresses=canonical_addresses,
+            addresses_to_match=addresses_to_match,
+            canonical_address_filter=canonical_address_filter,
+            con=con,
+            stages=stages if stages is not None else _default_realtime_stages(),
+            debug_options=debug_options,
+            cleaning_num_chunks=cleaning_num_chunks,
+        )
+        self.stages = [_to_realtime_stage(stage) for stage in self.stages]
+        self._realtime_schema_alias = f"ukam_realtime_{_uid()}"
+        self._realtime_attached = False
+        self._realtime_inverted_index: duckdb.DuckDBPyRelation | None = None
+        self._realtime_inverted_index_hashed: duckdb.DuckDBPyRelation | None = None
+
+    @property
+    def _inverted_index(self) -> duckdb.DuckDBPyRelation | None:
+        if self._realtime_inverted_index is not None:
+            return self._realtime_inverted_index
+        return super()._inverted_index
+
+    def _resolve_canonical_data(self) -> None:
+        if not isinstance(self._raw_canonical, (str, Path)):
+            raise TypeError(
+                "RealTimeAddressMatcher requires a local folder created by "
+                "prepare_canonical_folder_for_realtime()."
+            )
+
+        db_path = validate_realtime_prepared_folder(self._raw_canonical, con=self.con)
+        if not self._realtime_attached:
+            escaped_db_path = _escape_sql_string(str(db_path))
+            alias = _quote_identifier(self._realtime_schema_alias)
+            self.con.execute(f"ATTACH '{escaped_db_path}' AS {alias} (READ_ONLY)")
+            self._realtime_attached = True
+
+        alias = _quote_identifier(self._realtime_schema_alias)
+        canonical_table = f"__ukam__tmp_realtime_canonical_{_uid()}"
+        tf_table = f"__ukam__tmp_realtime_tf_{_uid()}"
+        inverted_index_table = f"__ukam__tmp_realtime_inverted_index_{_uid()}"
+        inverted_index_hashed_table = (
+            f"__ukam__tmp_realtime_inverted_index_hashed_{_uid()}"
+        )
+
+        self.con.execute(f"""
+            CREATE TEMP TABLE {canonical_table} AS
+            SELECT *, list_value(unique_id) AS exploding_unique_ids
+            FROM {alias}.{_quote_identifier(REALTIME_CANONICAL_TABLE)}
+        """)
+        self.con.execute(f"""
+            CREATE TEMP TABLE {tf_table} AS
+            SELECT * FROM {alias}.{_quote_identifier(REALTIME_TERM_FREQUENCIES_TABLE)}
+        """)
+        self.con.execute(f"""
+            CREATE TEMP TABLE {inverted_index_table} AS
+            SELECT * FROM {alias}.{_quote_identifier(REALTIME_INVERTED_INDEX_TABLE)}
+        """)
+        self.con.execute(f"""
+            CREATE TEMP TABLE {inverted_index_hashed_table} AS
+            SELECT *
+            FROM {alias}.{_quote_identifier(REALTIME_INVERTED_INDEX_HASHED_TABLE)}
+        """)
+        self.con.execute(f"DETACH {alias}")
+        self._realtime_attached = False
+
+        self._canonical_clean = self.con.table(canonical_table)
+        if self.canonical_address_filter is not None:
+            self._canonical_clean = self._canonical_clean.filter(
+                self.canonical_address_filter
+            )
+
+        self._tf_table = self.con.table(tf_table)
+        self._register_inverted_index(self.con.table(inverted_index_table))
+        self._realtime_inverted_index = None
+        self._realtime_inverted_index_hashed = self.con.table(inverted_index_hashed_table)
+
+        self._configure_realtime_stages()
+        logger.debug(
+            "Loaded realtime prepared canonical data from '%s/%s'",
+            self._raw_canonical,
+            PREPARED_REALTIME_DUCKDB_FILENAME,
+        )
+
+    def _configure_realtime_stages(self) -> None:
+        from uk_address_matcher.linking_model.matching.stages.realtime_splink import (
+            _RealTimeSplinkStage,
+        )
+
+        for stage in self.stages:
+            if isinstance(stage, _RealTimeSplinkStage):
+                stage.realtime_inverted_index_hashed = (
+                    self._realtime_inverted_index_hashed
+                )
+
+    def _resolve_messy_data(self) -> None:
+        self._messy_clean = prepare_data_for_matching(
+            self._raw_messy,
+            con=self.con,
+            num_of_chunks=self.cleaning_num_chunks,
+            term_frequency_lookup=self._tf_table,
+            dataset_role="messy",
+            debug_options=self.debug_options,
+        )
