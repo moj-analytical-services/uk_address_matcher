@@ -734,6 +734,22 @@
           "is_null_level": true
         },
         {
+          "sql_condition": "list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 2 AND numeric_token_1_l = numeric_token_1_r AND NOT (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r)",
+          "label_for_charts": "2+ unique signature hits + number agreement",
+          "m_probability": 256.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 1 AND numeric_token_1_l = numeric_token_1_r AND NOT (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r)",
+          "label_for_charts": "1 unique signature hit + number agreement",
+          "m_probability": 80.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 40",
           "label_for_charts": "Signature IDF sum >= 40 (very strong)",
           "m_probability": 64.0,
