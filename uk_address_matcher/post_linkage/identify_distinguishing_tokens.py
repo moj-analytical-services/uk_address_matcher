@@ -21,6 +21,15 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
     MISSING_TOKEN_PENALTY=0.1,
     POSITIONAL_CONFLICT_PENALTY=6.0,
+    IDENTITY_RESIDUE_BONUS_BITS=0.0,
+    RAW_NO_DIGIT_BIGRAM_REWARD_CAP: float | None = None,
+    RAW_NO_DIGIT_RARE_MISSING_POSITIVE_CAP: float | None = None,
+    RAW_NO_DIGIT_ROLE_CONFLICT_POSITIVE_CAP: float | None = None,
+    SUB_PREMISE_CONFLICT_POSITIVE_CAP: float | None = None,
+    SUB_PREMISE_PARTIAL_POSITIVE_CAP: float | None = None,
+    GUARD_RAW_NO_DIGIT_RARE_IDENTITY=False,
+    GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_MATCH_WEIGHT=8.0,
+    GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_UPLIFT=6.0,
 ):
     """
     Improve match predictions by identifying distinguishing tokens between addresses.
@@ -44,6 +53,33 @@ def improve_predictions_using_distinguishing_tokens(
 
     if "ukam_label_r" in df_predict.columns:
         add_cols_select += "ukam_label_r, "
+
+    flat_identity_l_expr = (
+        "flat_identity_l" if "flat_identity_l" in df_predict.columns else "NULL::VARCHAR"
+    )
+    flat_identity_r_expr = (
+        "flat_identity_r" if "flat_identity_r" in df_predict.columns else "NULL::VARCHAR"
+    )
+    sub_premise_location_l_expr = (
+        "sub_premise_location_l"
+        if "sub_premise_location_l" in df_predict.columns
+        else "NULL::VARCHAR"
+    )
+    sub_premise_location_r_expr = (
+        "sub_premise_location_r"
+        if "sub_premise_location_r" in df_predict.columns
+        else "NULL::VARCHAR"
+    )
+    has_flat_indicator_l_expr = (
+        "has_flat_indicator_l"
+        if "has_flat_indicator_l" in df_predict.columns
+        else "NULL::BOOLEAN"
+    )
+    has_flat_indicator_r_expr = (
+        "has_flat_indicator_r"
+        if "has_flat_indicator_r" in df_predict.columns
+        else "NULL::BOOLEAN"
+    )
 
     # Split the large SQL query into separate CTE steps
 
@@ -103,6 +139,14 @@ def improve_predictions_using_distinguishing_tokens(
         clean_full_address_l
             .trim()
             .upper()
+            .regexp_split_to_array('\\s+') AS clean_full_address_l_tokens,
+        clean_full_address_r
+            .trim()
+            .upper()
+            .regexp_split_to_array('\\s+') AS clean_full_address_r_tokens,
+        clean_full_address_l
+            .trim()
+            .upper()
             .regexp_split_to_array('\\s+')
             .list_reverse()
             .list_filter((tok, i) -> not (
@@ -140,6 +184,12 @@ def improve_predictions_using_distinguishing_tokens(
     SELECT DISTINCT
         ukam_address_id_r,
 
+        __token_address_r
+            .trim()
+            .upper()
+            .regexp_split_to_array('\\s+')
+            as identity_tokens_r,
+
         concat_ws(' ', __token_address_r, postcode_r)
             .trim()
             .upper()
@@ -154,10 +204,29 @@ def improve_predictions_using_distinguishing_tokens(
     SELECT
         t.ukam_address_id_r,
         t.tokens_r,
+        t.identity_tokens_r,
 
         -----------------
         -- TOKENS SECTION
         -----------------
+
+        __token_address_l
+                .trim()
+                .upper()
+                .regexp_split_to_array('\\s+')
+                .array_agg()
+                .flatten()
+                as identity_tokens_in_block_l,
+
+        list_aggregate(identity_tokens_in_block_l, 'histogram')
+            AS hist_all_identity_tokens_in_block_l,
+
+        map_from_entries(
+                list_filter(
+                    map_entries(hist_all_identity_tokens_in_block_l),
+                    x -> list_contains(identity_tokens_r, x.key)
+                )
+            ) AS hist_overlapping_identity_tokens_r_block_l,
 
         concat_ws(' ', __token_address_l, postcode_l)
                 .trim()
@@ -219,7 +288,7 @@ def improve_predictions_using_distinguishing_tokens(
 
     FROM remove_common_end_tokens m
     JOIN tokenise_r t USING (ukam_address_id_r)
-    GROUP BY t.ukam_address_id_r, t.tokens_r
+    GROUP BY t.ukam_address_id_r, t.tokens_r, t.identity_tokens_r
     """
     tokens = con.sql(sql_tokens)  # noqa: F841
 
@@ -241,6 +310,12 @@ def improve_predictions_using_distinguishing_tokens(
         -- TOKENS SECTION
         -----------------
 
+        __token_address_l
+            .trim()
+            .upper()
+            .regexp_split_to_array('\\s+') AS identity_tokens_l,
+        t.identity_tokens_r,
+
         concat_ws(' ', __token_address_l, postcode_l)
             .trim()
             .upper()
@@ -256,6 +331,13 @@ def improve_predictions_using_distinguishing_tokens(
                 x -> list_contains(tokens_l, x.key)
             )
         ) AS overlapping_tokens_this_l_and_r,
+
+        map_from_entries(
+            list_filter(
+                map_entries(hist_overlapping_identity_tokens_r_block_l),
+                x -> list_contains(identity_tokens_l, x.key)
+            )
+        ) AS overlapping_identity_tokens_this_l_and_r,
 
         t.hist_all_tokens_in_block_l,
         t.hist_overlapping_tokens_r_block_l,
@@ -326,6 +408,18 @@ def improve_predictions_using_distinguishing_tokens(
 
         postcode_l,
         postcode_r,
+        __token_address_l AS actual_clean_full_address_l_used_by_reranker,
+        __token_address_r AS actual_clean_full_address_r_used_by_reranker,
+        list_filter(clean_full_address_l_tokens, tok -> tok NOT IN identity_tokens_l)
+            AS common_end_tokens_removed_l,
+        list_filter(clean_full_address_r_tokens, tok -> tok NOT IN t.identity_tokens_r)
+            AS common_end_tokens_removed_r,
+            {flat_identity_l_expr} AS flat_identity_l,
+            {flat_identity_r_expr} AS flat_identity_r,
+            {sub_premise_location_l_expr} AS sub_premise_location_l,
+            {sub_premise_location_r_expr} AS sub_premise_location_r,
+            {has_flat_indicator_l_expr} AS has_flat_indicator_l,
+            {has_flat_indicator_r_expr} AS has_flat_indicator_r,
         {add_cols_select}
     FROM remove_common_end_tokens m
     LEFT JOIN tokens t USING (ukam_address_id_r)
@@ -371,12 +465,56 @@ def improve_predictions_using_distinguishing_tokens(
         -----------------
 
         overlapping_tokens_this_l_and_r,
+        overlapping_identity_tokens_this_l_and_r,
         tokens_elsewhere_in_block_but_not_this,
         hist_overlapping_tokens_r_block_l,
         hist_all_tokens_in_block_l,
         missing_tokens,
+        identity_tokens_l,
+        identity_tokens_r,
+        tokens_l,
+        tokens_r,
+        NOT regexp_matches(lower(coalesce(original_address_concat_r, '')), '[0-9]')
+            AS source_no_digit_excluding_postcode,
+        list_filter(
+            list_filter(identity_tokens_r, tok -> tok NOT IN identity_tokens_l),
+            tok -> coalesce(tokens_elsewhere_in_block_but_not_this[tok], 0) = 1
+        ) AS rare_missing_identity_tokens,
+        CASE
+            WHEN len(identity_tokens_r) = 0 THEN 0.0
+            ELSE len(map_keys(overlapping_identity_tokens_this_l_and_r))::DOUBLE
+                / len(identity_tokens_r)
+        END AS source_identity_recall,
+        CASE
+            WHEN len(identity_tokens_l) = 0 OR len(identity_tokens_r) = 0 THEN false
+            WHEN len(list_intersect(identity_tokens_l, identity_tokens_r)) > 0 THEN false
+            ELSE (
+                len(
+                    list_intersect(
+                        identity_tokens_l,
+                        ['FARM', 'FARMHOUSE', 'BARN', 'COTTAGE', 'BUNGALOW', 'CARAVAN', 'FLAT', 'ANNEXE', 'ANNEX', 'LODGE', 'HOUSE', 'HOTEL', 'SCHOOL', 'CHURCH', 'PRESBYTERY']
+                    )
+                ) > 0
+                AND len(
+                    list_intersect(
+                        identity_tokens_r,
+                        ['FARM', 'FARMHOUSE', 'BARN', 'COTTAGE', 'BUNGALOW', 'CARAVAN', 'FLAT', 'ANNEXE', 'ANNEX', 'LODGE', 'HOUSE', 'HOTEL', 'SCHOOL', 'CHURCH', 'PRESBYTERY']
+                    )
+                ) > 0
+            )
+        END AS role_conflict,
+        actual_clean_full_address_l_used_by_reranker,
+        actual_clean_full_address_r_used_by_reranker,
+        common_end_tokens_removed_l,
+        common_end_tokens_removed_r,
         positional_tokens_l,
         positional_tokens_r,
+            flat_identity_l,
+            flat_identity_r,
+            sub_premise_location_l,
+            sub_premise_location_r,
+            has_flat_indicator_l,
+            has_flat_indicator_r,
 
         {
         '''
@@ -441,63 +579,369 @@ def improve_predictions_using_distinguishing_tokens(
     sql = f"""
     CREATE OR REPLACE TABLE {_distinguishing_token_matches_table} AS
 
+    WITH scored AS (
+        SELECT
+            *,
+            CASE
+                WHEN len(map_keys(overlapping_identity_tokens_this_l_and_r)) = 0 THEN NULL
+                ELSE list_sort(map_keys(overlapping_identity_tokens_this_l_and_r))
+                    .array_to_string('|')
+            END AS identity_residue_key,
+            len(map_keys(overlapping_identity_tokens_this_l_and_r))
+                AS shared_identity_token_count,
+            len(identity_tokens_r) AS source_identity_token_count
+        FROM windowed_tokens
+    ),
+    scored_with_bonus AS (
+        SELECT
+            *,
+            COUNT(*) OVER (
+                PARTITION BY ukam_address_id_r, identity_residue_key
+            ) AS candidate_surface_residue_count,
+            CASE
+                WHEN {IDENTITY_RESIDUE_BONUS_BITS} <= 0 THEN 0.0
+                WHEN postcode_l IS DISTINCT FROM postcode_r THEN 0.0
+                WHEN source_identity_token_count < 2 THEN 0.0
+                WHEN shared_identity_token_count < 2 THEN 0.0
+                WHEN identity_residue_key IS NULL THEN 0.0
+                WHEN candidate_surface_residue_count != 1 THEN 0.0
+                WHEN shared_identity_token_count::DOUBLE / source_identity_token_count < 0.95 THEN 0.0
+                ELSE {IDENTITY_RESIDUE_BONUS_BITS}
+            END AS identity_residue_bonus_bits
+        FROM scored
+    ),
+    raw_adjustments AS (
+        SELECT
+            unique_id_l,
+            unique_id_r,
+            ukam_address_id_r,
+            ukam_address_id_l,
+            match_weight AS match_weight_original,
+            ifnull(map_values(overlapping_tokens_this_l_and_r)
+                .list_transform(x -> 1/(x^2))
+                .list_sum() * {REWARD_MULTIPLIER}, 0) AS token_reward,
+            ifnull(map_values(tokens_elsewhere_in_block_but_not_this)
+                .list_transform(x -> 1)
+                .list_sum() * {PUNISHMENT_MULTIPLIER}, 0) AS token_punishment,
+            (len(missing_tokens) * {MISSING_TOKEN_PENALTY}) AS missing_token_penalty,
+            (CASE
+                WHEN len(positional_tokens_l) > 0
+                    AND len(positional_tokens_r) > 0
+                    AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
+                THEN {POSITIONAL_CONFLICT_PENALTY}
+                ELSE 0
+              END) AS positional_conflict_penalty,
+            {
+        f'''
+            ifnull(map_values(overlapping_bigrams_this_l_and_r_filtered)
+                .list_transform(x -> 1/(x^2))
+                .list_sum() * {BIGRAM_REWARD_MULTIPLIER}, 0) AS bigram_reward_raw,
+            ifnull(map_values(bigrams_elsewhere_in_block_but_not_this_filtered)
+                .list_transform(x -> 1)
+                .list_sum() * {BIGRAM_PUNISHMENT_MULTIPLIER}, 0) AS bigram_punishment,
+            '''
+        if use_bigrams
+        else '''
+            0.0 AS bigram_reward_raw,
+            0.0 AS bigram_punishment,
+            '''
+    }
+            source_no_digit_excluding_postcode,
+            rare_missing_identity_tokens,
+            source_identity_recall,
+            role_conflict,
+            identity_residue_bonus_bits,
+            identity_residue_key,
+            candidate_surface_residue_count,
+            shared_identity_token_count,
+            source_identity_token_count,
+            overlapping_tokens_this_l_and_r,
+            overlapping_identity_tokens_this_l_and_r,
+            tokens_elsewhere_in_block_but_not_this,
+            missing_tokens,
+            identity_tokens_l,
+            identity_tokens_r,
+            tokens_l,
+            tokens_r,
+            actual_clean_full_address_l_used_by_reranker,
+            actual_clean_full_address_r_used_by_reranker,
+            common_end_tokens_removed_l,
+            common_end_tokens_removed_r,
+            positional_tokens_l,
+            positional_tokens_r,
+            flat_identity_l,
+            flat_identity_r,
+            sub_premise_location_l,
+            sub_premise_location_r,
+            has_flat_indicator_l,
+            has_flat_indicator_r,
+            original_address_concat_l,
+            postcode_l,
+            original_address_concat_r,
+            postcode_r,
+            {
+        '''
+            overlapping_bigrams_this_l_and_r,
+            bigrams_elsewhere_in_block_but_not_this,
+            overlapping_bigrams_this_l_and_r_filtered,
+            bigrams_elsewhere_in_block_but_not_this_filtered,
+            '''
+        if use_bigrams
+        else ""
+    }
+            {add_cols_select}
+        FROM scored_with_bonus
+    ),
+    promoted_adjustments AS (
+        SELECT
+            *,
+            CASE
+                WHEN source_no_digit_excluding_postcode
+                    AND {
+        "NULL"
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is None
+        else str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+    } IS NOT NULL
+                THEN least(
+                    bigram_reward_raw,
+                    {
+        str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is not None
+        else "0.0"
+    }
+                )
+                ELSE bigram_reward_raw
+            END AS bigram_reward,
+            CASE
+                WHEN source_no_digit_excluding_postcode
+                    AND {
+        "NULL"
+        if RAW_NO_DIGIT_RARE_MISSING_POSITIVE_CAP is None
+        else str(RAW_NO_DIGIT_RARE_MISSING_POSITIVE_CAP)
+    } IS NOT NULL
+                    AND len(rare_missing_identity_tokens) > 0
+                THEN least(
+                    (
+                        token_reward - token_punishment - missing_token_penalty - positional_conflict_penalty
+                        + CASE
+                            WHEN source_no_digit_excluding_postcode
+                                AND {
+        "NULL"
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is None
+        else str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+    } IS NOT NULL
+                            THEN least(
+                                bigram_reward_raw,
+                                {
+        str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is not None
+        else "0.0"
+    }
+                            )
+                            ELSE bigram_reward_raw
+                          END
+                        - bigram_punishment
+                        + identity_residue_bonus_bits
+                    ),
+                    {
+        str(RAW_NO_DIGIT_RARE_MISSING_POSITIVE_CAP)
+        if RAW_NO_DIGIT_RARE_MISSING_POSITIVE_CAP is not None
+        else "0.0"
+    }
+                )
+                ELSE (
+                    token_reward - token_punishment - missing_token_penalty - positional_conflict_penalty
+                    + CASE
+                        WHEN source_no_digit_excluding_postcode
+                            AND {
+        "NULL"
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is None
+        else str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+    } IS NOT NULL
+                        THEN least(
+                            bigram_reward_raw,
+                            {
+        str(RAW_NO_DIGIT_BIGRAM_REWARD_CAP)
+        if RAW_NO_DIGIT_BIGRAM_REWARD_CAP is not None
+        else "0.0"
+    }
+                        )
+                        ELSE bigram_reward_raw
+                      END
+                    - bigram_punishment
+                    + identity_residue_bonus_bits
+                )
+            END AS mw_adjustment_after_rare_missing_cap
+        FROM raw_adjustments
+    ),
+    final_scored AS (
+        SELECT
+            *,
+            CASE
+                WHEN source_no_digit_excluding_postcode
+                    AND {
+        "NULL"
+        if RAW_NO_DIGIT_ROLE_CONFLICT_POSITIVE_CAP is None
+        else str(RAW_NO_DIGIT_ROLE_CONFLICT_POSITIVE_CAP)
+    } IS NOT NULL
+                    AND role_conflict
+                THEN least(
+                    mw_adjustment_after_rare_missing_cap,
+                    {
+        str(RAW_NO_DIGIT_ROLE_CONFLICT_POSITIVE_CAP)
+        if RAW_NO_DIGIT_ROLE_CONFLICT_POSITIVE_CAP is not None
+        else "0.0"
+    }
+                )
+                ELSE mw_adjustment_after_rare_missing_cap
+            END AS mw_adjustment_after_role_conflict_cap,
+            CASE
+                WHEN flat_identity_l IS NOT NULL
+                    AND flat_identity_r IS NOT NULL
+                    AND flat_identity_l != flat_identity_r
+                THEN true
+                WHEN sub_premise_location_l IS NOT NULL
+                    AND sub_premise_location_r IS NOT NULL
+                    AND sub_premise_location_l != sub_premise_location_r
+                THEN true
+                ELSE false
+            END AS structured_sub_premise_conflict,
+            CASE
+                WHEN flat_identity_l IS NULL
+                    AND flat_identity_r IS NULL
+                    AND sub_premise_location_l IS NULL
+                    AND sub_premise_location_r IS NULL
+                    AND coalesce(has_flat_indicator_l, false) = false
+                    AND coalesce(has_flat_indicator_r, false) = false
+                THEN false
+                WHEN flat_identity_l IS NULL
+                    OR flat_identity_r IS NULL
+                    OR sub_premise_location_l IS NULL
+                    OR sub_premise_location_r IS NULL
+                    OR coalesce(has_flat_indicator_l, false)
+                        != coalesce(has_flat_indicator_r, false)
+                THEN true
+                ELSE false
+            END AS structured_sub_premise_partial
+        FROM promoted_adjustments
+    ),
+    capped_structured_sub_premise AS (
+        SELECT
+            *,
+            CASE
+                WHEN structured_sub_premise_conflict
+                    AND {
+        "NULL"
+        if SUB_PREMISE_CONFLICT_POSITIVE_CAP is None
+        else str(SUB_PREMISE_CONFLICT_POSITIVE_CAP)
+    } IS NOT NULL
+                THEN least(
+                    mw_adjustment_after_role_conflict_cap,
+                    {
+        str(SUB_PREMISE_CONFLICT_POSITIVE_CAP)
+        if SUB_PREMISE_CONFLICT_POSITIVE_CAP is not None
+        else "0.0"
+    }
+                )
+                WHEN structured_sub_premise_partial
+                    AND {
+        "NULL"
+        if SUB_PREMISE_PARTIAL_POSITIVE_CAP is None
+        else str(SUB_PREMISE_PARTIAL_POSITIVE_CAP)
+    } IS NOT NULL
+                THEN least(
+                    mw_adjustment_after_role_conflict_cap,
+                    {
+        str(SUB_PREMISE_PARTIAL_POSITIVE_CAP)
+        if SUB_PREMISE_PARTIAL_POSITIVE_CAP is not None
+        else "0.0"
+    }
+                )
+                ELSE mw_adjustment_after_role_conflict_cap
+            END AS mw_adjustment
+        FROM final_scored
+    )
     SELECT
         unique_id_l,
         unique_id_r,
         ukam_address_id_r,
         ukam_address_id_l,
-
-        -- Token-based adjustments
-        ifnull(map_values(overlapping_tokens_this_l_and_r)
-            .list_transform(x -> 1/(x^2))
-            .list_sum() *  {REWARD_MULTIPLIER}, 0)
-
-        -  ifnull(map_values(tokens_elsewhere_in_block_but_not_this)
-            .list_transform(x -> 1)
-            .list_sum() *  {PUNISHMENT_MULTIPLIER}, 0)
-
-        - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
-
-        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT).
-        -- Only fires when both sides carry a positional descriptor and they disagree;
-        -- silent otherwise so neutral/missing cases are unaffected.
-        - (CASE
-            WHEN len(positional_tokens_l) > 0
-                AND len(positional_tokens_r) > 0
-                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
-            THEN {POSITIONAL_CONFLICT_PENALTY}
-            ELSE 0
-          END)
-
-        -- Bigram-based adjustments
-        {
-        f'''
-        + ifnull(map_values(overlapping_bigrams_this_l_and_r_filtered)
-            .list_transform(x -> 1/(x^2))
-            .list_sum() * {BIGRAM_REWARD_MULTIPLIER}, 0)
-        -  ifnull(map_values(bigrams_elsewhere_in_block_but_not_this_filtered)
-            .list_transform(x -> 1)
-            .list_sum() *  {BIGRAM_PUNISHMENT_MULTIPLIER}, 0)
-
-
-        '''
-        if use_bigrams
-        else ""
+        mw_adjustment,
+        match_weight_original,
+        token_reward,
+        token_punishment,
+        missing_token_penalty,
+        positional_conflict_penalty,
+        bigram_reward,
+        bigram_punishment,
+        identity_residue_bonus_bits,
+        identity_residue_key,
+        candidate_surface_residue_count,
+        shared_identity_token_count,
+        source_identity_token_count,
+        CASE
+            WHEN {str(bool(GUARD_RAW_NO_DIGIT_RARE_IDENTITY)).upper()}
+                AND source_no_digit_excluding_postcode
+                AND len(rare_missing_identity_tokens) > 0
+                AND match_weight_original >= {
+        GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_MATCH_WEIGHT
     }
-        as mw_adjustment,
-        match_weight AS match_weight_original,
-        (match_weight_original + mw_adjustment) AS match_weight,
-
-        -- Token-related fields
+                AND mw_adjustment >= {GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_UPLIFT}
+            THEN 0.0
+            ELSE mw_adjustment
+        END AS mw_adjustment_effective,
+        CASE
+            WHEN {str(bool(GUARD_RAW_NO_DIGIT_RARE_IDENTITY)).upper()}
+                AND source_no_digit_excluding_postcode
+                AND len(rare_missing_identity_tokens) > 0
+                AND match_weight_original >= {
+        GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_MATCH_WEIGHT
+    }
+                AND mw_adjustment >= {GUARD_RAW_NO_DIGIT_RARE_IDENTITY_MIN_UPLIFT}
+            THEN true
+            ELSE false
+        END AS raw_no_digit_rare_identity_guard_fired,
+        (match_weight_original + mw_adjustment_effective) AS match_weight,
         overlapping_tokens_this_l_and_r,
+        overlapping_identity_tokens_this_l_and_r,
         tokens_elsewhere_in_block_but_not_this,
         missing_tokens,
+        identity_tokens_l,
+        identity_tokens_r,
+        tokens_l,
+        tokens_r,
+        source_no_digit_excluding_postcode,
+        rare_missing_identity_tokens,
+        actual_clean_full_address_l_used_by_reranker,
+        actual_clean_full_address_r_used_by_reranker,
+        common_end_tokens_removed_l,
+        common_end_tokens_removed_r,
         positional_tokens_l,
         positional_tokens_r,
-
+        source_identity_recall,
+        role_conflict,
+        flat_identity_l,
+        flat_identity_r,
+        sub_premise_location_l,
+        sub_premise_location_r,
+        has_flat_indicator_l,
+        has_flat_indicator_r,
+        structured_sub_premise_conflict,
+        structured_sub_premise_partial,
+        CASE
+            WHEN structured_sub_premise_conflict
+                AND mw_adjustment_after_role_conflict_cap > mw_adjustment
+            THEN true
+            ELSE false
+        END AS structured_sub_premise_conflict_guard_fired,
+        CASE
+            WHEN structured_sub_premise_partial
+                AND mw_adjustment_after_role_conflict_cap > mw_adjustment
+            THEN true
+            ELSE false
+        END AS structured_sub_premise_partial_guard_fired,
         {
         '''
-        -- Bigram-related fields
         overlapping_bigrams_this_l_and_r,
         bigrams_elsewhere_in_block_but_not_this,
         overlapping_bigrams_this_l_and_r_filtered,
@@ -506,16 +950,12 @@ def improve_predictions_using_distinguishing_tokens(
         if use_bigrams
         else ""
     }
-
         original_address_concat_l,
         postcode_l,
         original_address_concat_r,
         postcode_r,
         {add_cols_select}
-
-
-
-    FROM windowed_tokens
+    FROM capped_structured_sub_premise
     """
 
     con.execute(sql)
