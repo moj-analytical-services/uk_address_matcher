@@ -1,0 +1,54 @@
+name: PR benchmark reminder
+
+on:
+  pull_request_target:
+    branches: [main]
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark-reminder:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Write sticky PR reminder
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          printf '%s\n' \
+            '## 🚨 Benchmark Check Required Before Merge' \
+            '' \
+            'Before merging this PR, make sure that you run the following check to test for performance regression:' \
+            '' \
+            '```bash' \
+            'bash ./shell/compare_commits.sh \' \
+            "  -b ${PR_BASE_REF} \\" \
+            "  -c ${PR_HEAD_SHA} \\" \
+            '  -d rhondda,aberdeenshire,hackney,mid_sussex' \
+            '```' \
+            '' \
+            'This comment updates automatically whenever a new commit is pushed to the PR.' \
+            '' \
+            '> [!NOTE]' \
+            '> If you have changed the cleaning, you will need to rerun cleaning prep in order to test these changes successfully.' \
+            > github-comment.md
+
+      - name: Comment on PR (sticky)
+        uses: marocchino/sticky-pull-request-comment@d4d6b0936434b21bc8345ad45a440c5f7d2c40ff # v3.0.3
+        with:
+          header: benchmark-regression-reminder
+          path: github-comment.md
+          hide_and_recreate: false
+          skip_unchanged: false
