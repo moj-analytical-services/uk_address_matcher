@@ -1,4 +1,5 @@
 import duckdb
+import pytest
 
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
@@ -90,3 +91,19 @@ def test_show_plan_handles_empty_pipeline(monkeypatch):
 
     assert "Empty pipeline" in output
     assert "(no stages added)" in output
+
+
+def test_create_sql_pipeline_rejects_duplicate_stages():
+    con = duckdb.connect()
+    try:
+        rel = con.sql("SELECT 1 AS id")
+
+        with pytest.raises(ValueError, match="Duplicate stage detected"):
+            create_sql_pipeline(
+                con,
+                rel,
+                [stage_one := _make_stage("stage_one"), stage_one],
+                pipeline_name="Duplicate pipeline",
+            )
+    finally:
+        con.close()

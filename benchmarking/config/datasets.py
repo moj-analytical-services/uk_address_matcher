@@ -65,7 +65,17 @@ _DATASETS: dict[str, dict[str, str]] = {
         "file_name": "RHONDDA_CYNON_TAF_CTBANDS_ONSUD_202512.csv",
         "data_path_env": "UKAM_RHONDDA_DATA_PATH",
     },
+    "pooled_councils": {
+        "label": "Pooled councils (Hackney + Rhondda + Aberdeenshire)",
+        "file_name": "<pooled-virtual-dataset>",
+        "data_path_env": "<pooled-virtual-dataset>",
+    },
 }
+
+# Member datasets combined by the virtual "pooled_councils" dataset. Each member
+# is loaded with its own source resolver and the rows are unioned together with a
+# dataset-prefixed unique_id to avoid PROPREF collisions across councils.
+_POOLED_MEMBERS: tuple[str, ...] = ("hackney", "rhondda", "aberdeenshire")
 
 
 def _file_reader_for(source_path: str) -> str:
@@ -317,6 +327,45 @@ def _load_mid_sussex(
     return _clean_output(con, relation)
 
 
+_POOLED_MEMBER_LOADERS = {
+    "aberdeenshire": _load_aberdeenshire,
+    "hackney": _load_hackney,
+    "rhondda": _load_rhondda,
+}
+
+
+def _load_pooled_councils(
+    con: duckdb.DuckDBPyConnection,
+) -> duckdb.DuckDBPyRelation:
+    """Union Hackney, Rhondda and Aberdeenshire into one pooled benchmark dataset.
+
+    Each member is loaded via its own source resolver. ``unique_id`` is prefixed
+    with the member key so the council-local PROPREF/identifier values cannot
+    collide once combined. ``ukam_label`` (the national UPRN) is left untouched so
+    accuracy scoring against the canonical dataset still works.
+    """
+    member_queries: list[str] = []
+    for member_key in _POOLED_MEMBERS:
+        loader = _POOLED_MEMBER_LOADERS[member_key]
+        source_path = _resolve_dataset_source(get_dataset_definition(member_key))
+        maybe_enable_s3_for_path(con, source_path)
+        print(f"  pooled member '{member_key}' from: {source_path}")
+        member_relation = loader(con, source_path)
+        member_queries.append(
+            f"""
+            SELECT
+                '{member_key}:' || unique_id AS unique_id,
+                address_concat,
+                ukam_label,
+                postcode
+            FROM ({member_relation.sql_query()}) AS {member_key}_src
+            """
+        )
+
+    union_sql = "\nUNION ALL\n".join(member_queries)
+    return con.sql(union_sql)
+
+
 def list_dataset_keys() -> list[str]:
     return sorted(_DATASETS.keys())
 
@@ -337,24 +386,29 @@ def load_dataset(
     sample_mode: bool = False,
 ) -> duckdb.DuckDBPyRelation:
     dataset = get_dataset_definition(dataset_key)
-    source_path = _resolve_dataset_source(dataset)
 
-    maybe_enable_s3_for_path(con, source_path)
-    if source_path.lower().endswith(".xlsx"):
-        load_duckdb_excel(con)
+    if dataset_key == "pooled_councils":
+        print(f"Reading {dataset['label']} (virtual pooled dataset)")
+        df_messy = _load_pooled_councils(con)
+    else:
+        source_path = _resolve_dataset_source(dataset)
 
-    print(f"Reading {dataset['label']} from: {source_path}")
+        maybe_enable_s3_for_path(con, source_path)
+        if source_path.lower().endswith(".xlsx"):
+            load_duckdb_excel(con)
 
-    loaders = {
-        "aberdeenshire": _load_aberdeenshire,
-        "hackney": _load_hackney,
-        "lambeth_council_tax": _load_lambeth_council_tax,
-        "lambeth_electoral_register": _load_lambeth_electoral_register,
-        "lambeth_llpg": _load_lambeth_llpg,
-        "mid_sussex": _load_mid_sussex,
-        "rhondda": _load_rhondda,
-    }
-    df_messy = loaders[dataset_key](con, source_path)
+        print(f"Reading {dataset['label']} from: {source_path}")
+
+        loaders = {
+            "aberdeenshire": _load_aberdeenshire,
+            "hackney": _load_hackney,
+            "lambeth_council_tax": _load_lambeth_council_tax,
+            "lambeth_electoral_register": _load_lambeth_electoral_register,
+            "lambeth_llpg": _load_lambeth_llpg,
+            "mid_sussex": _load_mid_sussex,
+            "rhondda": _load_rhondda,
+        }
+        df_messy = loaders[dataset_key](con, source_path)
 
     if sample_mode:
         df_messy = con.sql(

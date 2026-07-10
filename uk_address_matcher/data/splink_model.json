@@ -1,814 +1,788 @@
 {
-    "link_type": "link_only",
-    "probability_two_random_records_match": 3e-08,
-    "retain_matching_columns": true,
-    "retain_intermediate_calculation_columns": true,
-    "additional_columns_to_retain": [],
-    "sql_dialect": "duckdb",
-    "linker_uid": "e5bphl9c",
-    "em_convergence": 0.0001,
-    "max_iterations": 25,
-    "bayes_factor_column_prefix": "bf_",
-    "term_frequency_adjustment_column_prefix": "tf_",
-    "comparison_vector_value_column_prefix": "gamma_",
-    "unique_id_column_name": "ukam_address_id",
-    "source_dataset_column_name": "source_dataset",
-    "blocking_rules_to_generate_predictions": [
-            {
-                "blocking_rule": "l.postcode = r.postcode and ((l.numeric_token_1 = r.numeric_token_1) or (l.numeric_token_2 = r.numeric_token_2))",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.postcode = r.postcode and ((l.numeric_token_2 = r.numeric_token_1) or (l.numeric_token_1 = r.numeric_token_2))",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1) and list_extract(l.unusual_tokens_arr, 2) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 2) = split_part(r.postcode, ' ', 2)",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and l.postcode = r.postcode",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.numeric_token_2 = r.numeric_token_2 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "list_extract(l.extremely_unusual_tokens_arr, 1) = list_extract(r.extremely_unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
-                "sql_dialect": "duckdb"
-            },
-            {
-                "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
-                "sql_dialect": "duckdb",
-                "arrays_to_explode": [
-                    "exploding_unique_ids"
-                ]
-            }
-    ],
-    "comparisons": [
+  "link_type": "link_only",
+  "probability_two_random_records_match": 3e-08,
+  "retain_matching_columns": true,
+  "retain_intermediate_calculation_columns": true,
+  "additional_columns_to_retain": [
+    "common_end_tokens_hist"
+  ],
+  "sql_dialect": "duckdb",
+  "linker_uid": "e5bphl9c",
+  "em_convergence": 0.0001,
+  "max_iterations": 25,
+  "bayes_factor_column_prefix": "bf_",
+  "term_frequency_adjustment_column_prefix": "tf_",
+  "comparison_vector_value_column_prefix": "gamma_",
+  "unique_id_column_name": "ukam_address_id",
+  "source_dataset_column_name": "source_dataset",
+  "blocking_rules_to_generate_predictions": [
+    {
+      "blocking_rule": "l.postcode = r.postcode and ((l.numeric_token_1 = r.numeric_token_1) or (l.numeric_token_2 = r.numeric_token_2))",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.postcode = r.postcode and ((l.numeric_token_2 = r.numeric_token_1) or (l.numeric_token_1 = r.numeric_token_2))",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1) and list_extract(l.unusual_tokens_arr, 2) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 2) = split_part(r.postcode, ' ', 2)",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and l.postcode = r.postcode",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.numeric_token_2 = r.numeric_token_2 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "list_extract(l.extremely_unusual_tokens_arr, 1) = list_extract(r.extremely_unusual_tokens_arr, 1) and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
+      "sql_dialect": "duckdb",
+      "arrays_to_explode": [
+        "exploding_unique_ids"
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "output_column_name": "address_without_numbers",
+      "comparison_levels": [
         {
-            "output_column_name": "clean_full_address",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"clean_full_address_l\" IS NULL OR \"clean_full_address_r\" IS NULL",
-                    "label_for_charts": "clean_full_address is NULL",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\"clean_full_address_l\" = \"clean_full_address_r\"",
-                    "label_for_charts": "Exact match on clean_full_address",
-                    "m_probability": 15,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 2,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                }
-            ],
-            "comparison_description": "ExactMatch"
+          "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL OR nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL",
+          "label_for_charts": "address_without_numbers is NULL",
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "is_null_level": true
         },
         {
-            "output_column_name": "address_without_numbers",
-            "comparison_levels": [
-                {
-                    "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL OR nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') IS NULL",
-                    "label_for_charts": "address_without_numbers is NULL",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') = nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')",
-                    "label_for_charts": "Exact match on address_without_numbers",
-                    "m_probability": 15,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.95",
-                    "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
-                    "m_probability": 8,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.88",
-                    "label_for_charts": "Jaccard >= 0.88 on address_without_numbers",
-                    "m_probability": 4,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.80",
-                    "label_for_charts": "Jaccard >= 0.80 on address_without_numbers",
-                    "m_probability": 2,
-                    "u_probability": 1,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 2,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                }
-            ],
-            "comparison_description": "CustomComparison"
+          "sql_condition": "nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '') = nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')",
+          "label_for_charts": "Exact match on address_without_numbers",
+          "m_probability": 15,
+          "u_probability": 1,
+          "fix_m_probability": false,
+          "fix_u_probability": false
         },
         {
-            "output_column_name": "flat_identity",
-            "comparison_levels": [
-                {
-                    "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
-                    "label_for_charts": "One has flat indicator, other does not",
-                    "m_probability": 0.0009765625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\"flat_identity_l\" IS NULL AND \"flat_identity_r\" IS NULL",
-                    "label_for_charts": "Both null (no flat info)",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "flat_identity_l = flat_identity_r",
-                    "label_for_charts": "Exact match on flat identity",
-                    "m_probability": 95.00950852025916,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_l = flat_positional_r",
-                    "label_for_charts": "Same positional, different letter/number",
-                    "m_probability": 0.25,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "(\n        (flat_positional_l IS NOT NULL AND flat_positional_r IS NULL)\n        OR\n        (flat_positional_r IS NOT NULL AND flat_positional_l IS NULL)\n    )\n    AND flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL",
-                    "label_for_charts": "Cross-type flat (positional vs letter/number)",
-                    "m_probability": 0.25,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "has_flat_indicator_l = TRUE\n    AND has_flat_indicator_r = TRUE\n    AND flat_identity_l IS NOT NULL\n    AND flat_identity_r IS NOT NULL\n    AND flat_identity_l != flat_identity_r\n    AND (\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_r AS INTEGER) IS NOT NULL\n            AND flat_number_l IS NULL\n            AND flat_letter_r IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_r AS INTEGER)\n        )\n        OR\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_l AS INTEGER) IS NOT NULL\n            AND flat_number_r IS NULL\n            AND flat_letter_l IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_l AS INTEGER)\n        )\n    )",
-                    "label_for_charts": "Fuzzy flat equivalence",
-                    "m_probability": 13,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_letter_l IS NOT NULL\n    AND flat_letter_l = flat_letter_r\n    AND (\n        (flat_number_l IS NULL AND flat_number_r IS NOT NULL)\n        OR (flat_number_l IS NOT NULL AND flat_number_r IS NULL)\n    )\n    AND flat_positional_l IS NULL\n    AND flat_positional_r IS NULL",
-                    "label_for_charts": "Same letter, number one-sided",
-                    "m_probability": 4.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_r IS NOT NULL\n    AND flat_positional_l != flat_positional_r",
-                    "label_for_charts": "Both positional but different floors",
-                    "m_probability": 0.00390625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
-                    "label_for_charts": "Same number, letter one-sided",
-                    "m_probability": 0.25,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r",
-                    "label_for_charts": "Same number, letters both differ",
-                    "m_probability": 0.0009765625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "Flat identity differs (different number)",
-                    "m_probability": 9.5367431640625e-07,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "Combined flat identity comparison"
+          "sql_condition": "regexp_replace(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), '[^A-Za-z0-9]', '', 'g') = regexp_replace(nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), '[^A-Za-z0-9]', '', 'g')",
+          "label_for_charts": "Exact match on address_without_numbers (no punctuation/spaces)",
+          "m_probability": 11.313708498984761,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
         },
         {
-            "output_column_name": "sub_premise_location",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"sub_premise_location_l\" IS NULL AND \"sub_premise_location_r\" IS NULL",
-                    "label_for_charts": "Both null (no sub-premise location info)",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "sub_premise_location_l = sub_premise_location_r",
-                    "label_for_charts": "Exact match on sub-premise location",
-                    "m_probability": 8.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "(sub_premise_location_l IS NULL AND sub_premise_location_r IS NOT NULL) OR (sub_premise_location_l IS NOT NULL AND sub_premise_location_r IS NULL)",
-                    "label_for_charts": "One-sided sub-premise location info",
-                    "m_probability": 1,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "Sub-premise location differs",
-                    "m_probability": 0.125,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "Sub-premise location comparison"
+          "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.95",
+          "label_for_charts": "Jaccard >= 0.95 on address_without_numbers",
+          "m_probability": 8,
+          "u_probability": 1,
+          "fix_m_probability": false,
+          "fix_u_probability": false
         },
         {
-            "output_column_name": "numeric_token_1",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"numeric_token_1_l\" IS NULL AND \"numeric_token_1_r\" IS NULL",
-                    "label_for_charts": "Both null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\"numeric_token_1_l\" = \"numeric_token_1_r\"",
-                    "label_for_charts": "Exact match",
-                    "m_probability": 95.00950852025916,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true,
-                    "tf_adjustment_column": "numeric_token_1",
-                    "tf_adjustment_weight": 0.1
-                },
-                {
-                    "sql_condition": "\n                            nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '')\n                            = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')\n                            ",
-                    "label_for_charts": "Numeric part matches",
-                    "m_probability": 95.00950852025916,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true,
-                    "tf_adjustment_column": "numeric_token_1",
-                    "tf_adjustment_weight": 0.1
-                },
-                {
-                    "sql_condition": "numeric_token_2_l = numeric_token_1_r or numeric_token_1_l = numeric_token_2_r",
-                    "label_for_charts": "Exact match inverted numbers",
-                    "m_probability": 4,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
-                    "label_for_charts": "Primary numbers both present but differ",
-                    "m_probability": 0.0001,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 0.0625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
+          "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.88",
+          "label_for_charts": "Jaccard >= 0.88 on address_without_numbers",
+          "m_probability": 4,
+          "u_probability": 1,
+          "fix_m_probability": false,
+          "fix_u_probability": false
         },
         {
-            "output_column_name": "numeric_token_2",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"numeric_token_2_l\" IS NULL AND \"numeric_token_2_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_2_r\"",
-                    "label_for_charts": "Exact match",
-                    "m_probability": 95.00950852025916,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true,
-                    "tf_adjustment_column": "numeric_token_2",
-                    "tf_adjustment_weight": 0.1
-                },
-                {
-                    "sql_condition": "numeric_token_1_l = numeric_token_2_r OR numeric_token_1_r = numeric_token_2_l",
-                    "label_for_charts": "Exact match inverted numbers",
-                    "m_probability": 1,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\"numeric_token_2_l\" IS NOT NULL AND \"numeric_token_2_r\" IS NOT NULL AND \"numeric_token_2_l\" != \"numeric_token_2_r\"",
-                    "label_for_charts": "Secondary numbers both present but differ",
-                    "m_probability": 0.0001,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\"numeric_token_2_l\" IS NULL OR \"numeric_token_2_r\" IS NULL",
-                    "label_for_charts": "One null",
-                    "m_probability": 0.25,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 0.0625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
+          "sql_condition": "jaccard(nullif(trim(regexp_replace(regexp_replace(clean_full_address_l, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), ''), nullif(trim(regexp_replace(regexp_replace(clean_full_address_r, '\\b(\\d{1,5}-\\d{1,5}|[A-Za-z]?\\d{1,5}[A-Za-z]?)\\b', '', 'g'), '\\s+', ' ', 'g')), '')) >= 0.80",
+          "label_for_charts": "Jaccard >= 0.80 on address_without_numbers",
+          "m_probability": 2,
+          "u_probability": 1,
+          "fix_m_probability": false,
+          "fix_u_probability": false
         },
         {
-            "output_column_name": "numeric_token_3",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"numeric_token_3_l\" IS NULL AND \"numeric_token_3_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\"numeric_token_3_l\" = \"numeric_token_3_r\"",
-                    "label_for_charts": "Exact match",
-                    "m_probability": 0.6,
-                    "u_probability": 0.0001,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "tf_adjustment_column": "numeric_token_3",
-                    "tf_adjustment_weight": 0.5
-                },
-                {
-                    "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_3_r\"",
-                    "label_for_charts": "Exact match inverted",
-                    "m_probability": 0.3,
-                    "u_probability": 0.0025,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "tf_adjustment_column": "numeric_token_3",
-                    "tf_adjustment_weight": 0.5
-                },
-                {
-                    "sql_condition": "\"numeric_token_3_l\" IS NULL OR \"numeric_token_3_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "m_probability": 1,
-                    "u_probability": 16,
-                    "fix_m_probability": false,
-                    "fix_u_probability": false
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 256,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
-        },
-        {
-            "output_column_name": "token_rel_freq_arr_hist",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-29",
-                    "label_for_charts": " < 1e-29",
-                    "m_probability": 77935.87748881833,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-28",
-                    "label_for_charts": " < 1e-28",
-                    "m_probability": 65536.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-27",
-                    "label_for_charts": " < 1e-27",
-                    "m_probability": 55108.98747006743,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-26",
-                    "label_for_charts": " < 1e-26",
-                    "m_probability": 46340.95001184158,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-25",
-                    "label_for_charts": " < 1e-25",
-                    "m_probability": 38967.93874440916,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-24",
-                    "label_for_charts": " < 1e-24",
-                    "m_probability": 32768.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-23",
-                    "label_for_charts": " < 1e-23",
-                    "m_probability": 27554.493735033717,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-22",
-                    "label_for_charts": " < 1e-22",
-                    "m_probability": 23170.47500592079,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-21",
-                    "label_for_charts": " < 1e-21",
-                    "m_probability": 19483.96937220458,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-20",
-                    "label_for_charts": " < 1e-20",
-                    "m_probability": 16384.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-19",
-                    "label_for_charts": " < 1e-19",
-                    "m_probability": 13777.246867516858,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-18",
-                    "label_for_charts": " < 1e-18",
-                    "m_probability": 11585.237502960395,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-17",
-                    "label_for_charts": " < 1e-17",
-                    "m_probability": 9741.98468610229,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-16",
-                    "label_for_charts": " < 1e-16",
-                    "m_probability": 8192.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-15",
-                    "label_for_charts": " < 1e-15",
-                    "m_probability": 6888.623433758429,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-14",
-                    "label_for_charts": " < 1e-14",
-                    "m_probability": 5792.618751480198,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-13",
-                    "label_for_charts": " < 1e-13",
-                    "m_probability": 4870.992343051145,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-12",
-                    "label_for_charts": " < 1e-12",
-                    "m_probability": 4096,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-11",
-                    "label_for_charts": " < 1e-11",
-                    "m_probability": 2048,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-10",
-                    "label_for_charts": " < 1e-10",
-                    "m_probability": 1024,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-9",
-                    "label_for_charts": " < 1e-9",
-                    "m_probability": 512,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-8",
-                    "label_for_charts": " < 1e-8",
-                    "m_probability": 256,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-7",
-                    "label_for_charts": " < 1e-7",
-                    "m_probability": 128,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-6",
-                    "label_for_charts": " < 1e-6",
-                    "m_probability": 64,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-5",
-                    "label_for_charts": " < 1e-5",
-                    "m_probability": 32,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-4",
-                    "label_for_charts": " < 1e-4",
-                    "m_probability": 16,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-3",
-                    "label_for_charts": " < 1e-3",
-                    "m_probability": 8,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-2",
-                    "label_for_charts": " < 1e-2",
-                    "m_probability": 4,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-1",
-                    "label_for_charts": " < 1e-1",
-                    "m_probability": 2,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e0",
-                    "label_for_charts": " < 1e0",
-                    "m_probability": 1,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e1",
-                    "label_for_charts": " < 1e1",
-                    "m_probability": 0.5,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e2",
-                    "label_for_charts": " < 1e2",
-                    "m_probability": 0.25,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e3",
-                    "label_for_charts": " < 1e3",
-                    "m_probability": 0.125,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e4",
-                    "label_for_charts": " < 1e4",
-                    "m_probability": 0.0625,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 256,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
-        },
-        {
-            "output_column_name": "common_end_tokens",
-            "comparison_levels": [
-                {
-                    "sql_condition": "\"common_end_tokens_hist_l\" IS NULL OR \"common_end_tokens_hist_r\" IS NULL",
-                    "label_for_charts": "Null",
-                    "fix_m_probability": false,
-                    "fix_u_probability": false,
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(common_end_tokens_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(common_end_tokens_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, common_end_tokens_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-2",
-                    "label_for_charts": "<1e-2",
-                    "m_probability": 4,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 1.5,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
-        },
-        {
-            "output_column_name": "postcode",
-            "comparison_levels": [
-                {
-                    "sql_condition": "postcode_l IS NULL AND postcode_r IS NULL",
-                    "label_for_charts": "Null",
-                    "is_null_level": true
-                },
-                {
-                    "sql_condition": "postcode_r IS NULL",
-                    "label_for_charts": "Postcode missing from messy table",
-                    "fix_m_probability": true,
-                    "fix_u_probability": true,
-                    "m_probability": 1024,
-                    "u_probability": 1
-                },
-                {
-                    "sql_condition": "postcode_l = postcode_r",
-                    "label_for_charts": "Exact",
-                    "m_probability": 3000000.0,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "levenshtein(postcode_l, postcode_r) <= 1",
-                    "label_for_charts": "Lev <= 1",
-                    "m_probability": 10000,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "levenshtein(postcode_l, postcode_r) <= 2",
-                    "label_for_charts": "Lev <=2",
-                    "m_probability": 5000,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "split_part(postcode_l, ' ', 1) = split_part(postcode_r, ' ', 1)",
-                    "label_for_charts": "District",
-                    "m_probability": 3000,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "split_part(postcode_l, ' ', 2) = split_part(postcode_r, ' ', 2)",
-                    "label_for_charts": "Unit not District",
-                    "m_probability": 2000,
-                    "u_probability": 1,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                },
-                {
-                    "sql_condition": "ELSE",
-                    "label_for_charts": "All other comparisons",
-                    "m_probability": 1,
-                    "u_probability": 64,
-                    "fix_m_probability": true,
-                    "fix_u_probability": true
-                }
-            ],
-            "comparison_description": "CustomComparison"
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 1,
+          "u_probability": 2,
+          "fix_m_probability": false,
+          "fix_u_probability": false
         }
-    ]
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "flat_identity",
+      "comparison_levels": [
+        {
+          "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
+          "label_for_charts": "One has flat indicator, other does not",
+          "m_probability": 0.05106352126896113,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\"flat_identity_l\" IS NULL AND \"flat_identity_r\" IS NULL",
+          "label_for_charts": "Both null (no flat info)",
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "flat_identity_l = flat_identity_r",
+          "label_for_charts": "Exact match on flat identity",
+          "m_probability": 95.00950852025916,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_l = flat_positional_r",
+          "label_for_charts": "Same positional, different letter/number",
+          "m_probability": 0.06121737931893529,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n        (flat_positional_l IS NOT NULL AND flat_positional_r IS NULL)\n        OR\n        (flat_positional_r IS NOT NULL AND flat_positional_l IS NULL)\n    )\n    AND flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL",
+          "label_for_charts": "Cross-type flat (positional vs letter/number)",
+          "m_probability": 0.25,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "has_flat_indicator_l = TRUE\n    AND has_flat_indicator_r = TRUE\n    AND flat_identity_l IS NOT NULL\n    AND flat_identity_r IS NOT NULL\n    AND flat_identity_l != flat_identity_r\n    AND (\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_r AS INTEGER) IS NOT NULL\n            AND flat_number_l IS NULL\n            AND flat_letter_r IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_l), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_l)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_r AS INTEGER)\n        )\n        OR\n        (\n            CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END IS NOT NULL\n            AND TRY_CAST(flat_number_l AS INTEGER) IS NOT NULL\n            AND flat_number_r IS NULL\n            AND flat_letter_l IS NULL\n            AND CASE\n                WHEN regexp_matches(UPPER(flat_letter_r), '^[A-Z]$')\n                    THEN unicode(UPPER(flat_letter_r)) - 64\n                ELSE NULL\n            END = TRY_CAST(flat_number_l AS INTEGER)\n        )\n    )",
+          "label_for_charts": "Fuzzy flat equivalence",
+          "m_probability": 13,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "flat_letter_l IS NOT NULL\n    AND flat_letter_l = flat_letter_r\n    AND (\n        (flat_number_l IS NULL AND flat_number_r IS NOT NULL)\n        OR (flat_number_l IS NOT NULL AND flat_number_r IS NULL)\n    )\n    AND flat_positional_l IS NULL\n    AND flat_positional_r IS NULL",
+          "label_for_charts": "Same letter, number one-sided",
+          "m_probability": 0.5471739094617537,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "flat_positional_l IS NOT NULL\n    AND flat_positional_r IS NOT NULL\n    AND flat_positional_l != flat_positional_r",
+          "label_for_charts": "Both positional but different floors",
+          "m_probability": 0.00390625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r\n    AND (\n        (flat_letter_l IS NULL AND flat_letter_r IS NOT NULL)\n        OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)\n    )",
+          "label_for_charts": "Same number, letter one-sided",
+          "m_probability": 5.17,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "flat_number_l IS NOT NULL\n    AND flat_number_l = flat_number_r",
+          "label_for_charts": "Same number, letters both differ",
+          "m_probability": 0.06605693988147546,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "Flat identity differs (different number)",
+          "m_probability": 9.5367431640625e-07,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Combined flat identity comparison"
+    },
+    {
+      "output_column_name": "numeric_token_1",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"numeric_token_1_l\" IS NULL AND \"numeric_token_1_r\" IS NULL",
+          "label_for_charts": "Both null",
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "\"numeric_token_1_l\" = \"numeric_token_1_r\"",
+          "label_for_charts": "Exact match",
+          "m_probability": 95.00950852025916,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true,
+          "tf_adjustment_column": "numeric_token_1",
+          "tf_adjustment_weight": 0.1
+        },
+        {
+          "sql_condition": "\n                            nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '')\n                            = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')\n                            ",
+          "label_for_charts": "Numeric part matches",
+          "m_probability": 95.00950852025916,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true,
+          "tf_adjustment_column": "numeric_token_1",
+          "tf_adjustment_weight": 0.1
+        },
+        {
+          "sql_condition": "numeric_token_2_l = numeric_token_1_r or numeric_token_1_l = numeric_token_2_r",
+          "label_for_charts": "Exact match inverted numbers",
+          "m_probability": 4,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
+          "label_for_charts": "Primary numbers both present but differ",
+          "m_probability": 0.0001,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.0625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "numeric_token_2",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"numeric_token_2_l\" IS NULL AND \"numeric_token_2_r\" IS NULL",
+          "label_for_charts": "Null",
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_2_r\"",
+          "label_for_charts": "Exact match",
+          "m_probability": 95.00950852025916,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true,
+          "tf_adjustment_column": "numeric_token_2",
+          "tf_adjustment_weight": 0.1
+        },
+        {
+          "sql_condition": "numeric_token_1_l = numeric_token_2_r OR numeric_token_1_r = numeric_token_2_l",
+          "label_for_charts": "Exact match inverted numbers",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\"numeric_token_2_l\" IS NOT NULL AND \"numeric_token_2_r\" IS NOT NULL AND \"numeric_token_2_l\" != \"numeric_token_2_r\"",
+          "label_for_charts": "Secondary numbers both present but differ",
+          "m_probability": 0.0001,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\"numeric_token_2_l\" IS NULL OR \"numeric_token_2_r\" IS NULL",
+          "label_for_charts": "One null",
+          "m_probability": 0.25,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.0625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "numeric_token_3",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"numeric_token_3_l\" IS NULL AND \"numeric_token_3_r\" IS NULL",
+          "label_for_charts": "Null",
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "\"numeric_token_3_l\" = \"numeric_token_3_r\"",
+          "label_for_charts": "Exact match",
+          "m_probability": 0.6,
+          "u_probability": 0.0001,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "numeric_token_3",
+          "tf_adjustment_weight": 0.5
+        },
+        {
+          "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_3_r\"",
+          "label_for_charts": "Exact match inverted",
+          "m_probability": 0.3,
+          "u_probability": 0.0025,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "numeric_token_3",
+          "tf_adjustment_weight": 0.5
+        },
+        {
+          "sql_condition": "\"numeric_token_3_l\" IS NULL OR \"numeric_token_3_r\" IS NULL",
+          "label_for_charts": "Null",
+          "m_probability": 1,
+          "u_probability": 16,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 1,
+          "u_probability": 256,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "token_rel_freq_arr_hist",
+      "comparison_levels": [
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-29",
+          "label_for_charts": " < 1e-29",
+          "m_probability": 77935.87748881833,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-28",
+          "label_for_charts": " < 1e-28",
+          "m_probability": 65536.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-27",
+          "label_for_charts": " < 1e-27",
+          "m_probability": 55108.98747006743,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-26",
+          "label_for_charts": " < 1e-26",
+          "m_probability": 46340.95001184158,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-25",
+          "label_for_charts": " < 1e-25",
+          "m_probability": 38967.93874440916,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-24",
+          "label_for_charts": " < 1e-24",
+          "m_probability": 32768.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-23",
+          "label_for_charts": " < 1e-23",
+          "m_probability": 6888.623433758429,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-22",
+          "label_for_charts": " < 1e-22",
+          "m_probability": 23170.47500592079,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-21",
+          "label_for_charts": " < 1e-21",
+          "m_probability": 19483.96937220458,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-20",
+          "label_for_charts": " < 1e-20",
+          "m_probability": 16384.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-19",
+          "label_for_charts": " < 1e-19",
+          "m_probability": 13777.246867516858,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-18",
+          "label_for_charts": " < 1e-18",
+          "m_probability": 11585.237502960395,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-17",
+          "label_for_charts": " < 1e-17",
+          "m_probability": 9741.98468610229,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-16",
+          "label_for_charts": " < 1e-16",
+          "m_probability": 8192.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-15",
+          "label_for_charts": " < 1e-15",
+          "m_probability": 6888.623433758429,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-14",
+          "label_for_charts": " < 1e-14",
+          "m_probability": 5792.618751480198,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-13",
+          "label_for_charts": " < 1e-13",
+          "m_probability": 4870.992343051145,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-12",
+          "label_for_charts": " < 1e-12",
+          "m_probability": 4096,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-11",
+          "label_for_charts": " < 1e-11",
+          "m_probability": 2048,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-10",
+          "label_for_charts": " < 1e-10",
+          "m_probability": 1024,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-9",
+          "label_for_charts": " < 1e-9",
+          "m_probability": 512,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-8",
+          "label_for_charts": " < 1e-8",
+          "m_probability": 256,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-7",
+          "label_for_charts": " < 1e-7",
+          "m_probability": 128,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-6",
+          "label_for_charts": " < 1e-6",
+          "m_probability": 64,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-5",
+          "label_for_charts": " < 1e-5",
+          "m_probability": 32,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-4",
+          "label_for_charts": " < 1e-4",
+          "m_probability": 16,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-3",
+          "label_for_charts": " < 1e-3",
+          "m_probability": 8,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-2",
+          "label_for_charts": " < 1e-2",
+          "m_probability": 4,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-1",
+          "label_for_charts": " < 1e-1",
+          "m_probability": 2,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e0",
+          "label_for_charts": " < 1e0",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e1",
+          "label_for_charts": " < 1e1",
+          "m_probability": 0.5,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e2",
+          "label_for_charts": " < 1e2",
+          "m_probability": 0.25,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e3",
+          "label_for_charts": " < 1e3",
+          "m_probability": 0.125,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e4",
+          "label_for_charts": " < 1e4",
+          "m_probability": 0.0625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 1,
+          "u_probability": 256,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "postcode",
+      "comparison_levels": [
+        {
+          "sql_condition": "postcode_l IS NULL AND postcode_r IS NULL",
+          "label_for_charts": "Null",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "postcode_r IS NULL",
+          "label_for_charts": "Postcode missing from messy table",
+          "fix_m_probability": true,
+          "fix_u_probability": true,
+          "m_probability": 1024,
+          "u_probability": 1
+        },
+        {
+          "sql_condition": "postcode_l = postcode_r",
+          "label_for_charts": "Exact",
+          "m_probability": 3000000.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "levenshtein(postcode_l, postcode_r) <= 1",
+          "label_for_charts": "Lev <= 1",
+          "m_probability": 10000,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "levenshtein(postcode_l, postcode_r) <= 2",
+          "label_for_charts": "Lev <=2",
+          "m_probability": 5000,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "split_part(postcode_l, ' ', 1) = split_part(postcode_r, ' ', 1)",
+          "label_for_charts": "District",
+          "m_probability": 3000,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "split_part(postcode_l, ' ', 2) = split_part(postcode_r, ' ', 2)",
+          "label_for_charts": "Unit not District",
+          "m_probability": 2000,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 1,
+          "u_probability": 64,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "signature_evidence",
+      "comparison_levels": [
+        {
+          "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) IS NULL",
+          "label_for_charts": "No signature overlap",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 2 AND numeric_token_1_l = numeric_token_1_r AND NOT (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r)",
+          "label_for_charts": "2+ unique signature hits + number agreement",
+          "m_probability": 256.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 1 AND numeric_token_1_l = numeric_token_1_r AND NOT (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r)",
+          "label_for_charts": "1 unique signature hit + number agreement",
+          "m_probability": 80.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 40",
+          "label_for_charts": "Signature IDF sum >= 40 (very strong)",
+          "m_probability": 64.0,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 20",
+          "label_for_charts": "Signature IDF sum >= 20 (strong)",
+          "m_probability": 16.97056274847714,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 8",
+          "label_for_charts": "Signature IDF sum >= 8 (weak)",
+          "m_probability": 1.5,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "Signature IDF sum < 8 (negligible)",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Bigram/trigram inverted-index signature overlap (IDF-weighted)"
+    }
+  ]
 }

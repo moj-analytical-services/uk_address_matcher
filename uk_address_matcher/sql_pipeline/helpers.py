@@ -155,8 +155,8 @@ def package_resource_read_sql(package: str, filename: str) -> str:
 
 def _duckdb_table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     result = con.execute(
-        "SELECT COUNT(*) FROM information_schema.tables "
-        f"WHERE table_name = '{table_name}'"
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+        [table_name],
     ).fetchone()
     return result[0] > 0
 
@@ -193,10 +193,10 @@ def _drop_table_and_registered_aliases(
 
     object_type = object_row[0]
     if object_type == "VIEW":
-        con.execute(f"DROP VIEW IF EXISTS {table_name}")
+        con.execute(f"DROP VIEW IF EXISTS {_quote_identifier(table_name)}")
         return
 
-    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    con.execute(f"DROP TABLE IF EXISTS {_quote_identifier(table_name)}")
 
 
 def _register_input_relation_once(

@@ -76,6 +76,7 @@ PARQUET_COMPRESSION_LEVEL = 9
 # which ZSTD and dictionary/run-length encoding exploit. Row order is irrelevant
 # to matching, so this is a free win.
 CANONICAL_SORT_COLUMNS = ("postcode", "clean_full_address")
+INVERTED_INDEX_SORT_COLUMNS = ("index_strategy", "key")
 
 # Columns that are trivially recomputable at load time and therefore not persisted,
 # to reduce file size. They are restored in ``load_prepared_canonical_data``.
@@ -564,6 +565,27 @@ def prepare_canonical_folder(
     canonical_paths: list[str | Path] = []
     artefact_paths: list[str | Path]
     artefact_columns: dict[str, list[str]]
+    # Write parquet files
+    tf_path = (
+        join_remote_path(output_folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
+        if output_is_remote
+        else output_folder_path / PREPARED_TERM_FREQUENCIES_FILENAME
+    )
+    idx_path = (
+        join_remote_path(output_folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
+        if output_is_remote
+        else output_folder_path / PREPARED_INVERTED_INDEX_FILENAME
+    )
+
+    _write_parquet_artefact(con, tf_table, tf_path)
+    _write_parquet_artefact(
+        con,
+        inverted_index,
+        idx_path,
+        sort_columns=INVERTED_INDEX_SORT_COLUMNS,
+    )
+
+    canonical_paths: list[str | Path]
     chunk_output_location: str | Path | None = None
     if output_format == "duckdb":
         assert output_folder_path is not None

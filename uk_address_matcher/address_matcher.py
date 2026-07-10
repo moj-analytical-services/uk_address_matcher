@@ -292,6 +292,9 @@ class AddressMatcher:
         """Cleans messy data, reusing the canonical term frequencies and index."""
 
         logger.debug("Cleaning messy data")
+        inverted_index_n: int | None = None
+        if self._canonical_clean is not None:
+            inverted_index_n = self._canonical_clean.count("*").fetchone()[0]
         self._messy_clean = prepare_data_for_matching(
             self._raw_messy,
             con=self.con,
@@ -299,6 +302,7 @@ class AddressMatcher:
             # If nothing was loaded from disk, these will be None — but that's fine,
             term_frequency_lookup=self._tf_table,
             inverted_index=self._inverted_index,
+            inverted_index_n=inverted_index_n,
             dataset_role="messy",
             debug_options=self.debug_options,
         )

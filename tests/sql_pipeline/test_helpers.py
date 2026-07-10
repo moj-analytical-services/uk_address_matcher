@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import duckdb
 
-from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
+from uk_address_matcher.sql_pipeline.helpers import (
+    _drop_table_and_registered_aliases,
+    _duckdb_table_exists,
+    _register_input_relation_once,
+)
 
 
 class _FakeRelation:
@@ -22,7 +26,7 @@ class _FakeConnection:
         self.sql_calls: list[str] = []
         self.table_calls: list[str] = []
 
-    def execute(self, _query: str) -> SimpleNamespace:
+    def execute(self, _query: str, _params=None) -> SimpleNamespace:
         return SimpleNamespace(fetchone=lambda: (0,))
 
     def register(self, alias: str, relation: _FakeRelation) -> None:
@@ -83,3 +87,42 @@ def test_register_input_relation_once_returns_nested_sql_for_cross_connection_re
     finally:
         source_con.close()
         target_con.close()
+
+
+def test_duckdb_table_exists_handles_names_requiring_literal_escaping():
+    con = duckdb.connect(database=":memory:")
+
+    try:
+        con.execute('CREATE TEMP TABLE "quoted\'table" (a INTEGER)')
+
+        assert _duckdb_table_exists(con, "quoted'table") is True
+        assert _duckdb_table_exists(con, "missing'table") is False
+    finally:
+        con.close()
+
+
+def test_drop_table_and_registered_aliases_quotes_table_identifiers():
+    con = duckdb.connect(database=":memory:")
+
+    try:
+        con.execute('CREATE TEMP TABLE "quoted table" (a INTEGER)')
+
+        _drop_table_and_registered_aliases(con, "quoted table")
+
+        assert _duckdb_table_exists(con, "quoted table") is False
+    finally:
+        con.close()
+
+
+def test_drop_table_and_registered_aliases_quotes_view_identifiers():
+    con = duckdb.connect(database=":memory:")
+
+    try:
+        con.execute("CREATE TEMP TABLE source_tbl (a INTEGER)")
+        con.execute('CREATE VIEW "quoted view" AS SELECT * FROM source_tbl')
+
+        _drop_table_and_registered_aliases(con, "quoted view")
+
+        assert _duckdb_table_exists(con, "quoted view") is False
+    finally:
+        con.close()
