@@ -10,6 +10,10 @@ The best results for working around this come from two related paths:
 2. The most faithful path is the **prefiltered full-block path**.
    It reproduces all Splink blocking rules, then prefilters the canonical to the blocked ids before scoring.
 
+A stricter third path is now also validated:
+3. The lowest-intrusion path is the **reduced-canonical stock `predict()` path**.
+  It reproduces all blocking rules, materialises the blocked canonical subset, rebuilds a fresh linker on that subset, and then calls normal Splink `predict()`.
+
 The most important practical point is this:
 - The biggest gains arrive when the ART index is doing the heavy lifting for the inverted-index blocking step, and when canonical rescoring is limited to a tiny candidate-only slice.
 - If we add back the other blocking rules, we gain fidelity and keep exact match weights, but some of the speed advantage is given back because we are again visiting Splink blocking SQL and assembling a larger candidate set.
@@ -18,11 +22,11 @@ The most important practical point is this:
 
 ### Full canonical, 71,438,939 rows
 
-| Row limit | ART candidate-gen | ART-scored prefiltered | ART-scored legacy | Full-block prefiltered | Full-block legacy | Stock `predict()` |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.0105 s | 0.0239 s | 2.48 s | 0.0394 s | 2.52 s | 10.64 s |
-| 10 | 0.0976 s | 0.0445 s | 2.43 s | 0.0767 s | 2.46 s | 11.16 s |
-| 100 | 1.7169 s | 0.4870 s | 2.53 s | 3.3959 s | 5.43 s | 11.65 s |
+| Row limit | ART candidate-gen | ART-scored prefiltered | Full-block prefiltered | Reduced-canonical stock `predict()` | Stock `predict()` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.0105 s | 0.0239 s | 0.0394 s | 0.8972 s | 11.4543 s |
+| 10 | 0.0976 s | 0.0445 s | 0.0767 s | 0.9140 s | 12.2631 s |
+| 100 | 1.7169 s | 0.4870 s | 3.3959 s | 4.3498 s | 11.4229 s |
 
 Key interpretation:
 
@@ -30,12 +34,84 @@ Key interpretation:
   It delivered about **445x / 251x / 24x** speed-ups at row limits **1 / 10 / 100**.
 - **Prefiltered full-block** is the faithful drop-in path.
   It delivered about **270x / 145x / 3.4x** speed-ups at row limits **1 / 10 / 100**, with **100% coverage** of baseline prediction pairs.
+- **Reduced-canonical stock `predict()`** is the lower-intrusion path.
+  It delivered about **12.8x / 13.4x / 2.6x** speed-ups at row limits **1 / 10 / 100**, with **100% coverage** of baseline prediction pairs and identical match weights, but it was still materially slower than the prefiltered full-block scorer.
 - The earlier **~4 to 5x** result is now clearly understood as the cost of the old, non-prefiltered scoring path. It is not the floor of the ART approach.
 
 ### Fidelity
 
 - Prefiltered ART-scored path: `max |Δ match_weight| = 0.00e+00` on shared pairs.
 - Prefiltered full-block path: `max |Δ match_weight| = 0.00e+00`, with **100% shared-pair coverage** against baseline predictions.
+- Reduced-canonical stock `predict()` path: `max |Δ match_weight| = 0.00e+00`, with **100% shared-pair coverage** against baseline predictions.
+
+## What the strict stock `predict()` path tells us
+
+The reduced-canonical stock `predict()` path answers the implementation question:
+what if we do all the containment work up front, but then hand a much smaller
+canonical back to normal Splink `predict()`?
+
+The result is: **yes, it works**, and it is **meaningfully faster than stock**.
+But it is **not** the best latency path.
+
+Why it remains slower than the prefiltered full-block scorer:
+
+- it still pays about **0.26 s** to rebuild a fresh linker per request
+- it still pays about **0.59 to 0.64 s** for stock `predict()` even on a tiny filtered canonical
+- at row limit 100, the dominant remaining cost is still full-block pair assembly plus canonical prefilter, not match-weight maths
+
+Rule of thumb:
+
+- if we want the **lowest-risk, closer-to-stock integration**, the reduced-canonical stock `predict()` path is valid
+- if we want the **best realtime latency**, the prefiltered full-block scorer remains the better choice
+
+## Follow-up linker and materialisation notes (2026-06-17)
+
+Two follow-up probes were run after the main experiment to answer a narrower
+question: is the residual stock-`predict()` cost partly self-inflicted by how we
+hand reduced canonicals to Splink?
+
+Findings:
+
+- **The small linker floor is real.** On a 1-row messy batch with canonical
+  subsets of **100 / 1,000 / 5,000 / 10,000** rows, `_get_linker()` stayed at
+  about **0.39 to 0.43 s**. A manual breakdown put about **0.27 s** of that in
+  Splink `Linker(...)` initialisation itself, with only small additional costs
+  from our settings prep and `concat_with_tf` registration.
+- **There was no evidence of accidental canonical copying inside the reduced
+  path.** In this workspace Splink's DuckDB path registers relations/views; it
+  does not eagerly copy the reduced canonical into a physical table just because
+  `_get_linker()` is called.
+- **Materialising the ART-filtered subset can help, but only modestly and not
+  uniformly.** On the full-canonical ART database:
+  - **row-limit 1**, **7** filtered canonical rows: total
+    **0.845 s -> 0.779 s** (**1.08x faster**)
+  - **row-limit 10**, **47** filtered canonical rows: total
+    **0.810 s -> 0.821 s** (slightly worse once temp-table build cost is
+    included)
+  - **row-limit 100**, **997** filtered canonical rows: total
+    **1.410 s -> 1.190 s** (**1.18x faster**)
+  The row-limit-100 gain mostly appeared in `predict()` itself
+  (**1.170 s -> 0.555 s**) rather than in linker build time.
+- **Materialising the *full* canonical before stock `predict()` is actively
+  harmful.** On the full Hackney dataset (**114,166** messy rows) against the
+  full **71,438,939**-row canonical:
+  - stock prepared relation: **0.466 s** linker build, **14.922 s**
+    `predict()`, **18.969 s** total
+  - materialised full canonical table: **0.313 s** linker build,
+    **34.174 s** `predict()`, plus **14.904 s** one-off materialisation,
+    **52.474 s** total
+  - reverse-order confirmation still showed **29.839 s** materialised
+    `predict()` versus **13.433 s** stock `predict()`, with identical
+    prediction row counts (**3,417,643**)
+
+Practical conclusion:
+
+- **Promote materialisation only for the ART-filtered candidate subset, and only
+  as a measured realtime optimisation.** The gain is real at row-limits 1 and
+  100, but small enough that row-limit 10 was effectively neutral/slightly worse
+  after paying the temp-table build cost.
+- **Do not materialise the full canonical and then hand that full table back to
+  stock Splink `predict()`.**
 
 ## Where the gains actually come from
 
@@ -74,6 +150,7 @@ So the rule of thumb is:
 
 - If the goal is the **fastest possible ART-based realtime scoring experiment**, use the **prefiltered ART-scored path**.
 - If the goal is **faithful behaviour with stock-blocking recall**, use the **prefiltered full-block path**.
+- If the goal is **faithful behaviour while keeping the normal Splink `predict()` call**, use the **reduced-canonical stock `predict()` path**, but expect a latency tradeoff.
 
 ## ART lookup planner behaviour
 
@@ -314,6 +391,7 @@ pipeline.enqueue_list_of_sqls(
 - Persisted auxiliary lookup: `canonical_ukam_lookup` with 71,438,939 rows.
 - Validation artefacts:
   - full canonical run summary and results
+  - full canonical reduced-canonical stock `predict()` run summary and results
   - Hackney residential run summary and results
 - Match-weight equivalence: `max |Δ| = 0.00e+00` in all validated configurations.
 
