@@ -20,9 +20,9 @@ class _RealTimeSplinkStage(SplinkStage):
     """Splink stage that pre-filters canonical rows through the realtime index.
 
     The stage still delegates scoring and candidate ranking to Splink
-    ``predict()``. Its only extra responsibility is using the ART-indexed
-    inverted index to materialise a much smaller canonical relation before the
-    linker is built.
+    ``predict()``. Its only extra responsibility is using the precomputed
+    inverted-index blocker to materialise a much smaller canonical relation
+    before the linker is built.
     """
 
     realtime_inverted_index_hashed: duckdb.DuckDBPyRelation | None = field(
@@ -47,7 +47,7 @@ class _RealTimeSplinkStage(SplinkStage):
 
         if self.realtime_inverted_index_hashed is None:
             raise ValueError(
-                "RealTimeSplinkStage requires an ART-indexed inverted index. "
+                "RealTimeSplinkStage requires a realtime inverted-index blocker. "
                 "Use RealTimeAddressMatcher with a folder created by "
                 "prepare_canonical_folder_for_realtime()."
             )
