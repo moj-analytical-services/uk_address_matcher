@@ -45,7 +45,6 @@ REALTIME_CANONICAL_TABLE = "canonical_addresses"
 REALTIME_TERM_FREQUENCIES_TABLE = "term_frequencies"
 REALTIME_INVERTED_INDEX_TABLE = "inverted_index"
 REALTIME_INVERTED_INDEX_HASHED_TABLE = "inverted_index_hashed"
-REALTIME_INDEX_NAMES: tuple[str, ...] = ()
 
 REQUIRED_FILES = [
     PREPARED_TERM_FREQUENCIES_FILENAME,
@@ -736,16 +735,16 @@ def prepare_canonical_folder_for_realtime(
     overwrite: bool = False,
     show_progress: bool = True,
 ) -> None:
-    """Prepare canonical data with additional ART-indexed realtime artefacts.
+    """Prepare canonical data with additional realtime blocker artefacts.
 
     This keeps the batch preparation path slim. Realtime users opt into the
-    extra DuckDB database that backs the inverted-index blocker used by
+    extra DuckDB tables that back the inverted-index blocker used by
     ``RealTimeAddressMatcher``.
     """
     if is_remote_folder_reference(output_folder):
         raise ValueError(
             "prepare_canonical_folder_for_realtime() only supports local output "
-            "folders because the realtime ART indexes are stored in a DuckDB "
+            "folders because the realtime blocker is stored in a DuckDB "
             "database file."
         )
 
@@ -761,7 +760,7 @@ def prepare_canonical_folder_for_realtime(
     )
 
     output_folder_path = Path(output_folder)
-    _write_realtime_art_database(output_folder_path)
+    _write_realtime_blocker_table(output_folder_path)
     _mark_manifest_realtime(output_folder_path)
 
     logger.info("Realtime canonical artefacts written to '%s'", output_folder)
@@ -806,7 +805,7 @@ def _write_prepared_duckdb_database(
         con.execute(f'DETACH "{alias}"')
 
 
-def _write_realtime_art_database(folder: Path) -> None:
+def _write_realtime_blocker_table(folder: Path) -> None:
     import duckdb as _duckdb
 
     db_path = folder / PREPARED_REALTIME_DUCKDB_FILENAME
@@ -824,42 +823,8 @@ def _write_realtime_art_database(folder: Path) -> None:
             f"SELECT hash(key) AS key_hash, unnest(unique_ids) AS unique_id "
             f"FROM {REALTIME_INVERTED_INDEX_TABLE}"
         )
-
-        _create_realtime_art_indexes(art_con)
     finally:
         art_con.close()
-
-
-def _copy_prepared_duckdb_to_realtime_database(
-    con: duckdb.DuckDBPyConnection,
-    folder: Path,
-) -> None:
-    prepared_path = _validate_prepared_duckdb_folder(folder)
-    alias = f"ukam_prepared_{uuid4().hex}"
-    escaped_path = _escape_sql_string(str(prepared_path))
-    con.execute(f"ATTACH '{escaped_path}' AS \"{alias}\" (READ_ONLY)")
-    try:
-        con.execute(f"""
-            CREATE TABLE {REALTIME_CANONICAL_TABLE} AS
-            SELECT
-                *,
-                list_value(unique_id) AS exploding_unique_ids
-            FROM "{alias}".{REALTIME_CANONICAL_TABLE}
-        """)
-        con.execute(f"""
-            CREATE TABLE {REALTIME_TERM_FREQUENCIES_TABLE} AS
-            SELECT * FROM "{alias}".{REALTIME_TERM_FREQUENCIES_TABLE}
-        """)
-        con.execute(f"""
-            CREATE TABLE {REALTIME_INVERTED_INDEX_TABLE} AS
-            SELECT * FROM "{alias}".{REALTIME_INVERTED_INDEX_TABLE}
-        """)
-    finally:
-        con.execute(f'DETACH "{alias}"')
-
-
-def _create_realtime_art_indexes(con: duckdb.DuckDBPyConnection) -> None:
-    return None
 
 
 def _mark_manifest_realtime(folder: Path) -> None:
@@ -1176,7 +1141,7 @@ def validate_realtime_prepared_folder(
     folder: str | Path,
     con: duckdb.DuckDBPyConnection,
 ) -> Path:
-    """Validate that a prepared folder contains realtime ART artefacts."""
+    """Validate that a prepared folder contains realtime blocker artefacts."""
     import duckdb as _duckdb
 
     if is_remote_folder_reference(folder):
@@ -1215,7 +1180,7 @@ def validate_realtime_prepared_folder(
     db_path = layout_folder / PREPARED_REALTIME_DUCKDB_FILENAME
     if not db_path.exists():
         raise FileNotFoundError(
-            f"Realtime ART database '{PREPARED_REALTIME_DUCKDB_FILENAME}' is "
+            f"Realtime prepared database '{PREPARED_REALTIME_DUCKDB_FILENAME}' is "
             f"missing from '{layout_folder}'. Re-run "
             "prepare_canonical_folder_for_realtime()."
         )
@@ -1237,21 +1202,8 @@ def validate_realtime_prepared_folder(
         missing_tables = sorted(required_tables - tables)
         if missing_tables:
             raise FileNotFoundError(
-                f"Realtime ART database '{db_path}' is missing tables: "
+                f"Realtime prepared database '{db_path}' is missing tables: "
                 f"{missing_tables}. Re-run prepare_canonical_folder_for_realtime()."
-            )
-
-        indexes = {
-            row[0]
-            for row in validation_con.execute(
-                "SELECT index_name FROM duckdb_indexes()"
-            ).fetchall()
-        }
-        missing_indexes = sorted(set(REALTIME_INDEX_NAMES) - indexes)
-        if missing_indexes:
-            raise FileNotFoundError(
-                f"Realtime ART database '{db_path}' is missing ART indexes: "
-                f"{missing_indexes}. Re-run prepare_canonical_folder_for_realtime()."
             )
     finally:
         validation_con.close()

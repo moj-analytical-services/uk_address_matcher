@@ -30,6 +30,7 @@ from uk_address_matcher.prepare_canonical import (
 )
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
+    _quote_identifier,
     _register_input_relation_once,
     _uid,
 )
@@ -55,10 +56,6 @@ def _default_realtime_stages() -> list[MatchingStage]:
     from uk_address_matcher.linking_model.matching.stages import ExactMatchStage
 
     return [ExactMatchStage(), SplinkStage()]
-
-
-def _quote_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _to_realtime_stage(stage: MatchingStage) -> MatchingStage:
@@ -413,11 +410,11 @@ class AddressMatcher:
 
 
 class RealTimeAddressMatcher(AddressMatcher):
-    """Realtime matcher backed by a prepared folder with ART-indexed blockers.
+    """Realtime matcher backed by a prepared folder with precomputed blockers.
 
     Unlike ``AddressMatcher``, this entry point requires canonical data to be
     prepared by ``prepare_canonical_folder_for_realtime()``. That opt-in keeps
-    the normal batch path free of the extra DuckDB database and ART indexes.
+    the normal batch path free of the extra realtime blocker tables.
     """
 
     def __init__(
