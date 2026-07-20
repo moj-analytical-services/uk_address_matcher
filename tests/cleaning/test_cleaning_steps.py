@@ -1,3 +1,5 @@
+import logging
+
 import duckdb
 
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
@@ -319,6 +321,36 @@ def test_supplied_postcode_does_not_strip_postcode_like_floor_tokens():
         ("d", "SW1A 2AA", "10 DOWNING STREET"),
         ("e", "SW1A 2AA", "10 DOWNING STREET"),
     ]
+
+
+def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            ('1', '10 DOWNING STREET', 'SW1A 2AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        cleaned = prepare_data_for_matching(
+            input_relation,
+            con=connection,
+            progress="off",
+        )
+
+    assert cleaned.count("*").fetchone()[0] == 1
+    stage_prefixes = ("Cleaning and preprocessing", "Applying term frequencies")
+    assert not any(
+        record.getMessage().startswith(stage_prefix)
+        and (
+            " records across " in record.getMessage()
+            or " completed:" in record.getMessage()
+        )
+        for record in caplog.records
+        for stage_prefix in stage_prefixes
+    )
 
 
 def test_parse_out_business_unit():
