@@ -17,19 +17,12 @@ _NOTEBOOK_ENVIRONMENT_VARIABLES = (
 
 def resolve_progress_mode(
     progress: str = "auto",
-    *,
-    show_progress: bool | None = None,
 ) -> ProgressMode:
-    """Validate progress output configuration and support the legacy alias."""
+    """Validate progress output configuration."""
     if not isinstance(progress, str):
         raise TypeError("progress must be one of: 'auto', 'stages', or 'off'.")
     if progress not in _PROGRESS_MODES:
         raise ValueError("progress must be one of: 'auto', 'stages', or 'off'.")
-
-    if show_progress is not None:
-        if not isinstance(show_progress, bool):
-            raise TypeError("show_progress must be a boolean or None.")
-        return "auto" if show_progress else "off"
 
     return cast(ProgressMode, progress)
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -22,7 +21,16 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     _build_inverted_index_from_keys,
     _derive_keys_for_strategy,
 )
-from uk_address_matcher.helpers.progress import _ProgressBar
+from uk_address_matcher.logging.chunking import (
+    log_chunk_progress,
+    log_stage_complete,
+    log_stage_start,
+)
+from uk_address_matcher.logging.progress import (
+    ProgressMode,
+    _ProgressBar,
+    resolve_progress_mode,
+)
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _uid,
@@ -31,8 +39,6 @@ from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
 if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
-
-logger = logging.getLogger("uk_address_matcher")
 
 
 def _materialise_relation(
@@ -76,75 +82,6 @@ def _drop_tables_with_prefix(con: DuckDBPyConnection, prefix: str) -> None:
             _drop_table_and_registered_aliases(con, table_name)
 
 
-def _format_elapsed(elapsed_seconds: float) -> str:
-    total_seconds = int(round(max(0.0, elapsed_seconds)))
-    minutes, seconds = divmod(total_seconds, 60)
-    return f"{minutes}m {seconds:02d}s"
-
-
-def _format_elapsed_brief(elapsed_seconds: float) -> str:
-    total_seconds = int(round(max(0.0, elapsed_seconds)))
-    if total_seconds < 60:
-        return f"{total_seconds}s"
-    return _format_elapsed(elapsed_seconds)
-
-
-def _log_stage_start(stage_label: str, total_records: int, total_chunks: int) -> None:
-    logger.info(
-        "%s: %s records across %s chunk%s",
-        stage_label,
-        f"{total_records:,}",
-        total_chunks,
-        "" if total_chunks == 1 else "s",
-    )
-
-
-def _log_stage_complete(
-    stage_label: str,
-    total_records: int,
-    elapsed_seconds: float,
-) -> None:
-    logger.info(
-        "%s completed: %s records in %s",
-        stage_label,
-        f"{total_records:,}",
-        _format_elapsed_brief(elapsed_seconds),
-    )
-
-
-def _log_progress(
-    total_records: int,
-    processed_records: int,
-    stage_label: str,
-    *,
-    progress: _ProgressBar | None = None,
-    chunk_index: int | None = None,
-    total_chunks: int | None = None,
-    chunk_elapsed_seconds: float | None = None,
-) -> None:
-    if progress is not None:
-        ensure_line_break = getattr(progress, "ensure_line_break", None)
-        if callable(ensure_line_break):
-            ensure_line_break()
-
-    chunk_position = "?/?"
-    if chunk_index is not None and total_chunks is not None:
-        chunk_position = f"{chunk_index + 1}/{total_chunks}"
-
-    elapsed_suffix = ""
-    if chunk_elapsed_seconds is not None:
-        elapsed_suffix = f", elapsed={_format_elapsed_brief(chunk_elapsed_seconds)}"
-
-    logger.debug(
-        "%s: chunk %s, %s/%s records%s",
-        stage_label,
-        chunk_position,
-        f"{processed_records:,}",
-        f"{total_records:,}",
-        elapsed_suffix,
-    )
-
-
 def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
     if total_records <= 0:
         raise ValueError(
@@ -164,7 +101,7 @@ def clean_data_pre_term_frequencies(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional[DebugOptions] = None,
-    show_progress: bool = True,
+    progress: ProgressMode = "auto",
 ) -> DuckDBPyRelation:
     """Clean address data with foundational steps only (no term frequencies).
 
@@ -184,6 +121,7 @@ def clean_data_pre_term_frequencies(
     Returns:
         Cleaned address data without term frequencies, materialised as a relation.
     """
+    progress_mode = resolve_progress_mode(progress)
     uid = _uid()
     input_name = f"__ukam_input_addresses_{uid}"
     con.register(input_name, address_table)
@@ -199,13 +137,18 @@ def clean_data_pre_term_frequencies(
         label=stage_label,
         total=total_rows,
         total_units=total_chunks,
-        enabled=show_progress,
+        enabled=progress_mode == "auto",
     )
 
     con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}")
 
     stage_started_at = time.perf_counter()
-    _log_stage_start(stage_label, total_rows, total_chunks)
+    log_stage_start(
+        stage_label,
+        total_rows,
+        total_chunks,
+        progress_mode=progress_mode,
+    )
 
     try:
         for chunk_index in range(total_chunks):
@@ -244,10 +187,11 @@ def clean_data_pre_term_frequencies(
                 completed_units=chunk_index + 1,
             )
 
-            _log_progress(
+            log_chunk_progress(
                 total_rows,
                 processed_records,
                 stage_label=stage_label,
+                progress_mode=progress_mode,
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
@@ -258,7 +202,12 @@ def clean_data_pre_term_frequencies(
     finally:
         progress.close()
 
-    _log_stage_complete(stage_label, total_rows, time.perf_counter() - stage_started_at)
+    log_stage_complete(
+        stage_label,
+        total_rows,
+        time.perf_counter() - stage_started_at,
+        progress_mode=progress_mode,
+    )
 
     _drop_table_and_registered_aliases(con, input_name)
     _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
@@ -272,7 +221,7 @@ def derive_term_frequencies_table(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    show_progress: bool = True,
+    progress: ProgressMode = "auto",
 ) -> DuckDBPyRelation:
     """Derive a term frequency lookup table from address data.
 
@@ -300,10 +249,15 @@ def derive_term_frequencies_table(
         num_of_chunks: Number of chunks to split the data into for cleaning.
             Set to 1 for no chunking.
         debug_options: Optional debug configuration for pipeline execution.
+        progress: Progress output mode. ``"auto"`` renders live updates only
+            in a supported interactive terminal and otherwise logs stage
+            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+            suppresses progress output.
 
     Returns:
         Term frequency table with 'token' and 'rel_freq' columns.
     """
+    progress_mode = resolve_progress_mode(progress)
     uid = _uid()
 
     # Ensure postcode column exists
@@ -323,7 +277,7 @@ def derive_term_frequencies_table(
         label=stage_label,
         total=total_rows,
         total_units=total_chunks,
-        enabled=show_progress,
+        enabled=progress_mode == "auto",
     )
 
     cleaned_table = f"__ukam_tf_derive_cleaned_{uid}"
@@ -331,7 +285,12 @@ def derive_term_frequencies_table(
 
     # Process in chunks using minimal pipeline (clean + tokenise only)
     stage_started_at = time.perf_counter()
-    _log_stage_start(stage_label, total_rows, total_chunks)
+    log_stage_start(
+        stage_label,
+        total_rows,
+        total_chunks,
+        progress_mode=progress_mode,
+    )
 
     try:
         for chunk_index in range(total_chunks):
@@ -373,10 +332,11 @@ def derive_term_frequencies_table(
                 completed_units=chunk_index + 1,
             )
 
-            _log_progress(
+            log_chunk_progress(
                 total_rows,
                 processed_records,
                 stage_label=stage_label,
+                progress_mode=progress_mode,
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
@@ -387,7 +347,12 @@ def derive_term_frequencies_table(
     finally:
         progress.close()
 
-    _log_stage_complete(stage_label, total_rows, time.perf_counter() - stage_started_at)
+    log_stage_complete(
+        stage_label,
+        total_rows,
+        time.perf_counter() - stage_started_at,
+        progress_mode=progress_mode,
+    )
 
     # Compute token frequencies from clean_full_address tokens
     tf_sql = f"""
@@ -423,7 +388,7 @@ def derive_inverted_index(
     strategies: list[IndexingStrategy] | None = None,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    show_progress: bool = True,
+    progress: ProgressMode = "auto",
 ) -> DuckDBPyRelation:
     """Derive an inverted index from already-cleaned canonical data.
 
@@ -460,11 +425,17 @@ def derive_inverted_index(
         strategies: List of :class:`IndexingStrategy` instances.  Defaults
             to :data:`DEFAULT_INDEXING_STRATEGIES` (trigram + bigram).
         debug_options: Optional debug configuration for pipeline execution.
+        progress: Progress output mode. ``"auto"`` renders live updates only
+            in a supported interactive terminal and otherwise logs stage
+            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+            suppresses progress output.
 
     Returns:
         Inverted index table with ``key`` (VARCHAR), ``unique_ids`` (LIST),
         and ``index_strategy`` (VARCHAR) columns.
     """
+    progress_mode = resolve_progress_mode(progress)
+
     if strategies is None:
         strategies = DEFAULT_INDEXING_STRATEGIES
 
@@ -481,7 +452,12 @@ def derive_inverted_index(
         stage_label = f"Building inverted index ({strategy.name})"
         if num_of_chunks == 1:
             stage_started_at = time.perf_counter()
-            _log_stage_start(stage_label, total_rows, 1)
+            log_stage_start(
+                stage_label,
+                total_rows,
+                1,
+                progress_mode=progress_mode,
+            )
             # Single-pass for this strategy
             pipeline = create_sql_pipeline(
                 con,
@@ -502,18 +478,20 @@ def derive_inverted_index(
                 first_insert = False
             else:
                 chunk_result.insert_into(result_table)
-            _log_progress(
+            log_chunk_progress(
                 total_rows,
                 total_rows,
                 stage_label=stage_label,
+                progress_mode=progress_mode,
                 chunk_index=0,
                 total_chunks=1,
                 chunk_elapsed_seconds=time.perf_counter() - stage_started_at,
             )
-            _log_stage_complete(
+            log_stage_complete(
                 stage_label,
                 total_rows,
                 time.perf_counter() - stage_started_at,
+                progress_mode=progress_mode,
             )
         else:
             # Chunked path for this strategy
@@ -522,9 +500,14 @@ def derive_inverted_index(
                 label=stage_label,
                 total=total_rows,
                 total_units=num_of_chunks,
-                enabled=show_progress,
+                enabled=progress_mode == "auto",
             )
-            _log_stage_start(stage_label, total_rows, num_of_chunks)
+            log_stage_start(
+                stage_label,
+                total_rows,
+                num_of_chunks,
+                progress_mode=progress_mode,
+            )
             try:
                 for chunk_index in range(num_of_chunks):
                     chunk_started_at = time.perf_counter()
@@ -566,10 +549,11 @@ def derive_inverted_index(
                         processed_records,
                         completed_units=chunk_index + 1,
                     )
-                    _log_progress(
+                    log_chunk_progress(
                         total_rows,
                         processed_records,
                         stage_label=stage_label,
+                        progress_mode=progress_mode,
                         progress=progress,
                         chunk_index=chunk_index,
                         total_chunks=num_of_chunks,
@@ -578,10 +562,11 @@ def derive_inverted_index(
             finally:
                 progress.close()
 
-            _log_stage_complete(
+            log_stage_complete(
                 stage_label,
                 total_rows,
                 time.perf_counter() - stage_started_at,
+                progress_mode=progress_mode,
             )
 
     return con.table(result_table)
@@ -603,7 +588,7 @@ def prepare_data_for_matching(
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
     debug_options: Optional[DebugOptions] = None,
-    show_progress: bool = True,
+    progress: ProgressMode = "auto",
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -631,6 +616,10 @@ def prepare_data_for_matching(
         debug_options: Optional debug configuration for pipeline execution.
             Note: Debug options are only applied on the first iteration to avoid
             excessive logging output.
+        progress: Progress output mode. ``"auto"`` renders live updates only
+            in a supported interactive terminal and otherwise logs stage
+            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+            suppresses progress output.
 
     Returns:
         Cleaned address data with computed term frequencies, including numeric
@@ -659,6 +648,7 @@ def prepare_data_for_matching(
         # Using pre-baked term frequencies (default):
         df_prepared = prepare_data_for_matching(df_addresses, con)
     """
+    progress_mode = resolve_progress_mode(progress)
     uid = _uid()
 
     # Clean data in chunks (without term frequencies)
@@ -667,7 +657,7 @@ def prepare_data_for_matching(
         con,
         num_of_chunks=num_of_chunks,
         debug_options=debug_options,
-        show_progress=show_progress,
+        progress=progress_mode,
     )
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
@@ -692,7 +682,7 @@ def prepare_data_for_matching(
         label=stage_label,
         total=total_rows,
         total_units=total_chunks,
-        enabled=show_progress,
+        enabled=progress_mode == "auto",
     )
 
     # Get the underlying table name for direct access
@@ -709,7 +699,12 @@ def prepare_data_for_matching(
 
     # Apply term frequencies and trigram blocking to cleaned chunks
     stage_started_at = time.perf_counter()
-    _log_stage_start(stage_label, total_rows, total_chunks)
+    log_stage_start(
+        stage_label,
+        total_rows,
+        total_chunks,
+        progress_mode=progress_mode,
+    )
     try:
         for chunk_index in range(total_chunks):
             chunk_started_at = time.perf_counter()
@@ -754,10 +749,11 @@ def prepare_data_for_matching(
                 processed_records,
                 completed_units=chunk_index + 1,
             )
-            _log_progress(
+            log_chunk_progress(
                 total_rows,
                 processed_records,
                 stage_label=stage_label,
+                progress_mode=progress_mode,
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
@@ -768,7 +764,12 @@ def prepare_data_for_matching(
     finally:
         progress.close()
 
-    _log_stage_complete(stage_label, total_rows, time.perf_counter() - stage_started_at)
+    log_stage_complete(
+        stage_label,
+        total_rows,
+        time.perf_counter() - stage_started_at,
+        progress_mode=progress_mode,
+    )
 
     # Verify the intermediate table is now empty (all chunks processed)
     remaining_rows = con.sql(f"SELECT COUNT(*) FROM {cleaned_table_name}").fetchone()[0]
