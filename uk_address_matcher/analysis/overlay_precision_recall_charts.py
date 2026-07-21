@@ -696,6 +696,7 @@ def _build_overlay_chart_definition(
         "value": 0.18,
     }
     bottom_panel["layer"][1]["mark"]["strokeWidth"] = 2.75
+    bottom_panel["layer"][1]["mark"].pop("point", None)
     bottom_panel["layer"][1]["encoding"]["detail"] = {
         "field": "series_id",
         "type": "nominal",
