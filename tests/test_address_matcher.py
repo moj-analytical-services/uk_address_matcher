@@ -254,6 +254,70 @@ def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
     )
 
 
+def test_matcher_progress_stages_logs_boundaries_without_chunk_updates(
+    con, canonical_data, messy_data, caplog
+):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+        show_progress="stages",
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        matcher._resolve_canonical_data()
+        matcher._resolve_messy_data()
+
+    messages = [record.getMessage() for record in caplog.records]
+
+    assert any(message.startswith("Cleaning for TF derivation:") for message in messages)
+    assert any(message.startswith("Applying term frequencies:") for message in messages)
+    assert not any("chunk 1/" in message for message in messages)
+
+
+def test_matcher_progress_off_suppresses_stage_status_logs(
+    con, canonical_data, messy_data, caplog
+):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+        show_progress="off",
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        matcher._resolve_canonical_data()
+        matcher._resolve_messy_data()
+
+    stage_prefixes = (
+        "Cleaning for TF derivation",
+        "Cleaning and preprocessing",
+        "Applying term frequencies",
+        "Building inverted index",
+    )
+    assert not any(
+        record.getMessage().startswith(stage_prefix)
+        and (
+            " records across " in record.getMessage()
+            or " completed:" in record.getMessage()
+        )
+        for record in caplog.records
+        for stage_prefix in stage_prefixes
+    )
+
+
+def test_matcher_rejects_unknown_progress_mode(con, canonical_data, messy_data):
+    with pytest.raises(ValueError, match="show_progress must be a boolean"):
+        AddressMatcher(
+            canonical_addresses=canonical_data,
+            addresses_to_match=messy_data,
+            con=con,
+            show_progress="verbose",
+        )
+
+
 def test_match_with_custom_splink_stage(con, canonical_data, messy_data):
     """SplinkStage parameters should be passable directly."""
     matcher = AddressMatcher(
