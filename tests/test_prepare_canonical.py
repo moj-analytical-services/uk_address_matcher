@@ -273,7 +273,7 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
     assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
 
 
-def test_prepare_progress_off_suppresses_live_output(
+def test_prepare_show_progress_false_suppresses_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
     stream = _FakeStream(isatty_value=True)
@@ -284,7 +284,7 @@ def test_prepare_progress_off_suppresses_live_output(
         output_folder=tmp_path / "prepared",
         con=con,
         overwrite=True,
-        progress="off",
+        show_progress=False,
     )
 
     assert stream.getvalue() == ""
@@ -302,7 +302,7 @@ def test_prepare_progress_stages_logs_boundaries_without_chunk_updates(
             output_folder=tmp_path / "prepared",
             con=con,
             overwrite=True,
-            progress="stages",
+            show_progress="stages",
         )
 
     messages = [record.getMessage() for record in caplog.records]
@@ -325,7 +325,7 @@ def test_prepare_progress_off_suppresses_stage_status_logs(
             output_folder=tmp_path / "prepared",
             con=con,
             overwrite=True,
-            progress="off",
+            show_progress="off",
         )
 
     stage_prefixes = (
@@ -345,7 +345,7 @@ def test_prepare_progress_off_suppresses_stage_status_logs(
     )
 
 
-def test_prepare_default_progress_enables_live_output(
+def test_prepare_default_show_progress_enables_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
     enabled_values: list[bool] = []
@@ -387,7 +387,7 @@ def test_prepare_default_progress_enables_live_output(
     assert all(value is True for value in enabled_values)
 
 
-def test_prepare_progress_auto_emits_live_output(
+def test_prepare_show_progress_true_emits_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
     enabled_values: list[bool] = []
@@ -423,7 +423,7 @@ def test_prepare_progress_auto_emits_live_output(
         output_folder=tmp_path / "prepared",
         con=con,
         overwrite=True,
-        progress="auto",
+        show_progress="auto",
     )
 
     assert enabled_values
@@ -439,7 +439,7 @@ def test_prepare_logs_sparse_info_and_debug_progress(
             output_folder=tmp_path / "prepared",
             con=con,
             overwrite=True,
-            progress="auto",
+            show_progress=True,
         )
 
     info_messages = [
@@ -640,19 +640,19 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "derive_term_frequencies_table",
-        lambda data, con, num_of_chunks, progress="auto": tf_relation,
+        lambda data, con, num_of_chunks, show_progress=True: tf_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, progress="auto": (
+        lambda data, con, num_of_chunks, term_frequency_lookup, show_progress=True: (
             clean_relation
         ),
     )
     monkeypatch.setattr(
         chunking_strategies,
         "derive_inverted_index",
-        lambda df_clean, con, num_of_chunks, progress="auto": inverted_relation,
+        lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
     )
 
     prepare_canonical_folder(
@@ -716,19 +716,19 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "derive_term_frequencies_table",
-        lambda data, con, num_of_chunks, progress="auto": tf_relation,
+        lambda data, con, num_of_chunks, show_progress=True: tf_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, progress="auto": (
+        lambda data, con, num_of_chunks, term_frequency_lookup, show_progress=True: (
             clean_relation
         ),
     )
     monkeypatch.setattr(
         chunking_strategies,
         "derive_inverted_index",
-        lambda df_clean, con, num_of_chunks, progress="auto": inverted_relation,
+        lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
     )
 
     prepare_canonical_folder(

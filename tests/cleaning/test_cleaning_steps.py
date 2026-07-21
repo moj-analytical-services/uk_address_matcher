@@ -337,7 +337,7 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
         cleaned = prepare_data_for_matching(
             input_relation,
             con=connection,
-            progress="off",
+            show_progress="off",
         )
 
     assert cleaned.count("*").fetchone()[0] == 1

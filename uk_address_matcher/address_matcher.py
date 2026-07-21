@@ -16,7 +16,7 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
-from uk_address_matcher.logging.progress import ProgressMode, resolve_progress_mode
+from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
 from uk_address_matcher.post_linkage.match_result import MatchResult
 from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 from uk_address_matcher.sql_pipeline.helpers import (
@@ -70,9 +70,10 @@ class AddressMatcher:
         cleaning_num_chunks: Number of chunks to use for cleaning and term
             frequency derivation when canonical input is a raw relation. Also
             used for messy-address cleaning. Must be a positive integer.
-        progress: Progress output mode. ``"auto"`` renders live updates only
-            in a supported interactive terminal and otherwise logs stage
-            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+        show_progress: ``True`` uses automatic live progress when supported;
+            ``False`` suppresses progress output. ``"auto"`` renders live
+            updates only in a supported interactive terminal and otherwise logs
+            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
             suppresses progress output.
         debug_options: Optional `DebugOptions` to control debug output and logging.
 
@@ -135,12 +136,12 @@ class AddressMatcher:
         stages: Optional[list[MatchingStage]] = None,
         debug_options: Optional[DebugOptions] = None,
         cleaning_num_chunks: int = 10,
-        progress: ProgressMode = "auto",
+        show_progress: ShowProgress = True,
     ):
         self.con = con
         self.stages = stages if stages is not None else _default_stages()
         self.debug_options = debug_options
-        self.progress = resolve_progress_mode(progress)
+        self.show_progress = resolve_progress_mode(show_progress)
         self.canonical_address_filter = canonical_address_filter
         if not isinstance(cleaning_num_chunks, int):
             raise TypeError("cleaning_num_chunks must be an integer.")
@@ -238,7 +239,7 @@ class AddressMatcher:
                 con=self.con,
                 num_of_chunks=self.cleaning_num_chunks,
                 debug_options=self.debug_options,
-                progress=self.progress,
+                show_progress=self.show_progress,
             )
 
             logger.debug("Cleaning canonical data")
@@ -249,7 +250,7 @@ class AddressMatcher:
                 term_frequency_lookup=self._tf_table,
                 dataset_role="canonical",
                 debug_options=self.debug_options,
-                progress=self.progress,
+                show_progress=self.show_progress,
             )
 
             logger.debug("Building inverted index from canonical data")
@@ -257,7 +258,7 @@ class AddressMatcher:
                 self._canonical_clean,
                 con=self.con,
                 debug_options=self.debug_options,
-                progress=self.progress,
+                show_progress=self.show_progress,
             )
             self._register_inverted_index(inverted_index)
 
@@ -278,7 +279,7 @@ class AddressMatcher:
             inverted_index_n=inverted_index_n,
             dataset_role="messy",
             debug_options=self.debug_options,
-            progress=self.progress,
+            show_progress=self.show_progress,
         )
 
     def _coerce_addresses_to_match(

@@ -27,7 +27,7 @@ from uk_address_matcher.logging.chunking import (
     log_stage_start,
 )
 from uk_address_matcher.logging.progress import (
-    ProgressMode,
+    ShowProgress,
     _ProgressBar,
     resolve_progress_mode,
 )
@@ -101,7 +101,7 @@ def clean_data_pre_term_frequencies(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional[DebugOptions] = None,
-    progress: ProgressMode = "auto",
+    show_progress: ShowProgress = True,
 ) -> DuckDBPyRelation:
     """Clean address data with foundational steps only (no term frequencies).
 
@@ -121,7 +121,7 @@ def clean_data_pre_term_frequencies(
     Returns:
         Cleaned address data without term frequencies, materialised as a relation.
     """
-    progress_mode = resolve_progress_mode(progress)
+    progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     input_name = f"__ukam_input_addresses_{uid}"
     con.register(input_name, address_table)
@@ -221,7 +221,7 @@ def derive_term_frequencies_table(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    progress: ProgressMode = "auto",
+    show_progress: ShowProgress = True,
 ) -> DuckDBPyRelation:
     """Derive a term frequency lookup table from address data.
 
@@ -249,15 +249,16 @@ def derive_term_frequencies_table(
         num_of_chunks: Number of chunks to split the data into for cleaning.
             Set to 1 for no chunking.
         debug_options: Optional debug configuration for pipeline execution.
-        progress: Progress output mode. ``"auto"`` renders live updates only
-            in a supported interactive terminal and otherwise logs stage
-            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+        show_progress: ``True`` uses automatic live progress when supported;
+            ``False`` suppresses progress output. ``"auto"`` renders live
+            updates only in a supported interactive terminal and otherwise logs
+            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
             suppresses progress output.
 
     Returns:
         Term frequency table with 'token' and 'rel_freq' columns.
     """
-    progress_mode = resolve_progress_mode(progress)
+    progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
 
     # Ensure postcode column exists
@@ -388,7 +389,7 @@ def derive_inverted_index(
     strategies: list[IndexingStrategy] | None = None,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    progress: ProgressMode = "auto",
+    show_progress: ShowProgress = True,
 ) -> DuckDBPyRelation:
     """Derive an inverted index from already-cleaned canonical data.
 
@@ -425,16 +426,17 @@ def derive_inverted_index(
         strategies: List of :class:`IndexingStrategy` instances.  Defaults
             to :data:`DEFAULT_INDEXING_STRATEGIES` (trigram + bigram).
         debug_options: Optional debug configuration for pipeline execution.
-        progress: Progress output mode. ``"auto"`` renders live updates only
-            in a supported interactive terminal and otherwise logs stage
-            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+        show_progress: ``True`` uses automatic live progress when supported;
+            ``False`` suppresses progress output. ``"auto"`` renders live
+            updates only in a supported interactive terminal and otherwise logs
+            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
             suppresses progress output.
 
     Returns:
         Inverted index table with ``key`` (VARCHAR), ``unique_ids`` (LIST),
         and ``index_strategy`` (VARCHAR) columns.
     """
-    progress_mode = resolve_progress_mode(progress)
+    progress_mode = resolve_progress_mode(show_progress)
 
     if strategies is None:
         strategies = DEFAULT_INDEXING_STRATEGIES
@@ -588,7 +590,7 @@ def prepare_data_for_matching(
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
     debug_options: Optional[DebugOptions] = None,
-    progress: ProgressMode = "auto",
+    show_progress: ShowProgress = True,
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -616,9 +618,10 @@ def prepare_data_for_matching(
         debug_options: Optional debug configuration for pipeline execution.
             Note: Debug options are only applied on the first iteration to avoid
             excessive logging output.
-        progress: Progress output mode. ``"auto"`` renders live updates only
-            in a supported interactive terminal and otherwise logs stage
-            boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+        show_progress: ``True`` uses automatic live progress when supported;
+            ``False`` suppresses progress output. ``"auto"`` renders live
+            updates only in a supported interactive terminal and otherwise logs
+            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
             suppresses progress output.
 
     Returns:
@@ -648,7 +651,7 @@ def prepare_data_for_matching(
         # Using pre-baked term frequencies (default):
         df_prepared = prepare_data_for_matching(df_addresses, con)
     """
-    progress_mode = resolve_progress_mode(progress)
+    progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
 
     # Clean data in chunks (without term frequencies)
@@ -657,7 +660,7 @@ def prepare_data_for_matching(
         con,
         num_of_chunks=num_of_chunks,
         debug_options=debug_options,
-        progress=progress_mode,
+        show_progress=progress_mode,
     )
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]

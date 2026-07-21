@@ -31,13 +31,19 @@ def test_progress_bar_does_not_render_in_databricks_runtime(monkeypatch) -> None
     assert stream.getvalue() == ""
 
 
-@pytest.mark.parametrize("progress", ["auto", "stages", "off"])
-def test_resolve_progress_mode_accepts_supported_values(progress: str) -> None:
-    assert resolve_progress_mode(progress) == progress
+@pytest.mark.parametrize(
+    ("show_progress", "expected_mode"),
+    [(True, "auto"), (False, "off"), ("auto", "auto"), ("stages", "stages")],
+)
+def test_resolve_progress_mode_accepts_boolean_and_named_values(
+    show_progress: bool | str,
+    expected_mode: str,
+) -> None:
+    assert resolve_progress_mode(show_progress) == expected_mode
 
 
 def test_resolve_progress_mode_rejects_unknown_value() -> None:
-    with pytest.raises(ValueError, match="progress must be one of"):
+    with pytest.raises(ValueError, match="show_progress must be a boolean"):
         resolve_progress_mode("verbose")
 
 

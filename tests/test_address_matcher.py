@@ -262,7 +262,7 @@ def test_matcher_progress_stages_logs_boundaries_without_chunk_updates(
         addresses_to_match=messy_data,
         con=con,
         stages=[ExactMatchStage()],
-        progress="stages",
+        show_progress="stages",
     )
 
     with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
@@ -284,7 +284,7 @@ def test_matcher_progress_off_suppresses_stage_status_logs(
         addresses_to_match=messy_data,
         con=con,
         stages=[ExactMatchStage()],
-        progress="off",
+        show_progress="off",
     )
 
     with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
@@ -309,12 +309,12 @@ def test_matcher_progress_off_suppresses_stage_status_logs(
 
 
 def test_matcher_rejects_unknown_progress_mode(con, canonical_data, messy_data):
-    with pytest.raises(ValueError, match="progress must be one of"):
+    with pytest.raises(ValueError, match="show_progress must be a boolean"):
         AddressMatcher(
             canonical_addresses=canonical_data,
             addresses_to_match=messy_data,
             con=con,
-            progress="verbose",
+            show_progress="verbose",
         )
 
 
