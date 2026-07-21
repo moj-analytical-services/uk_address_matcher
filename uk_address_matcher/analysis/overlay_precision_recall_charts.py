@@ -9,18 +9,20 @@ from pathlib import Path
 from typing import Any
 
 _OVERLAY_COLOUR_RANGE = [
-    "#12436D",
-    "#28A197",
-    "#F46A25",
-    "#801650",
-    "#1D609D",
-    "#30AA51",
-    "#A285D1",
-    "#00B1EB",
+    "#6929C4",
+    "#1192E8",
+    "#005D5D",
+    "#9F1853",
+    "#FA4D56",
+    "#570408",
+    "#198038",
+    "#002D9C",
+    "#EE538B",
+    "#B28600",
 ]
 
 _HOVER_GUIDE_COLOUR = "#A0A5B4"
-_LABEL_MIN_VERTICAL_GAP = 0.012
+_LABEL_MIN_VERTICAL_GAP = 0.001
 
 _ALTAIR_SPEC_ASSIGNMENT_RE = re.compile(r"\b(?:var|const|let)\s+spec\s*=\s*")
 
@@ -322,11 +324,11 @@ def _interpolate_numeric_field_for_recall(
 
 def _build_diff_records(
     baseline_records: list[dict[str, Any]],
-    comparison_records_by_label: list[tuple[str, list[dict[str, Any]]]],
+    comparison_records_by_label: list[tuple[str, str, list[dict[str, Any]]]],
 ) -> list[dict[str, Any]]:
     diff_records: list[dict[str, Any]] = []
 
-    for comparison_label, comparison_records in comparison_records_by_label:
+    for comparison_label, series_id, comparison_records in comparison_records_by_label:
         min_comparison_recall = min(
             float(record["recall"]) for record in comparison_records
         )
@@ -352,9 +354,11 @@ def _build_diff_records(
             diff_records.append(
                 {
                     "baseline_recall": baseline_recall,
+                    "recall": baseline_recall,
                     "baseline_precision": baseline_precision,
                     "baseline_fp": baseline_record.get("fp"),
                     "comparison_label": comparison_label,
+                    "series_id": series_id,
                     "comparison_precision": comparison_precision,
                     "comparison_fp": comparison_fp,
                     "precision_gap_percentage_points": (
@@ -377,33 +381,71 @@ def _build_overlay_chart_definition(
     label_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     adjusted_label_records = _apply_label_offsets(label_records)
+    precision_axis_floor = min(float(record["precision"]) for record in curve_records)
+    recall_axis_minimum = max(
+        0.0,
+        min(float(record["recall"]) for record in curve_records) - 0.05,
+    )
+    recall_axis_maximum = min(
+        1.0,
+        max(float(record["recall"]) for record in curve_records) + 0.05,
+    )
+    recall_axis_minimum = round(recall_axis_minimum, 12)
+    recall_axis_maximum = round(recall_axis_maximum, 12)
     ordered_series_labels = [record["series_label"] for record in adjusted_label_records]
     comparison_labels = [
         record["series_label"]
         for record in adjusted_label_records
         if not bool(record["is_baseline"])
     ]
-    comparison_colour_range = _OVERLAY_COLOUR_RANGE[1 : len(comparison_labels) + 1]
+    if len(ordered_series_labels) > len(_OVERLAY_COLOUR_RANGE):
+        raise ValueError(
+            "Precision-recall overlays support at most "
+            f"{len(_OVERLAY_COLOUR_RANGE)} curves; received "
+            f"{len(ordered_series_labels)}."
+        )
+
+    series_colours = dict(
+        zip(
+            ordered_series_labels,
+            _OVERLAY_COLOUR_RANGE,
+            strict=False,
+        )
+    )
+    series_colour_scale = {
+        "domain": ordered_series_labels,
+        "range": [series_colours[label] for label in ordered_series_labels],
+    }
+    comparison_colour_scale = {
+        "domain": comparison_labels,
+        "range": [series_colours[label] for label in comparison_labels],
+    }
 
     top_panel = _prepare_nested_chart_definition(
         _load_chart_definition("precision_recall.json")
     )
     top_panel["data"]["values"] = curve_records
     top_panel.pop("params", None)
+    top_panel.pop("title", None)
     top_panel["height"] = 320
-    top_panel["mark"]["fillOpacity"] = 0.08
     top_panel["encoding"]["detail"] = {
         "field": "series_id",
         "type": "nominal",
     }
+    top_panel["encoding"]["order"] = {
+        "field": "recall",
+        "type": "quantitative",
+    }
+    top_panel["encoding"]["x"]["scale"]["domain"] = [
+        recall_axis_minimum,
+        recall_axis_maximum,
+    ]
+    top_panel["encoding"]["y"]["scale"]["domain"] = [precision_axis_floor, 1.0]
     top_panel["encoding"]["color"] = {
         "field": "series_label",
         "type": "nominal",
         "title": "Curve",
-        "scale": {
-            "domain": ordered_series_labels,
-            "range": _OVERLAY_COLOUR_RANGE[: len(ordered_series_labels)],
-        },
+        "scale": series_colour_scale,
     }
     top_panel["encoding"]["tooltip"] = [
         {
@@ -420,24 +462,37 @@ def _build_overlay_chart_definition(
         *top_panel["encoding"]["tooltip"],
     ]
 
-    top_mark = top_panel.pop("mark")
+    top_panel.pop("mark")
     top_encoding = top_panel.pop("encoding")
-    top_panel["layer"] = [
+    line_hover_opacity_conditions = [
         {
-            "mark": top_mark,
-            "encoding": top_encoding,
+            "test": (
+                "length(data('label_hover_store')) === 0 && "
+                "length(data('gap_hover_store')) === 0"
+            ),
+            "value": 0.45,
         },
+        {
+            "param": "label_hover",
+            "empty": False,
+            "value": 1.0,
+        },
+        {
+            "param": "gap_hover",
+            "empty": False,
+            "value": 1.0,
+        },
+    ]
+    top_panel["layer"] = [
         {
             "mark": {
                 "type": "point",
                 "opacity": 0,
                 "size": 90,
+                "clip": True,
             },
             "encoding": {
-                "x": {
-                    "field": "recall",
-                    "type": "quantitative",
-                },
+                "x": top_encoding["x"],
                 "y": {
                     "field": "precision",
                     "type": "quantitative",
@@ -462,6 +517,76 @@ def _build_overlay_chart_definition(
             ],
         },
         {
+            "transform": [{"filter": "datum.is_baseline"}],
+            "mark": {
+                "type": "area",
+                "interpolate": "linear",
+                "clip": True,
+                "line": False,
+                "opacity": 0.10,
+            },
+            "encoding": {
+                "x": top_encoding["x"],
+                "y": top_encoding["y"],
+                "color": top_encoding["color"],
+            },
+        },
+        {
+            "transform": [{"filter": "!datum.is_baseline"}],
+            "mark": {
+                "type": "area",
+                "interpolate": "linear",
+                "clip": True,
+                "line": False,
+                "opacity": 0.15,
+            },
+            "encoding": {
+                "x": top_encoding["x"],
+                "y": top_encoding["y"],
+                "color": top_encoding["color"],
+            },
+        },
+        {
+            "transform": [{"filter": "datum.is_baseline"}],
+            "mark": {
+                "type": "line",
+                "interpolate": "linear",
+                "clip": True,
+                "strokeWidth": 3.25,
+            },
+            "encoding": {
+                "x": top_encoding["x"],
+                "y": top_encoding["y"],
+                "detail": top_encoding["detail"],
+                "order": top_encoding["order"],
+                "color": top_encoding["color"],
+                "opacity": {
+                    "condition": line_hover_opacity_conditions,
+                    "value": 0.18,
+                },
+            },
+        },
+        {
+            "transform": [{"filter": "!datum.is_baseline"}],
+            "mark": {
+                "type": "line",
+                "interpolate": "linear",
+                "clip": True,
+                "strokeWidth": 2.75,
+            },
+            "encoding": {
+                "x": top_encoding["x"],
+                "y": top_encoding["y"],
+                "detail": top_encoding["detail"],
+                "order": top_encoding["order"],
+                "color": top_encoding["color"],
+                "opacity": {
+                    "condition": line_hover_opacity_conditions,
+                    "value": 0.18,
+                },
+            },
+        },
+        {
             "data": {"values": adjusted_label_records},
             "transform": [{"filter": "datum.label_has_connector"}],
             "mark": {
@@ -469,10 +594,7 @@ def _build_overlay_chart_definition(
                 "strokeWidth": 1,
             },
             "encoding": {
-                "x": {
-                    "field": "recall",
-                    "type": "quantitative",
-                },
+                "x": top_encoding["x"],
                 "y": {
                     "field": "precision",
                     "type": "quantitative",
@@ -484,10 +606,7 @@ def _build_overlay_chart_definition(
                     "field": "series_label",
                     "type": "nominal",
                     "legend": None,
-                    "scale": {
-                        "domain": ordered_series_labels,
-                        "range": _OVERLAY_COLOUR_RANGE[: len(ordered_series_labels)],
-                    },
+                    "scale": series_colour_scale,
                 },
             },
         },
@@ -501,11 +620,19 @@ def _build_overlay_chart_definition(
                 "fontSize": 11,
                 "fontWeight": "bold",
             },
+            "params": [
+                {
+                    "name": "label_hover",
+                    "select": {
+                        "type": "point",
+                        "on": "mouseover",
+                        "clear": "mouseout",
+                        "fields": ["series_id"],
+                    },
+                }
+            ],
             "encoding": {
-                "x": {
-                    "field": "recall",
-                    "type": "quantitative",
-                },
+                "x": top_encoding["x"],
                 "y": {
                     "field": "label_precision",
                     "type": "quantitative",
@@ -518,10 +645,15 @@ def _build_overlay_chart_definition(
                     "field": "series_label",
                     "type": "nominal",
                     "legend": None,
-                    "scale": {
-                        "domain": ordered_series_labels,
-                        "range": _OVERLAY_COLOUR_RANGE[: len(ordered_series_labels)],
+                    "scale": series_colour_scale,
+                },
+                "opacity": {
+                    "condition": {
+                        "param": "label_hover",
+                        "empty": False,
+                        "value": 1.0,
                     },
+                    "value": 0.75,
                 },
             },
         },
@@ -533,10 +665,7 @@ def _build_overlay_chart_definition(
                 "strokeWidth": 1,
             },
             "encoding": {
-                "x": {
-                    "field": "recall",
-                    "type": "quantitative",
-                },
+                "x": top_encoding["x"],
             },
             "transform": [{"filter": {"param": "curve_hover", "empty": False}}],
         },
@@ -561,18 +690,56 @@ def _build_overlay_chart_definition(
         _load_chart_definition("precision_recall_diff.json")
     )
     bottom_panel["data"]["values"] = diff_records
-    bottom_panel["layer"][1]["encoding"]["color"]["scale"] = {
-        "domain": comparison_labels,
-        "range": comparison_colour_range,
+    bottom_panel["layer"][1]["encoding"]["color"]["scale"] = comparison_colour_scale
+    bottom_panel["layer"][1]["encoding"]["opacity"] = {
+        "condition": line_hover_opacity_conditions,
+        "value": 0.18,
+    }
+    bottom_panel["layer"][1]["mark"]["strokeWidth"] = 2.75
+    bottom_panel["layer"][1]["encoding"]["detail"] = {
+        "field": "series_id",
+        "type": "nominal",
+    }
+    bottom_panel["layer"][1]["params"] = [
+        {
+            "name": "gap_hover",
+            "select": {
+                "type": "point",
+                "on": "mouseover",
+                "clear": "mouseout",
+                "fields": ["series_id"],
+            },
+        }
+    ]
+    bottom_panel["layer"][1]["encoding"]["x"]["field"] = "recall"
+    bottom_panel["layer"][1]["encoding"]["x"]["scale"]["domain"] = [
+        recall_axis_minimum,
+        recall_axis_maximum,
+    ]
+    precision_gap_extent = max(
+        (
+            abs(float(record["precision_gap_percentage_points"]))
+            for record in diff_records
+        ),
+        default=1.0,
+    )
+    precision_gap_extent = round(precision_gap_extent, 12)
+    if precision_gap_extent == 0:
+        precision_gap_extent = 1.0
+    bottom_panel["layer"][1]["encoding"]["y"]["scale"] = {
+        "domain": [-precision_gap_extent, precision_gap_extent],
+        "nice": False,
     }
 
     return {
-        "$schema": "https://vega.github.io/schema/vega-lite/v6.1.0.json",
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "description": (
             "Overlayed precision-recall curves with recall-aligned precision gaps"
         ),
         "title": "Precision-Recall Curve Comparison",
+        "background": "#FFFFFF",
         "padding": {"top": 5, "left": 5, "right": 5, "bottom": 5},
+        "spacing": 12,
         "vconcat": [
             top_panel,
             bottom_panel,
@@ -580,12 +747,32 @@ def _build_overlay_chart_definition(
         "resolve": {
             "scale": {
                 "color": "independent",
+                "x": "shared",
             }
         },
         "config": {
             "view": {"stroke": None},
-            "axis": {"labelFontSize": 11, "titleFontSize": 12},
-            "legend": {"labelFontSize": 11, "titleFontSize": 12},
+            "axis": {
+                "domainColor": "#6B7280",
+                "gridColor": "#E5E7EB",
+                "gridOpacity": 0.8,
+                "labelColor": "#374151",
+                "labelFontSize": 11,
+                "tickColor": "#9CA3AF",
+                "titleColor": "#1F2937",
+                "titleFontSize": 12,
+                "titleFontWeight": 600,
+            },
+            "legend": {
+                "labelColor": "#374151",
+                "labelFontSize": 11,
+                "titleColor": "#1F2937",
+                "titleFontSize": 12,
+            },
+            "title": {
+                "anchor": "start",
+                "fontSize": 16,
+            },
         },
     }
 
@@ -613,7 +800,7 @@ def _overlay_precision_recall_charts(
 
     curve_records = list(baseline_records)
     label_records = [_choose_label_record(baseline_records)]
-    comparison_records_by_label: list[tuple[str, list[dict[str, Any]]]] = []
+    comparison_records_by_label: list[tuple[str, str, list[dict[str, Any]]]] = []
 
     for index, (chart, label) in enumerate(
         zip(normalised_comparison_charts, normalised_comparison_labels, strict=True),
@@ -627,7 +814,9 @@ def _overlay_precision_recall_charts(
         )
         curve_records.extend(comparison_records)
         label_records.append(_choose_label_record(comparison_records))
-        comparison_records_by_label.append((label, comparison_records))
+        comparison_records_by_label.append(
+            (label, f"comparison_{index}", comparison_records)
+        )
 
     diff_records = _build_diff_records(baseline_records, comparison_records_by_label)
     chart_definition = _build_overlay_chart_definition(
