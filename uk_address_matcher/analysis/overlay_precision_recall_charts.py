@@ -9,16 +9,16 @@ from pathlib import Path
 from typing import Any
 
 _OVERLAY_COLOUR_RANGE = [
-    "#6929C4",
-    "#1192E8",
     "#005D5D",
-    "#9F1853",
     "#FA4D56",
-    "#570408",
+    "#6929C4",
+    "#B28600",
     "#198038",
+    "#1192E8",
+    "#9F1853",
     "#002D9C",
     "#EE538B",
-    "#B28600",
+    "#570408",
 ]
 
 _HOVER_GUIDE_COLOUR = "#A0A5B4"
@@ -523,7 +523,7 @@ def _build_overlay_chart_definition(
                 "interpolate": "linear",
                 "clip": True,
                 "line": False,
-                "opacity": 0.10,
+                "opacity": 0.09,
             },
             "encoding": {
                 "x": top_encoding["x"],
@@ -538,7 +538,7 @@ def _build_overlay_chart_definition(
                 "interpolate": "linear",
                 "clip": True,
                 "line": False,
-                "opacity": 0.15,
+                "opacity": 0.14,
             },
             "encoding": {
                 "x": top_encoding["x"],
