@@ -1,7 +1,68 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
+from typing import Literal, TypeAlias, cast
+
+ProgressMode: TypeAlias = Literal["auto", "stages", "off"]
+ShowProgress: TypeAlias = bool | ProgressMode
+
+_PROGRESS_MODES = frozenset({"auto", "stages", "off"})
+_NOTEBOOK_ENVIRONMENT_VARIABLES = (
+    "DATABRICKS_RUNTIME_VERSION",
+    "DATABRICKS_CLUSTER_ID",
+    "DATABRICKS_HOST",
+)
+
+
+def resolve_progress_mode(
+    show_progress: ShowProgress = True,
+) -> ProgressMode:
+    """Normalise boolean and named progress-output settings."""
+    if isinstance(show_progress, bool):
+        return "auto" if show_progress else "off"
+    if not isinstance(show_progress, str):
+        raise TypeError(
+            "show_progress must be a boolean or one of: 'auto', 'stages', or 'off'."
+        )
+    if show_progress not in _PROGRESS_MODES:
+        raise ValueError(
+            "show_progress must be a boolean or one of: 'auto', 'stages', or 'off'."
+        )
+
+    return cast(ProgressMode, show_progress)
+
+
+def _is_notebook_environment() -> bool:
+    """Return whether the current process is running in a notebook runtime."""
+    if any(os.environ.get(name) for name in _NOTEBOOK_ENVIRONMENT_VARIABLES):
+        return True
+
+    ipython = sys.modules.get("IPython")
+    get_ipython = getattr(ipython, "get_ipython", None)
+    if not callable(get_ipython):
+        return False
+
+    try:
+        shell = get_ipython()
+    except Exception:
+        return False
+
+    shell_module = getattr(shell.__class__, "__module__", "") if shell else ""
+    return shell_module.startswith(("ipykernel.", "google.colab."))
+
+
+def _supports_live_progress(stream: object) -> bool:
+    """Return whether a stream can safely render an overwriting progress bar."""
+    isatty = getattr(stream, "isatty", None)
+    if not callable(isatty):
+        return False
+
+    try:
+        return bool(isatty()) and not _is_notebook_environment()
+    except (OSError, ValueError):
+        return False
 
 
 class _ProgressBar:
@@ -30,7 +91,7 @@ class _ProgressBar:
         self._filled_glyph = "▮"
         self._empty_glyph = "▯"
 
-        self.enabled = enabled
+        self.enabled = enabled and _supports_live_progress(self.stream)
         self._configure_glyphs()
 
     def _configure_glyphs(self) -> None:
