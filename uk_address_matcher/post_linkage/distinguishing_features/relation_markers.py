@@ -37,9 +37,17 @@ def improve_predictions_using_relation_markers(
         WITH normalised AS (
             SELECT
                 *,
-                trim(regexp_replace(upper(original_address_concat_r), '[^A-Z0-9]+', ' ', 'g'))
+                trim(
+                    regexp_replace(
+                        upper(original_address_concat_r), '[^A-Z0-9]+', ' ', 'g'
+                    )
+                )
                     AS source_address,
-                trim(regexp_replace(upper(original_address_concat_l), '[^A-Z0-9]+', ' ', 'g'))
+                trim(
+                    regexp_replace(
+                        upper(original_address_concat_l), '[^A-Z0-9]+', ' ', 'g'
+                    )
+                )
                     AS candidate_address
             FROM df_predict
         ),
@@ -95,9 +103,12 @@ def improve_predictions_using_relation_markers(
                     THEN TRUE
                     ELSE FALSE
                 END AS target_all_tokens_match,
-                len(list_intersect(candidate_tokens, target_tokens)) AS target_token_overlap_count,
-                list_has_any(candidate_tokens, anchor_number_tokens) AS anchor_number_match,
-                len(list_intersect(candidate_tokens, anchor_tokens)) AS anchor_token_overlap_count,
+                len(list_intersect(candidate_tokens, target_tokens))
+                    AS target_token_overlap_count,
+                list_has_any(candidate_tokens, anchor_number_tokens)
+                    AS anchor_number_match,
+                len(list_intersect(candidate_tokens, anchor_tokens))
+                    AS anchor_token_overlap_count,
                 (
                     target_address IN {_WEAK_RELATION_TARGETS_SQL}
                     OR regexp_matches(
@@ -110,7 +121,8 @@ def improve_predictions_using_relation_markers(
         classified AS (
             SELECT
                 *,
-                (target_phrase_match OR target_all_tokens_match) AS candidate_preserves_target,
+                (target_phrase_match OR target_all_tokens_match)
+                    AS candidate_preserves_target,
                 (
                     target_token_overlap_count = 0
                     AND (anchor_number_match OR anchor_token_overlap_count >= 3)
@@ -131,8 +143,14 @@ def improve_predictions_using_relation_markers(
                 CASE
                     WHEN weak_target THEN 0.0
                     ELSE
-                        CASE WHEN target_phrase_match THEN {TARGET_PHRASE_BOOST} ELSE 0.0 END
-                        + CASE WHEN target_all_tokens_match THEN {TARGET_ALL_TOKENS_BOOST} ELSE 0.0 END
+                        CASE
+                            WHEN target_phrase_match THEN {TARGET_PHRASE_BOOST}
+                            ELSE 0.0
+                        END
+                        + CASE
+                            WHEN target_all_tokens_match THEN {TARGET_ALL_TOKENS_BOOST}
+                            ELSE 0.0
+                        END
                         + CASE
                             WHEN candidate_is_anchor_only AND target_rival_exists
                             THEN {ANCHOR_ONLY_WITH_TARGET_RIVAL_PENALTY}
