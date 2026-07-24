@@ -221,7 +221,7 @@ def _lookup_keys_in_inverted_index(strategies=None):
         for strategy in strategies:
             union_parts.append(
                 f"SELECT unique_id AS __messy_uid, "
-                f"unnest({strategy.keys_sql_expr}) AS __key "
+                f"CAST(unnest({strategy.keys_sql_expr}) AS VARCHAR) AS __key "
                 f"FROM {{base}}"
             )
         unnested_keys_sql = " UNION ALL ".join(union_parts)
@@ -232,7 +232,7 @@ def _lookup_keys_in_inverted_index(strategies=None):
             __messy_uid,
             flatten(list(ii.unique_ids)) AS __matched
         FROM {unnested_keys} ut
-        LEFT JOIN __ukam_inverted_index ii ON ut.__key = ii.key
+        LEFT JOIN __ukam_inverted_index ii ON ut.__key = CAST(ii.key AS VARCHAR)
         WHERE ii.unique_ids IS NOT NULL
         GROUP BY __messy_uid
         """
@@ -271,7 +271,7 @@ def _lookup_keys_in_inverted_index(strategies=None):
                 / len(ii.unique_ids)
             ) AS __key_idf
         FROM {distinct_keys} AS dk
-        JOIN __ukam_inverted_index AS ii ON dk.__key = ii.key
+        JOIN __ukam_inverted_index AS ii ON dk.__key = CAST(ii.key AS VARCHAR)
         WHERE ii.unique_ids IS NOT NULL
           AND len(ii.unique_ids) > 0
         """

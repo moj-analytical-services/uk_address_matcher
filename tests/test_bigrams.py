@@ -1,5 +1,8 @@
 import duckdb
 
+from uk_address_matcher.post_linkage.distinguishing_features.relation_markers import (
+    improve_predictions_using_relation_markers,
+)
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
@@ -42,6 +45,39 @@ def generate_test_data(
         }
         data.append(row)
     return data
+
+
+def test_relation_marker_reranker_prefers_target_over_anchor_only_candidate():
+    con = duckdb.connect()
+    predictions = con.sql("""
+        SELECT * FROM (
+            VALUES
+                ('target', 'source', 'TY COCH DUMFRIES STREET',
+                    'TY COCH R/O 4 DUMFRIES STREET', 10.0),
+                ('anchor', 'source', '4 DUMFRIES STREET',
+                    'TY COCH R/O 4 DUMFRIES STREET', 20.0),
+                ('weak', 'weak-source', 'FLAT 7 DUMFRIES STREET',
+                    'FLAT R/O 4 DUMFRIES STREET', 15.0),
+                ('ordinary', 'ordinary-source', '1 HIGH STREET',
+                    '1 HIGH STREET', 11.0)
+        ) AS predictions(
+            unique_id_l,
+            unique_id_r,
+            original_address_concat_l,
+            original_address_concat_r,
+            match_weight
+        )
+    """)
+
+    result = improve_predictions_using_relation_markers(
+        df_predict=predictions,
+        con=con,
+    ).df()
+
+    scores = dict(zip(result["unique_id_l"], result["match_weight"]))
+    assert scores["target"] > scores["anchor"]
+    assert scores["weak"] == 15.0
+    assert scores["ordinary"] == 11.0
 
 
 def run_assertions(

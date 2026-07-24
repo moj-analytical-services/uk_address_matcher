@@ -129,12 +129,12 @@ def test_overlay_chart_definition_uses_translucent_comparisons_and_hover_guides(
     baseline_line_layer = top_panel["layer"][3]
     comparison_line_layer = top_panel["layer"][4]
     assert comparison_area_layer["transform"][-1] == {"filter": "!datum.is_baseline"}
-    assert comparison_area_layer["mark"]["opacity"] == 0.15
+    assert comparison_area_layer["mark"]["opacity"] == 0.14
     assert "y2" not in comparison_area_layer["encoding"]
     assert "detail" not in comparison_area_layer["encoding"]
     assert "order" not in comparison_area_layer["encoding"]
     assert baseline_area_layer["transform"][-1] == {"filter": "datum.is_baseline"}
-    assert baseline_area_layer["mark"]["opacity"] == 0.10
+    assert baseline_area_layer["mark"]["opacity"] == 0.09
     assert "y2" not in baseline_area_layer["encoding"]
     assert "detail" not in baseline_area_layer["encoding"]
     assert "order" not in baseline_area_layer["encoding"]
@@ -265,6 +265,7 @@ def test_overlay_chart_uses_one_ordered_colour_mapping() -> None:
         "domain": ["Baseline", "First", "Second"],
         "range": _OVERLAY_COLOUR_RANGE[:3],
     }
+    assert top_colour_scale["range"] == ["#005D5D", "#FA4D56", "#6929C4"]
     assert len(set(top_colour_scale["range"])) == len(top_colour_scale["range"])
     assert comparison_line_layer["encoding"]["color"]["scale"] == top_colour_scale
     assert connector_layer["encoding"]["color"]["scale"] == top_colour_scale
