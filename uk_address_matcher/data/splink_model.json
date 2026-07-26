@@ -58,6 +58,41 @@
   ],
   "comparisons": [
     {
+      "output_column_name": "neighbour_distinguishing_tokens",
+      "comparison_levels": [
+        {
+          "sql_condition": "distinguishing_adj_start_tokens_l IS NULL OR len(distinguishing_adj_start_tokens_l) = 0",
+          "label_for_charts": "No distinguishing tokens",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_adj_start_tokens_l)",
+          "label_for_charts": "All distinguishing tokens present",
+          "m_probability": 2.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_has_any(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_adj_start_tokens_l)",
+          "label_for_charts": "Some distinguishing tokens present",
+          "m_probability": 1.4142135623730951,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No distinguishing tokens present",
+          "m_probability": 1.0,
+          "u_probability": 1024.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Locally distinguishing canonical tokens"
+    },
+    {
       "output_column_name": "address_without_numbers",
       "comparison_levels": [
         {

@@ -2,12 +2,14 @@ import logging
 
 import duckdb
 
+from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps import (
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
@@ -16,6 +18,138 @@ def _run_single_stage(stage_factory, input_relation, connection):
     pipeline = DuckDBPipeline(connection, input_relation)
     pipeline.add_step(stage_factory())
     return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'A1', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'preserved-a'),
+            (2, 'A2', '1 HIGH STREET CAMDEN LONDON', 'preserved-b'),
+            (3, 'B1', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'preserved-c'),
+            (4, 'B2', 'NEW STATION RAINBOW LANE TAUNTON', 'preserved-d'),
+            (5, 'C1', '9 SOLO ROAD YORK', 'preserved-e')
+        ) AS t(ukam_address_id, unique_id, clean_full_address, source_marker)
+        """
+    )
+
+    result = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        input_relation,
+        connection,
+    )
+    assert result.columns.count("ukam_address_id") == 1
+    actual = {
+        unique_id: (distinguishing, common, source_marker)
+        for unique_id, distinguishing, common, source_marker in result.project(
+            """
+            unique_id,
+            distinguishing_adj_start_tokens,
+            common_adj_start_tokens,
+            source_marker
+            """
+        ).fetchall()
+    }
+
+    assert actual == {
+        "A1": (
+            ["FLAT", "A"],
+            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
+            "preserved-a",
+        ),
+        "A2": ([], ["1", "HIGH", "STREET", "CAMDEN", "LONDON"], "preserved-b"),
+        "B1": (
+            ["OLD", "STATION", "HOUSE"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            "preserved-c",
+        ),
+        "B2": (
+            ["NEW", "STATION"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            "preserved-d",
+        ),
+        "C1": ([], ["9", "SOLO", "ROAD", "YORK"], "preserved-e"),
+    }
+
+
+def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
+    monkeypatch,
+):
+    connection = duckdb.connect()
+    candidate_addresses = [
+        f"FLAT {letter} 1 HIGH STREET CAMDEN LONDON" for letter in ("A", "B", "C", "D")
+    ]
+    partitioned_addresses = connection.sql(
+        "SELECT address, abs(hash(address)) % 2 AS partition FROM (VALUES "
+        + ", ".join(f"('{address}')" for address in candidate_addresses)
+        + ") AS candidates(address)"
+    ).fetchall()
+    first_address = partitioned_addresses[0][0]
+    first_partition = partitioned_addresses[0][1]
+    second_address = next(
+        address
+        for address, partition in partitioned_addresses[1:]
+        if partition != first_partition
+    )
+    input_relation = connection.sql(
+        f"""
+        SELECT * FROM (VALUES
+            ('A1', '{first_address}', 'N1 1AA'),
+            ('A2', '{second_address}', 'N1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_calculate_chunk_size",
+        lambda total_records, num_of_chunks: 1,
+    )
+    result = prepare_data_for_matching(
+        input_relation,
+        con=connection,
+        num_of_chunks=2,
+        derive_distinguishing_wrt_adjacent_records=True,
+        dataset_role="canonical",
+        show_progress=False,
+    )
+
+    rows = result.project(
+        "unique_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(distinguishing for _, distinguishing, _ in rows)
+    assert all(
+        common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows
+    )
+
+
+def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'U4', 'DELTA LANE TAUNTON'),
+            (2, 'U3', 'ALPHA RAINBOW LANE TAUNTON'),
+            (3, 'U3', 'ALPHB RAINBOW LANE TAUNTON'),
+            (4, 'U3', 'ALPHC RAINBOW LANE TAUNTON')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    result = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        input_relation,
+        connection,
+    )
+    target = (
+        result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
+        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+        .fetchone()
+    )
+
+    assert target == (["ALPHC", "RAINBOW"], ["LANE", "TAUNTON"])
 
 
 def test_parse_out_flat_positional():
