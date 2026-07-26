@@ -242,6 +242,7 @@ class AddressMatcher:
                 con=self.con,
                 num_of_chunks=self.cleaning_num_chunks,
                 term_frequency_lookup=self._tf_table,
+                derive_distinguishing_wrt_adjacent_records=True,
                 dataset_role="canonical",
                 debug_options=self.debug_options,
             )

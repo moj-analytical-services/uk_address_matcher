@@ -27,6 +27,7 @@ from uk_address_matcher.helpers.path_parsing import (
     read_duckdb_relation_from_path,
     relative_remote_path,
 )
+from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
 from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
 
 if TYPE_CHECKING:
@@ -446,6 +447,7 @@ def prepare_canonical_folder(
     con: duckdb.DuckDBPyConnection,
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
+    derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = True,
@@ -476,6 +478,8 @@ def prepare_canonical_folder(
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write hash-partitioned chunks under
             `ukam_canonical_addresses_chunks/`.
+        derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
+            leading tokens that distinguish suffix-similar nearby records.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -504,6 +508,7 @@ def prepare_canonical_folder(
     output_is_remote = is_remote_folder_reference(output_folder)
     output_folder_uri = str(output_folder) if output_is_remote else None
     output_folder_path = None if output_is_remote else Path(output_folder)
+    progress_mode = resolve_progress_mode(show_progress)
     data = _coerce_prepare_input_to_relation(data, con=con)
 
     logger.info("Preparing canonical data from '%s'", _describe_prepare_input(data))
@@ -547,7 +552,7 @@ def prepare_canonical_folder(
         data,
         con=con,
         num_of_chunks=num_of_chunks,
-        show_progress=show_progress,
+        show_progress=progress_mode,
     )
 
     logger.debug("Cleaning canonical addresses")
@@ -556,7 +561,11 @@ def prepare_canonical_folder(
         con=con,
         num_of_chunks=num_of_chunks,
         term_frequency_lookup=tf_table,
-        show_progress=show_progress,
+        derive_distinguishing_wrt_adjacent_records=(
+            derive_distinguishing_wrt_adjacent_records
+        ),
+        dataset_role="canonical",
+        show_progress=progress_mode,
     )
 
     logger.debug("Building inverted index")
@@ -564,7 +573,7 @@ def prepare_canonical_folder(
         df_clean,
         con=con,
         num_of_chunks=num_of_chunks,
-        show_progress=show_progress,
+        show_progress=progress_mode,
     )
 
     # Write parquet files
