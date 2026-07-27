@@ -12,6 +12,7 @@ from benchmarking.insights.run_persistence import (
     compare_persisted_runs,
     generate_benchmark_run_id,
     persist_benchmark_run,
+    write_overlay_precision_recall_chart_html,
 )
 from benchmarking.runner import (
     BenchmarkRunResult,
@@ -70,6 +71,34 @@ def test_generate_benchmark_run_id_hashes_timestamp_seed() -> None:
         == hashlib.sha256(timestamp_seed.encode("utf-8")).hexdigest()[:16]
     )
     assert generate_benchmark_run_id(at=timestamp) != timestamp_seed
+
+
+def test_overlay_html_uses_matching_vega_lite_runtime_and_export_actions(
+    tmp_path: Path,
+) -> None:
+    values = [
+        {
+            "recall": 0.8,
+            "precision": 0.95,
+            "truth_threshold": 8.0,
+            "match_probability": 0.996,
+            "fp": 5,
+        }
+    ]
+    output_path = tmp_path / "overlay.html"
+
+    write_overlay_precision_recall_chart_html(
+        path=output_path,
+        baseline_chart={"data": {"values": values}},
+        comparison_charts={"data": {"values": values}},
+    )
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "https://cdn.jsdelivr.net/npm/vega@5" in html
+    assert "https://cdn.jsdelivr.net/npm/vega-lite@5" in html
+    assert "https://cdn.jsdelivr.net/npm/vega-embed@6" in html
+    assert '"$schema": "https://vega.github.io/schema/vega-lite/v5.json"' in html
+    assert "{ actions: true, renderer: 'svg' }" in html
 
 
 def test_persist_benchmark_run_records_run_id_and_legacy_hash(tmp_path: Path) -> None:
