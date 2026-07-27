@@ -49,6 +49,10 @@
       "sql_dialect": "duckdb"
     },
     {
+      "blocking_rule": "regexp_replace(l.clean_full_address, '[^A-Z0-9]', '', 'g') = regexp_replace(r.clean_full_address, '[^A-Z0-9]', '', 'g')",
+      "sql_dialect": "duckdb"
+    },
+    {
       "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
       "sql_dialect": "duckdb",
       "arrays_to_explode": [
@@ -782,7 +786,7 @@
           "fix_u_probability": true
         }
       ],
-      "comparison_description": "Bigram/trigram inverted-index signature overlap (IDF-weighted)"
+      "comparison_description": "Bigram/trigram inverted-index signature overlap (IDF-weighted; filter_condition IS NULL; outward singleton four-gram rows are candidate-only)"
     }
   ]
 }
