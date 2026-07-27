@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from uk_address_matcher.cleaning.steps.inverted_index import (
-    BIGRAM_INDEX,
+    BIGRAM_STRATEGY,
     DEFAULT_INDEXING_STRATEGIES,
-    TRIGRAM_INDEX,
+    TRIGRAM_STRATEGY,
     InvertedIndexLookupStrategy,
     PhysicalIndexStrategy,
     _build_inverted_index_from_keys,
@@ -23,10 +23,6 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _strip_country_suffix,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
-)
-from uk_address_matcher.cleaning.steps.numeric_ranges import (
-    _add_numeric_range_lower_endpoint_tf,
-    _derive_numeric_range,
 )
 from uk_address_matcher.cleaning.steps.term_frequencies import (
     _add_numeric_term_frequencies_using_registered_df,
@@ -75,9 +71,6 @@ __all__ = [
     "_normalise_abbreviations_and_units",
     "_join_excluding_with_next_token",
     "_preserve_original_address_concat",
-    # numeric_ranges
-    "_add_numeric_range_lower_endpoint_tf",
-    "_derive_numeric_range",
     # tokenisation
     "_split_numeric_tokens_to_cols",
     "_tokenise_address_without_numbers",
@@ -93,8 +86,8 @@ __all__ = [
     # inverted_index
     "PhysicalIndexStrategy",
     "InvertedIndexLookupStrategy",
-    "TRIGRAM_INDEX",
-    "BIGRAM_INDEX",
+    "TRIGRAM_STRATEGY",
+    "BIGRAM_STRATEGY",
     "DEFAULT_INDEXING_STRATEGIES",
     "_build_inverted_index_from_keys",
     "_derive_keys_for_strategy",
