@@ -182,13 +182,14 @@ class SplinkStage(MatchingStage):
 
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
+            "CREATE OR REPLACE TEMP TABLE "
             + table_name
             + " AS SELECT * FROM ("
             + prediction_output.sql_query()
             + ")"
         )
         self.predictions_table = table_name
+        df_predict_ddb = con.table(table_name)
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(
@@ -211,7 +212,16 @@ class SplinkStage(MatchingStage):
             df_predict=df_improved,
             con=con,
         )
-        self.improved_predictions_table = getattr(df_improved, "alias", None)
+        improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE "
+            + improved_table_name
+            + " AS SELECT * FROM ("
+            + df_improved.sql_query()
+            + ")"
+        )
+        self.improved_predictions_table = improved_table_name
+        df_improved = con.table(improved_table_name)
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
@@ -223,7 +233,13 @@ class SplinkStage(MatchingStage):
         )
 
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
-        df_best.create(df_best_name)
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE "
+            + df_best_name
+            + " AS SELECT * FROM ("
+            + df_best.sql_query()
+            + ")"
+        )
         self.best_matches_table = df_best_name
 
         # Step 5: Apply thresholds and project to standard columns
