@@ -115,6 +115,12 @@ The examples below use the fictional London datasets from `ukam_datasets`, which
 | `.match_metrics()` | Match-reason breakdown with counts and percentages. |
 | `.accuracy_analysis()` | Threshold-based accuracy analysis from labelled data (requires `ukam_label` in messy input). |
 
+## Exporting a labelling bundle
+
+After matching, `result.export_labelling_bundle()` creates a durable review
+folder for later labelling. See [Labelling bundles](labelling.md) for the
+initial workflow and a high-level description of the exported artefacts.
+
 
 ??? info "Customising stages"
 
