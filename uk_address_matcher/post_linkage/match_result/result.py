@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -98,6 +99,23 @@ class MatchResult:
                 {", ".join(cols)}
             FROM ({base_relation_sql}) AS match_result
             """
+        )
+
+    def export_labelling_bundle(
+        self,
+        output_directory: str | Path = "ukam_labelling_bundle",
+        *,
+        top_n_candidates: int = 3,
+        overwrite: bool = False,
+    ) -> Path:
+        """Export a durable bundle for the UKAM labelling workflow."""
+        from uk_address_matcher.labelling import export_labelling_bundle
+
+        return export_labelling_bundle(
+            match_result=self,
+            output_directory=output_directory,
+            top_n_candidates=top_n_candidates,
+            overwrite=overwrite,
         )
 
     def match_metrics(

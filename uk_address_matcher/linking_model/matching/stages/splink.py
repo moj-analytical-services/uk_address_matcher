@@ -260,7 +260,7 @@ class SplinkStage(MatchingStage):
         )
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
+            "CREATE OR REPLACE TEMP TABLE "
             + table_name
             + " AS SELECT * FROM ("
             + prediction_output.sql_query()
@@ -268,6 +268,7 @@ class SplinkStage(MatchingStage):
         )
         self.predictions_table = table_name
         self.phase_timings["raw_prediction"] = perf_counter() - phase_started
+        df_predict_ddb = con.table(table_name)
 
         # Step 3: Improve predictions using distinguishing tokens
         phase_started = perf_counter()
@@ -295,7 +296,7 @@ class SplinkStage(MatchingStage):
         )
         improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
         con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
+            "CREATE OR REPLACE TEMP TABLE "
             + improved_table_name
             + " AS SELECT * FROM ("
             + df_improved.sql_query()
@@ -318,7 +319,13 @@ class SplinkStage(MatchingStage):
 
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
         phase_started = perf_counter()
-        df_best.create(df_best_name)
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE "
+            + df_best_name
+            + " AS SELECT * FROM ("
+            + df_best.sql_query()
+            + ")"
+        )
         self.best_matches_table = df_best_name
         self.phase_timings["best_match_materialisation"] = perf_counter() - phase_started
 
