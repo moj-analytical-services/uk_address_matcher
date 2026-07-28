@@ -5,7 +5,7 @@ import logging
 import shutil
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,7 +58,7 @@ def export_labelling_bundle(
     validate_splink_relations(match_result)
 
     bundle_id = str(uuid.uuid4())
-    created_at_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     review_relation = build_final_review_relation(
         match_result=match_result,
         bundle_id=bundle_id,
