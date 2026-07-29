@@ -6,7 +6,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 BENCHMARK_PROJECT_ROOT = _PROJECT_ROOT.as_posix()
 BENCHMARK_RESULTS_ROOT = (_PROJECT_ROOT / "benchmarking" / "results").as_posix()
-DUCKDB_MAX_MEMORY = "8GB"
+DUCKDB_MAX_MEMORY = "16GB"
 
 RESIDENTIAL_ONLY_CANONICAL_FILTER_SQL = "substr(classificationcode, 1, 1) = 'R'"
 RESIDENTIAL_WITHOUT_GARAGES_OR_PARENT_SHELLS_CANONICAL_FILTER_SQL = (
