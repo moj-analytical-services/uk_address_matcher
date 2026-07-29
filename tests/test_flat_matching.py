@@ -609,3 +609,43 @@ def test_sub_premise_location_discrimination_in_reranker():
         "Expected the positional conflict to demote the LEFT sibling by ~one penalty; "
         f"got gap={mw_missing - mw_left:.3f}."
     )
+
+
+def test_reranker_treats_standalone_rear_as_an_ordinary_token():
+    con = duckdb.connect()
+    try:
+        df_predict = con.sql("""
+            SELECT *
+            FROM (
+                VALUES
+                    ('c_rear', 'm_rear', 1, 1, 'REAR 10 HIGH STREET',
+                     'REAR 10 HIGH STREET', 0.0),
+                    ('c_front', 'm_rear', 2, 1, 'FRONT 10 HIGH STREET',
+                     'REAR 10 HIGH STREET', 0.0)
+            ) AS candidates(
+                unique_id_l, unique_id_r, ukam_address_id_l, ukam_address_id_r,
+                clean_full_address_l, clean_full_address_r, match_weight
+            )
+        """).project("""
+            *,
+            0.5 AS match_probability,
+            clean_full_address_l AS original_address_concat_l,
+            clean_full_address_r AS original_address_concat_r,
+            'E1 6AA' AS postcode_l,
+            'E1 6AA' AS postcode_r,
+            MAP([]::VARCHAR[], []::BIGINT[]) AS common_end_tokens_hist_r
+        """)
+
+        results = (
+            improve_predictions_using_distinguishing_tokens(
+                df_predict=df_predict,
+                con=con,
+                match_weight_threshold=-100,
+            )
+            .df()
+            .set_index("unique_id_l")
+        )
+
+        assert results.loc["c_front", "match_weight"] > -6.0
+    finally:
+        con.close()

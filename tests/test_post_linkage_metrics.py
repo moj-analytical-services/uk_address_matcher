@@ -95,17 +95,17 @@ def test_best_matches_with_distinguishability_uses_distinct_canonical_candidates
                 (
                     'U1', 'M1', 101, 1,
                     '10 HIGH STREET', 'AA1 1AA',
-                    10.0, 0.0
+                    10.0, 0.0, NULL, 'source-1'
                 ),
                 (
                     'U1', 'M1', 102, 1,
                     '10 HIGH STREET ANNEX', 'AA1 1AA',
-                    9.8, 0.0
+                    9.8, 0.0, NULL, 'source-1'
                 ),
                 (
                     'U2', 'M1', 201, 1,
                     '12 HIGH STREET', 'AA1 1AA',
-                    8.0, 0.0
+                    8.0, 0.0, NULL, 'source-1'
                 )
         ) AS t(
             unique_id_l,
@@ -115,7 +115,9 @@ def test_best_matches_with_distinguishability_uses_distinct_canonical_candidates
             original_address_concat_l,
             postcode_l,
             match_weight,
-            mw_adjustment
+            mw_adjustment,
+            ukam_reranker_audit_source_unique_id_l,
+            ukam_reranker_audit_source_unique_id_r
         )
         """
     )
@@ -138,6 +140,7 @@ def test_best_matches_with_distinguishability_uses_distinct_canonical_candidates
         df_predict=df_predict,
         df_addresses_to_match=df_addresses_to_match,
         con=con,
+        additional_columns_to_retain=["ukam_reranker_audit_source_unique_id"],
     ).df()
 
     assert len(result) == 1
@@ -146,6 +149,7 @@ def test_best_matches_with_distinguishability_uses_distinct_canonical_candidates
     assert result.loc[0, "match_weight"] == pytest.approx(10.0)
     assert result.loc[0, "distinguishability"] == pytest.approx(2.0)
     assert result.loc[0, "candidate_rank"] == 1
+    assert result.loc[0, "ukam_reranker_audit_source_unique_id_r"] == "source-1"
 
 
 def test_best_matches_with_distinguishability_uses_consistent_top_row_when_tied():
