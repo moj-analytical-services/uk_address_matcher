@@ -4,10 +4,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
-from uk_address_matcher.post_linkage.contextual_residual_reranker import (
-    PRECISION_K3_CONFIG,
-    ContextualRerankerConfig,
-)
 
 if TYPE_CHECKING:
     import duckdb
@@ -65,6 +61,8 @@ class SplinkStage(MatchingStage):
             use the library defaults.
         retain_intermediate_calculation_columns: Retain Splink comparison
             columns needed for debugging and waterfall charts.
+        use_contextual_reranker: Whether to apply the default contextual residual
+            reranker after token-based score adjustment.
     """
 
     # Prediction threshold for initial Splink predict() call
@@ -74,9 +72,7 @@ class SplinkStage(MatchingStage):
     improve_threshold_match_weight: float = -20
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
-    contextual_reranker_config: ContextualRerankerConfig = field(
-        default=PRECISION_K3_CONFIG
-    )
+    use_contextual_reranker: bool = True
 
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
@@ -115,6 +111,7 @@ class SplinkStage(MatchingStage):
             best_matches_with_distinguishability,
         )
         from uk_address_matcher.post_linkage.contextual_residual_reranker import (
+            contextual_acceptance_lift_filter,
             improve_predictions_using_contextual_residuals,
         )
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
@@ -171,11 +168,11 @@ class SplinkStage(MatchingStage):
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
-        df_improved = improve_predictions_using_contextual_residuals(
-            df_predict=df_improved,
-            con=con,
-            config=self.contextual_reranker_config,
-        )
+        if self.use_contextual_reranker:
+            df_improved = improve_predictions_using_contextual_residuals(
+                df_predict=df_improved,
+                con=con,
+            )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
         # Step 4: Compute distinguishability and select best match per record
@@ -202,13 +199,9 @@ class SplinkStage(MatchingStage):
             )
 
         acceptance_lift_filter = ""
-        if self.contextual_reranker_config.maximum_acceptance_lift is not None:
-            minimum_phase1_score = (
+        if self.use_contextual_reranker:
+            acceptance_lift_filter = contextual_acceptance_lift_filter(
                 self.final_match_weight_threshold
-                - self.contextual_reranker_config.maximum_acceptance_lift
-            )
-            acceptance_lift_filter = (
-                f"AND best_match.phase1_score >= {minimum_phase1_score}"
             )
 
         return con.sql(f"""

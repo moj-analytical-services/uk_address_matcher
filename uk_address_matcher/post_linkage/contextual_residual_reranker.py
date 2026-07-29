@@ -38,6 +38,14 @@ class ContextualRerankerConfig:
 PRECISION_K3_CONFIG = ContextualRerankerConfig()
 
 
+def contextual_acceptance_lift_filter(final_match_weight_threshold: float) -> str:
+    """Return the final-stage filter for the default contextual reranker."""
+    minimum_phase1_score = (
+        final_match_weight_threshold - PRECISION_K3_CONFIG.maximum_acceptance_lift
+    )
+    return f"AND best_match.phase1_score >= {minimum_phase1_score}"
+
+
 def improve_predictions_using_contextual_residuals(
     *,
     df_predict: DuckDBPyRelation,
