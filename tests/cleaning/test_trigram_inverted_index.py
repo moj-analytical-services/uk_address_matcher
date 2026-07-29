@@ -356,9 +356,7 @@ class TestDeriveInvertedIndexFunction:
             canonical_raw, duck_con, num_of_chunks=1
         )
 
-        inverted_idx = derive_inverted_index(
-            canonical_clean, duck_con, max_unique_ids_per_key=20
-        )
+        inverted_idx = derive_inverted_index(canonical_clean, duck_con)
 
         # Check structure
         assert "key" in inverted_idx.columns
@@ -410,9 +408,21 @@ class TestDeriveInvertedIndexFunction:
             canonical_raw, duck_con, num_of_chunks=1
         )
 
-        # Set max_unique_ids_per_key to 2 to filter out common keys
+        from dataclasses import replace
+
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            BIGRAM_INDEX,
+            TRIGRAM_INDEX,
+        )
+
+        # Set the physical index posting caps to 2 to filter out common keys.
         inverted_idx = derive_inverted_index(
-            canonical_clean, duck_con, max_unique_ids_per_key=2
+            canonical_clean,
+            duck_con,
+            strategies=[
+                replace(BIGRAM_INDEX, maximum_posting_size=2),
+                replace(TRIGRAM_INDEX, maximum_posting_size=2),
+            ],
         )
 
         result = inverted_idx.fetchall()
@@ -446,16 +456,12 @@ class TestDeriveInvertedIndexFunction:
         )
 
         # Build inverted index without chunking
-        idx_no_chunk = derive_inverted_index(
-            canonical_clean, duck_con, max_unique_ids_per_key=20, num_of_chunks=1
-        )
+        idx_no_chunk = derive_inverted_index(canonical_clean, duck_con, num_of_chunks=1)
         no_chunk_rows = idx_no_chunk.fetchall()
         no_chunk_dict = {(row[0], row[2]): sorted(row[1]) for row in no_chunk_rows}
 
         # Build inverted index with chunking (use an odd-ish number)
-        idx_chunked = derive_inverted_index(
-            canonical_clean, duck_con, max_unique_ids_per_key=20, num_of_chunks=5
-        )
+        idx_chunked = derive_inverted_index(canonical_clean, duck_con, num_of_chunks=5)
         chunked_rows = idx_chunked.fetchall()
         chunked_dict = {(row[0], row[2]): sorted(row[1]) for row in chunked_rows}
 
