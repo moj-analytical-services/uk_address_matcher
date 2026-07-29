@@ -92,6 +92,10 @@ def best_matches_with_distinguishability(
     if "ukam_label_r" in df_predict.columns:
         add_cols_select += "t.ukam_label_r, "
 
+    phase1_score_select = (
+        "t.phase1_score" if "phase1_score" in df_predict.columns else "NULL"
+    )
+
     if 0 not in distinguishability_thresholds:
         distinguishability_thresholds.append(0)
     thres_sorted = sorted(distinguishability_thresholds, reverse=True)
@@ -165,7 +169,7 @@ def best_matches_with_distinguishability(
         t.original_address_concat_l,
         t.postcode_l,
         t.match_weight,
-        t.phase1_score,
+        {phase1_score_select} AS phase1_score,
         t.distinguishability,
         t.candidate_rank,
         COALESCE(
