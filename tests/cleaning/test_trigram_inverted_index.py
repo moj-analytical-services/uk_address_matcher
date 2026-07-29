@@ -149,8 +149,8 @@ class TestIndexingStrategySqlExpressions:
     """Tests that the SQL expressions from IndexingStrategy produce correct results."""
 
     def test_trigram_strategy_sql(self, duck_con):
-        """Test that the TRIGRAM_STRATEGY keys_sql_expr works correctly."""
-        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_STRATEGY
+        """Test that the TRIGRAM_INDEX keys_sql_expr works correctly."""
+        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_INDEX
 
         result = duck_con.sql(f"""
             WITH input AS (
@@ -158,15 +158,15 @@ class TestIndexingStrategySqlExpressions:
                     '9 LOVE LANE LONDON' AS clean_full_address,
                     string_split('9 LOVE LANE LONDON', ' ') AS __tokens
             )
-            SELECT {TRIGRAM_STRATEGY.keys_sql_expr} AS keys
+            SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
         """).fetchone()[0]
 
         assert result == ["9 LOVE LANE", "LOVE LANE LONDON"]
 
     def test_trigram_strategy_sql_short_address(self, duck_con):
-        """Test TRIGRAM_STRATEGY with fewer than 3 tokens returns empty."""
-        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_STRATEGY
+        """Test TRIGRAM_INDEX with fewer than 3 tokens returns empty."""
+        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_INDEX
 
         result = duck_con.sql(f"""
             WITH input AS (
@@ -174,15 +174,15 @@ class TestIndexingStrategySqlExpressions:
                     'HIGH STREET' AS clean_full_address,
                     string_split('HIGH STREET', ' ') AS __tokens
             )
-            SELECT {TRIGRAM_STRATEGY.keys_sql_expr} AS keys
+            SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
         """).fetchone()[0]
 
         assert result == []
 
     def test_bigram_strategy_sql(self, duck_con):
-        """Test that the BIGRAM_STRATEGY keys_sql_expr works correctly."""
-        from uk_address_matcher.cleaning.steps.inverted_index import BIGRAM_STRATEGY
+        """Test that the BIGRAM_INDEX keys_sql_expr works correctly."""
+        from uk_address_matcher.cleaning.steps.inverted_index import BIGRAM_INDEX
 
         result = duck_con.sql(f"""
             WITH input AS (
@@ -190,15 +190,15 @@ class TestIndexingStrategySqlExpressions:
                     '9 LOVE LANE LONDON' AS clean_full_address,
                     string_split('9 LOVE LANE LONDON', ' ') AS __tokens
             )
-            SELECT {BIGRAM_STRATEGY.keys_sql_expr} AS keys
+            SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
         """).fetchone()[0]
 
         assert result == ["9 LOVE", "LOVE LANE", "LANE LONDON"]
 
     def test_bigram_strategy_sql_single_token(self, duck_con):
-        """Test BIGRAM_STRATEGY with a single token returns empty."""
-        from uk_address_matcher.cleaning.steps.inverted_index import BIGRAM_STRATEGY
+        """Test BIGRAM_INDEX with a single token returns empty."""
+        from uk_address_matcher.cleaning.steps.inverted_index import BIGRAM_INDEX
 
         result = duck_con.sql(f"""
             WITH input AS (
@@ -206,7 +206,7 @@ class TestIndexingStrategySqlExpressions:
                     'LONDON' AS clean_full_address,
                     string_split('LONDON', ' ') AS __tokens
             )
-            SELECT {BIGRAM_STRATEGY.keys_sql_expr} AS keys
+            SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
         """).fetchone()[0]
 
@@ -467,7 +467,7 @@ class TestDeriveInvertedIndexFunction:
             derive_inverted_index,
             prepare_data_for_matching,
         )
-        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_STRATEGY
+        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_INDEX
 
         canonical_raw = duck_con.sql("""
             SELECT * FROM (VALUES
@@ -481,7 +481,7 @@ class TestDeriveInvertedIndexFunction:
         )
 
         inverted_idx = derive_inverted_index(  # noqa: F841
-            canonical_clean, duck_con, strategies=[TRIGRAM_STRATEGY]
+            canonical_clean, duck_con, strategies=[TRIGRAM_INDEX]
         )
 
         strategies = duck_con.sql("""
@@ -493,6 +493,130 @@ class TestDeriveInvertedIndexFunction:
 
 class TestPrepareDataForMatchingWithInvertedIndex:
     """Integration tests for prepare_data_for_matching with inverted_index parameter."""
+
+    def test_canonical_index_uses_rare_contiguous_keys_and_messy_uses_skips(
+        self, duck_con
+    ):
+        """Keep skip keys transient while using them to find canonical candidates."""
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            derive_inverted_index,
+            prepare_data_for_matching,
+        )
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            SKIP1_TRIGRAM_LOOKUP,
+            SKIP2_TRIGRAM_LOOKUP,
+        )
+
+        canonical = duck_con.sql("""
+            SELECT
+                CAST(row_number AS VARCHAR) AS unique_id,
+                'COMMON ROAD LONDON' AS address_concat,
+                'SW1A 1AA' AS postcode
+            FROM generate_series(1, 21) AS rows(row_number)
+            UNION ALL
+            SELECT 'skip1', 'ALPHA BRAVO CHARLIE DELTA', 'SW1A 1AB'
+            UNION ALL
+            SELECT 'skip2', 'LIME MANGO OLIVE PEAR', 'SW1A 1AC'
+        """)
+        messy = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('messy_skip1', 'ALPHA BRAVO XENON CHARLIE DELTA', 'SW1A 1AB'),
+                ('messy_skip2', 'LIME MANGO XENON YTTRIUM OLIVE PEAR', 'SW1A 1AC')
+            ) AS rows(unique_id, address_concat, postcode)
+        """)
+
+        canonical_clean = prepare_data_for_matching(
+            canonical,
+            duck_con,
+            num_of_chunks=1,
+            dataset_role="canonical",
+        )
+        inverted_index = derive_inverted_index(canonical_clean, duck_con)
+
+        index_rows = set(inverted_index.select("key, index_strategy").fetchall())
+        assert {index_strategy for _, index_strategy in index_rows} == {
+            "bigram",
+            "trigram",
+        }
+        assert ("COMMON ROAD", "bigram") not in index_rows
+        assert ("COMMON ROAD LONDON", "trigram") not in index_rows
+        assert ("ALPHA BRAVO", "bigram") in index_rows
+        assert ("ALPHA BRAVO CHARLIE", "trigram") in index_rows
+        assert ("ALPHA CHARLIE DELTA", "trigram") not in index_rows
+
+        trigram_index = inverted_index.filter("index_strategy = 'trigram'")
+        prepared_messy = prepare_data_for_matching(
+            messy,
+            duck_con,
+            num_of_chunks=1,
+            inverted_index=trigram_index,
+            _inverted_index_strategies=[
+                SKIP1_TRIGRAM_LOOKUP,
+                SKIP2_TRIGRAM_LOOKUP,
+            ],
+            dataset_role="messy",
+        )
+        candidates = dict(
+            prepared_messy.select("unique_id, exploding_unique_ids").fetchall()
+        )
+        signature_scores = dict(
+            prepared_messy.select("unique_id, signature_score_map").fetchall()
+        )
+        assert candidates["messy_skip1"] == ["skip1"]
+        assert candidates["messy_skip2"] == ["skip2"]
+        assert signature_scores["messy_skip1"] == {}
+        assert signature_scores["messy_skip2"] == {}
+
+    def test_skip_bigrams_are_messy_only_and_deduplicate_candidates(self, duck_con):
+        """Use ordered skip-bigrams for short messy addresses without duplicates."""
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            derive_inverted_index,
+            prepare_data_for_matching,
+        )
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
+        )
+
+        canonical = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('skip1', 'ALPHA BRAVO', 'SW1A 1AA'),
+                ('skip2', 'LIME PEAR', 'SW1A 1AB')
+            ) AS rows(unique_id, address_concat, postcode)
+        """)
+        messy = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('skip1', 'ALPHA XENON BRAVO', 'SW1A 1AA'),
+                ('skip2', 'LIME XENON YTTRIUM PEAR', 'SW1A 1AB'),
+                ('reordered', 'BRAVO XENON ALPHA', 'SW1A 1AC')
+            ) AS rows(unique_id, address_concat, postcode)
+        """)
+
+        canonical_clean = prepare_data_for_matching(
+            canonical,
+            duck_con,
+            num_of_chunks=1,
+            dataset_role="canonical",
+        )
+        inverted_index = derive_inverted_index(canonical_clean, duck_con)
+        index_rows = set(inverted_index.select("key, index_strategy").fetchall())
+        assert ("ALPHA BRAVO", "bigram") in index_rows
+        assert ("ALPHA XENON BRAVO", "bigram") not in index_rows
+
+        prepared_messy = prepare_data_for_matching(
+            messy,
+            duck_con,
+            num_of_chunks=1,
+            inverted_index=inverted_index,
+            _inverted_index_strategies=MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
+            dataset_role="messy",
+        )
+        candidates = dict(
+            prepared_messy.select("unique_id, exploding_unique_ids").fetchall()
+        )
+        assert candidates["skip1"] == ["skip1"]
+        assert candidates["skip2"] == ["skip2"]
+        assert candidates["reordered"] == []
+        assert len(candidates["skip1"]) == len(set(candidates["skip1"]))
 
     def test_prepare_data_with_inverted_index(self, duck_con):
         """Test full pipeline with inverted index."""
