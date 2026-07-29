@@ -1,41 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 
-from uk_address_matcher.cleaning.steps.signature_patterns import ordered_pattern_keys_sql
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 BASE_POSTING_CAP = 20
-TRANSFORMED_TRIGRAM_POSTING_CAP = 5
-POSTCODE_FREE_FALLBACK_PREDICATE = """\
-NOT COALESCE(
-    regexp_full_match(
-        postcode,
-        '([A-Z]{1,2}\\d[A-Z\\d]?|GIR) \\d[A-Z]{2}'
-    ),
-    FALSE
-)"""
-
-
-class SignatureEvidenceMode(StrEnum):
-    """Control whether lookup matches contribute to the legacy signature score."""
-
-    SCORED = "scored"
-    CANDIDATE_ONLY = "candidate_only"
-
-
-class LookupActivation(StrEnum):
-    """Control which messy records generate transient keys for a lookup.
-
-    This gates messy-side lookup execution only; it does not affect which
-    canonical keys are built or persisted in a physical index.
-    """
-
-    ALWAYS = "always"
-    POSTCODE_FREE_FALLBACK = "postcode_free_fallback"
-    NO_BASE_TRIGRAM_CANDIDATES = "no_base_trigram_candidates"
 
 
 @dataclass(frozen=True)
@@ -72,10 +42,9 @@ class InvertedIndexLookupStrategy:
     source_key_generator: SignatureKeyGenerator
     target_index: PhysicalIndexStrategy
     maximum_posting_size_override: int | None = None
-    evidence_mode: SignatureEvidenceMode = SignatureEvidenceMode.SCORED
-    activation: LookupActivation = LookupActivation.ALWAYS
+    contributes_signature_evidence: bool = True
     transformation_cost: int = 0
-    deduplication_precedence: int | None = None
+    lookup_precedence: int = 0
 
     def __post_init__(self) -> None:
         if (
@@ -85,11 +54,8 @@ class InvertedIndexLookupStrategy:
             raise ValueError("maximum_posting_size_override must be positive")
         if self.transformation_cost < 0:
             raise ValueError("transformation_cost cannot be negative")
-        if (
-            self.deduplication_precedence is not None
-            and self.deduplication_precedence < 0
-        ):
-            raise ValueError("deduplication_precedence cannot be negative")
+        if self.lookup_precedence < 0:
+            raise ValueError("lookup_precedence cannot be negative")
 
     @property
     def maximum_posting_size(self) -> int:
@@ -97,15 +63,6 @@ class InvertedIndexLookupStrategy:
             self.maximum_posting_size_override
             if self.maximum_posting_size_override is not None
             else self.target_index.maximum_posting_size
-        )
-
-    @property
-    def lookup_precedence(self) -> int:
-        """Return the route ordering used when strategies emit the same key."""
-        return (
-            self.deduplication_precedence
-            if self.deduplication_precedence is not None
-            else self.transformation_cost
         )
 
 
@@ -116,26 +73,6 @@ class InvertedIndexPortfolio:
     name: str
     physical_indexes: tuple[PhysicalIndexStrategy, ...]
     lookup_strategies: tuple[InvertedIndexLookupStrategy, ...]
-
-
-def with_posting_cap(strategy: PhysicalIndexStrategy, cap: int) -> PhysicalIndexStrategy:
-    """Return an explicit experimental variant with a different posting cap."""
-    return replace(strategy, maximum_posting_size=cap)
-
-
-def lookup_activation_predicate(activation: LookupActivation) -> str:
-    """Return the source-row predicate for a lookup activation mode."""
-    if activation is LookupActivation.ALWAYS:
-        return "TRUE"
-    if activation is LookupActivation.POSTCODE_FREE_FALLBACK:
-        return POSTCODE_FREE_FALLBACK_PREDICATE
-    if activation is LookupActivation.NO_BASE_TRIGRAM_CANDIDATES:
-        return """NOT EXISTS (
-            SELECT 1
-            FROM {base_trigram_candidate_sources} AS base_candidates
-            WHERE base_candidates.__messy_uid = unique_id
-        )"""
-    raise ValueError(f"Unsupported lookup activation: {activation}")
 
 
 ADJACENT_TRIGRAM_KEYS = SignatureKeyGenerator(
@@ -165,16 +102,68 @@ CASE
     ELSE []::VARCHAR[]
 END""",
 )
-
-SOURCE_GAP1_TRIGRAM_KEYS = SignatureKeyGenerator(
-    name="source_gap1_trigram_keys",
-    keys_sql_expr=ordered_pattern_keys_sql(token_arity=3, gap_class="gap1"),
+SKIP1_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip1_trigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 4 THEN list_concat(
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 3]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 3]
+        )
+    )
+    ELSE []::VARCHAR[]
+END""",
 )
-SOURCE_GAP2_TRIGRAM_KEYS = SignatureKeyGenerator(
-    name="source_gap2_trigram_keys",
-    keys_sql_expr=ordered_pattern_keys_sql(token_arity=3, gap_class="gap2"),
+SKIP1_BIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip1_bigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 3 THEN
+        list_transform(
+            generate_series(1, len(__tokens) - 2),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2]
+        )
+    ELSE []::VARCHAR[]
+END""",
 )
-
+SKIP2_BIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip2_bigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 4 THEN
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 3]
+        )
+    ELSE []::VARCHAR[]
+END""",
+)
+SKIP2_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip2_trigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 5 THEN list_concat(
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 4]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 4]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 3] || ' ' || __tokens[__i + 4]
+        )
+    )
+    ELSE []::VARCHAR[]
+END""",
+)
 
 TRIGRAM_INDEX = PhysicalIndexStrategy(
     name="trigram",
@@ -196,44 +185,56 @@ BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     source_key_generator=ADJACENT_BIGRAM_KEYS,
     target_index=BIGRAM_INDEX,
 )
-SOURCE_GAP1_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
-    name="source_gap1_trigram",
-    source_key_generator=SOURCE_GAP1_TRIGRAM_KEYS,
+SKIP1_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip1_trigram",
+    source_key_generator=SKIP1_TRIGRAM_KEYS,
     target_index=TRIGRAM_INDEX,
-    maximum_posting_size_override=TRANSFORMED_TRIGRAM_POSTING_CAP,
-    evidence_mode=SignatureEvidenceMode.CANDIDATE_ONLY,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
     transformation_cost=1,
-    deduplication_precedence=1,
+    lookup_precedence=1,
 )
-SOURCE_GAP2_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
-    name="source_gap2_trigram",
-    source_key_generator=SOURCE_GAP2_TRIGRAM_KEYS,
-    target_index=TRIGRAM_INDEX,
-    maximum_posting_size_override=TRANSFORMED_TRIGRAM_POSTING_CAP,
-    evidence_mode=SignatureEvidenceMode.CANDIDATE_ONLY,
+SKIP1_BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip1_bigram",
+    source_key_generator=SKIP1_BIGRAM_KEYS,
+    target_index=BIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=1,
+    lookup_precedence=1,
+)
+SKIP2_BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip2_bigram",
+    source_key_generator=SKIP2_BIGRAM_KEYS,
+    target_index=BIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
     transformation_cost=2,
-    deduplication_precedence=2,
+    lookup_precedence=2,
+)
+SKIP2_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip2_trigram",
+    source_key_generator=SKIP2_TRIGRAM_KEYS,
+    target_index=TRIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=2,
+    lookup_precedence=2,
 )
 BASE_INDEX_PORTFOLIO = InvertedIndexPortfolio(
     name="base",
     physical_indexes=(BIGRAM_INDEX, TRIGRAM_INDEX),
     lookup_strategies=(BIGRAM_LOOKUP, TRIGRAM_LOOKUP),
 )
-WAVE2_SOURCE_GAPS_PORTFOLIO = InvertedIndexPortfolio(
-    name="wave2_source_gaps",
-    physical_indexes=BASE_INDEX_PORTFOLIO.physical_indexes,
-    lookup_strategies=(
-        *BASE_INDEX_PORTFOLIO.lookup_strategies,
-        SOURCE_GAP1_TRIGRAM_LOOKUP,
-        SOURCE_GAP2_TRIGRAM_LOOKUP,
-    ),
-)
 DEFAULT_INDEXING_STRATEGIES = list(BASE_INDEX_PORTFOLIO.physical_indexes)
 DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = list(BASE_INDEX_PORTFOLIO.lookup_strategies)
-
-# Transitional aliases retain existing imports and persisted strategy names.
-TRIGRAM_STRATEGY = TRIGRAM_INDEX
-BIGRAM_STRATEGY = BIGRAM_INDEX
+MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
+    *DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    SKIP1_BIGRAM_LOOKUP,
+    SKIP2_BIGRAM_LOOKUP,
+    SKIP1_TRIGRAM_LOOKUP,
+    SKIP2_TRIGRAM_LOOKUP,
+]
 
 
 def _derive_keys_for_strategy(
@@ -336,19 +337,21 @@ def _lookup_keys_in_inverted_index(
         """
         union_parts = []
         for strategy in lookup_strategies:
-            is_scored = strategy.evidence_mode is SignatureEvidenceMode.SCORED
-            activation = lookup_activation_predicate(strategy.activation)
+            evidence_mode = (
+                "scored" if strategy.contributes_signature_evidence else "candidate_only"
+            )
+            contributes_evidence = str(strategy.contributes_signature_evidence).upper()
             union_parts.append(
                 f"SELECT unique_id AS __messy_uid, "
                 f"unnest({strategy.source_key_generator.keys_sql_expr}) AS __key, "
                 f"'{strategy.name}' AS __source_strategy, "
                 f"'{strategy.target_index.name}' AS __lookup_strategy, "
-                f"'{strategy.evidence_mode}' AS __evidence_mode, "
-                f"{str(is_scored).upper()} AS __contributes_signature_evidence, "
+                f"'{evidence_mode}' AS __evidence_mode, "
+                f"{contributes_evidence} AS __contributes_signature_evidence, "
                 f"{strategy.maximum_posting_size} AS __maximum_posting_size, "
-                f"{strategy.transformation_cost} AS __transformation_cost "
-                f", {strategy.lookup_precedence} AS __lookup_precedence "
-                f"FROM {{base}} WHERE {activation}"
+                f"{strategy.transformation_cost} AS __transformation_cost, "
+                f"{strategy.lookup_precedence} AS __lookup_precedence "
+                "FROM {base}"
             )
         unnested_keys_sql = " UNION ALL ".join(union_parts)
 
@@ -361,19 +364,6 @@ def _lookup_keys_in_inverted_index(
             ORDER BY __lookup_precedence, __transformation_cost, __source_strategy
         ) = 1
         """
-        base_trigram_candidate_sources_sql = """
-        SELECT DISTINCT base.unique_id AS __messy_uid
-        FROM {{base}} AS base
-        CROSS JOIN UNNEST({trigram_keys}) AS keys(__key)
-        INNER JOIN __ukam_inverted_index AS index
-            ON keys.__key = index.key
-           AND index.index_strategy = '{trigram_index_name}'
-           AND len(index.unique_ids) <= {trigram_posting_cap}
-        """.format(
-            trigram_keys=ADJACENT_TRIGRAM_KEYS.keys_sql_expr,
-            trigram_index_name=TRIGRAM_INDEX.name,
-            trigram_posting_cap=TRIGRAM_LOOKUP.maximum_posting_size,
-        )
         matched_sql = """
         SELECT
             requested.__messy_uid,
@@ -414,39 +404,22 @@ def _lookup_keys_in_inverted_index(
         WHERE candidate_id IS NOT NULL
         GROUP BY __messy_uid
         """
-        distinct_keys_sql = """
-        SELECT DISTINCT
-            __messy_uid,
-            __key,
-            __lookup_strategy,
-            __maximum_posting_size
-        FROM {requested_keys}
-        WHERE __contributes_signature_evidence
-        """
-        key_scores_sql = """
-        SELECT
-            requested.__messy_uid,
-            index.unique_ids AS __cand_ids,
-            len(index.unique_ids) AS __posting_size,
-            log2(
-                (SELECT n FROM __ukam_index_meta)::DOUBLE
-                / len(index.unique_ids)
-            ) AS __key_idf
-        FROM {distinct_keys} AS requested
-        INNER JOIN __ukam_inverted_index AS index
-            ON requested.__key = index.key
-           AND requested.__lookup_strategy = index.index_strategy
-           AND len(index.unique_ids) <= requested.__maximum_posting_size
-        WHERE index.unique_ids IS NOT NULL
-          AND len(index.unique_ids) > 0
-        """
         cand_scores_sql = """
         SELECT
             __messy_uid,
             CAST(candidate_id AS VARCHAR) AS __cand_id,
-            SUM(__key_idf) AS __score,
-            SUM(CASE WHEN __posting_size = 1 THEN 1 ELSE 0 END) AS __unique_hits
-        FROM {key_scores}, unnest(__cand_ids) AS candidates(candidate_id)
+            SUM(
+                log2(
+                    (SELECT n FROM __ukam_index_meta)::DOUBLE
+                    / __posting_list_size
+                )
+            ) AS __score,
+            SUM(
+                CASE WHEN __posting_list_size = 1 THEN 1 ELSE 0 END
+            ) AS __unique_hits
+        FROM {candidate_provenance}
+        WHERE __contributes_signature_evidence
+          AND __posting_list_size > 0
         GROUP BY __messy_uid, CAST(candidate_id AS VARCHAR)
         """
         score_map_sql = """
@@ -482,16 +455,6 @@ def _lookup_keys_in_inverted_index(
           ON base.unique_id = scores.__messy_uid
         """
         steps = [CTEStep("base", base_sql)]
-        if any(
-            strategy.activation is LookupActivation.NO_BASE_TRIGRAM_CANDIDATES
-            for strategy in lookup_strategies
-        ):
-            steps.append(
-                CTEStep(
-                    "base_trigram_candidate_sources",
-                    base_trigram_candidate_sources_sql,
-                )
-            )
         steps.extend(
             [
                 CTEStep("unnested_keys", unnested_keys_sql),
@@ -499,8 +462,6 @@ def _lookup_keys_in_inverted_index(
                 CTEStep("matched", matched_sql),
                 CTEStep("candidate_provenance", provenance_sql),
                 CTEStep("deduplicated", deduplicated_sql),
-                CTEStep("distinct_keys", distinct_keys_sql),
-                CTEStep("key_scores", key_scores_sql),
                 CTEStep("cand_scores", cand_scores_sql),
                 CTEStep("score_map", score_map_sql),
                 CTEStep("final", final_sql),
