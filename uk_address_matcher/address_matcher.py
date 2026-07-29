@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
-from uk_address_matcher._experimental import _current_lookup_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     derive_inverted_index,
     derive_term_frequencies_table,
@@ -266,7 +265,6 @@ class AddressMatcher:
             # If nothing was loaded from disk, these will be None — but that's fine,
             term_frequency_lookup=self._tf_table,
             inverted_index=self._inverted_index,
-            _inverted_index_strategies=_current_lookup_strategies(),
             inverted_index_n=inverted_index_n,
             dataset_role="messy",
             debug_options=self.debug_options,
