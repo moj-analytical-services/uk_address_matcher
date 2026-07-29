@@ -302,7 +302,9 @@ def improve_predictions_using_distinguishing_tokens(
                     map_values(overlapping_tokens_this_l_and_r),
                     value -> 1.0 / (value * value)
                 )), 0.0) * {REWARD_MULTIPLIER} AS token_reward,
-                COALESCE(len(map_entries(tokens_elsewhere_in_block_but_not_this)), 0)::DOUBLE
+                COALESCE(len(map_entries(
+                    tokens_elsewhere_in_block_but_not_this
+                )), 0)::DOUBLE
                     * {PUNISHMENT_MULTIPLIER} AS token_absence_penalty,
                 COALESCE(len(missing_tokens), 0)::DOUBLE * {MISSING_TOKEN_PENALTY}
                     AS missing_token_penalty,
@@ -325,10 +327,16 @@ def improve_predictions_using_distinguishing_tokens(
                     list_filter(
                         map_entries(overlapping_bigrams_this_l_and_r),
                         entry -> NOT (
-                            map_contains(overlapping_tokens_this_l_and_r, entry.key[1])
-                            AND overlapping_tokens_this_l_and_r[entry.key[1]] <= entry.value
-                            AND map_contains(overlapping_tokens_this_l_and_r, entry.key[2])
-                            AND overlapping_tokens_this_l_and_r[entry.key[2]] <= entry.value
+                            map_contains(
+                                overlapping_tokens_this_l_and_r, entry.key[1]
+                            )
+                            AND overlapping_tokens_this_l_and_r[entry.key[1]]
+                                <= entry.value
+                            AND map_contains(
+                                overlapping_tokens_this_l_and_r, entry.key[2]
+                            )
+                            AND overlapping_tokens_this_l_and_r[entry.key[2]]
+                                <= entry.value
                         )
                     )
                 ) AS overlapping_bigrams_this_l_and_r_filtered,
@@ -336,10 +344,18 @@ def improve_predictions_using_distinguishing_tokens(
                     list_filter(
                         map_entries(bigrams_elsewhere_in_block_but_not_this),
                         entry -> NOT (
-                            map_contains(tokens_elsewhere_in_block_but_not_this, entry.key[1])
-                            AND tokens_elsewhere_in_block_but_not_this[entry.key[1]] <= entry.value
-                            AND map_contains(tokens_elsewhere_in_block_but_not_this, entry.key[2])
-                            AND tokens_elsewhere_in_block_but_not_this[entry.key[2]] <= entry.value
+                            map_contains(
+                                tokens_elsewhere_in_block_but_not_this,
+                                entry.key[1]
+                            )
+                            AND tokens_elsewhere_in_block_but_not_this[entry.key[1]]
+                                <= entry.value
+                            AND map_contains(
+                                tokens_elsewhere_in_block_but_not_this,
+                                entry.key[2]
+                            )
+                            AND tokens_elsewhere_in_block_but_not_this[entry.key[2]]
+                                <= entry.value
                         )
                     )
                 ) AS bigrams_elsewhere_in_block_but_not_this_filtered
@@ -352,7 +368,9 @@ def improve_predictions_using_distinguishing_tokens(
                     map_values(overlapping_bigrams_this_l_and_r_filtered),
                     value -> 1.0 / (value * value)
                 )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
-                COALESCE(len(map_entries(bigrams_elsewhere_in_block_but_not_this_filtered)), 0)::DOUBLE
+                COALESCE(len(map_entries(
+                    bigrams_elsewhere_in_block_but_not_this_filtered
+                )), 0)::DOUBLE
                     * {BIGRAM_PUNISHMENT_MULTIPLIER} AS bigram_absence_penalty
             FROM scored_components
         )
@@ -382,9 +400,12 @@ def improve_predictions_using_distinguishing_tokens(
             missing_tokens,
             positional_tokens_l,
             positional_tokens_r,
-            {"bigrams_l, bigrams_r, overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
-            {"bigrams_elsewhere_in_block_but_not_this, hist_all_bigrams_in_block_l, " if use_bigrams else ""}
-            {"hist_overlapping_bigrams_r_block_l, overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
+            {"bigrams_l, bigrams_r, " if use_bigrams else ""}
+            {"overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
+            {"bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
+            {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
+            {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
+            {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
             {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
             original_address_concat_l,
             postcode_l,
