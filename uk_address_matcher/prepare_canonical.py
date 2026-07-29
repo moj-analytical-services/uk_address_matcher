@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
+from uk_address_matcher.cleaning.steps.inverted_index import (
+    BASE_INDEX_PORTFOLIO,
+)
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
 )
@@ -68,15 +71,14 @@ PARQUET_COMPRESSION_LEVEL = 9
 CANONICAL_SORT_COLUMNS = ("postcode", "clean_full_address")
 INVERTED_INDEX_SORT_COLUMNS = ("index_strategy", "key")
 
-# Columns that are trivially recomputable at load time and therefore not persisted,
-# to reduce file size. They are restored in ``load_prepared_canonical_data``.
+# Columns that are not needed after preparation and therefore not persisted.
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
-RECOMPUTABLE_DROP_COLUMNS = ("exploding_unique_ids",)
+RECOMPUTABLE_DROP_COLUMNS = ("address_tokens", "exploding_unique_ids")
 
 
 @dataclass(frozen=True)
 class _PreparedCanonical:
-    """Container for the three artefacts loaded from a prepared folder.
+    """Container for artefacts loaded from a prepared folder.
 
     Attributes:
         addresses: Cleaned and tokenised canonical addresses.
@@ -224,11 +226,14 @@ def _rehydrate_canonical_addresses(
 ) -> duckdb.DuckDBPyRelation:
     """Restore recomputable columns not persisted in the canonical parquet.
 
-    ``exploding_unique_ids`` is always ``[unique_id]`` for canonical data, so it
-    is omitted at write time and reconstructed here to keep the in-memory schema
-    identical to a freshly-prepared relation.
+    ``exploding_unique_ids`` is always ``[unique_id]`` for canonical data. It is
+    omitted at write time and reconstructed here to keep the in-memory schema
+    identical to a freshly-prepared relation. ``address_tokens`` is no longer
+    part of the prepared schema; inverted-index stages derive it inline.
     """
     columns = addresses.columns
+    if "address_tokens" in columns:
+        addresses = addresses.select("* EXCLUDE (address_tokens)")
     if "exploding_unique_ids" not in columns and "unique_id" in columns:
         addresses = addresses.select("*, list_value(unique_id) AS exploding_unique_ids")
     return addresses
@@ -418,6 +423,16 @@ def _build_manifest(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_with_duckdb_version": created_with_duckdb_version,
         "row_counts": row_counts,
+        "inverted_index_portfolio": {
+            "name": BASE_INDEX_PORTFOLIO.name,
+            "physical_indexes": [
+                {
+                    "name": strategy.name,
+                    "maximum_posting_size": strategy.maximum_posting_size,
+                }
+                for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
+            ],
+        },
         "files": files_meta,
     }
 
@@ -764,13 +779,15 @@ def _write_manifest_remote(
             f"CREATE TEMP TABLE {manifest_table} AS "
             "SELECT ? AS ukam_version, ? AS created_at, "
             "? AS created_with_duckdb_version, "
-            "?::JSON AS row_counts, ?::JSON AS files"
+            "?::JSON AS row_counts, ?::JSON AS inverted_index_portfolio, "
+            "?::JSON AS files"
         ),
         [
             manifest["ukam_version"],
             manifest["created_at"],
             manifest["created_with_duckdb_version"],
             json.dumps(manifest["row_counts"]),
+            json.dumps(manifest["inverted_index_portfolio"]),
             json.dumps(manifest["files"]),
         ],
     )

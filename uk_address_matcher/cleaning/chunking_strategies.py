@@ -17,9 +17,13 @@ from uk_address_matcher.cleaning.pipelines import (
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     DEFAULT_INDEXING_STRATEGIES,
-    IndexingStrategy,
+    DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    InvertedIndexLookupStrategy,
+    PhysicalIndexStrategy,
     _build_inverted_index_from_keys,
     _derive_keys_for_strategy,
+    _lookup_keys_in_inverted_index,
 )
 from uk_address_matcher.logging.chunking import (
     log_chunk_progress,
@@ -384,9 +388,8 @@ def derive_term_frequencies_table(
 def derive_inverted_index(
     cleaned_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
-    max_unique_ids_per_key: int = 20,
     num_of_chunks: int = 1,
-    strategies: list[IndexingStrategy] | None = None,
+    strategies: list[PhysicalIndexStrategy] | None = None,
     *,
     debug_options: Optional["DebugOptions"] = None,
     show_progress: ShowProgress = True,
@@ -399,12 +402,13 @@ def derive_inverted_index(
     For each indexing strategy it generates keys and builds an inverted
     index mapping each key to a list of unique_ids.  Keys appearing in more
     than ``max_unique_ids_per_key`` records are filtered out as they provide
-    poor blocking selectivity.
+    poor blocking selectivity. A strategy can specify a stricter limit and
+    suppress raw keys already retained by an earlier strategy.
 
     When ``num_of_chunks`` > 1, the inverted index is built in chunks
-    partitioned by **key hash** (not by address).  This ensures every
+    partitioned by **key hash** (not by address). This ensures every
     occurrence of a given key is processed within the same chunk so the
-    global frequency filter is applied correctly.  Chunk results are
+    global frequency filter is applied correctly. Chunk results are
     vertically concatenated.
 
     Example usage::
@@ -419,11 +423,9 @@ def derive_inverted_index(
         cleaned_address_table: Pre-cleaned address relation with
             ``clean_full_address`` and ``unique_id`` columns.
         con: DuckDB connection.
-        max_unique_ids_per_key: Maximum number of unique_ids a key can
-            reference before being filtered out.  Default 20.
         num_of_chunks: Number of chunks to split the work into.  Set to 1
             (the default) for no chunking.
-        strategies: List of :class:`IndexingStrategy` instances.  Defaults
+        strategies: List of :class:`PhysicalIndexStrategy` instances. Defaults
             to :data:`DEFAULT_INDEXING_STRATEGIES` (trigram + bigram).
         debug_options: Optional debug configuration for pipeline execution.
         show_progress: ``True`` uses automatic live progress when supported;
@@ -466,7 +468,7 @@ def derive_inverted_index(
                 input_rel=cleaned_address_table,
                 stage_specs=[
                     _derive_keys_for_strategy(strategy),
-                    _build_inverted_index_from_keys(strategy, max_unique_ids_per_key),
+                    _build_inverted_index_from_keys(strategy),
                 ],
                 pipeline_name=f"Build inverted index ({strategy.name})",
                 pipeline_description=(
@@ -523,10 +525,7 @@ def derive_inverted_index(
                                 num_of_chunks=num_of_chunks,
                                 chunk_index=chunk_index,
                             ),
-                            _build_inverted_index_from_keys(
-                                strategy,
-                                max_unique_ids_per_key,
-                            ),
+                            _build_inverted_index_from_keys(strategy),
                         ],
                         pipeline_name=f"Build inverted index ({strategy.name})",
                         pipeline_description=(
@@ -585,6 +584,7 @@ def prepare_data_for_matching(
     num_of_chunks: int = 10,
     term_frequency_lookup: Optional[DuckDBPyRelation] = None,
     inverted_index: Optional[DuckDBPyRelation] = None,
+    _inverted_index_strategies: list[InvertedIndexLookupStrategy] | None = None,
     inverted_index_n: Optional[int] = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
@@ -666,14 +666,24 @@ def prepare_data_for_matching(
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
 
-    # Register inverted index table if provided (for use in pipeline stages)
     inv_idx_table_name = _register_inverted_index_table(
         con, inverted_index, inverted_index_n
     )
 
-    # Determine which inverted index stages to use as additional pipeline stages
+    lookup_strategies = _inverted_index_strategies
+    if lookup_strategies is None:
+        lookup_strategies = (
+            MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES
+            if dataset_role == "messy"
+            else DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
+        )
+
     inverted_index_stages = (
-        list(QUEUE_INVERTED_INDEX_LOOKUP)
+        (
+            [_lookup_keys_in_inverted_index(lookup_strategies)]
+            if lookup_strategies != DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
+            else list(QUEUE_INVERTED_INDEX_LOOKUP)
+        )
         if inv_idx_table_name is not None
         else list(QUEUE_INVERTED_INDEX_SELF)
     )
