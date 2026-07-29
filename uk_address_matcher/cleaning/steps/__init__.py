@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from uk_address_matcher.cleaning.steps.inverted_index import (
-    BIGRAM_STRATEGY,
+    BIGRAM_INDEX,
     DEFAULT_INDEXING_STRATEGIES,
-    TRIGRAM_STRATEGY,
+    TRIGRAM_INDEX,
     InvertedIndexLookupStrategy,
     PhysicalIndexStrategy,
     _build_inverted_index_from_keys,
@@ -86,8 +86,8 @@ __all__ = [
     # inverted_index
     "PhysicalIndexStrategy",
     "InvertedIndexLookupStrategy",
-    "TRIGRAM_STRATEGY",
-    "BIGRAM_STRATEGY",
+    "TRIGRAM_INDEX",
+    "BIGRAM_INDEX",
     "DEFAULT_INDEXING_STRATEGIES",
     "_build_inverted_index_from_keys",
     "_derive_keys_for_strategy",
