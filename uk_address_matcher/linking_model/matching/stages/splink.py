@@ -4,19 +4,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
+from uk_address_matcher.post_linkage.contextual_residual_reranker import (
+    PRECISION_K3_CONFIG,
+    ContextualRerankerConfig,
+)
 
 if TYPE_CHECKING:
     import duckdb
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
-
-
-def _contextual_acceptance_lift_filter(
-    *, final_match_weight_threshold: float, maximum_acceptance_lift: float
-) -> str:
-    minimum_phase1_score = final_match_weight_threshold - maximum_acceptance_lift
-    return f"AND best_match.phase1_score >= {minimum_phase1_score}"
 
 
 @dataclass(repr=False)
@@ -77,6 +74,9 @@ class SplinkStage(MatchingStage):
     improve_threshold_match_weight: float = -20
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
+    contextual_reranker_config: ContextualRerankerConfig = field(
+        default=PRECISION_K3_CONFIG
+    )
 
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
@@ -110,12 +110,12 @@ class SplinkStage(MatchingStage):
         debug_options: Optional[DebugOptions] = None,
         explain: bool = False,
     ) -> Optional[duckdb.DuckDBPyRelation]:
-        from uk_address_matcher._experimental import (
-            _current_contextual_residual_reranker,
-        )
         from uk_address_matcher.linking_model.splink_model import _get_linker
         from uk_address_matcher.post_linkage.analyse_results import (
             best_matches_with_distinguishability,
+        )
+        from uk_address_matcher.post_linkage.contextual_residual_reranker import (
+            improve_predictions_using_contextual_residuals,
         )
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
@@ -171,19 +171,11 @@ class SplinkStage(MatchingStage):
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
-        contextual_config = _current_contextual_residual_reranker()
-        if contextual_config is not None:
-            from uk_address_matcher.post_linkage.contextual_residual_reranker import (
-                improve_predictions_using_contextual_residuals,
-            )
-
-            df_improved = improve_predictions_using_contextual_residuals(
-                df_predict=df_improved,
-                con=con,
-                config=contextual_config.config,
-                contextual_base_score=contextual_config.contextual_base_score,
-                telemetry=contextual_config.telemetry,
-            )
+        df_improved = improve_predictions_using_contextual_residuals(
+            df_predict=df_improved,
+            con=con,
+            config=self.contextual_reranker_config,
+        )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
 
         # Step 4: Compute distinguishability and select best match per record
@@ -209,32 +201,14 @@ class SplinkStage(MatchingStage):
                 f"OR distinguishability >= {self.final_distinguishability_threshold})"
             )
 
-        threshold_score = (
-            "best_match.phase1_score"
-            if (
-                contextual_config is not None
-                and contextual_config.apply_final_threshold_to_phase1_score
-            )
-            else "best_match.match_weight"
-        )
-        emitted_score = (
-            "best_match.phase1_score"
-            if (
-                contextual_config is not None
-                and contextual_config.apply_final_threshold_to_phase1_score
-            )
-            else "best_match.match_weight"
-        )
         acceptance_lift_filter = ""
-        if (
-            contextual_config is not None
-            and contextual_config.config.maximum_acceptance_lift is not None
-        ):
-            acceptance_lift_filter = _contextual_acceptance_lift_filter(
-                final_match_weight_threshold=self.final_match_weight_threshold,
-                maximum_acceptance_lift=(
-                    contextual_config.config.maximum_acceptance_lift
-                ),
+        if self.contextual_reranker_config.maximum_acceptance_lift is not None:
+            minimum_phase1_score = (
+                self.final_match_weight_threshold
+                - self.contextual_reranker_config.maximum_acceptance_lift
+            )
+            acceptance_lift_filter = (
+                f"AND best_match.phase1_score >= {minimum_phase1_score}"
             )
 
         return con.sql(f"""
@@ -243,14 +217,14 @@ class SplinkStage(MatchingStage):
                 best_match.unique_id_l AS resolved_canonical_id,
                 best_match.ukam_address_id_l AS canonical_ukam_address_id,
                 '{splink_label}' AS match_reason,
-                {emitted_score} AS match_weight,
+                best_match.match_weight,
                 best_match.distinguishability
             FROM (
                 SELECT *
                 FROM {df_best_name}
                 WHERE candidate_rank = 1
             ) AS best_match
-            WHERE {threshold_score} >= {self.final_match_weight_threshold}
+            WHERE best_match.match_weight >= {self.final_match_weight_threshold}
             {acceptance_lift_filter}
             {dist_filter}
             AND best_match.unique_id_l IS NOT NULL

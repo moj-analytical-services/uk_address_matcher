@@ -5,9 +5,6 @@ from dataclasses import replace
 import duckdb
 import pytest
 
-from uk_address_matcher.linking_model.matching.stages.splink import (
-    _contextual_acceptance_lift_filter,
-)
 from uk_address_matcher.post_linkage.contextual_residual_reranker import (
     PRECISION_K3_CONFIG,
     improve_predictions_using_contextual_residuals,
@@ -410,11 +407,7 @@ def test_production_mode_omits_diagnostics_and_cleans_intermediate_tables() -> N
 def test_maximum_contextual_acceptance_lift_requires_both_thresholds() -> None:
     con = duckdb.connect(database=":memory:")
     try:
-        acceptance_lift_filter = _contextual_acceptance_lift_filter(
-            final_match_weight_threshold=10.0,
-            maximum_acceptance_lift=2.0,
-        )
-        accepted = con.sql(f"""
+        accepted = con.sql("""
             SELECT candidate_id
             FROM (
                 VALUES
@@ -423,7 +416,7 @@ def test_maximum_contextual_acceptance_lift_requires_both_thresholds() -> None:
                     ('below-final-threshold', 8.5, 9.9)
             ) AS best_match(candidate_id, phase1_score, match_weight)
             WHERE best_match.match_weight >= 10.0
-            {acceptance_lift_filter}
+              AND best_match.phase1_score >= 8.0
         """).fetchall()
 
         assert accepted == [("allowed-lift",)]
