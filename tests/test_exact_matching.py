@@ -13,7 +13,11 @@ from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 def test_data(duck_con):
     """Set up test data as DuckDB PyRelations for exact matching tests."""
     df_fuzzy = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            NULL::VARCHAR AS numeric_token_1,
+            NULL::VARCHAR AS numeric_token_2,
+            NULL::VARCHAR AS numeric_token_3
         FROM (
             VALUES
                 (
@@ -91,7 +95,11 @@ def test_data(duck_con):
         """)
 
     df_canonical = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            NULL::VARCHAR AS numeric_token_1,
+            NULL::VARCHAR AS numeric_token_2,
+            NULL::VARCHAR AS numeric_token_3
         FROM (
             VALUES
                 (
@@ -238,7 +246,11 @@ FLAT_CANONICAL_DUPLICATE_ROW_SQL = """
 
 def _address_relation_from_values(duck_con, values_sql: str):
     return duck_con.sql(f"""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 {values_sql}
@@ -339,7 +351,11 @@ def peeled_test_data(duck_con):
     """Test data for peeled address matching with locality tokens to remove."""
     # Fuzzy addresses with various peeled token scenarios
     df_fuzzy = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 -- Case 1: Single peeled token (LONDON)
@@ -470,7 +486,11 @@ def peeled_test_data(duck_con):
 
     # Canonical addresses - some with peeling, some without
     df_canonical = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 -- Matches Case 1: same postcode, peeled address = '100 HIGH STREET'
@@ -729,7 +749,11 @@ def test_peeled_address_multi_word_token_handling(duck_con):
     """
     # Setup: fuzzy has 'TUNBRIDGE WELLS' as a single entry in peeled_tokens_list
     df_fuzzy = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 (
@@ -768,7 +792,11 @@ def test_peeled_address_multi_word_token_handling(duck_con):
 
     # Canonical: '10 TEST STREET' (no locality suffix)
     df_canonical = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 (
@@ -820,7 +848,11 @@ def test_peeled_address_multi_word_token_handling(duck_con):
 
 def test_peeled_address_stripped_matching_is_enabled_by_default(duck_con):
     df_fuzzy = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 (
@@ -858,7 +890,11 @@ def test_peeled_address_stripped_matching_is_enabled_by_default(duck_con):
         """)
 
     df_canonical = duck_con.sql("""
-        SELECT *, NULL::VARCHAR AS sub_premise_location
+        SELECT *,
+            NULL::VARCHAR AS sub_premise_location,
+            numeric_tokens[1] AS numeric_token_1,
+            numeric_tokens[2] AS numeric_token_2,
+            numeric_tokens[3] AS numeric_token_3
         FROM (
             VALUES
                 (

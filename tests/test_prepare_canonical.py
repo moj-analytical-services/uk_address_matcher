@@ -101,6 +101,21 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_manifest.json").exists()
 
 
+def test_prepare_omits_numeric_tokens_from_canonical_parquet(prepared_folder, con):
+    parquet_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    columns = con.sql(
+        f"""
+        SELECT column_name
+        FROM (
+            DESCRIBE SELECT * FROM read_parquet('{parquet_path}')
+        )
+        WHERE column_name = 'numeric_tokens'
+        """
+    ).fetchall()
+
+    assert columns == []
+
+
 def test_progress_bar_disabled_writes_nothing():
     stream = _FakeStream(isatty_value=True)
     progress = _ProgressBar(label="Testing", total=10, enabled=False, stream=stream)
