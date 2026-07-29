@@ -362,6 +362,7 @@ def improve_predictions_using_distinguishing_tokens(
             ukam_address_id_r,
             ukam_address_id_l,
             match_weight AS match_weight_original,
+            match_weight AS splink_match_weight,
             token_reward,
             token_absence_penalty,
             bigram_reward,
@@ -375,6 +376,9 @@ def improve_predictions_using_distinguishing_tokens(
                 - missing_token_penalty
                 - positional_conflict_penalty AS mw_adjustment,
             match_weight + mw_adjustment AS match_weight,
+            match_weight + mw_adjustment AS phase1_score,
+            tokens_l,
+            tokens_r,
             overlapping_tokens_this_l_and_r,
             tokens_elsewhere_in_block_but_not_this,
             hist_all_tokens_in_block_l,

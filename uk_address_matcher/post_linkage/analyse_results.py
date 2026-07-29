@@ -165,6 +165,7 @@ def best_matches_with_distinguishability(
         t.original_address_concat_l,
         t.postcode_l,
         t.match_weight,
+        t.phase1_score,
         t.distinguishability,
         t.candidate_rank,
         COALESCE(
