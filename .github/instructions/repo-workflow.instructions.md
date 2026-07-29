@@ -27,6 +27,40 @@ applyTo:
   - Prefer minimal, composable changes that reduce downstream user work.
   - Respect existing workflows and integrations; avoid forcing new patterns without need.
 
+## Change policy
+
+- Make the smallest possible change that fully satisfies the explicit request.
+- Change only code directly required by the request, modifying the fewest files and lines possible.
+- Do not perform unrelated refactoring, cleanup, formatting, renaming, dependency upgrades,
+  documentation rewrites, or architectural changes.
+- Do not introduce abstractions, helpers, dependencies, configuration, or files unless necessary
+  for the requested behaviour; follow existing project patterns and preserve surrounding comments
+  and formatting.
+- Preserve current behaviour outside the request. Prefer local fixes over system-wide redesigns;
+  avoid speculative handling for hypothetical requirements.
+- Do not modify generated files, vendored code, lockfiles, migrations, or build output unless the
+  request requires it.
+- Add or update only focused tests for the requested behaviour; do not rewrite tests to accommodate
+  an unintended behaviour change.
+
+### Public API stability
+
+- Treat the public API as frozen unless the request explicitly authorises a change. This includes
+  public classes, functions, methods, properties, constants, types, signatures, package exports,
+  module paths, routes, request and response formats, CLI behaviour, configuration, environment
+  variables, schemas, serialised data, error types, side effects, defaults, and runtime behaviour.
+- Do not rename, move, remove, reorder, narrow, or otherwise change a public API or existing
+  default merely to make an implementation cleaner.
+- When work appears to require a breaking API change, do not make it. Briefly explain the conflict,
+  propose a backward-compatible alternative, and wait for explicit authorisation.
+
+### Communication
+
+- Before making changes, briefly state which files need to change and why.
+- After making changes, report only what changed, checks performed, and any unresolved limitation.
+- When instructions are ambiguous, choose the interpretation that preserves current behaviour and
+  produces the smallest diff.
+
 - Start from a feature branch off `main`.
 - Keep diffs focused; avoid unrelated formatting/refactor churn.
 - Prefer the smallest viable implementation unless the user asks for a larger feature or experiment.

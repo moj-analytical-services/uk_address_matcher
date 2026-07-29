@@ -11,8 +11,8 @@ import pytest
 
 from uk_address_matcher import prepare_canonical_folder
 from uk_address_matcher.cleaning import chunking_strategies
-from uk_address_matcher.helpers import progress as progress_helpers
-from uk_address_matcher.helpers.progress import _ProgressBar
+from uk_address_matcher.logging import progress as progress_helpers
+from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
     _coerce_prepare_input_to_relation,
@@ -148,13 +148,14 @@ def test_progress_bar_caps_progress_at_total():
     assert f"▕{'▮' * 24}▏" in stream.getvalue()
 
 
-def test_progress_bar_defaults_to_enabled():
+def test_progress_bar_disables_live_output_for_non_tty_stream():
     stream = _FakeStream(isatty_value=False)
     progress = _ProgressBar(label="Testing", total=10, stream=stream)
 
     progress.update(5)
 
-    assert stream.getvalue()
+    assert progress.enabled is False
+    assert stream.getvalue() == ""
 
 
 def test_progress_bar_disables_itself_when_stream_cannot_render():
@@ -289,6 +290,61 @@ def test_prepare_show_progress_false_suppresses_live_output(
     assert stream.getvalue() == ""
 
 
+def test_prepare_progress_stages_logs_boundaries_without_chunk_updates(
+    con, canonical_data, tmp_path, monkeypatch, caplog
+):
+    stream = _FakeStream(isatty_value=True)
+    monkeypatch.setattr(progress_helpers.sys, "stderr", stream)
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path / "prepared",
+            con=con,
+            overwrite=True,
+            show_progress="stages",
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+
+    assert any(message.startswith("Cleaning for TF derivation:") for message in messages)
+    assert any(
+        message.startswith("Cleaning for TF derivation completed:")
+        for message in messages
+    )
+    assert not any("chunk 1/" in message for message in messages)
+    assert stream.getvalue() == ""
+
+
+def test_prepare_progress_off_suppresses_stage_status_logs(
+    con, canonical_data, tmp_path, caplog
+):
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path / "prepared",
+            con=con,
+            overwrite=True,
+            show_progress="off",
+        )
+
+    stage_prefixes = (
+        "Cleaning for TF derivation",
+        "Cleaning and preprocessing",
+        "Applying term frequencies",
+        "Building inverted index",
+    )
+    assert not any(
+        record.getMessage().startswith(stage_prefix)
+        and (
+            " records across " in record.getMessage()
+            or " completed:" in record.getMessage()
+        )
+        for record in caplog.records
+        for stage_prefix in stage_prefixes
+    )
+
+
 def test_prepare_default_show_progress_enables_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
@@ -367,7 +423,7 @@ def test_prepare_show_progress_true_emits_live_output(
         output_folder=tmp_path / "prepared",
         con=con,
         overwrite=True,
-        show_progress=True,
+        show_progress="auto",
     )
 
     assert enabled_values
@@ -383,7 +439,7 @@ def test_prepare_logs_sparse_info_and_debug_progress(
             output_folder=tmp_path / "prepared",
             con=con,
             overwrite=True,
-            show_progress=False,
+            show_progress=True,
         )
 
     info_messages = [

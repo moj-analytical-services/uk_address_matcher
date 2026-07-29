@@ -117,6 +117,9 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.analyse_results import (
             best_matches_with_distinguishability,
         )
+        from uk_address_matcher.post_linkage.distinguishing_features import (
+            relation_markers,
+        )
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )

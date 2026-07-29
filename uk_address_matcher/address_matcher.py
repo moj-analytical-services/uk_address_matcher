@@ -4,11 +4,13 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
-from uk_address_matcher._experimental import _current_lookup_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     derive_inverted_index,
     derive_term_frequencies_table,
     prepare_data_for_matching,
+)
+from uk_address_matcher.cleaning.steps.inverted_index import (
+    MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
 )
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
@@ -17,6 +19,7 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
+from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
 from uk_address_matcher.post_linkage.match_result import MatchResult
 from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 from uk_address_matcher.sql_pipeline.helpers import (
@@ -70,6 +73,11 @@ class AddressMatcher:
         cleaning_num_chunks: Number of chunks to use for cleaning and term
             frequency derivation when canonical input is a raw relation. Also
             used for messy-address cleaning. Must be a positive integer.
+        show_progress: ``True`` uses automatic live progress when supported;
+            ``False`` suppresses progress output. ``"auto"`` renders live
+            updates only in a supported interactive terminal and otherwise logs
+            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
+            suppresses progress output.
         debug_options: Optional `DebugOptions` to control debug output and logging.
 
     Examples:
@@ -131,10 +139,12 @@ class AddressMatcher:
         stages: Optional[list[MatchingStage]] = None,
         debug_options: Optional[DebugOptions] = None,
         cleaning_num_chunks: int = 10,
+        show_progress: ShowProgress = True,
     ):
         self.con = con
         self.stages = stages if stages is not None else _default_stages()
         self.debug_options = debug_options
+        self.show_progress = resolve_progress_mode(show_progress)
         self.canonical_address_filter = canonical_address_filter
         if not isinstance(cleaning_num_chunks, int):
             raise TypeError("cleaning_num_chunks must be an integer.")
@@ -232,6 +242,7 @@ class AddressMatcher:
                 con=self.con,
                 num_of_chunks=self.cleaning_num_chunks,
                 debug_options=self.debug_options,
+                show_progress=self.show_progress,
             )
 
             logger.debug("Cleaning canonical data")
@@ -242,6 +253,7 @@ class AddressMatcher:
                 term_frequency_lookup=self._tf_table,
                 dataset_role="canonical",
                 debug_options=self.debug_options,
+                show_progress=self.show_progress,
             )
 
             logger.debug("Building inverted index from canonical data")
@@ -249,6 +261,7 @@ class AddressMatcher:
                 self._canonical_clean,
                 con=self.con,
                 debug_options=self.debug_options,
+                show_progress=self.show_progress,
             )
             self._register_inverted_index(inverted_index)
 
@@ -266,10 +279,11 @@ class AddressMatcher:
             # If nothing was loaded from disk, these will be None — but that's fine,
             term_frequency_lookup=self._tf_table,
             inverted_index=self._inverted_index,
-            _inverted_index_strategies=_current_lookup_strategies(),
+            _inverted_index_strategies=MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
             inverted_index_n=inverted_index_n,
             dataset_role="messy",
             debug_options=self.debug_options,
+            show_progress=self.show_progress,
         )
 
     def _coerce_addresses_to_match(
