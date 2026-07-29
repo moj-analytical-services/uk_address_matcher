@@ -17,6 +17,8 @@ from uk_address_matcher.cleaning.pipelines import (
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     DEFAULT_INDEXING_STRATEGIES,
+    DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
     InvertedIndexLookupStrategy,
     PhysicalIndexStrategy,
     _build_inverted_index_from_keys,
@@ -668,10 +670,18 @@ def prepare_data_for_matching(
         con, inverted_index, inverted_index_n
     )
 
+    lookup_strategies = _inverted_index_strategies
+    if lookup_strategies is None:
+        lookup_strategies = (
+            MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES
+            if dataset_role == "messy"
+            else DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
+        )
+
     inverted_index_stages = (
         (
-            [_lookup_keys_in_inverted_index(_inverted_index_strategies)]
-            if _inverted_index_strategies is not None
+            [_lookup_keys_in_inverted_index(lookup_strategies)]
+            if lookup_strategies != DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
             else list(QUEUE_INVERTED_INDEX_LOOKUP)
         )
         if inv_idx_table_name is not None
