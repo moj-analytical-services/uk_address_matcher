@@ -11,6 +11,21 @@ POSTCODE_STRATEGIES: tuple[PostcodeStrategy, PostcodeStrategy] = (
 )
 
 
+def _numeric_tokens_from_scalar_columns_sql(alias: str) -> str:
+    """Build the reduced numeric-token array used by matching stages."""
+
+    return f"""
+        list_filter(
+            list_value(
+                {alias}.numeric_token_1,
+                {alias}.numeric_token_2,
+                {alias}.numeric_token_3
+            ),
+            token -> token IS NOT NULL
+        )
+    """.strip()
+
+
 @pipeline_stage(
     name="restrict_canonical_to_messy_postcodes",
     description="Restrict canonical addresses to postcodes observed in the messy input.",
@@ -39,7 +54,7 @@ def _restrict_canonical_to_messy_postcodes(
         "canon.postcode",
         "canon.unique_id AS canonical_unique_id",
         "canon.ukam_address_id AS ukam_address_id",
-        "canon.numeric_tokens",
+        (f"{_numeric_tokens_from_scalar_columns_sql('canon')} AS numeric_tokens"),
         "canon.has_flat_indicator",
         "canon.flat_positional",
         "canon.sub_premise_location",

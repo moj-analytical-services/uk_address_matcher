@@ -71,9 +71,13 @@ PARQUET_COMPRESSION_LEVEL = 9
 CANONICAL_SORT_COLUMNS = ("postcode", "clean_full_address")
 INVERTED_INDEX_SORT_COLUMNS = ("index_strategy", "key")
 
-# Columns that are not needed after preparation and therefore not persisted.
-# For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
-RECOMPUTABLE_DROP_COLUMNS = ("address_tokens", "exploding_unique_ids")
+# Columns omitted from prepared canonical Parquet because they are either
+# reconstructed when loaded or derived only by matching stages when required.
+RECOMPUTABLE_DROP_COLUMNS = (
+    "address_tokens",
+    "exploding_unique_ids",
+    "numeric_tokens",
+)
 
 
 @dataclass(frozen=True)

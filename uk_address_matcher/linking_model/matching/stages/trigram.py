@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.linking_model.matching.input_filters import (
+    _numeric_tokens_from_scalar_columns_sql,
     _restrict_canonical_to_messy_postcodes,
 )
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
@@ -206,7 +207,7 @@ def _resolve_with_trigrams(
         SELECT
             m.ukam_address_id AS messy_ukam_address_id,
             m.postcode,
-            m.numeric_tokens,
+            {_numeric_tokens_from_scalar_columns_sql("m")} AS numeric_tokens,
             m.{unit_fields.replace(chr(10), " ")},
             {_ngram_expression(messy_tokens_expr, ngram_size)} AS ngrams
         FROM {{__ukam__tmp_messy_addresses}} AS m

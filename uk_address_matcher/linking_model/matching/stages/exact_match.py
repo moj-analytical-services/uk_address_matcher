@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
 
 from uk_address_matcher.linking_model.matching.input_filters import (
+    _numeric_tokens_from_scalar_columns_sql,
     _restrict_canonical_to_messy_postcodes,
 )
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
@@ -166,7 +167,8 @@ def _exact_matches(
         "\n                messy.sub_premise_location,"
         "\n                messy.has_business_unit,"
         "\n                messy.business_unit_id,"
-        "\n                messy.numeric_tokens"
+        f"\n                {_numeric_tokens_from_scalar_columns_sql('messy')} "
+        "AS numeric_tokens"
         if enable_flat_retraction
         else ""
     )
