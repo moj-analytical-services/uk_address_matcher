@@ -21,7 +21,6 @@ def improve_predictions_using_distinguishing_tokens(
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
 ) -> DuckDBPyRelation:
-    """Apply B's token and bigram distinguishability adjustment to candidates."""
     matches_table = "__ukam__distinguishability_matches"
 
     retained_columns = ""
