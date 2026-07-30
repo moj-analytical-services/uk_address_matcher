@@ -172,6 +172,27 @@ def _get_linker(
     if messy_has_score_map or canonical_has_score_map:
         settings_as_dict["additional_columns_to_retain"].append("signature_score_map")
 
+    # Live messy cleaning emits the quantised token histogram before older
+    # prepared canonicals have been rebuilt. Keep the input schemas aligned so
+    # baseline experiments can still run against the pre-rebuild canonical.
+    _empty_token_idf_q_hist = (
+        "MAP([]::VARCHAR[], "
+        "[]::STRUCT(idf_q USMALLINT, token_count UTINYINT)[]) "
+        "AS token_idf_q_hist"
+    )
+    messy_has_token_idf_q_hist = "token_idf_q_hist" in df_addresses_to_match.columns
+    canonical_has_token_idf_q_hist = (
+        "token_idf_q_hist" in df_addresses_to_search_within.columns
+    )
+    if messy_has_token_idf_q_hist and not canonical_has_token_idf_q_hist:
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            f"*, {_empty_token_idf_q_hist}"
+        )
+    elif canonical_has_token_idf_q_hist and not messy_has_token_idf_q_hist:
+        df_addresses_to_match = df_addresses_to_match.select(
+            f"*, {_empty_token_idf_q_hist}"
+        )
+
     # Align the parallel unique-hit count map the same way. It carries, per
     # candidate canonical id, the number of shared inverted-index keys whose
     # posting list has size 1 (i.e. a key unique to that canonical) so the

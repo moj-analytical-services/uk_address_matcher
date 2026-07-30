@@ -461,13 +461,33 @@ def _create_histograms_from_token_frequencies():
     """Create histogram aggregates from token frequency arrays."""
 
     sql = """
+    WITH histograms AS (
+        SELECT
+            *,
+            list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
+            list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist
+        FROM {input}
+    )
     SELECT
         * EXCLUDE (
             token_rel_freq_arr,
             common_end_tokens
         ),
-        list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
-        list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist
-    FROM {input}
+        map_from_entries(
+            list_transform(
+                map_entries(token_rel_freq_arr_hist),
+                entry -> struct_pack(
+                    key := entry.key.tok,
+                    value := struct_pack(
+                        idf_q := CAST(
+                            ROUND(-LOG10(entry.key.rel_freq) * 256)
+                            AS USMALLINT
+                        ),
+                        token_count := CAST(entry.value AS UTINYINT)
+                    )
+                )
+            )
+        ) AS token_idf_q_hist
+    FROM histograms
     """
     return sql
