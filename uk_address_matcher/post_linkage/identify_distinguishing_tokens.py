@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.sql_pipeline.helpers import _uid
+
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
 
 
@@ -21,7 +23,12 @@ def improve_predictions_using_distinguishing_tokens(
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
 ) -> DuckDBPyRelation:
-    matches_table = "__ukam__distinguishability_matches"
+    table_suffix = _uid()
+    matches_table = f"__ukam__tmp_distinguishability_matches_{table_suffix}"
+    good_matches_table = f"__ukam__tmp_good_matches_{table_suffix}"
+    top_n_matches_table = f"__ukam__tmp_top_n_matches_{table_suffix}"
+    token_addresses_table = f"__ukam__tmp_token_addresses_{table_suffix}"
+    block_statistics_table = f"__ukam__tmp_block_statistics_{table_suffix}"
 
     retained_columns = ""
     if additional_columns_to_retain:
@@ -67,21 +74,21 @@ def improve_predictions_using_distinguishing_tokens(
             PARTITION BY unique_id_r, unique_id_l
             ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
         ) = 1
-    """).create("good_matches")
+    """).create(good_matches_table)
 
     con.sql(f"""
         SELECT *
-        FROM good_matches
+        FROM {good_matches_table}
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY unique_id_r
             ORDER BY match_weight DESC, unique_id_l DESC
         ) <= {top_n_matches}
-    """).create("top_n_matches")
+    """).create(top_n_matches_table)
 
-    con.sql("""
+    con.sql(f"""
         WITH intermediate AS (
             SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-            FROM top_n_matches
+            FROM {top_n_matches_table}
         ),
         enriched AS (
             SELECT
@@ -129,7 +136,7 @@ def improve_predictions_using_distinguishing_tokens(
                 .list_reverse()
                 .array_to_string(' ') AS __token_address_r
         FROM enriched
-    """).create("token_addresses")
+    """).create(token_addresses_table)
 
     con.sql(f"""
         WITH source_tokens AS (
@@ -139,7 +146,7 @@ def improve_predictions_using_distinguishing_tokens(
                     .trim()
                     .upper()
                     .regexp_split_to_array('\\s+') AS tokens_r
-            FROM token_addresses
+            FROM {token_addresses_table}
         ),
         block_tokens AS (
             SELECT
@@ -149,7 +156,7 @@ def improve_predictions_using_distinguishing_tokens(
                     .trim()
                     .upper()
                     .regexp_split_to_array('\\s+') AS candidate_tokens
-            FROM token_addresses AS candidate
+            FROM {token_addresses_table} AS candidate
             JOIN source_tokens AS source USING (ukam_address_id_r)
             {eligibility_filter}
         ),
@@ -183,7 +190,7 @@ def improve_predictions_using_distinguishing_tokens(
                 pair -> ARRAY[pair[1], pair[2]]
             ) AS bigrams_r
         FROM block_histograms
-    """).create("block_statistics")
+    """).create(block_statistics_table)
 
     con.sql(f"""
         WITH intermediate AS (
@@ -223,8 +230,8 @@ def improve_predictions_using_distinguishing_tokens(
                             token -> token IN {_POSITIONAL_TOKENS_SQL}
                     )
                 ) AS positional_tokens_r
-            FROM token_addresses AS candidate
-            LEFT JOIN block_statistics AS statistics USING (ukam_address_id_r)
+            FROM {token_addresses_table} AS candidate
+            LEFT JOIN {block_statistics_table} AS statistics USING (ukam_address_id_r)
         ),
         candidate_features AS (
             SELECT

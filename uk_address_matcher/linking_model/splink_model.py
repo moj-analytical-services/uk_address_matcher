@@ -136,6 +136,7 @@ def _get_linker(
     else:
         settings_as_dict = settings.create_settings_dict("duckdb")
 
+    settings_as_dict["linker_uid"] = None
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
     if additional_columns_to_retain:
