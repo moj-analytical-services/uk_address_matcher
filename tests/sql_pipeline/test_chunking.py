@@ -164,10 +164,10 @@ def test_clean_data_using_precomputed_rel_tok_freq(
 
 
 @pytest.mark.parametrize("use_data_specific_tfs", [True, False])
-def test_token_rel_freq_arr_hist_consistent_across_chunks(
+def test_token_histograms_consistent_across_chunks(
     duck_con, fhrs_data, mock_chunk_size_1k, use_data_specific_tfs
 ):
-    """Verify token_rel_freq_arr_hist is identical irrespective of chunking strategy."""
+    """Verify token histograms are identical irrespective of chunking strategy."""
     # Derive term frequencies if using data-specific TFs
     tf_lookup = (
         derive_term_frequencies_table(fhrs_data, con=duck_con)
@@ -183,7 +183,9 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
         term_frequency_lookup=tf_lookup,
     )
     no_chunk_hist = (
-        no_chunk.order("unique_id").select("token_rel_freq_arr_hist").fetchall()[:50]
+        no_chunk.order("unique_id")
+        .select("token_rel_freq_arr_hist, token_idf_q_hist")
+        .fetchall()[:50]
     )
 
     # Process with 5 chunks
@@ -194,11 +196,12 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
         term_frequency_lookup=tf_lookup,
     )
     chunked_hist = (
-        chunked.order("unique_id").select("token_rel_freq_arr_hist").fetchall()[:50]
+        chunked.order("unique_id")
+        .select("token_rel_freq_arr_hist, token_idf_q_hist")
+        .fetchall()[:50]
     )
 
     # First 50 records should have identical histograms
     assert no_chunk_hist == chunked_hist, (
-        "Token frequency histograms differ for "
-        f"use_data_specific_tfs={use_data_specific_tfs}"
+        f"Token histograms differ for use_data_specific_tfs={use_data_specific_tfs}"
     )
