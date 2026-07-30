@@ -337,6 +337,41 @@ def test_match_with_custom_splink_stage(con, canonical_data, messy_data):
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
 
 
+def test_sequential_matchers_share_connection_with_splink(
+    con, canonical_data, messy_data
+):
+    stages = [ExactMatchStage(), SplinkStage()]
+    first_result = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=stages,
+    ).match()
+    first_cache_uid = stages[-1].linker._cache_uid
+
+    second_messy_data = _make_addresses(
+        con,
+        [
+            {
+                "unique_id": "M3",
+                "address_concat": "3 middle boulevard birmingham",
+                "postcode": "B1 1AA",
+            }
+        ],
+    )
+    second_result = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=second_messy_data,
+        con=con,
+        stages=stages,
+    ).match()
+    second_cache_uid = stages[-1].linker._cache_uid
+
+    assert first_result.matches().count("*").fetchone()[0] == 2
+    assert second_result.matches().count("*").fetchone()[0] == 1
+    assert first_cache_uid != second_cache_uid
+
+
 def test_match_from_prepared_folder(con, canonical_data, messy_data):
     """Loading canonical data from a prepared folder should work end-to-end."""
     with tempfile.TemporaryDirectory() as tmp:
