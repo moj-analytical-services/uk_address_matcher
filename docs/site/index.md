@@ -87,6 +87,14 @@ Example output:
 
 The above is recommended if your canonical dataset is relatively small, say, under 1 million rows. If you're matching to larger canonical dataset, a preprocessing step is recommended. See [choose whether to pre-process your canonical dataset](get_started.md#choose-whether-to-pre-process-your-canonical-dataset) for details.
 
+## Use Cases
+
+Here is a list of some of our known users and their use cases:
+
+=== "Public Sector (UK)"
+
+	- The [Greater London Authority](https://www.london.gov.uk/)'s High Streets Data Service uses the `uk_address_matcher` to precisely geolocate London's businesses and assign each of them a commercial UPRN, in order to fully map the city's retail provision and commercial property use.
+
 ## Licence
 
 This project is free and open source and is released under the MIT licence.
