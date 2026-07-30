@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -15,6 +16,7 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
 )
+from uk_address_matcher.helpers.path_parsing import is_remote_folder_reference
 from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
@@ -34,6 +36,17 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+_PREPARED_CANONICAL_CACHE: dict[
+    int, dict[tuple[str, str | None], "_PreparedCanonicalCacheEntry"]
+] = {}
+
+
+@dataclass(frozen=True)
+class _PreparedCanonicalCacheEntry:
+    addresses_table_name: str
+    term_frequencies_table_name: str
+    inverted_index_table_name: str
 
 
 def _default_stages() -> list[MatchingStage]:
@@ -63,7 +76,9 @@ class AddressMatcher:
             `DuckDBPyRelation` or a path to a prepared canonical folder.
         canonical_address_filter: Optional DuckDB SQL expression used to
             filter canonical addresses after load (for prepared folders)
-            or directly on the provided canonical relation.
+            or directly on the provided canonical relation. Prepared-folder
+            artefacts are materialised once per connection and reused when the
+            same folder and filter are used by later matchers.
         addresses_to_match: Messy addresses to resolve. Can be a
             `DuckDBPyRelation`, a list of `AddressRecord`, or a list of dicts
             with `address_concat`, `postcode`, and `unique_id` fields.
@@ -219,15 +234,10 @@ class AddressMatcher:
         """Loads or cleans canonical data depending on the input type."""
 
         if isinstance(self._raw_canonical, (str, Path)):
-            logger.debug("Loading prepared canonical data from '%s'", self._raw_canonical)
-            prepared = load_prepared_canonical_data(
-                self._raw_canonical,
-                self.con,
-                canonical_address_filter=self.canonical_address_filter,
-            )
-            self._canonical_clean = prepared.addresses
-            self._tf_table = prepared.term_frequencies
-            self._register_inverted_index(prepared.inverted_index)
+            cached = self._get_or_load_prepared_canonical()
+            self._canonical_clean = self.con.table(cached.addresses_table_name)
+            self._tf_table = self.con.table(cached.term_frequencies_table_name)
+            self._inverted_index_table_name = cached.inverted_index_table_name
 
         else:
             canonical_for_preparation = normalise_and_validate_raw_canonical(
@@ -264,6 +274,66 @@ class AddressMatcher:
                 show_progress=self.show_progress,
             )
             self._register_inverted_index(inverted_index)
+
+    def _get_or_load_prepared_canonical(self) -> _PreparedCanonicalCacheEntry:
+        cache_key = self._prepared_canonical_cache_key()
+        cache = _PREPARED_CANONICAL_CACHE.setdefault(id(self.con), {})
+        cached = cache.get(cache_key)
+        if cached is not None and self._prepared_canonical_tables_exist(cached):
+            logger.debug("Reusing prepared canonical data from '%s'", self._raw_canonical)
+            return cached
+
+        logger.debug("Loading prepared canonical data from '%s'", self._raw_canonical)
+        prepared = load_prepared_canonical_data(
+            self._raw_canonical,
+            self.con,
+            canonical_address_filter=self.canonical_address_filter,
+        )
+        cached = _PreparedCanonicalCacheEntry(
+            addresses_table_name=self._materialise_prepared_relation(
+                prepared.addresses, "canonical_addresses"
+            ),
+            term_frequencies_table_name=self._materialise_prepared_relation(
+                prepared.term_frequencies, "term_frequencies"
+            ),
+            inverted_index_table_name=self._materialise_prepared_relation(
+                prepared.inverted_index, "inverted_index"
+            ),
+        )
+        cache[cache_key] = cached
+        return cached
+
+    def _prepared_canonical_cache_key(self) -> tuple[str, str | None]:
+        folder = str(self._raw_canonical)
+        if not is_remote_folder_reference(folder):
+            folder = str(Path(folder).expanduser().resolve())
+        return folder, self.canonical_address_filter
+
+    def _prepared_canonical_tables_exist(
+        self, cached: _PreparedCanonicalCacheEntry
+    ) -> bool:
+        table_names = (
+            cached.addresses_table_name,
+            cached.term_frequencies_table_name,
+            cached.inverted_index_table_name,
+        )
+        for table_name in table_names:
+            row = self.con.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
+                [table_name],
+            ).fetchone()
+            if row is None:
+                return False
+        return True
+
+    def _materialise_prepared_relation(
+        self,
+        relation: duckdb.DuckDBPyRelation,
+        artefact_name: str,
+    ) -> str:
+        table_name = f"__ukam__prepared_{artefact_name}_{_uid()}"
+        relation.create(table_name)
+        return table_name
 
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
