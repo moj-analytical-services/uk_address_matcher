@@ -7,6 +7,7 @@ import duckdb
 import pyarrow
 import pytest
 
+import uk_address_matcher.address_matcher as address_matcher_module
 from uk_address_matcher import (
     AddressMatcher,
     ExactMatchStage,
@@ -390,6 +391,66 @@ def test_match_from_prepared_folder(con, canonical_data, messy_data):
         assert isinstance(result, MatchResult)
         assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
         assert result.matches().count("*").fetchone()[0] > 0
+
+
+def test_prepared_canonical_reuse_preserves_sequential_match_results(
+    con, canonical_data, messy_data, monkeypatch
+):
+    load_calls = 0
+    original_load = address_matcher_module.load_prepared_canonical_data
+
+    def spy_load(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(address_matcher_module, "load_prepared_canonical_data", spy_load)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+        first_matcher = AddressMatcher(
+            canonical_addresses=tmp,
+            addresses_to_match=messy_data,
+            con=con,
+            stages=[ExactMatchStage()],
+        )
+        first_matches = first_matcher.match().matches().order("unique_id")
+
+        second_messy_data = _make_addresses(
+            con,
+            [
+                {
+                    "unique_id": "M3",
+                    "address_concat": "3 middle road birmingham",
+                    "postcode": "B1 1AA",
+                }
+            ],
+        )
+
+        second_matcher = AddressMatcher(
+            canonical_addresses=Path(tmp),
+            addresses_to_match=second_messy_data,
+            con=con,
+            stages=[ExactMatchStage()],
+        )
+        second_matches = second_matcher.match().matches().order("unique_id")
+
+    assert load_calls == 1
+    assert first_matcher._canonical_clean.alias == second_matcher._canonical_clean.alias
+    assert first_matcher._tf_table.alias == second_matcher._tf_table.alias
+    assert (
+        first_matcher._inverted_index_table_name
+        == second_matcher._inverted_index_table_name
+    )
+    assert first_matches.select("unique_id, resolved_canonical_id").fetchall() == [
+        ("M1", "C1"),
+        ("M2", None),
+    ]
+    assert second_matches.select("unique_id, resolved_canonical_id").fetchall() == [
+        ("M3", "C3"),
+    ]
 
 
 def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data):
