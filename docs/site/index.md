@@ -94,12 +94,13 @@ Here is a list of some of our known users and their use cases:
 === "Public Sector (UK)"
 
 	- The [Greater London Authority](https://www.london.gov.uk/)'s High Streets Data Service uses the `uk_address_matcher` to precisely geolocate London's businesses and assign each of them a commercial UPRN, in order to fully map the city's retail provision and commercial property use.
+    - [Homes England](https://www.gov.uk/government/organisations/homes-england) has tested the Splink-based address matcher to link the Land Registry Price Paid dataset with the Ordnance Survey National Geographic Database (NGD). In a Databricks environment, it links around 30 million records in under five hours with high accuracy, helping to identify and monitor new builds that contribute to the 1.5 million homes mandate.
 
 ## Licence
 
 This project is free and open source and is released under the MIT licence.
 
-## Next steps
+****## Next steps
 
 - [Overview](index.md)
 - [Getting started](get_started.md)
