@@ -806,8 +806,8 @@ def launch_labelling_app(
         _handler_factory(bundle, input_dataset, session),
     )
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={session.token}"
-    print(f"UKAM labelling tool: {url}", flush=True)
-    print(
+    print(f"UKAM labelling tool: {url}", flush=True)  # noqa: T201
+    print(  # noqa: T201
         "This session will remain live until 10 minutes after your last interaction.",
         flush=True,
     )
