@@ -19,13 +19,21 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import duckdb
 
-DEFAULT_BUNDLE_PATH = Path("ukam_labelling_bundle")
+from uk_address_matcher.labelling.canonical import (
+    CANONICAL_PAGE_SIZE,
+    CanonicalSource,
+    find_canonical_record,
+    load_canonical_source,
+    search_canonical_data,
+)
+
 DEFAULT_PAGE_SIZE = 20
 ALLOWED_PAGE_SIZES = {10, 20, 50, 100}
 ALLOWED_MATCH_STAGES = {"exact", "peeled", "splink", "unique_trigram", "unmatched"}
 ALLOWED_DECISIONS = {
     "accept_model",
     "select_candidate",
+    "select_canonical",
     "use_existing",
     "no_match",
     "uncertain",
@@ -327,7 +335,11 @@ def _stage_counts(bundle: Bundle) -> dict[str, int]:
     }
 
 
-def _bootstrap_payload(bundle: Bundle, session: SessionState) -> dict[str, Any]:
+def _bootstrap_payload(
+    bundle: Bundle,
+    session: SessionState,
+    canonical_source: CanonicalSource | None = None,
+) -> dict[str, Any]:
     connection = duckdb.connect(str(bundle.state_file))
     try:
         row = connection.execute(
@@ -349,6 +361,19 @@ def _bootstrap_payload(bundle: Bundle, session: SessionState) -> dict[str, Any]:
         "stage_counts": _stage_counts(bundle),
         "score_bounds": {"minimum": row[2], "maximum": row[3]},
         "distinguishability_bounds": {"minimum": row[4], "maximum": row[5]},
+        "canonical_search": {
+            "available": canonical_source is not None,
+            "source_name": (
+                None if canonical_source is None else canonical_source.display_name
+            ),
+            "page_size": CANONICAL_PAGE_SIZE,
+            "warning": (
+                "No canonical path provided. If you wish to view canonical data in "
+                "this app, relaunch the application with canonical_data_path."
+                if canonical_source is None
+                else None
+            ),
+        },
     }
 
 
@@ -522,7 +547,9 @@ def _normalise_candidates(candidates: Any) -> list[dict[str, Any]]:
 
 
 def _validate_label_payload(
-    bundle: Bundle, payload: dict[str, Any]
+    bundle: Bundle,
+    payload: dict[str, Any],
+    canonical_source: CanonicalSource | None = None,
 ) -> tuple[str, str, str | None, int | None]:
     unique_id = str(payload.get("unique_id", "")).strip()
     decision = str(payload.get("decision", "")).strip()
@@ -551,6 +578,19 @@ def _validate_label_payload(
         if label not in candidate_ranks:
             raise ValueError("The submitted label is not one of the exported candidates")
         rank = candidate_ranks[label] if rank is None else rank
+    if decision == "select_canonical":
+        if canonical_source is None:
+            raise ValueError(
+                "A canonical-data path is required to select a canonical-search result"
+            )
+        if label is None:
+            raise ValueError("A canonical label is required")
+        if find_canonical_record(canonical_source, label) is None:
+            raise ValueError(
+                "The selected canonical ID does not exist in the configured "
+                "canonical data"
+            )
+        rank = None
     if decision == "use_existing" and (
         record["imported_label"] is None or label != record["imported_label"]
     ):
@@ -623,8 +663,11 @@ def _save_label(
     bundle: Bundle,
     payload: dict[str, Any],
     input_dataset: InputDataset | None = None,
+    canonical_source: CanonicalSource | None = None,
 ) -> dict[str, Any]:
-    unique_id, decision, label, rank = _validate_label_payload(bundle, payload)
+    unique_id, decision, label, rank = _validate_label_payload(
+        bundle, payload, canonical_source
+    )
     if input_dataset is not None:
         _replace_input_label(
             input_dataset,
@@ -650,10 +693,53 @@ def _save_label(
     }
 
 
+def _undo_last_label(
+    bundle: Bundle,
+    input_dataset: InputDataset | None = None,
+) -> dict[str, Any]:
+    connection = duckdb.connect(str(bundle.state_file))
+    try:
+        event = connection.execute(
+            """
+            SELECT event_id, unique_id
+            FROM label_events
+            ORDER BY created_at_utc DESC, event_id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if event is None:
+            raise ValueError("There are no label actions to undo")
+        event_id, unique_id = str(event[0]), str(event[1])
+        connection.execute("DELETE FROM label_events WHERE event_id = ?", [event_id])
+        cursor = connection.execute(
+            f"""{_base_review_cte(bundle)}
+            SELECT current_label FROM base WHERE unique_id = ?""",
+            [str(bundle.data_file), unique_id],
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Unknown messy unique_id: {unique_id}")
+        restored_label = row[0]
+    finally:
+        connection.close()
+    if input_dataset is not None:
+        _replace_input_label(
+            input_dataset,
+            unique_id=unique_id,
+            label=restored_label,
+        )
+    return {
+        "undone_event_id": event_id,
+        "unique_id": unique_id,
+        "ukam_label": restored_label,
+    }
+
+
 def _handler_factory(
     bundle: Bundle,
     input_dataset: InputDataset,
     session: SessionState,
+    canonical_source: CanonicalSource | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     static_root = files("uk_address_matcher.labelling.app")
 
@@ -727,7 +813,10 @@ def _handler_factory(
             try:
                 if path == "/api/bootstrap":
                     session.touch()
-                    self._send(HTTPStatus.OK, _bootstrap_payload(bundle, session))
+                    self._send(
+                        HTTPStatus.OK,
+                        _bootstrap_payload(bundle, session, canonical_source),
+                    )
                     return
                 if path == "/api/records":
                     session.touch()
@@ -736,6 +825,40 @@ def _handler_factory(
                 if path == "/api/review-record":
                     session.touch()
                     self._send(HTTPStatus.OK, _review_record_payload(bundle, query))
+                    return
+                if path == "/api/canonical-search":
+                    session.touch()
+                    if canonical_source is None:
+                        self._send(
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "Canonical search is unavailable because no "
+                                "canonical_data_path was supplied."
+                            },
+                        )
+                        return
+                    try:
+                        page = int(query.get("page", ["1"])[0])
+                    except ValueError as error:
+                        raise ValueError("Canonical page must be an integer.") from error
+                    result = search_canonical_data(
+                        canonical_source,
+                        postcode=query.get("postcode", [None])[0],
+                        address_query=query.get("address_query", [None])[0],
+                        page=page,
+                    )
+                    self._send(
+                        HTTPStatus.OK,
+                        {
+                            "page": result.page,
+                            "page_size": result.page_size,
+                            "has_previous": result.has_previous,
+                            "has_next": result.has_next,
+                            "postcode": result.postcode,
+                            "address_query": result.address_query,
+                            "rows": result.rows,
+                        },
+                    )
                     return
                 self._send(HTTPStatus.NOT_FOUND, {"error": "API route not found"})
             except ValueError as error:
@@ -766,8 +889,12 @@ def _handler_factory(
                     session.touch()
                     self._send(
                         HTTPStatus.CREATED,
-                        _save_label(bundle, payload, input_dataset),
+                        _save_label(bundle, payload, input_dataset, canonical_source),
                     )
+                    return
+                if path == "/api/undo":
+                    session.touch()
+                    self._send(HTTPStatus.OK, _undo_last_label(bundle, input_dataset))
                     return
                 self._send(HTTPStatus.NOT_FOUND, {"error": "API route not found"})
             except (ValueError, json.JSONDecodeError) as error:
@@ -782,10 +909,11 @@ def _handler_factory(
 
 
 def launch_labelling_app(
-    labelling_bundle_path: str | Path = DEFAULT_BUNDLE_PATH,
+    labelling_bundle_path: str | Path = Path("ukam_labelling_bundle"),
     *,
     input_dataset_path: str | Path,
     input_dataset_label_column: str = "ukam_label",
+    canonical_address_path: str | Path | None = None,
     port: int = 0,
     open_browser: bool = True,
 ) -> None:
@@ -800,10 +928,11 @@ def launch_labelling_app(
         label_column=input_dataset_label_column,
     )
     _ensure_state_database(bundle)
+    canonical_source = load_canonical_source(canonical_address_path)
     session = SessionState(600)
     server = ThreadingHTTPServer(
         ("127.0.0.1", port),
-        _handler_factory(bundle, input_dataset, session),
+        _handler_factory(bundle, input_dataset, session, canonical_source),
     )
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={session.token}"
     print(f"UKAM labelling tool: {url}", flush=True)  # noqa: T201
@@ -833,9 +962,10 @@ def launch_labelling_app(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Launch the local UKAM labelling tool")
-    parser.add_argument("--labelling-bundle", default=str(DEFAULT_BUNDLE_PATH))
+    parser.add_argument("--labelling-bundle", default="ukam_labelling_bundle")
     parser.add_argument("--input-dataset", required=True)
     parser.add_argument("--input-label-column", default="ukam_label")
+    parser.add_argument("--canonical-address-path", default=None)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     arguments = parser.parse_args()
@@ -843,6 +973,7 @@ def main() -> None:
         arguments.labelling_bundle,
         input_dataset_path=arguments.input_dataset,
         input_dataset_label_column=arguments.input_label_column,
+        canonical_address_path=arguments.canonical_address_path,
         port=arguments.port,
         open_browser=not arguments.no_browser,
     )

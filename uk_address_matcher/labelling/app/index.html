@@ -322,6 +322,9 @@
           <footer class="review-actions">
             <span id="review-current-label"></span>
             <div>
+              <button id="review-undo" class="review-button" type="button">
+                Undo
+              </button>
               <button id="review-accept" class="review-button accept">
                 Accept model match</button
               ><button
@@ -359,27 +362,36 @@
             <pre>
 launch_labelling_app(
     ...,
-    canonical_data_path=&lt;path&gt;,
+  canonical_address_path=&lt;path&gt;,
 )</pre>
             <p>The Overview and Review tabs remain available.</p>
           </div>
         </div>
         <div id="canonical-content" hidden>
-          <header class="canonical-header">
-            <div>
-              <h1>Canonical Search</h1>
-              <p>
-                Search prepared canonical data directly from its Parquet files.
-              </p>
+          <div class="canonical-review-heading">
+            <h1>Canonical Review</h1>
+            <p>
+              Search the canonical dataset and select the correct record for the
+              current review target.
+            </p>
+          </div>
+          <section id="canonical-record-context" hidden>
+            <div class="canonical-record-field">
+              <span>Raw address</span>
+              <strong id="canonical-review-messy-address"></strong>
             </div>
-            <div id="canonical-review-context" hidden>
-              <span>Reviewing record </span
-              ><strong id="canonical-review-record-id"></strong
-              ><button id="canonical-back-to-review" type="button">
-                Back to Review
-              </button>
+            <div class="canonical-record-field">
+              <span>Cleaned address</span>
+              <strong id="canonical-review-messy-cleaned"></strong>
             </div>
-          </header>
+            <div class="canonical-record-field">
+              <span>Postcode</span>
+              <strong id="canonical-review-messy-postcode"></strong>
+            </div>
+            <button id="canonical-back-to-review" type="button">
+              Back to Review
+            </button>
+          </section>
           <section class="canonical-search-panel">
             <label
               >Postcode<input
@@ -442,7 +454,7 @@ launch_labelling_app(
                 <tbody id="canonical-results-body"></tbody>
               </table>
             </div>
-            <footer>
+            <footer id="canonical-pagination" hidden>
               <button id="canonical-previous" type="button" disabled>
                 &larr; Previous 100</button
               ><span id="canonical-pagination-summary">Page 1</span
