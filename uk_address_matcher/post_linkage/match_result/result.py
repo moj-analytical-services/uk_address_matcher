@@ -27,6 +27,7 @@ from uk_address_matcher.post_linkage.match_result.debug_tools import (
     _MatchResultDebugTools,
 )
 from uk_address_matcher.post_linkage.match_result.splink_inspector import _SplinkInspector
+from uk_address_matcher.sql_pipeline.helpers import _drop_table_and_registered_aliases
 
 if TYPE_CHECKING:
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
@@ -46,6 +47,10 @@ class MatchResult:
     Key methods:
         match_metrics      - match-reason breakdown with counts and percentages.
         match_reasons      - distinct match-reason values.
+        close              - drop every table/view retained for this result,
+                             including the result table itself. After close(),
+                             `.matches()` and the inspection methods no longer
+                             work. Also usable as a context manager.
         _splink_predictions - raw Splink predictions table (requires `SplinkStage`).
     """
 
@@ -55,6 +60,13 @@ class MatchResult:
     _canonical_relation: DuckDBPyRelation | None = None
     _messy_relation: DuckDBPyRelation | None = None
     _stage_diagnostics: StageDiagnostics | None = None
+    # Catalogue objects this result owns and drops on close(). Snapshotted at
+    # construction time, so reusing the same stage objects for a later run
+    # cannot repoint an earlier result's cleanup at the newer run's tables.
+    _owned_table_names: tuple[str, ...] = ()
+    # SplinkDataFrame handles for Splink-side tables, dropped via Splink's
+    # public API on close().
+    _owned_splink_frames: tuple = ()
 
     def __repr__(self) -> str:
         class_name = self.__class__.__name__
@@ -98,6 +110,33 @@ class MatchResult:
             FROM ({base_relation_sql}) AS match_result
             """
         )
+
+    def close(self) -> None:
+        """Release every table/view retained for this result.
+
+        Idempotent. Drops only objects owned by this result, so closing an
+        earlier result never invalidates a later live result on the same
+        connection. After close(), `.matches()` and inspection methods raise.
+        """
+        for frame in self._owned_splink_frames:
+            try:
+                frame.drop_table_from_database_and_remove_from_cache(
+                    force_non_splink_table=True
+                )
+            except Exception:
+                # Best-effort: already dropped, or connection closing.
+                pass
+        self._owned_splink_frames = ()
+        for table_name in self._owned_table_names:
+            _drop_table_and_registered_aliases(self.con, table_name)
+        self._owned_table_names = ()
+
+    def __enter__(self) -> "MatchResult":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
 
     def match_metrics(
         self,
