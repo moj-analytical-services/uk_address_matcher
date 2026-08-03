@@ -27,8 +27,7 @@
     </header>
     <nav>
       <button class="tab active" data-view="overview">Overview</button
-      ><button class="tab" data-view="review">Review</button
-      ><button class="tab" data-view="canonical">Canonical Search</button>
+      ><button class="tab" data-view="review">Review</button>
     </nav>
     <main>
       <section id="overview-view" class="view active">
@@ -319,6 +318,95 @@
               </table>
             </div>
           </section>
+          <div id="canonical-unavailable" class="canonical-unavailable" hidden>
+            <div>
+              <h2>Canonical data is not available</h2>
+              <p>
+                No canonical path was provided. Relaunch the app with a
+                canonical address path to search canonical records.
+              </p>
+            </div>
+          </div>
+          <section id="canonical-content" class="review-canonical" hidden>
+            <div class="canonical-review-heading">
+              <h1>Canonical Viewer</h1>
+              <p>
+                Search the canonical dataset and select the correct record for
+                this review target.
+              </p>
+            </div>
+            <section class="canonical-search-panel">
+              <label
+                >Postcode<input
+                  id="canonical-postcode"
+                  type="text"
+                  maxlength="16"
+                  placeholder="For example, E5 8RY"
+                  autocomplete="off" /></label
+              ><label
+                >Cleaned address contains<input
+                  id="canonical-address-query"
+                  type="text"
+                  maxlength="100"
+                  placeholder="For example, 34 or STREET"
+                  autocomplete="off"
+              /></label>
+              <div>
+                <button id="canonical-use-review-postcode" type="button" hidden>
+                  Use postcode from record</button
+                ><button
+                  id="canonical-search"
+                  type="button"
+                  class="primary-button"
+                >
+                  Search</button
+                ><button id="canonical-clear" type="button">Clear</button>
+              </div>
+            </section>
+            <p class="canonical-help">
+              Enter a postcode, an address value, or both. Address searching is
+              a case-insensitive literal substring check.
+            </p>
+            <section class="canonical-results">
+              <header>
+                <div>
+                  <h2>Results</h2>
+                  <p id="canonical-results-status">
+                    Enter a postcode or address value to begin searching.
+                  </p>
+                </div>
+                <strong id="canonical-page-number">Page 1</strong>
+              </header>
+              <div
+                id="canonical-results-message"
+                class="canonical-results-message"
+              >
+                Search results will appear here.
+              </div>
+              <div id="canonical-results-table-shell" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Canonical ID</th>
+                      <th>Address</th>
+                      <th>Cleaned address</th>
+                      <th>Postcode</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="canonical-results-body"></tbody>
+                </table>
+              </div>
+              <footer id="canonical-pagination" hidden>
+                <button id="canonical-previous" type="button" disabled>
+                  &larr; Previous 100</button
+                ><span id="canonical-pagination-summary">Page 1</span
+                ><button id="canonical-next" type="button" disabled>
+                  Next 100 &rarr;
+                </button>
+              </footer>
+            </section>
+          </section>
           <footer class="review-actions">
             <span id="review-current-label"></span>
             <div>
@@ -332,7 +420,7 @@
                 class="review-button"
                 type="button"
               >
-                Search canonical data</button
+                Go to canonical search</button
               ><button id="review-no-match" class="review-button">
                 No match</button
               ><button id="review-uncertain" class="review-button">
@@ -349,120 +437,6 @@
           ><button id="review-complete-overview" class="review-button">
             Return to Overview
           </button>
-        </div>
-      </section>
-      <section id="canonical-view" class="view canonical-view">
-        <div id="canonical-unavailable" class="canonical-unavailable" hidden>
-          <div>
-            <h2>Canonical data is not available</h2>
-            <p>
-              No canonical path was provided. If you wish to view canonical data
-              in this app, relaunch it with:
-            </p>
-            <pre>
-launch_labelling_app(
-    ...,
-  canonical_address_path=&lt;path&gt;,
-)</pre>
-            <p>The Overview and Review tabs remain available.</p>
-          </div>
-        </div>
-        <div id="canonical-content" hidden>
-          <div class="canonical-review-heading">
-            <h1>Canonical Review</h1>
-            <p>
-              Search the canonical dataset and select the correct record for the
-              current review target.
-            </p>
-          </div>
-          <section id="canonical-record-context" hidden>
-            <div class="canonical-record-field">
-              <span>Raw address</span>
-              <strong id="canonical-review-messy-address"></strong>
-            </div>
-            <div class="canonical-record-field">
-              <span>Cleaned address</span>
-              <strong id="canonical-review-messy-cleaned"></strong>
-            </div>
-            <div class="canonical-record-field">
-              <span>Postcode</span>
-              <strong id="canonical-review-messy-postcode"></strong>
-            </div>
-            <button id="canonical-back-to-review" type="button">
-              Back to Review
-            </button>
-          </section>
-          <section class="canonical-search-panel">
-            <label
-              >Postcode<input
-                id="canonical-postcode"
-                type="text"
-                maxlength="16"
-                placeholder="For example, E5 8RY"
-                autocomplete="off" /></label
-            ><label
-              >Cleaned address contains<input
-                id="canonical-address-query"
-                type="text"
-                maxlength="100"
-                placeholder="For example, 34 or STREET"
-                autocomplete="off"
-            /></label>
-            <div>
-              <button id="canonical-use-review-postcode" type="button" hidden>
-                Use postcode from record</button
-              ><button
-                id="canonical-search"
-                type="button"
-                class="primary-button"
-              >
-                Search</button
-              ><button id="canonical-clear" type="button">Clear</button>
-            </div>
-          </section>
-          <p class="canonical-help">
-            Enter a postcode, an address value, or both. Address searching is a
-            case-insensitive literal substring check.
-          </p>
-          <section class="canonical-results">
-            <header>
-              <div>
-                <h2>Results</h2>
-                <p id="canonical-results-status">
-                  Enter a postcode or address value to begin searching.
-                </p>
-              </div>
-              <strong id="canonical-page-number">Page 1</strong>
-            </header>
-            <div
-              id="canonical-results-message"
-              class="canonical-results-message"
-            >
-              Search results will appear here.
-            </div>
-            <div id="canonical-results-table-shell" hidden>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Canonical ID</th>
-                    <th>Address</th>
-                    <th>Cleaned address</th>
-                    <th>Postcode</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody id="canonical-results-body"></tbody>
-              </table>
-            </div>
-            <footer id="canonical-pagination" hidden>
-              <button id="canonical-previous" type="button" disabled>
-                &larr; Previous 100</button
-              ><span id="canonical-pagination-summary">Page 1</span
-              ><button id="canonical-next" type="button" disabled>
-                Next 100 &rarr;
-              </button>
-            </footer>
-          </section>
         </div>
       </section>
     </main>
