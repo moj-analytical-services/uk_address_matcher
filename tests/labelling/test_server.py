@@ -14,6 +14,7 @@ import duckdb
 import pytest
 
 from tests.labelling.test_state import create_test_bundle
+from uk_address_matcher.labelling.canonical import load_canonical_source
 from uk_address_matcher.labelling.server import (
     InputDataset,
     SessionState,
@@ -249,6 +250,46 @@ def test_labels_endpoint_validates_candidates_and_writes_csv(
     )
     assert status == 200
     assert payload["total_filtered"] == 0
+
+
+def test_undo_restores_the_previous_input_label(
+    running_app: tuple[str, SessionState, Path],
+) -> None:
+    base_url, session, input_file = running_app
+    status, _ = request(
+        base_url,
+        "/api/labels",
+        token=session.token,
+        method="POST",
+        payload={
+            "unique_id": "messy-1",
+            "decision": "select_candidate",
+            "ukam_label": "label-2",
+            "selected_candidate_rank": 2,
+        },
+    )
+    assert status == 201
+
+    status, payload = request(
+        base_url,
+        "/api/undo",
+        token=session.token,
+        method="POST",
+        payload={},
+    )
+    assert status == 200
+    assert payload["unique_id"] == "messy-1"
+    assert payload["ukam_label"] is None
+
+    connection = duckdb.connect()
+    try:
+        label = connection.execute(
+            "SELECT review_label FROM read_csv_auto(?) WHERE unique_id = 'messy-1'",
+            [str(input_file)],
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert label is None
 
 
 def test_load_bundle_rejects_missing_folder(tmp_path: Path) -> None:
@@ -504,3 +545,117 @@ def test_saved_label_creates_missing_ukam_label_column(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert row == ("messy-1", "label-1", "unchanged")
+
+
+def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
+    bundle = _load_bundle(create_test_bundle(tmp_path / "bundle"))
+    _ensure_state_database(bundle)
+    input_file = tmp_path / "input.csv"
+    input_file.write_text("unique_id\nmessy-1\n", encoding="utf-8")
+    input_dataset = _load_input_dataset(bundle, input_file)
+    canonical_file = tmp_path / "canonical.parquet"
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            """COPY (
+                SELECT 'canonical-1' AS unique_id,
+                    '1 TEST ROAD' AS original_address_concat,
+                    '1 TEST ROAD' AS clean_full_address, 'E1 1AA' AS postcode
+                UNION ALL
+                SELECT 'canonical-2', '2 TEST ROAD', '2 TEST ROAD', 'E1 1AA'
+            ) TO ? (FORMAT PARQUET)""",
+            [str(canonical_file)],
+        )
+    finally:
+        connection.close()
+    canonical_source = load_canonical_source(canonical_file)
+    assert canonical_source is not None
+    original_bytes = canonical_file.read_bytes()
+    session = SessionState(idle_timeout_seconds=600)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        _handler_factory(bundle, input_dataset, session, canonical_source),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, payload = request(
+            base_url,
+            "/api/bootstrap",
+            token=session.token,
+        )
+        assert status == 200
+        assert payload["canonical_search"] == {
+            "available": True,
+            "source_name": "canonical.parquet",
+            "page_size": 100,
+            "warning": None,
+        }
+
+        status, payload = request(
+            base_url,
+            "/api/canonical-search?postcode=e11aa&address_query=test&page=1",
+            token=session.token,
+        )
+        assert status == 200
+        assert payload["postcode"] == "E1 1AA"
+        assert [row["canonical_id"] for row in payload["rows"]] == [
+            "canonical-1",
+            "canonical-2",
+        ]
+
+        status, payload = request(
+            base_url,
+            "/api/labels",
+            token=session.token,
+            method="POST",
+            payload={
+                "unique_id": "messy-1",
+                "decision": "select_canonical",
+                "ukam_label": "unknown",
+                "selected_candidate_rank": None,
+            },
+        )
+        assert status == 400
+        assert "does not exist" in payload["error"]
+
+        status, payload = request(
+            base_url,
+            "/api/labels",
+            token=session.token,
+            method="POST",
+            payload={
+                "unique_id": "messy-1",
+                "decision": "select_canonical",
+                "ukam_label": "canonical-2",
+                "selected_candidate_rank": None,
+            },
+        )
+        assert status == 201
+        assert payload["decision"] == "select_canonical"
+        assert payload["ukam_label"] == "canonical-2"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert canonical_file.read_bytes() == original_bytes
+
+
+def test_canonical_search_api_is_unavailable_without_source(
+    running_app: tuple[str, SessionState, Path],
+) -> None:
+    base_url, session, _ = running_app
+
+    status, payload = request(
+        base_url,
+        "/api/canonical-search?postcode=E1%201AA",
+        token=session.token,
+    )
+
+    assert status == 409
+    assert payload == {
+        "error": (
+            "Canonical search is unavailable because no canonical_data_path was supplied."
+        )
+    }
