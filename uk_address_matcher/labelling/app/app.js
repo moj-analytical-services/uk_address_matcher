@@ -480,9 +480,7 @@ async function initialise() {
     view(
       location.hash.startsWith("#review")
         ? "review"
-        : location.hash.startsWith("#canonical")
-          ? "canonical"
-          : "overview",
+        : "overview",
     ),
   );
   $("reset-filters").onclick = () => {
@@ -877,11 +875,6 @@ if (location.hash.startsWith("#review")) loadReview();
   const c = {
     unavailable: $("canonical-unavailable"),
     content: $("canonical-content"),
-    reviewContext: $("canonical-record-context"),
-    reviewMessyAddress: $("canonical-review-messy-address"),
-    reviewMessyCleaned: $("canonical-review-messy-cleaned"),
-    reviewMessyPostcode: $("canonical-review-messy-postcode"),
-    back: $("canonical-back-to-review"),
     postcode: $("canonical-postcode"),
     address: $("canonical-address-query"),
     usePostcode: $("canonical-use-review-postcode"),
@@ -1089,13 +1082,7 @@ if (location.hash.startsWith("#review")) loadReview();
     const record = state.review.record,
       reviewId = record?.unique_id || null,
       postcode = record?.messy_postcode || "";
-    c.reviewContext.hidden = !reviewId;
     c.usePostcode.hidden = !postcode;
-    if (reviewId) {
-      c.reviewMessyAddress.textContent = display(record.messy_address);
-      c.reviewMessyCleaned.textContent = display(record.messy_cleaned_address);
-      c.reviewMessyPostcode.textContent = display(record.messy_postcode);
-    }
     if (reviewId && reviewId !== state.canonical.initialisedReviewId) {
       state.canonical.initialisedReviewId = reviewId;
       state.canonical.page = 1;
@@ -1122,6 +1109,7 @@ if (location.hash.startsWith("#review")) loadReview();
   const oldRender = renderReview;
   renderReview = () => {
     oldRender();
+    prepare();
     renderSelection(state.review.record);
   };
   const oldAccept = updateReviewAccept;
@@ -1200,11 +1188,14 @@ if (location.hash.startsWith("#review")) loadReview();
       scrollTo({ top: 0, behavior: "smooth" });
     }
   };
-  c.back.onclick = () => {
-    if (state.review.record)
-      location.hash = `review/${encodeURIComponent(state.review.record.unique_id)}`;
+  c.reviewSearch.onclick = () => {
+    if (!state.canonical.available) {
+      toast("Canonical data is not available.");
+      return;
+    }
+    c.content.scrollIntoView({ behavior: "smooth", block: "start" });
+    c.postcode.focus();
   };
-  c.reviewSearch.onclick = () => (location.hash = "canonical");
   c.clearSelection.onclick = () => {
     clearPending();
     updateReviewAccept();
@@ -1219,16 +1210,13 @@ if (location.hash.startsWith("#review")) loadReview();
         }
       }),
   );
-  addEventListener("hashchange", () => {
-    if (location.hash.startsWith("#canonical")) prepare();
-  });
   const initialise = () => {
     if (!state.bootstrap) return setTimeout(initialise, 25);
     const config = state.bootstrap.canonical_search || {};
     state.canonical.available = Boolean(config.available);
     c.unavailable.hidden = state.canonical.available;
     c.content.hidden = !state.canonical.available;
-    if (location.hash.startsWith("#canonical")) prepare();
+    prepare();
   };
   initialise();
 })();
