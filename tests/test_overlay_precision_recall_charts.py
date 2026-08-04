@@ -181,6 +181,7 @@ def test_overlay_chart_definition_uses_translucent_comparisons_and_hover_guides(
     }
     assert baseline_line_layer["encoding"]["x"]["scale"]["domain"] == [0.84, 0.96]
     assert baseline_line_layer["encoding"]["y"]["scale"]["domain"] == [0.955, 1.0]
+    assert baseline_line_layer["encoding"]["y"]["axis"]["format"] == ".2%"
     assert "params" not in baseline_line_layer
     assert chart_definition["resolve"]["scale"]["x"] == "shared"
 
@@ -306,7 +307,7 @@ def test_overlay_chart_uses_one_ordered_colour_mapping() -> None:
         chart_definition["vconcat"][1]["layer"][1]["encoding"]["x"]["field"] == "recall"
     )
     assert chart_definition["vconcat"][1]["layer"][1]["encoding"]["y"]["scale"] == {
-        "domain": [-0.2, 0.2],
+        "domain": [-1.0, 1.0],
         "nice": False,
     }
 
@@ -321,7 +322,7 @@ def test_overlay_chart_rejects_more_curves_than_palette_colours() -> None:
         )
 
 
-def test_overlay_chart_preserves_curve_data_and_precision_gaps() -> None:
+def test_overlay_chart_preserves_curve_data_and_false_positive_reductions() -> None:
     baseline_values = _curve_values()
     comparison_values = [
         {**baseline_values[0], "precision": 0.91, "fp": 9},
@@ -381,12 +382,42 @@ def test_overlay_chart_preserves_curve_data_and_precision_gaps() -> None:
     ]
 
     diff_records = chart_definition["vconcat"][1]["data"]["values"]
-    precision_gaps = [
-        record["precision_gap_percentage_points"] for record in diff_records
+    false_positive_reductions = [
+        record["false_positive_reduction_percent"] for record in diff_records
     ]
-    assert precision_gaps == pytest.approx([1.0, 1.0])
+    assert false_positive_reductions == pytest.approx([10.0, 20.0])
+    assert [record["false_positive_reduction"] for record in diff_records] == [
+        1.0,
+        1.0,
+    ]
     assert [record["comparison_fp"] for record in diff_records] == [9.0, 4.0]
+    bottom_tooltips = chart_definition["vconcat"][1]["layer"][1]["encoding"][
+        "tooltip"
+    ]
+    assert [tooltip["field"] for tooltip in bottom_tooltips] == [
+        "comparison_label",
+        "baseline_recall",
+        "baseline_fp",
+        "comparison_fp",
+        "false_positive_reduction",
+        "false_positive_reduction_percent",
+    ]
     json.dumps(chart_definition, allow_nan=False)
+
+
+def test_overlay_chart_omits_reduction_when_baseline_has_no_false_positives() -> None:
+    baseline_values = [
+        {**_curve_values()[0], "precision": 1.0, "fp": 0},
+        _curve_values()[1],
+    ]
+
+    chart_definition = _overlay_precision_recall_charts(
+        _chart(baseline_values),
+        _chart(_curve_values(precision_offset=0.01)),
+    )
+
+    diff_records = chart_definition["vconcat"][1]["data"]["values"]
+    assert [record["recall"] for record in diff_records] == [0.8]
 
 
 @pytest.mark.parametrize("input_kind", ["dict", "json", "html", "object", "named"])
