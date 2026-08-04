@@ -42,6 +42,7 @@ class CanonicalSearchPage:
     page_size: int
     has_previous: bool
     has_next: bool
+    unique_id_query: str
     postcode: str | None
     address_query: str
     rows: list[dict[str, Any]]
@@ -165,25 +166,36 @@ def _row_dicts(cursor: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
 def search_canonical_data(
     source: CanonicalSource,
     *,
-    postcode: str | None,
-    address_query: str | None,
-    page: int,
+    unique_id_query: str | None = None,
+    postcode: str | None = None,
+    address_query: str | None = None,
+    page: int = 1,
 ) -> CanonicalSearchPage:
     if not isinstance(page, int):
         raise TypeError("Canonical search page must be an integer.")
     if page < 1:
         raise ValueError("Canonical search page must be at least 1.")
     normalised_postcode = normalise_postcode_search(postcode)
+    cleaned_unique_id_query = (
+        "" if unique_id_query is None else str(unique_id_query).strip()
+    )
+    if len(cleaned_unique_id_query) > 100:
+        raise ValueError("Unique ID search must contain no more than 100 characters.")
     cleaned_query = "" if address_query is None else str(address_query).strip()
     if len(cleaned_query) > 100:
         raise ValueError("Address search must contain no more than 100 characters.")
-    if normalised_postcode is None and not cleaned_query:
-        raise ValueError("Enter a postcode or an address value before searching.")
+    if normalised_postcode is None and not cleaned_query and not cleaned_unique_id_query:
+        raise ValueError(
+            "Enter a unique ID, postcode, or address value before searching."
+        )
     unique_id, postcode_column, cleaned_address, display_address = _canonical_columns(
         source
     )
     conditions = [f"{unique_id} IS NOT NULL"]
     parameters: list[Any] = []
+    if cleaned_unique_id_query:
+        conditions.append(f"contains(upper(CAST({unique_id} AS VARCHAR)), upper(?))")
+        parameters.append(cleaned_unique_id_query)
     if normalised_postcode is not None:
         conditions.append(f"{postcode_column} = ?")
         parameters.append(normalised_postcode)
@@ -213,6 +225,7 @@ def search_canonical_data(
         page_size=CANONICAL_PAGE_SIZE,
         has_previous=page > 1,
         has_next=len(rows) > CANONICAL_PAGE_SIZE,
+        unique_id_query=cleaned_unique_id_query,
         postcode=normalised_postcode,
         address_query=cleaned_query,
         rows=rows[:CANONICAL_PAGE_SIZE],
