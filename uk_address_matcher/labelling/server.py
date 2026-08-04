@@ -447,7 +447,8 @@ def _record_filter_sql(filters: RecordFilters) -> tuple[str, list[Any]]:
     if filters.address_query:
         conditions.append(
             "(contains(upper(COALESCE(CAST(messy_address AS VARCHAR), '')), upper(?)) "
-            "OR contains(upper(COALESCE(CAST(messy_cleaned_address AS VARCHAR), '')), upper(?)) "
+            "OR contains(upper(COALESCE(CAST(messy_cleaned_address AS VARCHAR), '')), "
+            "upper(?)) "
             "OR contains(upper(COALESCE(CAST(messy_postcode AS VARCHAR), '')), upper(?)))"
         )
         parameters.extend([filters.address_query] * 3)
