@@ -375,7 +375,9 @@ def _register_inverted_index_table(
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
-        inverted_index.create("__ukam_inverted_index")
+        con.sql(f"SELECT * FROM ({inverted_index.sql_query()})").create(
+            "__ukam_inverted_index"
+        )
 
     _register_inverted_index_meta(con, inverted_index_n)
     return "__ukam_inverted_index"

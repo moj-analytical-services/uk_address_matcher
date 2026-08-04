@@ -1,10 +1,8 @@
+from __future__ import annotations
+
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-# Sub-premise positional descriptors (e.g. "FLAT LEFT" vs "FLAT RIGHT"). These survive
-# cleaning into clean_full_address, so they appear as tokens here. They are decisive for
-# discriminating otherwise-identical sibling candidates, so the reranker treats a
-# conflict on them as a structured penalty rather than a generic distinguishing token.
-_POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT', 'REAR')"
+_POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
 
 
 def improve_predictions_using_distinguishing_tokens(
@@ -15,509 +13,406 @@ def improve_predictions_using_distinguishing_tokens(
     top_n_matches: int = 5,
     use_bigrams: bool = True,
     additional_columns_to_retain: list[str] | None = None,
-    REWARD_MULTIPLIER=3,
-    PUNISHMENT_MULTIPLIER=1.5,
-    BIGRAM_REWARD_MULTIPLIER=3,
-    BIGRAM_PUNISHMENT_MULTIPLIER=1.5,
-    MISSING_TOKEN_PENALTY=0.1,
-    POSITIONAL_CONFLICT_PENALTY=6.0,
-):
-    """
-    Improve match predictions by identifying distinguishing tokens between addresses.
+    histogram_eligibility_column: str | None = None,
+    REWARD_MULTIPLIER: float = 3.0,
+    PUNISHMENT_MULTIPLIER: float = 1.65,
+    BIGRAM_REWARD_MULTIPLIER: float = 2.2,
+    BIGRAM_PUNISHMENT_MULTIPLIER: float = 1.15,
+    MISSING_TOKEN_PENALTY: float = 0.0,
+    POSITIONAL_CONFLICT_PENALTY: float = 6.0,
+) -> DuckDBPyRelation:
+    matches_table = "__ukam__distinguishability_matches"
 
-    Args:
-        df_predict: DuckDB relation containing the prediction data
-        con: DuckDB connection
-        match_weight_threshold: Minimum match weight to consider
-        top_n_matches: Number of top matches to consider for each unique_id_r
-        use_bigrams: Whether to use bigram-based matching (default: True)
-
-    Returns:
-        DuckDBPyRelation: Table with improved match predictions
-    """
-    _distinguishing_token_matches_table = "__ukam__distinguishability_matches"
-
-    add_cols_select = ""
+    retained_columns = ""
     if additional_columns_to_retain:
-        for col in additional_columns_to_retain:
-            add_cols_select += f"{col}_l, {col}_r, "
-
+        retained_columns = "".join(
+            f"{column}_l, {column}_r, " for column in additional_columns_to_retain
+        )
     if "ukam_label_r" in df_predict.columns:
-        add_cols_select += "ukam_label_r, "
+        retained_columns += "ukam_label_r, "
 
-    # Split the large SQL query into separate CTE steps
+    eligibility_filter = ""
+    if histogram_eligibility_column is not None:
+        if histogram_eligibility_column not in df_predict.columns:
+            raise ValueError(
+                "histogram_eligibility_column must exist in df_predict: "
+                f"{histogram_eligibility_column}"
+            )
+        eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
 
-    # Step 1: Create good_matches CTE
-    sql_good_matches = f"""
-    SELECT *
-    FROM df_predict
-    WHERE match_weight > {match_weight_threshold}
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY unique_id_r, unique_id_l
-        ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
-    ) = 1
+    candidate_token_lists_sql = """
+        array_agg(candidate_tokens).
+        list_transform(candidate_tokens -> list_distinct(candidate_tokens))
     """
-    good_matches = con.sql(sql_good_matches)  # noqa: F841
+    canonical_bigrams_sql = """
+        list_transform(
+            array_agg(candidate_tokens),
+            candidate_tokens -> list_distinct(
+                list_transform(
+                    list_zip(
+                        list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
+                        list_slice(candidate_tokens, 2, length(candidate_tokens))
+                    ),
+                    pair -> ARRAY[pair[1], pair[2]]
+                )
+            )
+        ).flatten() AS bigrams_in_block_l,
+        """
 
-    # Step 2: Create top_n_matches CTE
-    sql_top_n_matches = f"""
-    SELECT *
-    FROM good_matches
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY unique_id_r
-        ORDER BY match_weight DESC, unique_id_l DESC
-    ) <= {top_n_matches}  -- e.g., 5 for top 5 matches
-    """
-    top_n_matches = con.sql(sql_top_n_matches)
+    con.sql(f"""
+        SELECT *
+        FROM df_predict
+        WHERE match_weight > {match_weight_threshold}
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY unique_id_r, unique_id_l
+            ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
+        ) = 1
+    """).create("good_matches")
 
-    # Step 3: Create remove_common_end_tokens CTE
-    # TODO(ThomasHepworth): Refine this code when we have time.
-    sql_remove_common_end_tokens = """
-    WITH intermediate AS (
+    con.sql(f"""
+        SELECT *
+        FROM good_matches
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY unique_id_r
+            ORDER BY match_weight DESC, unique_id_l DESC
+        ) <= {top_n_matches}
+    """).create("top_n_matches")
+
+    con.sql("""
+        WITH intermediate AS (
+            SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
+            FROM top_n_matches
+        ),
+        enriched AS (
+            SELECT
+                *,
+                COALESCE(
+                    common_end_tokens_r.list_transform(
+                        value -> COALESCE(
+                            struct_extract(
+                                TRY_CAST(value AS STRUCT(tok VARCHAR, rel_freq DOUBLE)),
+                                'tok'
+                            ),
+                            TRY_CAST(value AS VARCHAR)
+                        )
+                    ),
+                    CAST([] AS VARCHAR[])
+                ) AS common_end_tokens_tok
+            FROM intermediate
+        )
         SELECT
             *,
-            map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-        FROM top_n_matches
-    ),
-    -- If we have a column of NULL values, common_end_tokens_hist can often be of the
-    -- wrong type and will cause errors.
-    enriched AS (
-        SELECT
-            *,
-            COALESCE(
-                common_end_tokens_r.list_transform(
-                    x -> COALESCE(
-                        struct_extract(
-                            TRY_CAST(x AS STRUCT(tok VARCHAR, rel_freq DOUBLE)),
-                            'tok'
-                        ),
-                        TRY_CAST(x AS VARCHAR)
-                    )
-                ),
-                CAST([] AS VARCHAR[])
-            ) AS common_end_tokens_tok
-        FROM intermediate
-    )
-    SELECT
-        *,
-        clean_full_address_l
-            .trim()
-            .upper()
-            .regexp_split_to_array('\\s+')
-            .list_reverse()
-            .list_filter((tok, i) -> not (
-                i = 1 and common_end_tokens_tok.list_contains(tok)
-            ))
-            .list_filter((tok, i) -> not (
-                i = 1 and common_end_tokens_tok.list_contains(tok)
-            ))
-            .list_reverse()
-            .array_to_string(' ')
-            AS __token_address_l,
-
-        clean_full_address_r
-            .trim()
-            .upper()
-            .regexp_split_to_array('\\s+')
-            .list_reverse()
-            .list_filter((tok, i) -> not (
-                i = 1 and common_end_tokens_tok.list_contains(tok)
-            ))
-            .list_filter((tok, i) -> not (
-                i = 1 and common_end_tokens_tok.list_contains(tok)
-            ))
-            .list_reverse()
-            .array_to_string(' ')
-                AS __token_address_r
-
-    FROM enriched
-
-            """
-    remove_common_end_tokens = con.sql(sql_remove_common_end_tokens)  # noqa: F841
-
-    # Step 4: Create tokenise_r CTE
-    sql_tokenise_r = """
-    SELECT DISTINCT
-        ukam_address_id_r,
-
-        concat_ws(' ', __token_address_r, postcode_r)
-            .trim()
-            .upper()
-            .regexp_split_to_array('\\s+')
-            as tokens_r
-    FROM remove_common_end_tokens
-    """
-    tokenise_r = con.sql(sql_tokenise_r)  # noqa: F841
-
-    # Step 5: Create tokens CTE
-    sql_tokens = f"""
-    SELECT
-        t.ukam_address_id_r,
-        t.tokens_r,
-
-        -----------------
-        -- TOKENS SECTION
-        -----------------
-
-        concat_ws(' ', __token_address_l, postcode_l)
+            clean_full_address_l
                 .trim()
                 .upper()
                 .regexp_split_to_array('\\s+')
-                .array_agg()
-                .flatten()
-                as tokens_in_block_l,
+                .list_reverse()
+                .list_filter((token, position) -> NOT (
+                    position = 1 AND common_end_tokens_tok.list_contains(token)
+                ))
+                .list_filter((token, position) -> NOT (
+                    position = 1 AND common_end_tokens_tok.list_contains(token)
+                ))
+                .list_reverse()
+                .array_to_string(' ') AS __token_address_l,
+            clean_full_address_r
+                .trim()
+                .upper()
+                .regexp_split_to_array('\\s+')
+                .list_reverse()
+                .list_filter((token, position) -> NOT (
+                    position = 1 AND common_end_tokens_tok.list_contains(token)
+                ))
+                .list_filter((token, position) -> NOT (
+                    position = 1 AND common_end_tokens_tok.list_contains(token)
+                ))
+                .list_reverse()
+                .array_to_string(' ') AS __token_address_r
+        FROM enriched
+    """).create("token_addresses")
 
-        -- Counts of tokens in canonical addresses within block
-        list_aggregate(tokens_in_block_l, 'histogram') AS hist_all_tokens_in_block_l,
-
-        -- Filter to only include tokens that appear in both r and the block
-        map_from_entries(
+    con.sql(f"""
+        WITH source_tokens AS (
+            SELECT DISTINCT
+                ukam_address_id_r,
+                concat_ws(' ', __token_address_r, postcode_r)
+                    .trim()
+                    .upper()
+                    .regexp_split_to_array('\\s+') AS tokens_r
+            FROM token_addresses
+        ),
+        block_tokens AS (
+            SELECT
+                source.ukam_address_id_r,
+                source.tokens_r,
+                concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
+                    .trim()
+                    .upper()
+                    .regexp_split_to_array('\\s+') AS candidate_tokens
+            FROM token_addresses AS candidate
+            JOIN source_tokens AS source USING (ukam_address_id_r)
+            {eligibility_filter}
+        ),
+        block_histograms AS (
+            SELECT
+                ukam_address_id_r,
+                ANY_VALUE(tokens_r) AS tokens_r,
+                list_aggregate(
+                    {candidate_token_lists_sql}.flatten(),
+                    'histogram'
+                ) AS hist_all_tokens_in_block_l,
+                {canonical_bigrams_sql}
+            FROM block_tokens
+            GROUP BY ukam_address_id_r
+        )
+        SELECT
+            *,
+            map_from_entries(
                 list_filter(
                     map_entries(hist_all_tokens_in_block_l),
-                    x -> list_contains(tokens_r, x.key)
+                    entry -> list_contains(tokens_r, entry.key)
                 )
             ) AS hist_overlapping_tokens_r_block_l,
+            list_aggregate(bigrams_in_block_l, 'histogram')
+                AS hist_all_bigrams_in_block_l,
+            list_transform(
+                list_zip(
+                    list_slice(tokens_r, 1, length(tokens_r) - 1),
+                    list_slice(tokens_r, 2, length(tokens_r))
+                ),
+                pair -> ARRAY[pair[1], pair[2]]
+            ) AS bigrams_r
+        FROM block_histograms
+    """).create("block_statistics")
 
-        {
-        '''
-        -----------------
-        -- BIGRAMS SECTION
-        -----------------
-
-        -- Create bigrams from all tokens in block
-        list_transform(
-            list_zip(
-                list_slice(tokens_in_block_l, 1, length(tokens_in_block_l) - 1),
-                list_slice(tokens_in_block_l, 2, length(tokens_in_block_l))
-            ),
-            tup -> ARRAY[tup[1], tup[2]]
-        ) AS bigrams_in_block_l,
-
-        -- Counts of bigrams in canonical addresses within block
-        list_aggregate(bigrams_in_block_l, 'histogram') AS hist_all_bigrams_in_block_l,
-
-        -- Create bigrams from tokens_r
-        list_transform(
-            list_zip(
-                list_slice(tokens_r, 1, length(tokens_r) - 1),
-                list_slice(tokens_r, 2, length(tokens_r))
-            ),
-            tup -> ARRAY[tup[1], tup[2]]
-        ) AS bigrams_r,
-
-        -- Filter to only include bigrams that appear in both r and the block
-        map_from_entries(
-            list_filter(
-                map_entries(hist_all_bigrams_in_block_l),
-                x -> list_contains(bigrams_r, x.key)
-            )
-        ) AS hist_overlapping_bigrams_r_block_l
-        '''
-        if use_bigrams
-        else ""
-    }
-
-    FROM remove_common_end_tokens m
-    JOIN tokenise_r t USING (ukam_address_id_r)
-    GROUP BY t.ukam_address_id_r, t.tokens_r
-    """
-    tokens = con.sql(sql_tokens)  # noqa: F841
-
-    # Step 6: Create intermediate CTE
-    sql_intermediate = f"""
-    SELECT
-        match_weight,
-        match_probability,
-        -- Raw unique IDs
-        unique_id_l,
-        m.unique_id_r,
-        original_address_concat_l,
-        original_address_concat_r,
-        -- unique IDs generated by ukam cleaning process
-        ukam_address_id_l,
-        ukam_address_id_r,
-
-        -----------------
-        -- TOKENS SECTION
-        -----------------
-
-        concat_ws(' ', __token_address_l, postcode_l)
-            .trim()
-            .upper()
-            .regexp_split_to_array('\\s+')
-            -- .list_filter(tok -> tok NOT IN ('FLAT'))
-            AS tokens_l,
-        t.tokens_r,
-
-        -- Filter out any tokens not in l block!
-        map_from_entries(
-            list_filter(
-                map_entries(hist_overlapping_tokens_r_block_l),
-                x -> list_contains(tokens_l, x.key)
-            )
-        ) AS overlapping_tokens_this_l_and_r,
-
-        t.hist_all_tokens_in_block_l,
-        t.hist_overlapping_tokens_r_block_l,
-
-        --list_filter(t.tokens_r, tok -> tok NOT IN tokens_l) as tokens_r_not_in_l,
-
-        map_from_entries(list_distinct(list_transform(
-            list_filter(t.tokens_r, tok -> tok NOT IN tokens_l),
-            tok -> {{"key": tok, 'value': true}}
-        ))) as tokens_r_not_in_l_map,
-
-
-
-        -- missing tokens are tokens in the canonical address but not in the messy address
-        -- e.g. 'annex at'
-        list_filter(tokens_l, t -> t NOT IN tokens_r) AS missing_tokens,
-
-        -- Sub-premise positional descriptors present on each side (e.g. LEFT / REAR).
-        -- Carried forward so the final scoring step can penalise a positional conflict.
-        list_distinct(
-            list_filter(tokens_l, tok -> tok IN {_POSITIONAL_TOKENS_SQL})
-        ) AS positional_tokens_l,
-        list_distinct(
-            list_filter(t.tokens_r, tok -> tok IN {_POSITIONAL_TOKENS_SQL})
-        ) AS positional_tokens_r,
-
-        {
-        '''
-        -----------------
-        -- BIGRAMS SECTION
-        -----------------
-
-        -- Create bigrams from tokens_l
-        list_transform(
-            list_zip(
-                list_slice((tokens_l), 1,
-                          length((tokens_l)) - 1),
-                list_slice((tokens_l), 2,
-                          length((tokens_l)))
-            ),
-            tup -> ARRAY[tup[1], tup[2]]
-        ) AS bigrams_l,
-
-        t.bigrams_r,
-
-        -- Filter to only include bigrams that appear in both this l and r
-        map_from_entries(
-            list_filter(
-                map_entries(hist_overlapping_bigrams_r_block_l),
-                x -> list_contains(bigrams_l, x.key)
-            )
-        ) AS overlapping_bigrams_this_l_and_r,
-
-        t.hist_all_bigrams_in_block_l,
-        t.hist_overlapping_bigrams_r_block_l,
-
-        -- Bigrams in r but not in this l
-        list_filter(t.bigrams_r, bg -> bg NOT IN bigrams_l) as bigrams_r_not_in_l,
-
-        map_from_entries(list_distinct(list_transform(
-            list_filter(t.bigrams_r, bg -> bg NOT IN bigrams_l),
-            bg -> {'key': bg, 'value': true}
-        ))) as bigrams_r_not_in_l_map,
-        '''
-        if use_bigrams
-        else ""
-    }
-
-        postcode_l,
-        postcode_r,
-        {add_cols_select}
-    FROM remove_common_end_tokens m
-    LEFT JOIN tokens t USING (ukam_address_id_r)
-    """
-    intermediate = con.sql(sql_intermediate)  # noqa: F841
-
-    # Step 7: Final query
-    sql_final = f"""
-    SELECT
-        map_from_entries(
-            list_filter(
-                map_entries(hist_all_tokens_in_block_l),
-                x -> map_contains(tokens_r_not_in_l_map, x.key)
-            )
-        ) AS tokens_elsewhere_in_block_but_not_this,
-
-     {
-        '''
-      -- Bigrams that appear elsewhere in the block but not in this l
-        map_from_entries(
-            list_filter(
-                map_entries(hist_all_bigrams_in_block_l),
-                x -> map_contains(bigrams_r_not_in_l_map, x.key)
-            )
-        ) AS bigrams_elsewhere_in_block_but_not_this,
-        '''
-        if use_bigrams
-        else ""
-    }
-        unique_id_l,
-        unique_id_r,
-        match_weight,
-        match_probability,
-        original_address_concat_l,
-        postcode_l,
-        original_address_concat_r,
-        postcode_r,
-        ukam_address_id_l,
-        ukam_address_id_r,
-
-        -----------------
-        -- TOKENS SECTION
-        -----------------
-
-        overlapping_tokens_this_l_and_r,
-        tokens_elsewhere_in_block_but_not_this,
-        hist_overlapping_tokens_r_block_l,
-        hist_all_tokens_in_block_l,
-        missing_tokens,
-        positional_tokens_l,
-        positional_tokens_r,
-
-        {
-        '''
-        -----------------
-        -- BIGRAMS SECTION
-        -----------------
-        -- Filter out from bigrams tokens already covered in tokens (unigrams) part
-
-        overlapping_bigrams_this_l_and_r,
-        bigrams_elsewhere_in_block_but_not_this,
-        hist_overlapping_bigrams_r_block_l,
-        hist_all_bigrams_in_block_l,
-
-        overlapping_bigrams_this_l_and_r
-        .map_entries()
-        .list_filter(x ->
-            NOT (
-                (
-                    map_contains(overlapping_tokens_this_l_and_r, x.key[1])
-                    AND overlapping_tokens_this_l_and_r[x.key[1]] <= x.value
-                )
-                AND
-                (
-                    map_contains(overlapping_tokens_this_l_and_r, x.key[2])
-                    AND overlapping_tokens_this_l_and_r[x.key[2]] <= x.value
-                )
-            )
+    con.sql(f"""
+        WITH intermediate AS (
+            SELECT
+                candidate.match_weight,
+                candidate.match_probability,
+                candidate.unique_id_l,
+                candidate.unique_id_r,
+                candidate.original_address_concat_l,
+                candidate.original_address_concat_r,
+                candidate.ukam_address_id_l,
+                candidate.ukam_address_id_r,
+                candidate.postcode_l,
+                candidate.postcode_r,
+                concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
+                    .trim()
+                    .upper()
+                    .regexp_split_to_array('\\s+') AS tokens_l,
+                statistics.tokens_r,
+                statistics.hist_all_tokens_in_block_l,
+                statistics.hist_overlapping_tokens_r_block_l,
+                statistics.hist_all_bigrams_in_block_l,
+                statistics.bigrams_r,
+                {retained_columns}
+                list_distinct(
+                    list_filter(
+                        concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
+                            .trim()
+                            .upper()
+                            .regexp_split_to_array('\\s+'),
+                            token -> token IN {_POSITIONAL_TOKENS_SQL}
+                    )
+                ) AS positional_tokens_l,
+                list_distinct(
+                    list_filter(
+                        statistics.tokens_r,
+                            token -> token IN {_POSITIONAL_TOKENS_SQL}
+                    )
+                ) AS positional_tokens_r
+            FROM token_addresses AS candidate
+            LEFT JOIN block_statistics AS statistics USING (ukam_address_id_r)
+        ),
+        candidate_features AS (
+            SELECT
+                *,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_overlapping_tokens_r_block_l),
+                        entry -> list_contains(tokens_l, entry.key)
+                    )
+                ) AS overlapping_tokens_this_l_and_r,
+                map_from_entries(list_distinct(list_transform(
+                    list_filter(tokens_r, token -> token NOT IN tokens_l),
+                    token -> {{'key': token, 'value': true}}
+                ))) AS tokens_r_not_in_l_map,
+                list_filter(tokens_l, token -> token NOT IN tokens_r) AS missing_tokens,
+                list_transform(
+                    list_zip(
+                        list_slice(tokens_l, 1, length(tokens_l) - 1),
+                        list_slice(tokens_l, 2, length(tokens_l))
+                    ),
+                    pair -> ARRAY[pair[1], pair[2]]
+                ) AS bigrams_l
+            FROM intermediate
+        ),
+        evidence AS (
+            SELECT
+                *,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_all_tokens_in_block_l),
+                        entry -> map_contains(tokens_r_not_in_l_map, entry.key)
+                    )
+                ) AS tokens_elsewhere_in_block_but_not_this,
+                map_from_entries(list_distinct(list_transform(
+                    list_filter(bigrams_r, bigram -> bigram NOT IN bigrams_l),
+                    bigram -> {{'key': bigram, 'value': true}}
+                ))) AS bigrams_r_not_in_l_map,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_overlapping_tokens_r_block_l),
+                        entry -> list_contains(tokens_l, entry.key)
+                    )
+                ) AS overlapping_tokens_this_l_and_r_again
+            FROM candidate_features
+        ),
+        adjusted_evidence AS (
+            SELECT
+                *,
+                overlapping_tokens_this_l_and_r_again
+                    AS overlapping_tokens_this_l_and_r,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_all_bigrams_in_block_l),
+                        entry -> list_contains(bigrams_r, entry.key)
+                    )
+                ) AS hist_overlapping_bigrams_r_block_l,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_all_bigrams_in_block_l),
+                        entry -> map_contains(bigrams_r_not_in_l_map, entry.key)
+                    )
+                ) AS bigrams_elsewhere_in_block_but_not_this
+            FROM evidence
+        ),
+        components AS (
+            SELECT
+                *,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_overlapping_bigrams_r_block_l),
+                        entry -> list_contains(bigrams_l, entry.key)
+                    )
+                ) AS overlapping_bigrams_this_l_and_r,
+                COALESCE(list_sum(list_transform(
+                    map_values(overlapping_tokens_this_l_and_r),
+                    value -> 1.0 / (value * value)
+                )), 0.0) * {REWARD_MULTIPLIER} AS token_reward,
+                COALESCE(len(map_entries(
+                    tokens_elsewhere_in_block_but_not_this
+                )), 0)::DOUBLE
+                    * {PUNISHMENT_MULTIPLIER} AS token_absence_penalty,
+                COALESCE(len(missing_tokens), 0)::DOUBLE * {MISSING_TOKEN_PENALTY}
+                    AS missing_token_penalty,
+                CASE
+                    WHEN COALESCE(len(positional_tokens_l), 0) > 0
+                        AND COALESCE(len(positional_tokens_r), 0) > 0
+                        AND COALESCE(
+                            len(list_intersect(positional_tokens_l, positional_tokens_r)),
+                            0
+                        ) = 0
+                    THEN {POSITIONAL_CONFLICT_PENALTY}
+                    ELSE 0.0
+                END AS positional_conflict_penalty
+            FROM adjusted_evidence
+        ),
+        scored_components AS (
+            SELECT
+                *,
+                map_from_entries(
+                    list_filter(
+                        map_entries(overlapping_bigrams_this_l_and_r),
+                        entry -> NOT (
+                            map_contains(
+                                overlapping_tokens_this_l_and_r, entry.key[1]
+                            )
+                            AND overlapping_tokens_this_l_and_r[entry.key[1]]
+                                <= entry.value
+                            AND map_contains(
+                                overlapping_tokens_this_l_and_r, entry.key[2]
+                            )
+                            AND overlapping_tokens_this_l_and_r[entry.key[2]]
+                                <= entry.value
+                        )
+                    )
+                ) AS overlapping_bigrams_this_l_and_r_filtered,
+                map_from_entries(
+                    list_filter(
+                        map_entries(bigrams_elsewhere_in_block_but_not_this),
+                        entry -> NOT (
+                            map_contains(
+                                tokens_elsewhere_in_block_but_not_this,
+                                entry.key[1]
+                            )
+                            AND tokens_elsewhere_in_block_but_not_this[entry.key[1]]
+                                <= entry.value
+                            AND map_contains(
+                                tokens_elsewhere_in_block_but_not_this,
+                                entry.key[2]
+                            )
+                            AND tokens_elsewhere_in_block_but_not_this[entry.key[2]]
+                                <= entry.value
+                        )
+                    )
+                ) AS bigrams_elsewhere_in_block_but_not_this_filtered
+            FROM components
+        ),
+        scored_candidates AS (
+            SELECT
+                *,
+                COALESCE(list_sum(list_transform(
+                    map_values(overlapping_bigrams_this_l_and_r_filtered),
+                    value -> 1.0 / (value * value)
+                )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
+                COALESCE(len(map_entries(
+                    bigrams_elsewhere_in_block_but_not_this_filtered
+                )), 0)::DOUBLE
+                    * {BIGRAM_PUNISHMENT_MULTIPLIER} AS bigram_absence_penalty
+            FROM scored_components
         )
-        .map_from_entries() AS overlapping_bigrams_this_l_and_r_filtered,
+        SELECT
+            unique_id_l,
+            unique_id_r,
+            ukam_address_id_r,
+            ukam_address_id_l,
+            match_weight AS match_weight_original,
+            token_reward,
+            token_absence_penalty,
+            bigram_reward,
+            bigram_absence_penalty,
+            missing_token_penalty,
+            positional_conflict_penalty,
+            token_reward
+                - token_absence_penalty
+                + bigram_reward
+                - bigram_absence_penalty
+                - missing_token_penalty
+                - positional_conflict_penalty AS mw_adjustment,
+            match_weight + mw_adjustment AS match_weight,
+            overlapping_tokens_this_l_and_r,
+            tokens_elsewhere_in_block_but_not_this,
+            hist_all_tokens_in_block_l,
+            hist_overlapping_tokens_r_block_l,
+            missing_tokens,
+            positional_tokens_l,
+            positional_tokens_r,
+            {"bigrams_l, bigrams_r, " if use_bigrams else ""}
+            {"overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
+            {"bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
+            {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
+            {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
+            {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
+            {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
+            original_address_concat_l,
+            postcode_l,
+            original_address_concat_r,
+            postcode_r,
+            {retained_columns}
+        FROM scored_candidates
+    """).create(matches_table)
 
-
-        bigrams_elsewhere_in_block_but_not_this
-        .map_entries()
-         .list_filter(x ->
-            NOT (
-                (
-                    map_contains(tokens_elsewhere_in_block_but_not_this, x.key[1])
-                    AND tokens_elsewhere_in_block_but_not_this[x.key[1]] <= x.value
-                )
-                AND
-                (
-                    map_contains(tokens_elsewhere_in_block_but_not_this, x.key[2])
-                    AND tokens_elsewhere_in_block_but_not_this[x.key[2]] <= x.value
-                )
-            )
-        )
-        .map_from_entries() AS bigrams_elsewhere_in_block_but_not_this_filtered,
-        '''
-        if use_bigrams
-        else ""
-    }
-    {add_cols_select}
-
-    FROM intermediate
-    ORDER BY ukam_address_id_r
-    """
-
-    windowed_tokens = con.sql(sql_final)  # noqa: F841
-
-    # Calculate new match weights based on distinguishing tokens and bigrams
-
-    sql = f"""
-    CREATE OR REPLACE TABLE {_distinguishing_token_matches_table} AS
-
-    SELECT
-        unique_id_l,
-        unique_id_r,
-        ukam_address_id_r,
-        ukam_address_id_l,
-
-        -- Token-based adjustments
-        ifnull(map_values(overlapping_tokens_this_l_and_r)
-            .list_transform(x -> 1/(x^2))
-            .list_sum() *  {REWARD_MULTIPLIER}, 0)
-
-        -  ifnull(map_values(tokens_elsewhere_in_block_but_not_this)
-            .list_transform(x -> 1)
-            .list_sum() *  {PUNISHMENT_MULTIPLIER}, 0)
-
-        - (len(missing_tokens) * {MISSING_TOKEN_PENALTY})
-
-        -- Sub-premise positional conflict (e.g. messy says LEFT, candidate says RIGHT).
-        -- Only fires when both sides carry a positional descriptor and they disagree;
-        -- silent otherwise so neutral/missing cases are unaffected.
-        - (CASE
-            WHEN len(positional_tokens_l) > 0
-                AND len(positional_tokens_r) > 0
-                AND len(list_intersect(positional_tokens_l, positional_tokens_r)) = 0
-            THEN {POSITIONAL_CONFLICT_PENALTY}
-            ELSE 0
-          END)
-
-        -- Bigram-based adjustments
-        {
-        f'''
-        + ifnull(map_values(overlapping_bigrams_this_l_and_r_filtered)
-            .list_transform(x -> 1/(x^2))
-            .list_sum() * {BIGRAM_REWARD_MULTIPLIER}, 0)
-        -  ifnull(map_values(bigrams_elsewhere_in_block_but_not_this_filtered)
-            .list_transform(x -> 1)
-            .list_sum() *  {BIGRAM_PUNISHMENT_MULTIPLIER}, 0)
-
-
-        '''
-        if use_bigrams
-        else ""
-    }
-        as mw_adjustment,
-        match_weight AS match_weight_original,
-        (match_weight_original + mw_adjustment) AS match_weight,
-
-        -- Token-related fields
-        overlapping_tokens_this_l_and_r,
-        tokens_elsewhere_in_block_but_not_this,
-        missing_tokens,
-        positional_tokens_l,
-        positional_tokens_r,
-
-        {
-        '''
-        -- Bigram-related fields
-        overlapping_bigrams_this_l_and_r,
-        bigrams_elsewhere_in_block_but_not_this,
-        overlapping_bigrams_this_l_and_r_filtered,
-        bigrams_elsewhere_in_block_but_not_this_filtered,
-        '''
-        if use_bigrams
-        else ""
-    }
-
-        original_address_concat_l,
-        postcode_l,
-        original_address_concat_r,
-        postcode_r,
-        {add_cols_select}
-
-
-
-    FROM windowed_tokens
-    """
-
-    con.execute(sql)
-    matches = con.table(_distinguishing_token_matches_table)
-    return matches
+    return con.table(matches_table)

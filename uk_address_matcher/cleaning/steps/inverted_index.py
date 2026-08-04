@@ -1,33 +1,82 @@
 from __future__ import annotations
 
-from typing import NamedTuple
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
+BASE_POSTING_CAP = 20
 
-class IndexingStrategy(NamedTuple):
-    """Defines an inverted index strategy mapping clean_full_address to keys.
 
-    Each strategy provides a SQL expression that evaluates to a ``VARCHAR[]``
-    array of index keys. The expression can assume both
-    ``clean_full_address`` and ``__tokens`` are available.
-
-    Attributes:
-        name: Short identifier for the strategy (e.g. ``"trigram"``).
-        keys_sql_expr: DuckDB SQL expression referencing ``clean_full_address``
-            that evaluates to ``VARCHAR[]``.
-    """
+@dataclass(frozen=True)
+class SignatureKeyGenerator:
+    """Name the SQL expression that produces one or more signature keys."""
 
     name: str
     keys_sql_expr: str
 
 
-# ---------------------------------------------------------------------------
-# Built-in strategies
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class PhysicalIndexStrategy:
+    """Defines a persisted canonical inverted-index family."""
 
-TRIGRAM_STRATEGY = IndexingStrategy(
-    name="trigram",
+    name: str
+    key_generator: SignatureKeyGenerator
+    maximum_posting_size: int
+
+    def __post_init__(self) -> None:
+        if self.maximum_posting_size < 1:
+            raise ValueError("maximum_posting_size must be positive")
+
+    @property
+    def keys_sql_expr(self) -> str:
+        """Expose physical key SQL for read-only reporting compatibility."""
+        return self.key_generator.keys_sql_expr
+
+
+@dataclass(frozen=True)
+class InvertedIndexLookupStrategy:
+    """Defines transient source keys and their canonical target index."""
+
+    name: str
+    source_key_generator: SignatureKeyGenerator
+    target_index: PhysicalIndexStrategy
+    maximum_posting_size_override: int | None = None
+    contributes_signature_evidence: bool = True
+    transformation_cost: int = 0
+    lookup_precedence: int = 0
+
+    def __post_init__(self) -> None:
+        if (
+            self.maximum_posting_size_override is not None
+            and self.maximum_posting_size_override < 1
+        ):
+            raise ValueError("maximum_posting_size_override must be positive")
+        if self.transformation_cost < 0:
+            raise ValueError("transformation_cost cannot be negative")
+        if self.lookup_precedence < 0:
+            raise ValueError("lookup_precedence cannot be negative")
+
+    @property
+    def maximum_posting_size(self) -> int:
+        return (
+            self.maximum_posting_size_override
+            if self.maximum_posting_size_override is not None
+            else self.target_index.maximum_posting_size
+        )
+
+
+@dataclass(frozen=True)
+class InvertedIndexPortfolio:
+    """Names the physical indexes and transient lookups enabled together."""
+
+    name: str
+    physical_indexes: tuple[PhysicalIndexStrategy, ...]
+    lookup_strategies: tuple[InvertedIndexLookupStrategy, ...]
+
+
+ADJACENT_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="adjacent_trigram_keys",
     keys_sql_expr="""\
 CASE
     WHEN len(__tokens) >= 3 THEN
@@ -41,123 +90,207 @@ CASE
 END""",
 )
 
-BIGRAM_STRATEGY = IndexingStrategy(
-    name="bigram",
+ADJACENT_BIGRAM_KEYS = SignatureKeyGenerator(
+    name="adjacent_bigram_keys",
     keys_sql_expr="""\
 CASE
     WHEN len(__tokens) >= 2 THEN
         list_transform(
             generate_series(1, len(__tokens) - 1),
-            __i -> __tokens[__i]
-                   || ' ' || __tokens[__i + 1]
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 1]
         )
     ELSE []::VARCHAR[]
 END""",
 )
+SKIP1_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip1_trigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 4 THEN list_concat(
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 3]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 3]
+        )
+    )
+    ELSE []::VARCHAR[]
+END""",
+)
+SKIP1_BIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip1_bigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 3 THEN
+        list_transform(
+            generate_series(1, len(__tokens) - 2),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2]
+        )
+    ELSE []::VARCHAR[]
+END""",
+)
+SKIP2_BIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip2_bigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 4 THEN
+        list_transform(
+            generate_series(1, len(__tokens) - 3),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 3]
+        )
+    ELSE []::VARCHAR[]
+END""",
+)
+SKIP2_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="skip2_trigram_keys",
+    keys_sql_expr="""\
+CASE
+    WHEN len(__tokens) >= 5 THEN list_concat(
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 4]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 4]
+        ),
+        list_transform(
+            generate_series(1, len(__tokens) - 4),
+            __i -> __tokens[__i] || ' ' || __tokens[__i + 3] || ' ' || __tokens[__i + 4]
+        )
+    )
+    ELSE []::VARCHAR[]
+END""",
+)
 
-DEFAULT_INDEXING_STRATEGIES: list[IndexingStrategy] = [
-    TRIGRAM_STRATEGY,
-    BIGRAM_STRATEGY,
+TRIGRAM_INDEX = PhysicalIndexStrategy(
+    name="trigram",
+    key_generator=ADJACENT_TRIGRAM_KEYS,
+    maximum_posting_size=BASE_POSTING_CAP,
+)
+BIGRAM_INDEX = PhysicalIndexStrategy(
+    name="bigram",
+    key_generator=ADJACENT_BIGRAM_KEYS,
+    maximum_posting_size=BASE_POSTING_CAP,
+)
+TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="trigram",
+    source_key_generator=ADJACENT_TRIGRAM_KEYS,
+    target_index=TRIGRAM_INDEX,
+)
+BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="bigram",
+    source_key_generator=ADJACENT_BIGRAM_KEYS,
+    target_index=BIGRAM_INDEX,
+)
+SKIP1_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip1_trigram",
+    source_key_generator=SKIP1_TRIGRAM_KEYS,
+    target_index=TRIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=1,
+    lookup_precedence=1,
+)
+SKIP1_BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip1_bigram",
+    source_key_generator=SKIP1_BIGRAM_KEYS,
+    target_index=BIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=1,
+    lookup_precedence=1,
+)
+SKIP2_BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip2_bigram",
+    source_key_generator=SKIP2_BIGRAM_KEYS,
+    target_index=BIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=2,
+    lookup_precedence=2,
+)
+SKIP2_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="skip2_trigram",
+    source_key_generator=SKIP2_TRIGRAM_KEYS,
+    target_index=TRIGRAM_INDEX,
+    maximum_posting_size_override=5,
+    contributes_signature_evidence=False,
+    transformation_cost=2,
+    lookup_precedence=2,
+)
+BASE_INDEX_PORTFOLIO = InvertedIndexPortfolio(
+    name="base",
+    physical_indexes=(BIGRAM_INDEX, TRIGRAM_INDEX),
+    lookup_strategies=(BIGRAM_LOOKUP, TRIGRAM_LOOKUP),
+)
+DEFAULT_INDEXING_STRATEGIES = list(BASE_INDEX_PORTFOLIO.physical_indexes)
+DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = list(BASE_INDEX_PORTFOLIO.lookup_strategies)
+MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
+    *DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    SKIP1_BIGRAM_LOOKUP,
+    SKIP2_BIGRAM_LOOKUP,
+    SKIP1_TRIGRAM_LOOKUP,
+    SKIP2_TRIGRAM_LOOKUP,
 ]
 
 
-# ---------------------------------------------------------------------------
-# Pipeline stages — index building
-# ---------------------------------------------------------------------------
-
-
 def _derive_keys_for_strategy(
-    strategy: IndexingStrategy,
+    strategy: PhysicalIndexStrategy,
     *,
     num_of_chunks: int | None = None,
     chunk_index: int | None = None,
 ):
-    """Factory for a pipeline stage that derives index keys for one strategy.
-
-    When ``num_of_chunks`` and ``chunk_index`` are provided, the generated SQL
-    applies ``list_filter`` so only keys whose hash maps to the given chunk are
-    retained.  This allows the inverted index to be built in memory-bounded
-    chunks.
-
-    Args:
-        strategy: The indexing strategy to use.
-        num_of_chunks: Total number of chunks.
-        chunk_index: Zero-based index of the current chunk.
-    """
+    """Create a stage deriving canonical keys for one physical strategy."""
     chunked = num_of_chunks is not None and chunk_index is not None
     chunk_label = f" (chunk {chunk_index + 1}/{num_of_chunks})" if chunked else ""
 
     @pipeline_stage(
         name=f"derive_keys_{strategy.name}",
-        description=(
-            f"Generate {strategy.name} keys from clean_full_address" + chunk_label
-        ),
+        description=f"Generate {strategy.name} canonical keys{chunk_label}",
         tags="inverted_index",
     )
     def _stage():
-        keys_expr = strategy.keys_sql_expr
+        keys_expr = strategy.key_generator.keys_sql_expr
+        filtered_expr = keys_expr
         if chunked:
-            sql = f"""
-            WITH tokenised AS (
-                SELECT
-                    unique_id,
-                    clean_full_address,
-                    string_split(clean_full_address, ' ') AS __tokens
-                FROM {{input}}
+            filtered_expr = (
+                "list_filter("
+                f"{keys_expr}, "
+                f"__k -> (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
+                ")"
             )
-            SELECT
-                unique_id,
-                list_filter(
-                    {keys_expr},
-                    __k -> (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}
-                ) AS __index_keys
-            FROM tokenised
-            """
-        else:
-            sql = f"""
-            WITH tokenised AS (
-                SELECT
-                    unique_id,
-                    clean_full_address,
-                    string_split(clean_full_address, ' ') AS __tokens
-                FROM {{input}}
-            )
-            SELECT
-                unique_id,
-                {keys_expr} AS __index_keys
-            FROM tokenised
-            """
-        return sql
+        return f"""
+        SELECT
+            unique_id,
+            {filtered_expr} AS __index_keys
+        FROM (
+            SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
+            FROM {{input}}
+        ) AS tokenised
+        """
 
     return _stage
 
 
-def _build_inverted_index_from_keys(
-    strategy: IndexingStrategy,
-    max_unique_ids_per_key: int = 20,
-):
-    """Build inverted index rows from the output of ``_derive_keys_for_strategy``.
-
-    Args:
-        strategy: The indexing strategy (used to populate ``index_strategy``).
-        max_unique_ids_per_key: Maximum number of unique_ids a key can
-            reference before being filtered out.
-    """
+def _build_inverted_index_from_keys(strategy: PhysicalIndexStrategy):
+    """Create a stage that applies the physical strategy's authoritative cap."""
+    maximum_posting_size = strategy.maximum_posting_size
 
     @pipeline_stage(
         name=f"build_inverted_index_{strategy.name}",
         description=(
             f"Aggregate {strategy.name} keys into inverted index "
-            f"(max {max_unique_ids_per_key} unique_ids per key)"
+            f"(max {maximum_posting_size} unique_ids per key)"
         ),
         tags="inverted_index",
     )
     def _stage():
-        sql = f"""
+        return f"""
         WITH unnested_keys AS (
-            SELECT
-                unique_id,
-                unnest(__index_keys) AS key
+            SELECT unique_id, unnest(__index_keys) AS key
             FROM {{input}}
         ),
         grouped AS (
@@ -170,122 +303,125 @@ def _build_inverted_index_from_keys(
         )
         SELECT
             key,
-                        unique_ids,
-                        '{strategy.name}' AS index_strategy
+            unique_ids,
+            '{strategy.name}' AS index_strategy
         FROM grouped
-        WHERE count_unique_ids >= 1
-          AND count_unique_ids <= {max_unique_ids_per_key}
+        WHERE count_unique_ids BETWEEN 1 AND {maximum_posting_size}
         """
-        return sql
 
     return _stage
 
 
-# ---------------------------------------------------------------------------
-# Pipeline stages — lookup (used when matching messy data)
-# ---------------------------------------------------------------------------
-
-
-def _lookup_keys_in_inverted_index(strategies=None):
-    """Factory for a pipeline stage that looks up index keys in the inverted index.
-
-    For each messy address the stage computes keys using every strategy,
-    looks them up in ``__ukam_inverted_index`` (key-only join), and
-    populates ``exploding_unique_ids`` with the deduplicated matches.
-
-    Args:
-        strategies: List of :class:`IndexingStrategy` instances.  Defaults
-            to :data:`DEFAULT_INDEXING_STRATEGIES`.
-    """
-    if strategies is None:
-        strategies = DEFAULT_INDEXING_STRATEGIES
+def _lookup_keys_in_inverted_index(
+    strategies: Sequence[InvertedIndexLookupStrategy] | None = None,
+):
+    """Create the transient source-key lookup stage."""
+    lookup_strategies = tuple(strategies or DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES)
+    if not all(
+        isinstance(strategy, InvertedIndexLookupStrategy)
+        for strategy in lookup_strategies
+    ):
+        raise TypeError("strategies must contain InvertedIndexLookupStrategy values")
 
     @pipeline_stage(
         name="lookup_keys_in_inverted_index",
         description=(
-            "Look up index keys in pre-registered inverted index "
-            "to populate exploding_unique_ids and signature_score_map"
+            "Look up transient source keys to populate candidates and signature evidence"
         ),
         tags="inverted_index",
     )
     def _stage():
         base_sql = """
-        SELECT
-            *,
-            string_split(clean_full_address, ' ') AS __tokens
+        SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
         FROM {input}
         """
-
-        # Build UNION ALL of unnested keys from every strategy
         union_parts = []
-        for strategy in strategies:
+        for strategy in lookup_strategies:
+            evidence_mode = (
+                "scored" if strategy.contributes_signature_evidence else "candidate_only"
+            )
+            contributes_evidence = str(strategy.contributes_signature_evidence).upper()
             union_parts.append(
                 f"SELECT unique_id AS __messy_uid, "
-                f"CAST(unnest({strategy.keys_sql_expr}) AS VARCHAR) AS __key "
-                f"FROM {{base}}"
+                f"unnest({strategy.source_key_generator.keys_sql_expr}) AS __key, "
+                f"'{strategy.name}' AS __source_strategy, "
+                f"'{strategy.target_index.name}' AS __lookup_strategy, "
+                f"'{evidence_mode}' AS __evidence_mode, "
+                f"{contributes_evidence} AS __contributes_signature_evidence, "
+                f"{strategy.maximum_posting_size} AS __maximum_posting_size, "
+                f"{strategy.transformation_cost} AS __transformation_cost, "
+                f"{strategy.lookup_precedence} AS __lookup_precedence "
+                "FROM {base}"
             )
         unnested_keys_sql = " UNION ALL ".join(union_parts)
 
-        # Join to inverted index and aggregate matches
+        requested_keys_sql = """
+        SELECT *
+        FROM {unnested_keys}
+        WHERE __key IS NOT NULL
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY __messy_uid, __lookup_strategy, __key
+            ORDER BY __lookup_precedence, __transformation_cost, __source_strategy
+        ) = 1
+        """
         matched_sql = """
         SELECT
-            __messy_uid,
-            flatten(list(ii.unique_ids)) AS __matched
-        FROM {unnested_keys} ut
-        LEFT JOIN __ukam_inverted_index ii ON ut.__key = CAST(ii.key AS VARCHAR)
-        WHERE ii.unique_ids IS NOT NULL
-        GROUP BY __messy_uid
+            requested.__messy_uid,
+            requested.__source_strategy,
+            requested.__lookup_strategy,
+            requested.__key,
+            len(index.unique_ids) AS __posting_list_size,
+            index.unique_ids,
+            requested.__contributes_signature_evidence,
+            requested.__evidence_mode,
+            requested.__maximum_posting_size,
+            requested.__transformation_cost
+        FROM {requested_keys} AS requested
+        INNER JOIN __ukam_inverted_index AS index
+            ON requested.__key = index.key
+           AND requested.__lookup_strategy = index.index_strategy
+           AND len(index.unique_ids) <= requested.__maximum_posting_size
         """
-
-        # Deduplicate the matched unique_ids
+        provenance_sql = """
+        SELECT
+            __messy_uid,
+            __source_strategy,
+            __lookup_strategy,
+            __key,
+            __posting_list_size,
+            candidate_id,
+            __contributes_signature_evidence,
+            __evidence_mode,
+            __maximum_posting_size,
+            __transformation_cost
+        FROM {matched}, unnest(unique_ids) AS candidates(candidate_id)
+        """
         deduplicated_sql = """
         SELECT
             __messy_uid,
-            list(DISTINCT x ORDER BY x) AS exploding_unique_ids
-        FROM {matched}, unnest(__matched) AS t(x)
-        WHERE x IS NOT NULL
+            list(DISTINCT candidate_id ORDER BY candidate_id) AS exploding_unique_ids
+        FROM {candidate_provenance}
+        WHERE candidate_id IS NOT NULL
         GROUP BY __messy_uid
         """
-
-        # Signature evidence scoring.
-        # For each messy record, weight every shared index key by its IDF
-        # (log2(N / posting_list_size)) and accumulate the IDF onto each
-        # candidate canonical id that the key points at.  The result is a
-        # MAP<canonical_id (VARCHAR) -> summed IDF> the Splink comparison reads
-        # via list_extract(map_extract(signature_score_map_r, unique_id_l), 1).
-        # Keys are de-duplicated per record first so a repeated bigram/trigram
-        # only contributes its IDF once.
-        distinct_keys_sql = """
-        SELECT DISTINCT __messy_uid, __key
-        FROM {unnested_keys}
-        WHERE __key IS NOT NULL
-        """
-
-        key_scores_sql = """
-        SELECT
-            dk.__messy_uid,
-            ii.unique_ids AS __cand_ids,
-            len(ii.unique_ids) AS __posting_size,
-            log2(
-                (SELECT n FROM __ukam_index_meta)::DOUBLE
-                / len(ii.unique_ids)
-            ) AS __key_idf
-        FROM {distinct_keys} AS dk
-        JOIN __ukam_inverted_index AS ii ON dk.__key = CAST(ii.key AS VARCHAR)
-        WHERE ii.unique_ids IS NOT NULL
-          AND len(ii.unique_ids) > 0
-        """
-
         cand_scores_sql = """
         SELECT
             __messy_uid,
-            CAST(cid AS VARCHAR) AS __cand_id,
-            SUM(__key_idf) AS __score,
-            SUM(CASE WHEN __posting_size = 1 THEN 1 ELSE 0 END) AS __unique_hits
-        FROM {key_scores}, unnest(__cand_ids) AS t(cid)
-        GROUP BY __messy_uid, CAST(cid AS VARCHAR)
+            CAST(candidate_id AS VARCHAR) AS __cand_id,
+            SUM(
+                log2(
+                    (SELECT n FROM __ukam_index_meta)::DOUBLE
+                    / __posting_list_size
+                )
+            ) AS __score,
+            SUM(
+                CASE WHEN __posting_list_size = 1 THEN 1 ELSE 0 END
+            ) AS __unique_hits
+        FROM {candidate_provenance}
+        WHERE __contributes_signature_evidence
+          AND __posting_list_size > 0
+        GROUP BY __messy_uid, CAST(candidate_id AS VARCHAR)
         """
-
         score_map_sql = """
         SELECT
             __messy_uid,
@@ -300,61 +436,49 @@ def _lookup_keys_in_inverted_index(strategies=None):
         FROM {cand_scores}
         GROUP BY __messy_uid
         """
-
-        # Join back to base and add the blocking + scoring columns
         final_sql = """
         SELECT
             base.* EXCLUDE (__tokens),
-            COALESCE(d.exploding_unique_ids, []) AS exploding_unique_ids,
+            COALESCE(candidates.exploding_unique_ids, []) AS exploding_unique_ids,
             COALESCE(
-                s.signature_score_map,
+                scores.signature_score_map,
                 MAP([]::VARCHAR[], []::DOUBLE[])
             ) AS signature_score_map,
             COALESCE(
-                s.signature_unique_hits_map,
+                scores.signature_unique_hits_map,
                 MAP([]::VARCHAR[], []::BIGINT[])
             ) AS signature_unique_hits_map
         FROM {base} AS base
-        LEFT JOIN {deduplicated} AS d ON base.unique_id = d.__messy_uid
-        LEFT JOIN {score_map} AS s ON base.unique_id = s.__messy_uid
+        LEFT JOIN {deduplicated} AS candidates
+          ON base.unique_id = candidates.__messy_uid
+        LEFT JOIN {score_map} AS scores
+          ON base.unique_id = scores.__messy_uid
         """
-
-        steps = [
-            CTEStep("base", base_sql),
-            CTEStep("unnested_keys", unnested_keys_sql),
-            CTEStep("matched", matched_sql),
-            CTEStep("deduplicated", deduplicated_sql),
-            CTEStep("distinct_keys", distinct_keys_sql),
-            CTEStep("key_scores", key_scores_sql),
-            CTEStep("cand_scores", cand_scores_sql),
-            CTEStep("score_map", score_map_sql),
-            CTEStep("final", final_sql),
-        ]
-
+        steps = [CTEStep("base", base_sql)]
+        steps.extend(
+            [
+                CTEStep("unnested_keys", unnested_keys_sql),
+                CTEStep("requested_keys", requested_keys_sql),
+                CTEStep("matched", matched_sql),
+                CTEStep("candidate_provenance", provenance_sql),
+                CTEStep("deduplicated", deduplicated_sql),
+                CTEStep("cand_scores", cand_scores_sql),
+                CTEStep("score_map", score_map_sql),
+                CTEStep("final", final_sql),
+            ]
+        )
         return steps
 
     return _stage
 
 
-# ---------------------------------------------------------------------------
-# Canonical self-blocking (no inverted index)
-# ---------------------------------------------------------------------------
-
-
 @pipeline_stage(
     name="set_exploding_unique_ids_to_self",
-    description=(
-        "Set exploding_unique_ids to [unique_id] for canonical data "
-        "(no inverted index lookup)"
-    ),
+    description="Set canonical candidate IDs to each record's own unique ID",
     tags="inverted_index",
 )
 def _set_exploding_unique_ids_to_self():
-    """Set exploding_unique_ids to contain just the record's own unique_id.
-
-    Used for canonical data that doesn't need inverted index lookup.
-    """
-    sql = """
+    return """
     SELECT
         *,
         [unique_id] AS exploding_unique_ids,
@@ -362,4 +486,3 @@ def _set_exploding_unique_ids_to_self():
         MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map
     FROM {input}
     """
-    return sql
