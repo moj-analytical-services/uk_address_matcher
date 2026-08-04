@@ -192,26 +192,14 @@ def search_canonical_data(
         parameters.append(cleaned_query)
     offset = (page - 1) * CANONICAL_PAGE_SIZE
     query = f"""
-        WITH matching_rows AS (
-            SELECT
-                CAST({unique_id} AS VARCHAR) AS canonical_id,
-                CAST({display_address} AS VARCHAR) AS canonical_address,
-                CAST({cleaned_address} AS VARCHAR) AS cleaned_address,
-                CAST({postcode_column} AS VARCHAR) AS canonical_postcode,
-                ROW_NUMBER() OVER (
-                    PARTITION BY CAST({unique_id} AS VARCHAR)
-                    ORDER BY {postcode_column}, {cleaned_address}, {display_address},
-                        CAST({unique_id} AS VARCHAR)
-                ) AS identity_rank
-            FROM {canonical_scan_sql(source)}
-            WHERE {" AND ".join(conditions)}
-        ), unique_results AS (
-            SELECT canonical_id, canonical_address, cleaned_address, canonical_postcode
-            FROM matching_rows WHERE identity_rank = 1
-        )
-        SELECT canonical_id, canonical_address, cleaned_address, canonical_postcode
-        FROM unique_results
-        ORDER BY canonical_postcode, cleaned_address, canonical_id
+        SELECT
+            CAST({unique_id} AS VARCHAR) AS canonical_id,
+            CAST({display_address} AS VARCHAR) AS canonical_address,
+            CAST({cleaned_address} AS VARCHAR) AS cleaned_address,
+            CAST({postcode_column} AS VARCHAR) AS canonical_postcode
+        FROM {canonical_scan_sql(source)}
+        WHERE {" AND ".join(conditions)}
+        ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id
         LIMIT ? OFFSET ?
     """
     connection = duckdb.connect()
