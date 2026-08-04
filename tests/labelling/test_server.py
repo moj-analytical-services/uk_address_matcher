@@ -85,7 +85,8 @@ def create_api_test_bundle(root: Path, *, include_unmatched: bool = False) -> Pa
                     FALSE, 'canonical-2', 'label-3', '2 TEST ROAD LONDON',
                     'E1 1AB', 'exact: full match', 'exact', TRUE,
                     NULL::DOUBLE, NULL::DOUBLE, 1,
-                                        [{'rank': 1::BIGINT, 'label_id': 'label-3'::VARCHAR,
+                                        [{'rank': 1::BIGINT,
+                                            'label_id': 'label-3'::VARCHAR,
                                             'splink_match_weight': 8.0::DOUBLE}]
 """
                 + unmatched_record
