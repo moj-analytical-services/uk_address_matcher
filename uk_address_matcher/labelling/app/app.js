@@ -9,6 +9,8 @@ const state = {
   bootstrap: null,
   deadline: 0,
   lastActivity: 0,
+  sortBy: "unique_id",
+  sortOrder: "asc",
 };
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -97,6 +99,15 @@ function query() {
     page: state.page,
     page_size: state.pageSize,
     show_labelled: $("show-labelled").checked,
+    mismatches_only: $("mismatches-only").checked,
+    sort_by: state.sortBy,
+    sort_order: state.sortOrder,
+  });
+  [
+    ["unique_id_query", "record-unique-id"],
+    ["address_query", "record-address-query"],
+  ].forEach(([key, id]) => {
+    if ($(id).value.trim()) p.set(key, $(id).value.trim());
   });
   stages().forEach((stage) => p.append("stage", stage));
   [
@@ -125,6 +136,23 @@ function matchWeightClass(value) {
   if (weight < 12) return "match-weight weight-yellow-green";
   if (weight < 20) return "match-weight weight-green";
   return "match-weight weight-strong-green";
+}
+const sortDescriptions = {
+  reranked_score: "Final score after reranking candidates",
+  splink_score: "Raw Splink match weight before reranking",
+  distinguishability: "Difference between this match and the next-best candidate",
+};
+function updateSortControls() {
+  document.querySelectorAll(".sort-button").forEach((button) => {
+    const active = button.dataset.sort === state.sortBy,
+      direction = active ? state.sortOrder : "asc",
+      arrow = button.querySelector(".sort-arrow");
+    arrow.textContent = active ? (direction === "asc" ? "↑" : "↓") : "↕";
+    button.setAttribute(
+      "aria-label",
+      `${sortDescriptions[button.dataset.sort]}. Sort ${direction === "asc" ? "descending" : "ascending"} next`,
+    );
+  });
 }
 let hoverCard = null;
 function hideHoverCard() {
@@ -265,7 +293,7 @@ function render() {
   if (!state.rows.length) {
     const row = document.createElement("tr"),
       cell = text("td", "No records match the selected filters.");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     row.append(cell);
     el.body.append(row);
     return;
@@ -354,6 +382,13 @@ function render() {
       suggestion,
       stageCell,
       text("td", weightText, matchWeightClass(record.match_weight)),
+      text(
+        "td",
+        record.splink_match_weight == null
+          ? "-"
+          : Number(record.splink_match_weight).toFixed(2),
+        matchWeightClass(record.splink_match_weight),
+      ),
       text(
         "td",
         record.distinguishability == null
@@ -490,8 +525,14 @@ async function initialise() {
     ["score-min", "score-max", "dist-min", "dist-max"].forEach(
       (id) => ($(id).value = ""),
     );
+    $("record-unique-id").value = "";
+    $("record-address-query").value = "";
     resetRanges();
     $("show-labelled").checked = true;
+    $("mismatches-only").checked = false;
+    state.sortBy = "unique_id";
+    state.sortOrder = "asc";
+    updateSortControls();
     state.page = 1;
     load();
   };
@@ -506,6 +547,28 @@ async function initialise() {
     $("expand-filters").hidden = true;
   };
   $("show-labelled").onchange = applyFilter;
+  $("mismatches-only").onchange = applyFilter;
+  ["record-unique-id", "record-address-query"].forEach((id) =>
+    $(id).addEventListener("input", () => {
+      state.page = 1;
+      clearTimeout(window.searchTimer);
+      window.searchTimer = setTimeout(load, 250);
+    }),
+  );
+  document.querySelectorAll(".sort-button").forEach((button) => {
+    button.onclick = () => {
+      if (state.sortBy === button.dataset.sort)
+        state.sortOrder = state.sortOrder === "asc" ? "desc" : "asc";
+      else {
+        state.sortBy = button.dataset.sort;
+        state.sortOrder = "desc";
+      }
+      state.page = 1;
+      updateSortControls();
+      load();
+    };
+  });
+  updateSortControls();
   $("page-size").onchange = () => {
     state.page = 1;
     state.pageSize = Number($("page-size").value);
@@ -702,11 +765,11 @@ function renderReview() {
       ...list.map((candidate) => candidateRow(candidate)),
     );
   }
-  $("review-current-label").textContent = record.current_label
-    ? `Current label: ${record.current_label}`
+  $("review-current-label-value").textContent = record.current_label
+    ? record.current_label
     : record.is_labelled
-      ? "A decision has been recorded."
-      : "This record has not been labelled.";
+      ? "Decision recorded without a canonical label."
+      : "Not labelled yet.";
   updateReviewAccept();
 }
 function candidateRow(candidate) {
@@ -884,6 +947,7 @@ if (location.hash.startsWith("#review")) loadReview();
   const c = {
     unavailable: $("canonical-unavailable"),
     content: $("canonical-content"),
+    uniqueId: $("canonical-unique-id"),
     postcode: $("canonical-postcode"),
     address: $("canonical-address-query"),
     usePostcode: $("canonical-use-review-postcode"),
@@ -944,7 +1008,7 @@ if (location.hash.startsWith("#review")) loadReview();
     c.message.hidden = false;
     c.message.textContent = "Search results will appear here.";
     c.status.textContent =
-      "Enter a postcode or address value to begin searching.";
+      "Enter a unique ID, postcode, or address value to begin searching.";
     c.page.textContent = "Page 1";
     c.summary.textContent = "Page 1";
     c.previous.disabled = true;
@@ -1044,10 +1108,11 @@ if (location.hash.startsWith("#review")) loadReview();
   };
   const load = async () => {
     if (!state.canonical.available) return;
-    const postcode = c.postcode.value.trim(),
+    const uniqueIdQuery = c.uniqueId.value.trim(),
+      postcode = c.postcode.value.trim(),
       addressQuery = c.address.value.trim();
-    if (!postcode && !addressQuery) {
-      toast("Enter a postcode or address value.");
+    if (!uniqueIdQuery && !postcode && !addressQuery) {
+      toast("Enter a unique ID, postcode, or address value.");
       return;
     }
     state.canonical.loading = true;
@@ -1060,6 +1125,7 @@ if (location.hash.startsWith("#review")) loadReview();
       const parameters = new URLSearchParams({
         page: String(state.canonical.page),
       });
+      if (uniqueIdQuery) parameters.set("unique_id_query", uniqueIdQuery);
       if (postcode) parameters.set("postcode", postcode);
       if (addressQuery) parameters.set("address_query", addressQuery);
       const payload = await api(`/api/canonical-search?${parameters}`);
