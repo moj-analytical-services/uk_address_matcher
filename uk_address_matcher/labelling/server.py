@@ -30,6 +30,12 @@ from uk_address_matcher.labelling.canonical import (
 DEFAULT_PAGE_SIZE = 20
 ALLOWED_PAGE_SIZES = {10, 20, 50, 100}
 ALLOWED_MATCH_STAGES = {"exact", "peeled", "splink", "unique_trigram", "unmatched"}
+RECORD_SORT_COLUMNS = {
+    "unique_id": "unique_id",
+    "reranked_score": "match_weight",
+    "splink_score": "splink_match_weight",
+    "distinguishability": "distinguishability",
+}
 ALLOWED_DECISIONS = {
     "accept_model",
     "select_candidate",
@@ -83,12 +89,17 @@ class InputDataset:
 
 @dataclass(frozen=True)
 class RecordFilters:
+    unique_id_query: str
+    address_query: str
     stages: tuple[str, ...]
     score_min: float | None
     score_max: float | None
     distinguishability_min: float | None
     distinguishability_max: float | None
     show_labelled: bool
+    mismatches_only: bool
+    sort_by: str
+    sort_order: str
 
 
 class SessionState:
@@ -298,7 +309,11 @@ def _base_review_cte(bundle: Bundle) -> str:
                 CAST(r.resolved_label_id AS VARCHAR) AS resolved_label_id,
                 r.resolved_canonical_address, r.resolved_canonical_postcode,
                 r.match_reason, r.match_stage, r.is_matched, r.match_weight,
-                r.distinguishability, r.candidate_count, r.top_candidates,
+                r.distinguishability,
+                TRY_CAST(json_extract_string(
+                    CAST(r.top_candidates AS JSON), '$[0].splink_match_weight'
+                ) AS DOUBLE) AS splink_match_weight,
+                r.candidate_count, r.top_candidates,
                 l.decision AS saved_decision,
                 l.selected_candidate_rank,
                 CASE WHEN l.decision = 'clear' THEN FALSE
@@ -387,11 +402,28 @@ def _optional_float(query: dict[str, list[str]], name: str) -> float | None:
         raise ValueError(f"Query parameter {name!r} must be numeric") from error
 
 
+def _optional_text(query: dict[str, list[str]], name: str) -> str:
+    value = query.get(name, [""])[0].strip()
+    if len(value) > 100:
+        raise ValueError(
+            f"Query parameter {name!r} must contain no more than 100 characters"
+        )
+    return value
+
+
 def _parse_record_filters(query: dict[str, list[str]]) -> RecordFilters:
     stages = tuple(query.get("stage", []))
     if set(stages) - ALLOWED_MATCH_STAGES:
         raise ValueError("Unsupported match stage")
+    sort_by = query.get("sort_by", ["unique_id"])[0]
+    if sort_by not in RECORD_SORT_COLUMNS:
+        raise ValueError("Unsupported record sort")
+    sort_order = query.get("sort_order", ["asc"])[0].lower()
+    if sort_order not in {"asc", "desc"}:
+        raise ValueError("Record sort order must be asc or desc")
     return RecordFilters(
+        unique_id_query=_optional_text(query, "unique_id_query"),
+        address_query=_optional_text(query, "address_query"),
         stages=stages,
         score_min=_optional_float(query, "score_min"),
         score_max=_optional_float(query, "score_max"),
@@ -399,12 +431,26 @@ def _parse_record_filters(query: dict[str, list[str]]) -> RecordFilters:
         distinguishability_max=_optional_float(query, "distinguishability_max"),
         show_labelled=query.get("show_labelled", ["true"])[0].lower()
         in {"1", "true", "yes", "on"},
+        mismatches_only=query.get("mismatches_only", ["false"])[0].lower()
+        in {"1", "true", "yes", "on"},
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
 def _record_filter_sql(filters: RecordFilters) -> tuple[str, list[Any]]:
     conditions: list[str] = []
     parameters: list[Any] = []
+    if filters.unique_id_query:
+        conditions.append("contains(upper(unique_id), upper(?))")
+        parameters.append(filters.unique_id_query)
+    if filters.address_query:
+        conditions.append(
+            "(contains(upper(COALESCE(CAST(messy_address AS VARCHAR), '')), upper(?)) "
+            "OR contains(upper(COALESCE(CAST(messy_cleaned_address AS VARCHAR), '')), upper(?)) "
+            "OR contains(upper(COALESCE(CAST(messy_postcode AS VARCHAR), '')), upper(?)))"
+        )
+        parameters.extend([filters.address_query] * 3)
     if filters.stages:
         conditions.append(
             "match_stage IN (" + ", ".join("?" for _ in filters.stages) + ")"
@@ -419,9 +465,21 @@ def _record_filter_sql(filters: RecordFilters) -> tuple[str, list[Any]]:
         if value is not None:
             conditions.append(f"(match_stage != 'splink' OR {column} {operator} ?)")
             parameters.append(value)
-    if not filters.show_labelled:
+    if not filters.show_labelled and not filters.mismatches_only:
         conditions.append("is_labelled = FALSE")
+    if filters.mismatches_only:
+        conditions.append(
+            "match_stage <> 'unmatched' AND has_existing_label AND is_matched AND "
+            "imported_label IS NOT NULL AND resolved_label_id IS NOT NULL AND "
+            "resolved_label_id IS DISTINCT FROM imported_label"
+        )
     return ("WHERE " + " AND ".join(conditions) if conditions else "", parameters)
+
+
+def _record_order_sql(filters: RecordFilters) -> str:
+    column = RECORD_SORT_COLUMNS[filters.sort_by]
+    direction = filters.sort_order.upper()
+    return f"{column} {direction} NULLS LAST, unique_id ASC"
 
 
 def _records_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -432,7 +490,8 @@ def _records_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, A
         raise ValueError("page and page_size must be integers") from error
     if page_size not in ALLOWED_PAGE_SIZES:
         raise ValueError(f"page_size must be one of {sorted(ALLOWED_PAGE_SIZES)}")
-    where_clause, parameters = _record_filter_sql(_parse_record_filters(query))
+    filters = _parse_record_filters(query)
+    where_clause, parameters = _record_filter_sql(filters)
     connection = duckdb.connect(str(bundle.state_file))
     try:
         total = connection.execute(
@@ -448,9 +507,10 @@ def _records_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, A
                 has_existing_label, resolved_label_id,
                 resolved_canonical_address, resolved_canonical_postcode,
                 match_reason, match_stage, is_matched, match_weight, distinguishability,
-                candidate_count, top_candidates, current_decision,
+                splink_match_weight, candidate_count, top_candidates, current_decision,
                 current_label, selected_candidate_rank, is_labelled
-            FROM base {where_clause} ORDER BY unique_id LIMIT ? OFFSET ?""",
+            FROM base {where_clause} ORDER BY {_record_order_sql(filters)}
+            LIMIT ? OFFSET ?""",
             [str(bundle.data_file), *parameters, page_size, (page - 1) * page_size],
         )
         names = [column[0] for column in cursor.description]
@@ -472,7 +532,8 @@ def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[
     unique_id = query.get("unique_id", [""])[0]
     if not unique_id:
         raise ValueError("unique_id is required")
-    where_clause, parameters = _record_filter_sql(_parse_record_filters(query))
+    filters = _parse_record_filters(query)
+    where_clause, parameters = _record_filter_sql(filters)
     cleaned_address = (
         "messy_cleaned_address"
         if "messy_cleaned_address" in bundle.review_columns
@@ -482,10 +543,16 @@ def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[
     try:
         cursor = connection.execute(
             f"""{_base_review_cte(bundle)}, filtered AS (
-                SELECT *, ROW_NUMBER() OVER (ORDER BY unique_id) AS review_position,
+                SELECT *, ROW_NUMBER() OVER (
+                        ORDER BY {_record_order_sql(filters)}
+                    ) AS review_position,
                     COUNT(*) OVER () AS review_total,
-                    LAG(unique_id) OVER (ORDER BY unique_id) AS previous_unique_id,
-                    LEAD(unique_id) OVER (ORDER BY unique_id) AS next_unique_id
+                    LAG(unique_id) OVER (
+                        ORDER BY {_record_order_sql(filters)}
+                    ) AS previous_unique_id,
+                    LEAD(unique_id) OVER (
+                        ORDER BY {_record_order_sql(filters)}
+                    ) AS next_unique_id
                 FROM base {where_clause}
             )
             SELECT unique_id, messy_address, {cleaned_address} AS messy_cleaned_address,
@@ -843,6 +910,7 @@ def _handler_factory(
                         raise ValueError("Canonical page must be an integer.") from error
                     result = search_canonical_data(
                         canonical_source,
+                        unique_id_query=query.get("unique_id_query", [None])[0],
                         postcode=query.get("postcode", [None])[0],
                         address_query=query.get("address_query", [None])[0],
                         page=page,
@@ -854,6 +922,7 @@ def _handler_factory(
                             "page_size": result.page_size,
                             "has_previous": result.has_previous,
                             "has_next": result.has_next,
+                            "unique_id_query": result.unique_id_query,
                             "postcode": result.postcode,
                             "address_query": result.address_query,
                             "rows": result.rows,
