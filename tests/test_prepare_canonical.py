@@ -645,9 +645,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, show_progress=True: (
-            clean_relation
-        ),
+        lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -721,9 +719,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, show_progress=True: (
-            clean_relation
-        ),
+        lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -847,6 +843,50 @@ def test_load_prepared_data_has_expected_row_counts(con, prepared_folder):
     assert result.addresses.count("*").fetchone()[0] == 3
     assert result.term_frequencies.count("*").fetchone()[0] > 0
     assert result.inverted_index.count("*").fetchone()[0] > 0
+
+
+@pytest.mark.parametrize("output_chunk_count", [1, 2])
+def test_prepare_persists_distinguishing_tokens(
+    con,
+    tmp_path,
+    output_chunk_count,
+):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            ('C1', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('C2', '1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('C3', '9 SOLO ROAD YORK', 'Y1 1AA')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+
+    prepare_canonical_folder(
+        canonical,
+        output_folder=tmp_path,
+        con=con,
+        num_of_chunks=2,
+        output_chunk_count=output_chunk_count,
+        derive_distinguishing_wrt_adjacent_records=True,
+        overwrite=True,
+        show_progress=False,
+    )
+
+    loaded = load_prepared_canonical_data(tmp_path, con=con).addresses
+    actual = {
+        unique_id: (distinguishing, common)
+        for unique_id, distinguishing, common in loaded.project(
+            """
+            unique_id,
+            distinguishing_adj_start_tokens,
+            common_adj_start_tokens
+            """
+        ).fetchall()
+    }
+
+    assert actual == {
+        "C1": (["A"], ["1", "HIGH", "STREET", "CAMDEN", "LONDON"]),
+        "C2": ([], ["1", "HIGH", "STREET", "CAMDEN", "LONDON"]),
+        "C3": (["9", "SOLO", "ROAD"], ["YORK"]),
+    }
 
 
 def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):

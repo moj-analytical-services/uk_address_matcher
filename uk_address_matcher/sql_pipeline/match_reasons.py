@@ -14,6 +14,7 @@ class MatchReason(Enum):
         "peeled_address_stripped: match after peeling and removing whitespace "
         "and punctuation"
     )
+    DISTINGUISHING_TOKEN = "distinguishing_token: local prefix and ordered token match"
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
 
@@ -33,6 +34,8 @@ class MatchReason(Enum):
             return "peeled_address"
         if self is MatchReason.PEELED_ADDRESS_STRIPPED:
             return "peeled_address_stripped"
+        if self is MatchReason.DISTINGUISHING_TOKEN:
+            return "distinguishing_token"
         if self is MatchReason.SPLINK:
             return "splink"
         if self is MatchReason.UNIQUE_TRIGRAM:

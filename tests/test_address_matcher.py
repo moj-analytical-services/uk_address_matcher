@@ -600,6 +600,7 @@ def test_available_stages_prints_human_guidance():
     text = str(AddressMatcher.available_stages())
 
     assert text.startswith("Available matching stages (import from uk_address_matcher):")
+    assert "DistinguishingTokenStage" in text
     assert "ExactMatchStage" in text
     assert "PeeledAddressStage" in text
     assert "SplinkStage" in text

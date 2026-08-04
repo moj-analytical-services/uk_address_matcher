@@ -25,6 +25,9 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     _derive_keys_for_strategy,
     _lookup_keys_in_inverted_index,
 )
+from uk_address_matcher.cleaning.steps.token_parsing import (
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+)
 from uk_address_matcher.logging.chunking import (
     log_chunk_progress,
     log_stage_complete,
@@ -653,6 +656,7 @@ def prepare_data_for_matching(
     """
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
+    distinguishing_table_name = None
 
     # Clean data in chunks (without term frequencies)
     cleaned_address_table = clean_data_pre_term_frequencies(
@@ -662,6 +666,32 @@ def prepare_data_for_matching(
         debug_options=debug_options,
         show_progress=progress_mode,
     )
+
+    if derive_distinguishing_wrt_adjacent_records:
+        distinguishing_pipeline = create_sql_pipeline(
+            con,
+            input_rel=cleaned_address_table,
+            stage_specs=[
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records()
+            ],
+            pipeline_name="Derive locally distinguishing canonical tokens",
+            pipeline_description=(
+                "Compare each canonical address with nearby suffix-similar records"
+            ),
+        )
+        distinguishing_tokens = distinguishing_pipeline.run(debug_options).project(
+            """
+            ukam_address_id,
+            distinguishing_adj_start_tokens,
+            common_adj_start_tokens
+            """
+        )
+        distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
+        _materialise_relation(
+            con,
+            distinguishing_tokens,
+            distinguishing_table_name,
+        )
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
@@ -700,6 +730,17 @@ def prepare_data_for_matching(
 
     # Get the underlying table name for direct access
     cleaned_table_name = cleaned_address_table.alias
+    if distinguishing_table_name is None:
+        distinguishing_select_sql = ""
+        distinguishing_join_sql = ""
+    else:
+        distinguishing_select_sql = """,
+                distinguishing.distinguishing_adj_start_tokens,
+                distinguishing.common_adj_start_tokens"""
+        distinguishing_join_sql = f"""
+            LEFT JOIN {distinguishing_table_name} AS distinguishing
+              ON cleaned.ukam_address_id = distinguishing.ukam_address_id
+        """
 
     if dataset_role == "canonical":
         processed_table = f"__ukam__processed_canonical_{uid}"
@@ -722,10 +763,11 @@ def prepare_data_for_matching(
         for chunk_index in range(total_chunks):
             chunk_started_at = time.perf_counter()
             chunk_query = con.sql(f"""
-            SELECT *
-                FROM {cleaned_table_name}
+            SELECT cleaned.*{distinguishing_select_sql}
+                FROM {cleaned_table_name} AS cleaned
+                {distinguishing_join_sql}
                 WHERE
-                    (abs(hash(original_address_concat)) % {total_chunks})
+                    (abs(hash(cleaned.original_address_concat)) % {total_chunks})
                     = {chunk_index}
             """)
             chunk_table = f"__ukam_post_tf_chunk_input_{uid}_{chunk_index}"
@@ -736,9 +778,6 @@ def prepare_data_for_matching(
                 chunk,
                 con=con,
                 pre_cleaned_addresses=True,
-                derive_distinguishing_wrt_adjacent_records=(
-                    derive_distinguishing_wrt_adjacent_records
-                ),
                 additional_stages=inverted_index_stages,
                 debug_options=debug_options if chunk_index == 0 else None,
             )
