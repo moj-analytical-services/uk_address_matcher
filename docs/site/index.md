@@ -100,7 +100,7 @@ Here is a list of some of our known users and their use cases:
 
 This project is free and open source and is released under the MIT licence.
 
-****## Next steps
+## Next steps
 
 - [Overview](index.md)
 - [Getting started](get_started.md)
