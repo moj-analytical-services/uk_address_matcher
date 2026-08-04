@@ -645,9 +645,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, derive_distinguishing_wrt_adjacent_records, dataset_role, show_progress=True: (
-            clean_relation
-        ),
+        lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -721,9 +719,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
     monkeypatch.setattr(
         chunking_strategies,
         "prepare_data_for_matching",
-        lambda data, con, num_of_chunks, term_frequency_lookup, derive_distinguishing_wrt_adjacent_records, dataset_role, show_progress=True: (
-            clean_relation
-        ),
+        lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
