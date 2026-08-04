@@ -29,13 +29,29 @@ from uk_address_matcher.labelling.server import (
 )
 
 
-def create_api_test_bundle(root: Path) -> Path:
+def create_api_test_bundle(root: Path, *, include_unmatched: bool = False) -> Path:
     root.mkdir()
     data_file = root / "review_data.parquet"
+    first_imported_label = "'label-imported'" if include_unmatched else "NULL::VARCHAR"
+    first_has_existing_label = "TRUE" if include_unmatched else "FALSE"
+    unmatched_record = (
+        """
+                UNION ALL
+                SELECT
+                    'bundle-1', '1.2.3', CURRENT_TIMESTAMP, 'messy-unmatched',
+                    'UNMATCHED TEST ROAD', 'UNMATCHED TEST ROAD', 'E1 1AC',
+                    'label-unmatched', TRUE, NULL::VARCHAR, NULL::VARCHAR,
+                    NULL::VARCHAR, NULL::VARCHAR, 'No candidate match', 'unmatched',
+                    FALSE, NULL::DOUBLE, NULL::DOUBLE, 0, []
+        """
+        if include_unmatched
+        else ""
+    )
     connection = duckdb.connect()
     try:
         connection.execute(
-            """COPY (
+            (
+                """COPY (
                 SELECT
                     'bundle-1' AS bundle_id,
                     '1.2.3' AS uk_address_matcher_version,
@@ -44,8 +60,8 @@ def create_api_test_bundle(root: Path) -> Path:
                     '1 TEST ROAD' AS messy_address,
                     '1 TEST ROAD' AS messy_cleaned_address,
                     'E1 1AA' AS messy_postcode,
-                    NULL::VARCHAR AS ukam_label,
-                    FALSE AS has_existing_label,
+                    __FIRST_IMPORTED_LABEL__ AS ukam_label,
+                    __FIRST_HAS_EXISTING_LABEL__ AS has_existing_label,
                     'canonical-1' AS resolved_canonical_id,
                     'label-1' AS resolved_label_id,
                     '1 TEST ROAD LONDON' AS resolved_canonical_address,
@@ -57,8 +73,10 @@ def create_api_test_bundle(root: Path) -> Path:
                     2.1 AS distinguishability,
                     2 AS candidate_count,
                     [
-                        {'rank': 1::BIGINT, 'label_id': 'label-1'::VARCHAR},
-                        {'rank': 2::BIGINT, 'label_id': 'label-2'::VARCHAR}
+                        {'rank': 1::BIGINT, 'label_id': 'label-1'::VARCHAR,
+                         'splink_match_weight': 10.0::DOUBLE},
+                        {'rank': 2::BIGINT, 'label_id': 'label-2'::VARCHAR,
+                         'splink_match_weight': 8.0::DOUBLE}
                     ] AS top_candidates
                 UNION ALL
                 SELECT
@@ -67,8 +85,15 @@ def create_api_test_bundle(root: Path) -> Path:
                     FALSE, 'canonical-2', 'label-3', '2 TEST ROAD LONDON',
                     'E1 1AB', 'exact: full match', 'exact', TRUE,
                     NULL::DOUBLE, NULL::DOUBLE, 1,
-                    [{'rank': 1::BIGINT, 'label_id': 'label-3'::VARCHAR}]
-            ) TO ? (FORMAT PARQUET)""",
+                                        [{'rank': 1::BIGINT, 'label_id': 'label-3'::VARCHAR,
+                                            'splink_match_weight': 8.0::DOUBLE}]
+"""
+                + unmatched_record
+                + """
+                ) TO ? (FORMAT PARQUET)"""
+            )
+            .replace("__FIRST_IMPORTED_LABEL__", first_imported_label)
+            .replace("__FIRST_HAS_EXISTING_LABEL__", first_has_existing_label),
             [str(data_file)],
         )
     finally:
@@ -143,6 +168,7 @@ def test_server_requires_token_and_serves_application_shell(
     assert status == 200
     assert isinstance(payload, str)
     assert 'id="score-range-min"' in payload
+    assert 'id="review-current-label-value"' in payload
     assert 'id="review-content"' in payload
 
     status, payload = request(base_url, "/api/bootstrap", token=session.token)
@@ -184,7 +210,6 @@ def test_records_and_review_share_score_and_stage_filters(
         "previous_unique_id": None,
         "next_unique_id": None,
     }
-
     status, payload = request(
         base_url,
         "/api/review-record?unique_id=messy-2&stage=splink",
@@ -194,6 +219,74 @@ def test_records_and_review_share_score_and_stage_filters(
     assert payload == {
         "error": "The requested record does not exist in the current filtered review set"
     }
+
+
+def test_records_support_score_sorting_and_mismatch_filter(tmp_path: Path) -> None:
+    api_bundle = _load_bundle(create_api_test_bundle(tmp_path / "api-bundle"))
+    _ensure_state_database(api_bundle)
+
+    descending = _records_payload(
+        api_bundle,
+        {"sort_by": ["splink_score"], "sort_order": ["desc"]},
+    )
+    ascending = _records_payload(
+        api_bundle,
+        {"sort_by": ["splink_score"], "sort_order": ["asc"]},
+    )
+    assert [row["unique_id"] for row in descending["rows"]] == [
+        "messy-1",
+        "messy-2",
+    ]
+    assert [row["unique_id"] for row in ascending["rows"]] == [
+        "messy-2",
+        "messy-1",
+    ]
+    assert descending["rows"][0]["splink_match_weight"] == 10.0
+
+    mismatch_bundle = _load_bundle(create_test_bundle(tmp_path / "mismatch-bundle"))
+    _ensure_state_database(mismatch_bundle)
+    mismatches = _records_payload(mismatch_bundle, {"mismatches_only": ["true"]})
+    assert mismatches["total_filtered"] == 1
+    assert mismatches["rows"][0]["unique_id"] == "messy-1"
+    assert (
+        _records_payload(
+            mismatch_bundle,
+            {"mismatches_only": ["true"], "show_labelled": ["false"]},
+        )["total_filtered"]
+        == 1
+    )
+
+    unmatched_bundle = _load_bundle(
+        create_api_test_bundle(tmp_path / "unmatched-bundle", include_unmatched=True)
+    )
+    _ensure_state_database(unmatched_bundle)
+    mismatches = _records_payload(unmatched_bundle, {"mismatches_only": ["true"]})
+    assert mismatches["total_filtered"] == 1
+    assert mismatches["rows"][0]["unique_id"] == "messy-1"
+
+    filtered_mismatches = _records_payload(
+        unmatched_bundle,
+        {
+            "mismatches_only": ["true"],
+            "address_query": ["unmatched"],
+        },
+    )
+    assert filtered_mismatches["total_filtered"] == 0
+
+
+def test_record_text_filters_are_grouped_with_other_filters(tmp_path: Path) -> None:
+    bundle = _load_bundle(create_api_test_bundle(tmp_path / "filter-bundle"))
+    _ensure_state_database(bundle)
+
+    records = _records_payload(
+        bundle,
+        {
+            "address_query": ["road"],
+            "stage": ["splink"],
+        },
+    )
+
+    assert [row["unique_id"] for row in records["rows"]] == ["messy-1"]
 
 
 def test_labels_endpoint_validates_candidates_and_writes_csv(
@@ -604,6 +697,15 @@ def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
             "canonical-1",
             "canonical-2",
         ]
+
+        status, payload = request(
+            base_url,
+            "/api/canonical-search?unique_id_query=canonical-2",
+            token=session.token,
+        )
+        assert status == 200
+        assert payload["unique_id_query"] == "canonical-2"
+        assert [row["canonical_id"] for row in payload["rows"]] == ["canonical-2"]
 
         status, payload = request(
             base_url,
