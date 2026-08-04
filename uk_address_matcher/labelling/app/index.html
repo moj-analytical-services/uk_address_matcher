@@ -212,7 +212,20 @@
           </div>
           <div class="review-cards">
             <article class="review-card messy-card">
-              <h2>Messy input record</h2>
+              <div class="review-card-header messy-card-header">
+                <h2>Messy input record</h2>
+                <a
+                  id="review-open-map"
+                  class="map-link"
+                  href="#"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the exact messy address in Google Maps"
+                  aria-label="Open the exact messy address in Google Maps"
+                  ><span class="map-link-icon" aria-hidden="true">&#128205;</span
+                  >Open in Maps</a
+                >
+              </div>
               <dl>
                 <dt>Unique ID</dt>
                 <dd id="review-messy-id"></dd>
@@ -388,7 +401,6 @@
                   <thead>
                     <tr>
                       <th>Canonical ID</th>
-                      <th>Address</th>
                       <th>Cleaned address</th>
                       <th>Postcode</th>
                       <th>Action</th>
