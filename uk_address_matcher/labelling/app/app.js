@@ -634,7 +634,16 @@ function renderReview() {
   reviewElements.previous.disabled = !navigation.previous_unique_id;
   reviewElements.next.disabled = !navigation.next_unique_id;
   $("review-messy-id").textContent = display(record.unique_id);
-  $("review-messy-address").textContent = display(record.messy_address);
+  const messyAddress = String(record.messy_address || "").trim(),
+    messyPostcode = String(record.messy_postcode || "").trim(),
+    mapQuery = [messyAddress, messyPostcode].filter(Boolean).join(", ");
+  $("review-messy-address").textContent = display(messyAddress);
+  const mapLink = $("review-open-map");
+  mapLink.hidden = !messyAddress;
+  mapLink.href = `https://www.google.com/maps/search/?${new URLSearchParams({
+    api: "1",
+    query: mapQuery,
+  })}`;
   $("review-messy-cleaned").textContent = display(record.messy_cleaned_address);
   $("review-messy-postcode").textContent = display(record.messy_postcode);
   const matched = Boolean(
@@ -1011,20 +1020,14 @@ if (location.hash.startsWith("#review")) loadReview();
     c.table.hidden = false;
     const first = (state.canonical.page - 1) * 100 + 1,
       last = first + state.canonical.rows.length - 1;
-    c.status.textContent = `Showing unique canonical records ${format(first)}-${format(last)}`;
+    c.status.textContent = `Showing canonical records ${format(first)}-${format(last)}`;
     state.canonical.rows.forEach((record) => {
       const row = document.createElement("tr"),
         id = text("td", record.canonical_id, "primary"),
-        address = document.createElement("td"),
         cleaned = document.createElement("td"),
         postcode = text("td", record.canonical_postcode || "-"),
         action = document.createElement("td"),
         button = text("button", "Use this record", "use-canonical-button");
-      appendHighlight(
-        address,
-        record.canonical_address,
-        state.canonical.addressQuery,
-      );
       appendHighlight(
         cleaned,
         record.cleaned_address,
@@ -1033,7 +1036,7 @@ if (location.hash.startsWith("#review")) loadReview();
       button.type = "button";
       button.onclick = () => selectResult(record);
       action.append(button);
-      row.append(id, address, cleaned, postcode, action);
+      row.append(id, cleaned, postcode, action);
       row.ondblclick = () => selectResult(record);
       c.body.append(row);
     });
@@ -1100,7 +1103,7 @@ if (location.hash.startsWith("#review")) loadReview();
     if (!selection) return;
     c.selectionId.textContent = selection.canonical_id;
     c.selectionAddress.textContent = [
-      selection.canonical_address,
+      selection.cleaned_address,
       selection.canonical_postcode,
     ]
       .filter(Boolean)
