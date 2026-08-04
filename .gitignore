@@ -1,3 +1,5 @@
+benchmarking/
+data/
 old_del/*
 .tmp
 try_*
