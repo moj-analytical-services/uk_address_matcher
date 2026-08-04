@@ -157,6 +157,11 @@ def test_search_returns_stable_pages_and_literal_substrings(
         "199 TEST STREET HACKNEY LONDON",
         "FLAT 199 TEST STREET HACKNEY LONDON",
     ]
+    filtered_by_id = search_canonical_data(
+        source, unique_id_query="percent", postcode=None, address_query=None, page=1
+    )
+    assert filtered_by_id.unique_id_query == "percent"
+    assert [row["canonical_id"] for row in filtered_by_id.rows] == ["PERCENT"]
     assert (
         search_canonical_data(
             source, postcode="E5 8RY", address_query="street", page=1
@@ -187,7 +192,7 @@ def test_search_validation_lookup_and_parquet_plan(tmp_path: Path) -> None:
     assert normalise_postcode_search("n165fd") == "N16 5FD"
     assert find_canonical_record(source, "PERCENT")["canonical_postcode"] == "N16 5FD"
     assert find_canonical_record(source, "missing") is None
-    with pytest.raises(ValueError, match="postcode or an address"):
+    with pytest.raises(ValueError, match="unique ID"):
         search_canonical_data(source, postcode=None, address_query=None, page=1)
     with pytest.raises(ValueError, match="at least 1"):
         search_canonical_data(source, postcode="E5 8RY", address_query=None, page=0)
