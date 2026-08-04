@@ -1,6 +1,9 @@
 import math
 
 import pytest
+from splink import DuckDBAPI
+from splink.comparison_level_library import CustomLevel
+from splink.internals.testing import is_in_level
 
 from uk_address_matcher import AddressMatcher
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
@@ -154,6 +157,7 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
 
     assert [level["label_for_charts"] for level in levels] == [
         "No distinguishing tokens",
+        "Ordered two-token signature with up to two safe gaps, postcode exact",
         "All distinguishing tokens present",
         "Some distinguishing tokens present",
         "No distinguishing tokens present",
@@ -166,12 +170,61 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
         "label_for_charts": "No distinguishing tokens",
         "is_null_level": True,
     }
+    assert levels[1]["sql_condition"].startswith(
+        "postcode_l = postcode_r AND list_slice("
+    )
     assert [
         math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
-    ] == [1.0, 0.5000000000000001, -10.0]
+    ] == [10.0, 1.0, 0.5000000000000001, -10.0]
     assert all(
         level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
     )
+
+
+@pytest.mark.parametrize(
+    ("messy_address", "messy_postcode", "expected"),
+    [
+        ("FLAT A 1 HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A NORTH SOUTH 1 HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A NORTH 1 SOUTH HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A 1 HIGH STREET CAMDEN", "N1 1AB", False),
+        ("FLAT A 9 1 HIGH STREET CAMDEN", "N1 1AA", False),
+        ("FLAT A HOUSE 1 HIGH STREET CAMDEN", "N1 1AA", False),
+        ("FLAT A NORTH SOUTH EAST 1 HIGH STREET", "N1 1AA", False),
+        ("FLAT A HIGH 1 STREET CAMDEN", "N1 1AA", False),
+        ("1 HIGH STREET FLAT A CAMDEN", "N1 1AA", False),
+    ],
+)
+def test_postcode_exact_safe_gap_level_matches_expected_rows(
+    duck_con,
+    messy_address,
+    messy_postcode,
+    expected,
+):
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "neighbour_distinguishing_tokens"
+    )
+    safe_gap_level = CustomLevel(
+        comparison["comparison_levels"][1]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+
+    actual = is_in_level(
+        safe_gap_level,
+        {
+            "postcode_l": "N1 1AA",
+            "postcode_r": messy_postcode,
+            "distinguishing_adj_start_tokens_l": ["FLAT", "A"],
+            "clean_full_address_l": "FLAT A 1 HIGH STREET CAMDEN LONDON",
+            "clean_full_address_r": messy_address,
+        },
+        DuckDBAPI(connection=duck_con),
+    )
+
+    assert actual is expected
 
 
 def test_sanitise_null_comparison_level_removes_probabilities():
@@ -250,7 +303,7 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
     prediction_rows = predictions.as_pandas_dataframe()
 
     expected_weights = {
-        frozenset(("c_all", "m_all")): 1.0,
+        frozenset(("c_all", "m_all")): 10.0,
         frozenset(("c_some", "m_some")): 0.5,
         frozenset(("c_some", "m_none")): -10.0,
     }

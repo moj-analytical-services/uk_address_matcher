@@ -66,6 +66,14 @@
           "is_null_level": true
         },
         {
+          "sql_condition": "postcode_l = postcode_r AND list_slice(regexp_split_to_array(clean_full_address_r, '\\s+'), 1, len(distinguishing_adj_start_tokens_l)) = distinguishing_adj_start_tokens_l AND list_contains(flatten(list_transform(range(1, 5), first_offset -> list_transform(range(first_offset + 1, 5), second_offset -> list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + first_offset) = list_extract(regexp_split_to_array(clean_full_address_l, '\\s+'), len(distinguishing_adj_start_tokens_l) + 1) AND list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + second_offset) = list_extract(regexp_split_to_array(clean_full_address_l, '\\s+'), len(distinguishing_adj_start_tokens_l) + 2) AND NOT list_contains(list_transform(list_filter(range(1, second_offset + 1), gap_offset -> gap_offset != first_offset AND gap_offset != second_offset), gap_offset -> regexp_matches(list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + gap_offset), '[0-9]') OR list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + gap_offset) IN ('APARTMENT', 'BLOCK', 'BUILDING', 'COTTAGE', 'FLAT', 'HOUSE', 'MAISONETTE', 'OFFICE', 'STEADING', 'STUDIO', 'SUITE', 'UNIT', 'WAREHOUSE', 'WORKSHOP')), TRUE)))), TRUE)",
+          "label_for_charts": "Ordered two-token signature with up to two safe gaps, postcode exact",
+          "m_probability": 1024.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_adj_start_tokens_l)",
           "label_for_charts": "All distinguishing tokens present",
           "m_probability": 2.0,
