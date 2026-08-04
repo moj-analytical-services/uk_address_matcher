@@ -109,7 +109,7 @@ def test_rejects_missing_cleaned_address_column(tmp_path: Path) -> None:
         load_canonical_source(path)
 
 
-def test_search_returns_stable_unique_pages_and_literal_substrings(
+def test_search_returns_stable_pages_and_literal_substrings(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "canonical.parquet"
@@ -123,19 +123,40 @@ def test_search_returns_stable_unique_pages_and_literal_substrings(
     page_two = search_canonical_data(
         source, postcode="E5 8RY", address_query="STREET", page=2
     )
-    page_one_ids = [row["canonical_id"] for row in page_one.rows]
-    page_two_ids = [row["canonical_id"] for row in page_two.rows]
+    page_four = search_canonical_data(
+        source, postcode="E5 8RY", address_query="STREET", page=4
+    )
 
     assert len(page_one.rows) == CANONICAL_PAGE_SIZE
     assert len(page_two.rows) == CANONICAL_PAGE_SIZE
-    assert len(set(page_one_ids)) == CANONICAL_PAGE_SIZE
-    assert len(set(page_two_ids)) == CANONICAL_PAGE_SIZE
-    assert set(page_one_ids).isdisjoint(page_two_ids)
-    assert len(set(page_one_ids) | set(page_two_ids)) == 200
+    assert len(page_four.rows) == CANONICAL_PAGE_SIZE
+    assert (
+        len(
+            {
+                (row["canonical_id"], row["cleaned_address"])
+                for page in (page_one, page_two, page_four)
+                for row in page.rows
+            }
+        )
+        == CANONICAL_PAGE_SIZE * 3
+    )
     assert page_one.has_previous is False
     assert page_one.has_next is True
     assert page_two.has_previous is True
-    assert page_two.has_next is False
+    assert page_two.has_next is True
+    assert page_four.has_previous is True
+    assert page_four.has_next is False
+    duplicate_id_rows = search_canonical_data(
+        source, postcode="E5 8RY", address_query="199 TEST STREET", page=1
+    ).rows
+    assert [row["canonical_id"] for row in duplicate_id_rows] == [
+        "CANON_0199",
+        "CANON_0199",
+    ]
+    assert [row["cleaned_address"] for row in duplicate_id_rows] == [
+        "199 TEST STREET HACKNEY LONDON",
+        "FLAT 199 TEST STREET HACKNEY LONDON",
+    ]
     assert (
         search_canonical_data(
             source, postcode="E5 8RY", address_query="street", page=1
