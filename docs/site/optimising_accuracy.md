@@ -159,6 +159,7 @@ The available stages are as follows:
 | Stage | Type | What it is good at | Accuracy implication |
 |---|---|---|---|
 | `ExactMatchStage` | Deterministic | Cleaned address text is already the same on both sides | Very high precision, should usually run first |
+| `DistinguishingTokenStage` | Deterministic | A locally unique canonical prefix is followed by two ordered address tokens, allowing up to two safe gaps | Substantially higher recall than peeled matching, with a small reduction in precision overall; requires an opt-in prepared canonical |
 | `PeeledAddressStage` | Deterministic | One side has extra trailing locality words such as `LONDON` or `HACKNEY` | High precision, useful before probabilistic matching |
 | `UniqueTrigramStage` | Deterministic | A distinctive phrase identifies one canonical address within the postcode | High precision, removes clear fuzzy cases before Splink |
 | `SplinkStage` | Scored | Typos, abbreviations, partial matches, and other fuzzy cases | Precision and recall depend on threshold choice |
@@ -166,7 +167,26 @@ The available stages are as follows:
 
 ##### Summary recommendation
 
-You almost always want to use the `ExactMatchStage`.  The `PeeledAddressStage` and `UniqueTrigramStage` produce high, but not perfect precision (i.e. there's a chance of a small number of false positives).
+You almost always want to use the `ExactMatchStage`.  The `DistinguishingTokenStage`, `PeeledAddressStage` and `UniqueTrigramStage` produce high, but not perfect precision (i.e. there's a chance of a small number of false positives).
+
+`DistinguishingTokenStage` requires additional canonical preparation. Enable it
+when building the prepared canonical:
+
+Across four benchmark areas, `ExactMatchStage` followed by
+`DistinguishingTokenStage` achieved 76.1465% weighted recall, compared with
+60.0428% for `ExactMatchStage` followed by `PeeledAddressStage`. Weighted
+precision remained high but was slightly lower: 99.6010% compared with
+99.6855%. The recall improvement was substantial in every benchmark area,
+while the precision difference was small and varied slightly by area.
+
+```python
+prepare_canonical_folder(
+    df_canonical,
+    output_folder=output_folder,
+    con=con,
+    derive_distinguishing_wrt_adjacent_records=True,
+)
+```
 
 You almost always want to use the `SplinkStage` last, to attempt to find any matches missed by the previous stages.  In some cases, it may produce higher accuracy than the `PeeledAddressStage` and `UniqueTrigramStage`, which is why you do not always want to use these stages.
 
@@ -176,6 +196,7 @@ You almost always want to use the `SplinkStage` last, to attempt to find any mat
 ```python
 from uk_address_matcher import (
     AddressMatcher,
+    DistinguishingTokenStage,
     ExactMatchStage,
     PeeledAddressStage,
     UniqueTrigramStage,
@@ -188,6 +209,7 @@ matcher = AddressMatcher(
     con=con,
     stages=[
         ExactMatchStage(),
+        DistinguishingTokenStage(),
         PeeledAddressStage(),
         UniqueTrigramStage(),
         SplinkStage(
@@ -208,6 +230,10 @@ For guidance on choosing Splink thresholds, see [here](choosing_a_matching_thres
 ### ExactMatchStage
 
 ::: uk_address_matcher.ExactMatchStage
+
+### DistinguishingTokenStage
+
+::: uk_address_matcher.DistinguishingTokenStage
 
 ### PeeledAddressStage
 
