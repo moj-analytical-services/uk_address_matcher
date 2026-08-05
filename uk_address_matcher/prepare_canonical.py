@@ -74,6 +74,7 @@ INVERTED_INDEX_SORT_COLUMNS = ("index_strategy", "key")
 # Columns that are not needed after preparation and therefore not persisted.
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
 RECOMPUTABLE_DROP_COLUMNS = ("address_tokens", "exploding_unique_ids")
+DEBUG_ONLY_CANONICAL_COLUMNS = ("original_address_concat",)
 
 
 @dataclass(frozen=True)
@@ -414,6 +415,7 @@ def _build_manifest(
     created_with_duckdb_version: str,
     files_meta: dict[str, dict[str, object]],
     row_counts: dict[str, int],
+    preparation_options: dict[str, object],
 ) -> dict[str, object]:
     """Build the manifest payload shared by local and remote writers."""
     from uk_address_matcher import __version__
@@ -423,6 +425,7 @@ def _build_manifest(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_with_duckdb_version": created_with_duckdb_version,
         "row_counts": row_counts,
+        "preparation_options": preparation_options,
         "inverted_index_portfolio": {
             "name": BASE_INDEX_PORTFOLIO.name,
             "physical_indexes": [
@@ -445,6 +448,7 @@ def prepare_canonical_folder(
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
     overwrite: bool = False,
+    add_debug_features: bool = False,
     show_progress: ShowProgress = True,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
@@ -476,6 +480,12 @@ def prepare_canonical_folder(
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
+        add_debug_features: Retain additional canonical fields used for
+            enriched result inspection and debugging, including the original
+            uncleaned canonical address. Enabling this produces a larger
+            prepared canonical addresses file and may increase preparation,
+            loading and matching I/O; the exact increase depends on the
+            canonical data and compression ratio.
         show_progress: ``True`` uses automatic live progress when supported;
             ``False`` suppresses progress output. ``"auto"`` renders live
             updates only in a supported interactive terminal and otherwise logs
@@ -503,6 +513,11 @@ def prepare_canonical_folder(
 
     _validate_chunk_count(num_of_chunks, name="num_of_chunks")
     _validate_chunk_count(output_chunk_count, name="output_chunk_count")
+
+    canonical_drop_columns = list(RECOMPUTABLE_DROP_COLUMNS)
+    if not add_debug_features:
+        canonical_drop_columns.extend(DEBUG_ONLY_CANONICAL_COLUMNS)
+    canonical_drop_columns = tuple(canonical_drop_columns)
 
     if output_is_remote:
         assert output_folder_uri is not None
@@ -587,7 +602,7 @@ def prepare_canonical_folder(
             df_clean,
             addr_path,
             sort_columns=CANONICAL_SORT_COLUMNS,
-            drop_columns=RECOMPUTABLE_DROP_COLUMNS,
+            drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
     else:
@@ -630,7 +645,7 @@ def prepare_canonical_folder(
                     chunk_query,
                     chunk_path,
                     sort_columns=CANONICAL_SORT_COLUMNS,
-                    drop_columns=RECOMPUTABLE_DROP_COLUMNS,
+                    drop_columns=canonical_drop_columns,
                 )
                 chunk_count = chunk_query.count("*").fetchone()[0]
                 canonical_paths.append(chunk_path)
@@ -676,7 +691,7 @@ def prepare_canonical_folder(
             else str(Path(canonical_path).relative_to(output_folder_path))
         )
         artefact_columns[relative_name] = [
-            c for c in df_clean.columns if c not in RECOMPUTABLE_DROP_COLUMNS
+            c for c in df_clean.columns if c not in canonical_drop_columns
         ]
 
     manifest_row_counts = {
@@ -693,6 +708,7 @@ def prepare_canonical_folder(
             artefact_paths=[str(path) for path in [*canonical_paths, tf_path, idx_path]],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
+            preparation_options={"add_debug_features": add_debug_features},
         )
     else:
         _write_manifest_local(
@@ -701,6 +717,7 @@ def prepare_canonical_folder(
             artefact_paths=[Path(path) for path in [*canonical_paths, tf_path, idx_path]],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
+            preparation_options={"add_debug_features": add_debug_features},
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)
@@ -713,6 +730,7 @@ def _write_manifest_local(
     artefact_paths: list[Path],
     artefact_columns: dict[str, list[str]],
     row_counts: dict[str, int],
+    preparation_options: dict[str, object],
 ) -> None:
     """Write a JSON manifest recording provenance information.
 
@@ -735,6 +753,7 @@ def _write_manifest_local(
         created_with_duckdb_version=_duckdb.__version__,
         files_meta=files_meta,
         row_counts=row_counts,
+        preparation_options=preparation_options,
     )
 
     # Atomic write: write to a temp file then replace
@@ -752,6 +771,7 @@ def _write_manifest_remote(
     artefact_paths: list[str],
     artefact_columns: dict[str, list[str]],
     row_counts: dict[str, int],
+    preparation_options: dict[str, object],
 ) -> None:
     """Write a JSON manifest to a remote folder via DuckDB COPY."""
     import duckdb as _duckdb
@@ -769,6 +789,7 @@ def _write_manifest_remote(
         created_with_duckdb_version=_duckdb.__version__,
         files_meta=files_meta,
         row_counts=row_counts,
+        preparation_options=preparation_options,
     )
 
     manifest_table = f"__ukam_manifest_{uuid4().hex}"
@@ -779,14 +800,15 @@ def _write_manifest_remote(
             f"CREATE TEMP TABLE {manifest_table} AS "
             "SELECT ? AS ukam_version, ? AS created_at, "
             "? AS created_with_duckdb_version, "
-            "?::JSON AS row_counts, ?::JSON AS inverted_index_portfolio, "
-            "?::JSON AS files"
+            "?::JSON AS row_counts, ?::JSON AS preparation_options, "
+            "?::JSON AS inverted_index_portfolio, ?::JSON AS files"
         ),
         [
             manifest["ukam_version"],
             manifest["created_at"],
             manifest["created_with_duckdb_version"],
             json.dumps(manifest["row_counts"]),
+            json.dumps(manifest["preparation_options"]),
             json.dumps(manifest["inverted_index_portfolio"]),
             json.dumps(manifest["files"]),
         ],

@@ -114,6 +114,16 @@ def _build_final_output(
         f",\n            results.{column}" for column in additional_columns
     )
 
+    canonical_projection = [
+        "canonical.clean_full_address AS clean_full_address_canonical",
+        "canonical.postcode AS postcode_canonical",
+    ]
+    if "original_address_concat" in df_canonical_clean.columns:
+        canonical_projection.append(
+            "canonical.original_address_concat AS original_address_concat_canonical"
+        )
+    canonical_projection_sql = ",\n            ".join(canonical_projection)
+
     return con.sql(
         f"""
         SELECT
@@ -124,8 +134,7 @@ def _build_final_output(
             results.match_reason
             {additional_projection}
             ,
-            canonical.original_address_concat AS original_address_concat_canonical,
-            canonical.postcode AS postcode_canonical
+            {canonical_projection_sql}
         FROM {relation_sql(df_messy_clean)} AS messy
         INNER JOIN \"{results_table}\" AS results
             ON results.ukam_address_id = messy.ukam_address_id
@@ -163,13 +172,19 @@ def _run_matching(
         Also returns stage diagnostics for executed stages.
     """
     validate_tables(
-        relations={
-            "messy_addresses": df_messy_clean,
-            "canonical_addresses": df_canonical_clean,
-        },
+        relations={"messy_addresses": df_messy_clean},
         required=[
             ColumnSpec("unique_id"),
             ColumnSpec("original_address_concat"),
+            ColumnSpec("postcode"),
+            ColumnSpec("ukam_address_id"),
+        ],
+    )
+    validate_tables(
+        relations={"canonical_addresses": df_canonical_clean},
+        required=[
+            ColumnSpec("unique_id"),
+            ColumnSpec("clean_full_address"),
             ColumnSpec("postcode"),
             ColumnSpec("ukam_address_id"),
         ],

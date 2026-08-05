@@ -118,6 +118,16 @@ def _get_linker(
         df_addresses_to_match = df_addresses_to_match.filter(
             "resolved_canonical_id IS NULL"
         ).select(f"* EXCLUDE({exclude_sql})")
+
+    if "original_address_concat" in df_addresses_to_match.columns:
+        df_addresses_to_match = df_addresses_to_match.select(
+            "* EXCLUDE(original_address_concat)"
+        )
+    if "original_address_concat" in df_addresses_to_search_within.columns:
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            "* EXCLUDE(original_address_concat)"
+        )
+
     unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
     if unresolved_count == 0:
         raise ValueError(
@@ -139,6 +149,12 @@ def _get_linker(
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
     if additional_columns_to_retain:
+        additional_columns_to_retain = [
+            column
+            for column in additional_columns_to_retain
+            if column
+            not in {"original_address_concat", "original_address_concat_canonical"}
+        ]
         settings_as_dict.setdefault("additional_columns_to_retain", [])
         settings_as_dict["additional_columns_to_retain"] += additional_columns_to_retain
 
@@ -147,10 +163,7 @@ def _get_linker(
     settings_as_dict["unique_id_column_name"] = "ukam_address_id"
     # Also make sure we now retain unique_id from both datasets...
 
-    settings_as_dict["additional_columns_to_retain"] += [
-        "unique_id",
-        "original_address_concat",
-    ]
+    settings_as_dict["additional_columns_to_retain"].append("unique_id")
 
     # Align the signature evidence score map across both inputs. Live messy
     # cleaning always emits `signature_score_map`, but a prepared canonical
@@ -267,7 +280,11 @@ def _get_linker(
             df, f"numeric_token_{i}", overwrite=True
         )
 
-    cols_to_select = df_addresses_to_match.columns
+    cols_to_select = [
+        column
+        for column in df_addresses_to_match.columns
+        if column != "original_address_concat"
+    ]
     select_expr = ", ".join(cols_to_select)
     messy_subquery = df_addresses_to_match_fix.sql_query()
     canonical_subquery = df_addresses_to_search_within_fix.sql_query()

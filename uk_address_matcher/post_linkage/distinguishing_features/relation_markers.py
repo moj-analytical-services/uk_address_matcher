@@ -39,13 +39,13 @@ def improve_predictions_using_relation_markers(
                 *,
                 trim(
                     regexp_replace(
-                        upper(original_address_concat_r), '[^A-Z0-9]+', ' ', 'g'
+                        upper(clean_full_address_r), '[^A-Z0-9]+', ' ', 'g'
                     )
                 )
                     AS source_address,
                 trim(
                     regexp_replace(
-                        upper(original_address_concat_l), '[^A-Z0-9]+', ' ', 'g'
+                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
                     )
                 )
                     AS candidate_address
