@@ -405,3 +405,18 @@ def test_address_matcher_derives_distinguishing_tokens_only_for_canonical(duck_c
         "distinguishing_adj_start_tokens"
     ).fetchone() == (["FLAT", "A"],)
     assert "distinguishing_adj_start_tokens" not in matcher._messy_clean.columns
+
+
+def test_get_linker_accepts_canonical_without_raw_address(
+    duck_con,
+    unresolved_matches,
+    canonical_without_raw_address,
+):
+    linker = _get_linker(
+        df_addresses_to_match=unresolved_matches,
+        df_addresses_to_search_within=canonical_without_raw_address,
+        con=duck_con,
+    )
+
+    retained_columns = linker._settings_obj.as_dict()["additional_columns_to_retain"]
+    assert "original_address_concat" not in retained_columns
