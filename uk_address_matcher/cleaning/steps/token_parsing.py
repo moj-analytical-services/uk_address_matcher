@@ -9,121 +9,166 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
-    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
+    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records",
     description=(
         "Identify common suffixes between addresses and separate them "
         "into unique and common token parts"
     ),
     tags=["token_analysis", "address_comparison"],
 )
-def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records():
-    """
-    Identifies common suffixes between addresses and separates them
-    into unique and common parts.
-
-    This function analyses each address in relation to its neighbours
-    (previous and next addresses when sorted by unique_id) to find
-    common suffix patterns. It then splits each address into:
-
-        - unique_tokens: tokens unique to this address,
-            typically the beginning part.
-        - common_tokens: tokens shared with neighbouring addresses,
-            typically the end part.
-
-    Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation
-        con (DuckDBPyConnection): The DuckDB connection
-
-    Returns:
-        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
-    """
-    # We will only ever have FLAT in the code by this point, as APARTMENT and UNIT
-    # have already been removed in earlier cleaning steps
-    tokens_sql = """
+def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+    *,
+    include_input_columns: bool = True,
+):
+    """Split each address around its longest suffix shared by a local neighbour."""
+    tokenised_addresses_sql = r"""
     SELECT
-        ['FLAT'] AS __tokens_to_remove,
-        list_filter(
-            regexp_split_to_array(clean_full_address, '\\s+'),
-            x -> NOT list_contains(__tokens_to_remove, x)
-        ) AS __tokens,
-        row_number() OVER (ORDER BY reverse(clean_full_address)) AS row_order,
-        *
-    FROM {input}
+        ukam_address_id,
+        unique_id,
+        clean_full_address,
+        regexp_split_to_array(clean_full_address, '\s+')::VARCHAR[] AS __tokens
+    FROM {input} AS input_address
     """
 
-    neighbors_sql = """
+    neighbouring_addresses_sql = """
     SELECT
-        lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
-        lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
-        *
-    FROM {tokens}
+        ukam_address_id,
+        unique_id,
+        __tokens,
+        lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
+        lag(clean_full_address, 1) OVER address_order AS __lag_1_address,
+        lag(unique_id, 2) OVER address_order AS __lag_2_unique_id,
+        lag(clean_full_address, 2) OVER address_order AS __lag_2_address,
+        lag(unique_id, 3) OVER address_order AS __lag_3_unique_id,
+        lag(clean_full_address, 3) OVER address_order AS __lag_3_address,
+        lead(unique_id, 1) OVER address_order AS __lead_1_unique_id,
+        lead(clean_full_address, 1) OVER address_order AS __lead_1_address,
+        lead(unique_id, 2) OVER address_order AS __lead_2_unique_id,
+        lead(clean_full_address, 2) OVER address_order AS __lead_2_address,
+        lead(unique_id, 3) OVER address_order AS __lead_3_unique_id,
+        lead(clean_full_address, 3) OVER address_order AS __lead_3_address
+    FROM {tokenised_addresses} AS tokenised
+    WINDOW address_order AS (
+        ORDER BY
+            reverse(clean_full_address),
+            CAST(unique_id AS VARCHAR),
+            ukam_address_id
+    )
     """
+
+    neighbour_names = (
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "lead_1",
+        "lead_2",
+        "lead_3",
+    )
+    suffix_length_expressions = []
+    for neighbour_name in neighbour_names:
+        neighbour_id = f"__{neighbour_name}_unique_id"
+        neighbour_tokens = (
+            f"regexp_split_to_array(__{neighbour_name}_address, '\\s+')::VARCHAR[]"
+        )
+        suffix_length_expressions.append(f"""
+        CASE
+            WHEN {neighbour_id} IS NULL OR {neighbour_id} = unique_id THEN 0
+            ELSE COALESCE(
+                list_position(
+                    list_transform(
+                        list_zip(
+                            list_reverse(__tokens),
+                            list_reverse({neighbour_tokens}),
+                            true
+                        ),
+                        token_pair -> token_pair[1] != token_pair[2]
+                    ),
+                    true
+                ) - 1,
+                least(len(__tokens), len({neighbour_tokens}))
+            )
+        END AS __{neighbour_name}_common_suffix_length
+        """)
 
     suffix_lengths_sql = """
     SELECT
-        len(__tokens) AS __token_count,
-        CASE WHEN __prev_tokens IS NOT NULL THEN
-            (
-                SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
-                    list_slice(list_reverse(__prev_tokens), 1, i + 1)
-            )
-        ELSE 0 END AS prev_common_suffix,
-        CASE WHEN __next_tokens IS NOT NULL THEN
-            (
-                SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
-                    list_slice(list_reverse(__next_tokens), 1, i + 1)
-            )
-        ELSE 0 END AS next_common_suffix,
-        *
-    FROM {with_neighbors}
-    """
+        ukam_address_id,
+        __tokens,
+        {suffix_length_expressions}
+    FROM {neighbouring_addresses} AS neighbours
+    """.replace(
+        "{suffix_length_expressions}",
+        ",\n".join(suffix_length_expressions),
+    )
 
-    unique_parts_sql = """
+    maximum_suffix_lengths_sql = """
     SELECT
-        *,
-        greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
-        list_filter(
-            __tokens,
-            (token, i) ->
-                i < __token_count - greatest(prev_common_suffix, next_common_suffix)
-        ) AS unique_tokens,
-        list_filter(
-            __tokens,
-            (token, i) ->
-                i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
-        ) AS common_tokens
-    FROM {with_suffix_lengths}
+        suffix_lengths.ukam_address_id,
+        suffix_lengths.__tokens,
+        greatest(
+            __lag_1_common_suffix_length,
+            __lag_2_common_suffix_length,
+            __lag_3_common_suffix_length,
+            __lead_1_common_suffix_length,
+            __lead_2_common_suffix_length,
+            __lead_3_common_suffix_length
+        ) AS __max_common_suffix_length
+    FROM {suffix_lengths} AS suffix_lengths
     """
 
+    output_columns_sql = (
+        "input_address.*," if include_input_columns else "maximums.ukam_address_id,"
+    )
+    output_source_sql = (
+        "FROM {input} AS input_address\n"
+        "LEFT JOIN {maximum_suffix_lengths} AS maximums\n"
+        "  ON input_address.ukam_address_id = maximums.ukam_address_id"
+        if include_input_columns
+        else "FROM {maximum_suffix_lengths} AS maximums"
+    )
     final_sql = """
     SELECT
-        * EXCLUDE (
-            __tokens,
-            __prev_tokens,
-            __next_tokens,
-            __token_count,
-            __tokens_to_remove,
-            max_common_suffix,
-            next_common_suffix,
-            prev_common_suffix,
-            row_order,
-            common_tokens,
-            unique_tokens
-        ),
-        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
-        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens
-    FROM {with_unique_parts}
-    """
+        {output_columns_sql}
+        CASE
+            WHEN COALESCE(maximums.__max_common_suffix_length, 0) > 0
+                THEN COALESCE(
+                    list_slice(
+                        maximums.__tokens,
+                        1,
+                        len(maximums.__tokens)
+                            - maximums.__max_common_suffix_length
+                    ),
+                    []::VARCHAR[]
+                )
+            ELSE []::VARCHAR[]
+        END::VARCHAR[] AS distinguishing_adj_start_tokens,
+        CASE
+            WHEN COALESCE(maximums.__max_common_suffix_length, 0) > 0
+                THEN COALESCE(
+                    list_slice(
+                        maximums.__tokens,
+                        len(maximums.__tokens)
+                            - maximums.__max_common_suffix_length + 1,
+                        len(maximums.__tokens)
+                    ),
+                    []::VARCHAR[]
+                )
+            ELSE COALESCE(maximums.__tokens, []::VARCHAR[])
+        END::VARCHAR[] AS common_adj_start_tokens
+    {output_source_sql}
+    """.replace(
+        "{output_columns_sql}",
+        output_columns_sql,
+    ).replace(
+        "{output_source_sql}",
+        output_source_sql,
+    )
 
     steps = [
-        CTEStep("tokens", tokens_sql),
-        CTEStep("with_neighbors", neighbors_sql),
-        CTEStep("with_suffix_lengths", suffix_lengths_sql),
-        CTEStep("with_unique_parts", unique_parts_sql),
+        CTEStep("tokenised_addresses", tokenised_addresses_sql),
+        CTEStep("neighbouring_addresses", neighbouring_addresses_sql),
+        CTEStep("suffix_lengths", suffix_lengths_sql),
+        CTEStep("maximum_suffix_lengths", maximum_suffix_lengths_sql),
         CTEStep("final", final_sql),
     ]
 

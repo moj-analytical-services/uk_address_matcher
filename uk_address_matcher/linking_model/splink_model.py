@@ -76,6 +76,22 @@ def _get_precomputed_numeric_tf_table(con: DuckDBPyConnection):
     return con.sql(read_tf_sql)
 
 
+def _align_distinguishing_token_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add a neutral typed token array where either Splink input lacks it."""
+    column_name = "distinguishing_adj_start_tokens"
+    empty_tokens = f"[]::VARCHAR[] AS {column_name}"
+    if column_name not in df_addresses_to_match.columns:
+        df_addresses_to_match = df_addresses_to_match.select(f"*, {empty_tokens}")
+    if column_name not in df_addresses_to_search_within.columns:
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            f"*, {empty_tokens}"
+        )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
 def _get_linker(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -130,6 +146,14 @@ def _get_linker(
         raise ValueError(
             "Canonical relation is empty - Splink requires at least one search record."
         )
+
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_distinguishing_token_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
 
     if settings is None:
         settings_as_dict = _get_model_settings_dict()
