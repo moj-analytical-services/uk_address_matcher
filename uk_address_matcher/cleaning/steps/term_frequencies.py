@@ -354,16 +354,6 @@ def _separate_unusual_tokens():
                     token_rel_freq_arr,
                     list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
                 ),
-                x -> x.rel_freq < 5e-5 AND x.rel_freq >= 1e-7
-            ),
-            x -> x.tok
-        ) AS very_unusual_tokens_arr,
-        list_transform(
-            list_filter(
-                list_select(
-                    token_rel_freq_arr,
-                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
-                ),
                 x -> x.rel_freq < 1e-7
             ),
             x -> x.tok
