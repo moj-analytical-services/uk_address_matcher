@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import tempfile
@@ -166,6 +167,134 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
 
     assert "unique_id_l" in cols or "unique_id" in cols
     assert "match_reason" in cols
+
+
+def test_lean_and_debug_prepared_canonical_matching_is_identical(
+    con, canonical_data, messy_data, tmp_path
+):
+    lean_folder = tmp_path / "lean"
+    debug_folder = tmp_path / "debug"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=lean_folder,
+        con=con,
+        overwrite=True,
+    )
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=debug_folder,
+        con=con,
+        add_debug_features=True,
+        overwrite=True,
+    )
+
+    results = []
+    for canonical_folder in (lean_folder, debug_folder):
+        variant_con = duckdb.connect(database=":memory:")
+        try:
+            variant_messy_data = _make_addresses(variant_con, MESSY_RECORDS)
+            result = AddressMatcher(
+                canonical_addresses=canonical_folder,
+                addresses_to_match=variant_messy_data,
+                con=variant_con,
+            ).match()
+            all_matches = result.matches(all_columns=True)
+            results.append(
+                (
+                    set(all_matches.columns),
+                    all_matches.select(
+                        "unique_id, resolved_canonical_id, "
+                        "canonical_ukam_address_id, match_reason, match_weight, "
+                        "distinguishability"
+                    )
+                    .order("unique_id")
+                    .fetchall(),
+                )
+            )
+        finally:
+            variant_con.close()
+
+    lean_columns, lean_rows = results[0]
+    debug_columns, debug_rows = results[1]
+
+    assert lean_rows == debug_rows
+    assert {"original_address_concat", "clean_full_address_canonical"} <= lean_columns
+    assert "original_address_concat_canonical" not in lean_columns
+    assert {
+        "original_address_concat",
+        "clean_full_address_canonical",
+        "original_address_concat_canonical",
+    } <= debug_columns
+
+
+def test_lean_splink_inspection_uses_clean_canonical_address(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "lean"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+    ).match()
+
+    candidates = result._splink_results_for_messy_id("M2")
+
+    assert "original_address_canonical" in candidates.columns
+    assert candidates.fetchall()[0][3] == "2 LOW STREET MANCHESTER"
+
+
+def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "legacy"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        add_debug_features=True,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    legacy_path = prepared_folder / "ukam_canonical_addresses.legacy.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT *, []::VARCHAR[] AS very_unusual_tokens_arr
+            FROM read_parquet('{canonical_path}')
+        ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    legacy_path.rename(canonical_path)
+
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("preparation_options")
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+    ).match()
+
+    assert "original_address_concat_canonical" in result.matches().columns
+    assert (
+        result.matches()
+        .filter("unique_id = 'M2'")
+        .select("original_address_concat_canonical")
+        .fetchone()[0]
+        == "2 low street manchester"
+    )
+    assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
 
 
 def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(

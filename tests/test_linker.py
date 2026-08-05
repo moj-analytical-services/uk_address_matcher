@@ -89,6 +89,18 @@ def canonical_empty(duck_con):
     )
 
 
+@pytest.fixture
+def canonical_without_raw_address(duck_con):
+    return duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES (100::BIGINT, 'CANONICAL 1'::VARCHAR, 'POSTCODE 1'::VARCHAR)
+        ) AS t(unique_id, clean_full_address, postcode)
+        """
+    )
+
+
 def test_get_linker_raises_when_no_unresolved_rows(
     duck_con,
     resolved_only_matches,
@@ -113,3 +125,18 @@ def test_get_linker_raises_when_canonical_empty(
             df_addresses_to_search_within=canonical_empty,
             con=duck_con,
         )
+
+
+def test_get_linker_accepts_canonical_without_raw_address(
+    duck_con,
+    unresolved_matches,
+    canonical_without_raw_address,
+):
+    linker = _get_linker(
+        df_addresses_to_match=unresolved_matches,
+        df_addresses_to_search_within=canonical_without_raw_address,
+        con=duck_con,
+    )
+
+    retained_columns = linker._settings_obj.as_dict()["additional_columns_to_retain"]
+    assert "original_address_concat" not in retained_columns

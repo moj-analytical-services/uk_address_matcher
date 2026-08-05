@@ -273,6 +273,58 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
     assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
 
 
+@pytest.mark.parametrize("output_chunk_count", [1, 3])
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepared_canonical_schema_matches_debug_option(
+    con,
+    canonical_data,
+    tmp_path,
+    output_chunk_count,
+    add_debug_features,
+):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=output_chunk_count,
+        add_debug_features=add_debug_features,
+        overwrite=True,
+    )
+
+    if output_chunk_count == 1:
+        canonical_paths = [tmp_path / "ukam_canonical_addresses.parquet"]
+    else:
+        canonical_paths = sorted(
+            (tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet")
+        )
+
+    canonical_relation = con.read_parquet([str(path) for path in canonical_paths])
+    columns = set(canonical_relation.columns)
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+
+    assert "very_unusual_tokens_arr" not in columns
+    assert ("original_address_concat" in columns) is add_debug_features
+    assert "clean_full_address" in columns
+    assert canonical_relation.count("*").fetchone()[0] == 3
+    assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
+
+    for canonical_path in canonical_paths:
+        relative_name = str(canonical_path.relative_to(tmp_path))
+        physical_columns = set(con.read_parquet(str(canonical_path)).columns)
+        assert set(manifest["files"][relative_name]["columns"]) == physical_columns
+
+
+def test_old_manifest_without_preparation_options_still_loads(con, prepared_folder):
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("preparation_options")
+    manifest_path.write_text(json.dumps(manifest))
+
+    loaded = load_prepared_canonical_data(prepared_folder, con=con)
+
+    assert loaded.addresses.count("*").fetchone()[0] == 3
+
+
 def test_prepare_show_progress_false_suppresses_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
@@ -619,7 +671,8 @@ def test_prepare_overwrite_true_succeeds(con, canonical_data):
         )
 
 
-def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_features):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
@@ -659,6 +712,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
         "s3://bucket/input/canonical.csv",
         "s3://bucket/output/prepared",
         con=con,
+        add_debug_features=add_debug_features,
     )
 
     con.read_csv.assert_called_once_with("s3://bucket/input/canonical.csv")
@@ -684,9 +738,18 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
         for call in con.execute.call_args_list
         if call.args
     )
+    manifest_parameters = [
+        call.args[1]
+        for call in con.execute.call_args_list
+        if len(call.args) > 1 and "preparation_options" in str(call.args[0])
+    ]
+    assert manifest_parameters[0][4] == json.dumps(
+        {"add_debug_features": add_debug_features}
+    )
 
 
-def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_features):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
@@ -736,6 +799,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
         "s3://bucket/output/prepared",
         con=con,
         output_chunk_count=2,
+        add_debug_features=add_debug_features,
     )
 
     clean_relation.create.assert_called_once()
@@ -756,6 +820,14 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
     assert _written(
         "s3://bucket/output/prepared/ukam_canonical_addresses_chunks/"
         "canonical_addresses_chunk_00002_of_00002.parquet"
+    )
+    manifest_parameters = [
+        call.args[1]
+        for call in con.execute.call_args_list
+        if len(call.args) > 1 and "preparation_options" in str(call.args[0])
+    ]
+    assert manifest_parameters[0][4] == json.dumps(
+        {"add_debug_features": add_debug_features}
     )
 
 
@@ -792,6 +864,7 @@ def test_manifest_contains_expected_fields(prepared_folder):
     assert "created_with_duckdb_version" in manifest
     assert manifest["row_counts"]["canonical_addresses"] == 3
     assert manifest["row_counts"]["canonical_output_chunks"] == 1
+    assert manifest["preparation_options"] == {"add_debug_features": False}
 
     # Per-file metadata
     assert "files" in manifest
