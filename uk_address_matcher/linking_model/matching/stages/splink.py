@@ -93,6 +93,22 @@ class SplinkStage(MatchingStage):
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
+    # SplinkDataFrame handles for tables this stage registered/created via
+    # Splink. Held so they can be dropped through Splink's public API.
+    _owned_splink_frames: tuple = field(default=(), init=False, repr=False)
+
+    def _release_splink_tables(self) -> None:
+        """Drop this run's Splink tables via Splink's public API."""
+        for frame in self._owned_splink_frames:
+            try:
+                frame.drop_table_from_database_and_remove_from_cache(
+                    force_non_splink_table=True
+                )
+            except Exception:
+                # Best-effort: the table may already be gone (idempotent
+                # cleanup) or the connection may be closing.
+                pass
+        self._owned_splink_frames = ()
 
     def find_matches(
         self,
@@ -113,7 +129,10 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
-        from uk_address_matcher.sql_pipeline.helpers import _uid
+        from uk_address_matcher.sql_pipeline.helpers import (
+            _drop_table_and_registered_aliases,
+            _uid,
+        )
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:
@@ -123,65 +142,92 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
-        # Step 1: Build linker
-        linker = _get_linker(
-            df_addresses_to_match=df_unmatched,
-            df_addresses_to_search_within=df_canonical,
-            con=con,
-            include_full_postcode_block=self.include_full_postcode_block,
-            include_outside_postcode_block=self.include_outside_postcode_block,
-            additional_columns_to_retain=self.additional_columns_to_retain,
-            retain_intermediate_calculation_columns=(
-                self.retain_intermediate_calculation_columns
-            ),
-            settings=self.settings,
-        )
+        # Splink reads its two inputs through relations registered on the
+        # connection as `m_` and `c_` (see _get_linker). Any user table with
+        # either name is shadowed by that registration, so the registrations
+        # MUST be removed on every exit path — including exceptions —
+        # otherwise later reads of `m_`/`c_` silently return matcher data
+        # instead of the user's table. Hence the try/finally.
+        reranker_matches_table: str | None = None
+        try:
+            # Step 1: Build linker (registers m_/c_ and the tf/concat tables)
+            owned_frames: list = []
+            linker = _get_linker(
+                df_addresses_to_match=df_unmatched,
+                df_addresses_to_search_within=df_canonical,
+                con=con,
+                include_full_postcode_block=self.include_full_postcode_block,
+                include_outside_postcode_block=self.include_outside_postcode_block,
+                additional_columns_to_retain=self.additional_columns_to_retain,
+                retain_intermediate_calculation_columns=(
+                    self.retain_intermediate_calculation_columns
+                ),
+                settings=self.settings,
+                owned_splink_frames=owned_frames,
+            )
 
-        self.linker = linker
+            self.linker = linker
 
-        # Step 2: Predict
-        df_predict = linker.inference.predict(
-            threshold_match_weight=self.predict_threshold_match_weight
-        )
-        df_predict_ddb = df_predict.as_duckdbpyrelation()
+            # Step 2: Predict
+            df_predict = linker.inference.predict(
+                threshold_match_weight=self.predict_threshold_match_weight
+            )
+            owned_frames.append(df_predict)
+            self._owned_splink_frames = tuple(owned_frames)
+            df_predict_ddb = df_predict.as_duckdbpyrelation()
 
-        table_name = f"__ukam__splink__predictions__{_uid()}"
-        con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
-            + table_name
-            + " AS SELECT * FROM ("
-            + df_predict_ddb.sql_query()
-            + ")"
-        )
-        self.predictions_table = table_name
+            table_name = f"__ukam__splink__predictions__{_uid()}"
+            con.execute(
+                "CREATE OR REPLACE TEMP VIEW "
+                + table_name
+                + " AS SELECT * FROM ("
+                + df_predict_ddb.sql_query()
+                + ")"
+            )
+            self.predictions_table = table_name
 
-        # Step 3: Improve predictions using distinguishing tokens
-        df_improved = improve_predictions_using_distinguishing_tokens(
-            df_predict=df_predict_ddb,
-            con=con,
-            match_weight_threshold=self.improve_threshold_match_weight,
-            top_n_matches=self.improve_top_n_matches,
-            use_bigrams=self.improve_use_bigrams,
-            additional_columns_to_retain=self.additional_columns_to_retain,
-        )
-        df_improved = relation_markers.improve_predictions_using_relation_markers(
-            df_predict=df_improved,
-            con=con,
-        )
-        self.improved_predictions_table = getattr(df_improved, "alias", None)
+            # Step 3: Improve predictions using distinguishing tokens
+            df_improved = improve_predictions_using_distinguishing_tokens(
+                df_predict=df_predict_ddb,
+                con=con,
+                match_weight_threshold=self.improve_threshold_match_weight,
+                top_n_matches=self.improve_top_n_matches,
+                use_bigrams=self.improve_use_bigrams,
+                additional_columns_to_retain=self.additional_columns_to_retain,
+            )
+            reranker_matches_table = getattr(df_improved, "alias", None)
+            df_improved = relation_markers.improve_predictions_using_relation_markers(
+                df_predict=df_improved,
+                con=con,
+            )
+            self.improved_predictions_table = getattr(df_improved, "alias", None)
 
-        # Step 4: Compute distinguishability and select best match per record
-        # This returns an unmaterialised relation
-        df_best = best_matches_with_distinguishability(
-            df_predict=df_improved,
-            df_addresses_to_match=df_unmatched,
-            con=con,
-            best_match_only=False,
-        )
+            # Step 4: Compute distinguishability and select best match per
+            # record. This returns an unmaterialised relation.
+            df_best = best_matches_with_distinguishability(
+                df_predict=df_improved,
+                df_addresses_to_match=df_unmatched,
+                con=con,
+                best_match_only=False,
+            )
 
-        df_best_name = f"__ukam__splink__best_matches__{_uid()}"
-        df_best.create(df_best_name)
-        self.best_matches_table = df_best_name
+            df_best_name = f"__ukam__splink__best_matches__{_uid()}"
+            df_best.create(df_best_name)
+            self.best_matches_table = df_best_name
+        except BaseException:
+            # Failed part-way: drop everything this run created so a failed
+            # match leaves no run-scoped objects behind.
+            self._release_splink_tables()
+            for orphan in (reranker_matches_table, self.predictions_table):
+                if isinstance(orphan, str):
+                    _drop_table_and_registered_aliases(con, orphan)
+            self.predictions_table = None
+            raise
+        finally:
+            # Restore any user tables named m_/c_ that the registration
+            # shadowed. unregister of an unknown name is a no-op.
+            con.unregister("m_")
+            con.unregister("c_")
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value

@@ -192,6 +192,7 @@ class AddressMatcher:
         if self._inverted_index_table_name is not None:
             _drop_table_and_registered_aliases(self.con, self._inverted_index_table_name)
 
+        source_name = getattr(inverted_index, "alias", None)
         source_relation = _register_input_relation_once(
             inverted_index,
             con=self.con,
@@ -206,6 +207,11 @@ class AddressMatcher:
             + source_relation.sql_query()
             + ")"
         )
+        # The derived source table has been copied; it has no further use.
+        if isinstance(source_name, str) and source_name.startswith(
+            "__ukam_derived_inverted_index_"
+        ):
+            _drop_table_and_registered_aliases(self.con, source_name)
         self._inverted_index_table_name = table_name
 
     @property
@@ -346,13 +352,27 @@ class AddressMatcher:
         self._resolve_canonical_data()
         self._resolve_messy_data()
 
-        result, stage_diagnostics = _run_matching(
-            con=self.con,
-            df_messy_clean=self._messy_clean,
-            df_canonical_clean=self._canonical_clean,
-            stages=self.stages,
-            debug_options=self.debug_options,
-        )
+        # The inverted index is only consumed while cleaning the messy data,
+        # which has now happened. Drop it so it does not accumulate.
+        if self._inverted_index_table_name is not None:
+            _drop_table_and_registered_aliases(
+                self.con, self._inverted_index_table_name
+            )
+            self._inverted_index_table_name = None
+
+        try:
+            result, stage_diagnostics = _run_matching(
+                con=self.con,
+                df_messy_clean=self._messy_clean,
+                df_canonical_clean=self._canonical_clean,
+                stages=self.stages,
+                debug_options=self.debug_options,
+            )
+        except BaseException:
+            # Failed matching must not strand transient objects: run the same
+            # sweep the success path runs (there is no result to keep).
+            self._cleanup_intermediate_tables(None)
+            raise
 
         splink_stage = next(
             (stage for stage in self.stages if isinstance(stage, SplinkStage)),
@@ -361,6 +381,28 @@ class AddressMatcher:
 
         self._cleanup_intermediate_tables(result)
 
+        # Objects retained for this result's inspection APIs. Snapshot the
+        # names/handles now: if the caller reuses the same stage objects for a
+        # later run, this result must still clean up ITS run, not the newer one.
+        owned_tables = [
+            getattr(result, "alias", None),
+            getattr(self._messy_clean, "alias", None),
+        ]
+        if not isinstance(self._raw_canonical, (str, Path)):
+            # Raw canonical input was cleaned into a run-scoped table.
+            # (Prepared-folder canonical relations read parquet directly and
+            # own no catalogue objects.)
+            owned_tables.append(getattr(self._canonical_clean, "alias", None))
+        owned_splink_frames: tuple = ()
+        if splink_stage is not None:
+            owned_tables.extend(
+                (
+                    splink_stage.predictions_table,
+                    splink_stage.best_matches_table,
+                )
+            )
+            owned_splink_frames = splink_stage._owned_splink_frames
+
         return MatchResult(
             result,
             con=self.con,
@@ -368,9 +410,17 @@ class AddressMatcher:
             _canonical_relation=self._canonical_clean,
             _messy_relation=self._messy_clean,
             _stage_diagnostics=stage_diagnostics,
+            _owned_table_names=tuple(
+                dict.fromkeys(
+                    name for name in owned_tables if isinstance(name, str)
+                )
+            ),
+            _owned_splink_frames=owned_splink_frames,
         )
 
-    def _cleanup_intermediate_tables(self, result: duckdb.DuckDBPyRelation) -> None:
+    def _cleanup_intermediate_tables(
+        self, result: duckdb.DuckDBPyRelation | None
+    ) -> None:
         """A simple cleaning utility to drop transient tables created during
         matching, while keeping the final result and canonical/messy tables."""
         keep_names = {
