@@ -447,6 +447,7 @@ def prepare_canonical_folder(
     con: duckdb.DuckDBPyConnection,
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
+    derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = True,
@@ -477,6 +478,8 @@ def prepare_canonical_folder(
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write hash-partitioned chunks under
             `ukam_canonical_addresses_chunks/`.
+        derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
+            leading tokens that distinguish suffix-similar nearby records.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -558,6 +561,10 @@ def prepare_canonical_folder(
         con=con,
         num_of_chunks=num_of_chunks,
         term_frequency_lookup=tf_table,
+        derive_distinguishing_wrt_adjacent_records=(
+            derive_distinguishing_wrt_adjacent_records
+        ),
+        dataset_role="canonical",
         show_progress=progress_mode,
     )
 
