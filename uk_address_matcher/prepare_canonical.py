@@ -58,18 +58,26 @@ _MANAGED_FILES = [
 ]
 
 # Parquet write tuning for the prepared artefacts.
-# ZSTD with a moderate-high level is paid once at preparation time and does not
-# affect match-time runtime (zstd decompression speed is independent of the
-# compression level), while meaningfully reducing on-disk and in-memory size.
 PARQUET_COMPRESSION = "ZSTD"
-PARQUET_COMPRESSION_LEVEL = 9
+PARQUET_COMPRESSION_LEVEL = 15
+INVERTED_INDEX_COMPRESSION_LEVEL = 22
+PARQUET_VERSION = "V2"
+PARQUET_ROW_GROUP_SIZE = 122_880
 
-# Sorting canonical rows by these columns dramatically improves compression: rows
-# sharing a postcode share large substrings across the address/token columns,
-# which ZSTD and dictionary/run-length encoding exploit. Row order is irrelevant
-# to matching, so this is a free win.
-CANONICAL_SORT_COLUMNS = ("postcode", "clean_full_address")
-INVERTED_INDEX_SORT_COLUMNS = ("index_strategy", "key")
+# Sorting canonical rows by these columns improves compression locality. Any
+# remaining source columns provide deterministic tie-breakers before the ID.
+CANONICAL_SORT_COLUMNS = (
+    "postcode",
+    "unique_id",
+    "clean_full_address",
+    "filename",
+)
+INVERTED_INDEX_ORDER_BY = (
+    "index_strategy",
+    "left(key, 1)",
+    "unique_ids",
+    "key",
+)
 
 # Columns that are not needed after preparation and therefore not persisted.
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
@@ -111,26 +119,31 @@ def _write_parquet_artefact(
     path: str | Path,
     *,
     sort_columns: tuple[str, ...] = (),
+    order_by: tuple[str, ...] | None = None,
     drop_columns: tuple[str, ...] = (),
+    compression_level: int = PARQUET_COMPRESSION_LEVEL,
 ) -> None:
-    """Write a relation to a Parquet file using ZSTD compression.
+    """Write a relation to a Parquet file using the prepared-data settings.
 
     Optionally sorts rows by ``sort_columns`` (to maximise compression locality)
-    and excludes ``drop_columns`` that are recomputed at load time. Works for
-    both local paths and remote object-store URIs.
+    or explicit SQL ``order_by`` terms, and excludes ``drop_columns`` that are
+    recomputed at load time. Works for both local paths and remote object-store
+    URIs.
     """
     columns = relation.columns
     existing_drops = [c for c in drop_columns if c in columns]
     drop_clause = f" EXCLUDE ({', '.join(existing_drops)})" if existing_drops else ""
-    sort_cols = [c for c in sort_columns if c in columns]
-    order_clause = (" ORDER BY " + ", ".join(sort_cols)) if sort_cols else ""
+    order_terms = order_by or tuple(c for c in sort_columns if c in columns)
+    order_clause = (" ORDER BY " + ", ".join(order_terms)) if order_terms else ""
     escaped_path = _escape_sql_string(str(path))
     con.execute(
         f"COPY (SELECT *{drop_clause} "
         f"FROM ({relation.sql_query()}) AS _ukam_src{order_clause}) "
         f"TO '{escaped_path}' "
-        f"(FORMAT PARQUET, COMPRESSION {PARQUET_COMPRESSION}, "
-        f"COMPRESSION_LEVEL {PARQUET_COMPRESSION_LEVEL})"
+        f"(FORMAT PARQUET, PARQUET_VERSION {PARQUET_VERSION}, "
+        f"COMPRESSION {PARQUET_COMPRESSION}, "
+        f"COMPRESSION_LEVEL {compression_level}, "
+        f"ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE})"
     )
 
 
@@ -375,26 +388,6 @@ def _validate_chunk_count(value: int, *, name: str) -> None:
         )
 
 
-def _resolve_chunk_hash_key(columns: list[str]) -> str:
-    """Pick a stable hash-partition key present in cleaned canonical output."""
-    preferred_keys = [
-        "address_concat",
-        "clean_full_address",
-        "address_to_parse",
-        "unique_id",
-        "address_id",
-    ]
-    for key in preferred_keys:
-        if key in columns:
-            return key
-
-    raise ValueError(
-        "Unable to chunk canonical output: no suitable hash key column found. "
-        "Expected one of address_concat, clean_full_address, address_to_parse, "
-        "unique_id, or address_id."
-    )
-
-
 def _resolve_canonical_parquet_paths(folder: Path) -> list[Path]:
     """Resolve canonical addresses parquet paths for single-file or chunked layouts."""
     chunk_dir = folder / PREPARED_ADDRESSES_CHUNK_DIRNAME
@@ -450,7 +443,7 @@ def prepare_canonical_folder(
     derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
-    show_progress: ShowProgress = True,
+    show_progress: ShowProgress = "auto",
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
 
@@ -459,10 +452,10 @@ def prepare_canonical_folder(
     addresses (single-file or chunked), and a manifest
     to `output_folder`:
 
-        - `ukam_canonical_addresses.parquet` — cleaned and tokenised addresses
-            or
-          `ukam_canonical_addresses_chunks/`
-          `canonical_addresses_chunk_XXXXX_of_YYYYY.parquet`
+                - `ukam_canonical_addresses.parquet` — cleaned and tokenised addresses,
+                    or `ukam_canonical_addresses_chunks/` containing
+                    `canonical_addresses_chunk_XXXXX_of_YYYYY.parquet` files with
+                    contiguous ranges of the globally ordered canonical IDs.
     - `ukam_term_frequencies.parquet` — term frequency lookup table
     - `ukam_inverted_index.parquet` — inverted index for candidate retrieval
     - `ukam_manifest.json` — provenance metadata (version, row counts, hashes)
@@ -476,7 +469,7 @@ def prepare_canonical_folder(
             and term frequency derivation. Set to 1 for no chunking.
         output_chunk_count: Number of output chunks to write for canonical
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
-            Set above 1 to write hash-partitioned chunks under
+            Set above 1 to write contiguous globally ordered chunks under
             `ukam_canonical_addresses_chunks/`.
         derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
             leading tokens that distinguish suffix-similar nearby records.
@@ -489,11 +482,10 @@ def prepare_canonical_folder(
             prepared canonical addresses file and may increase preparation,
             loading and matching I/O; the exact increase depends on the
             canonical data and compression ratio.
-        show_progress: ``True`` uses automatic live progress when supported;
-            ``False`` suppresses progress output. ``"auto"`` renders live
-            updates only in a supported interactive terminal and otherwise logs
-            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
-            suppresses progress output.
+        show_progress: ``"auto"`` renders live updates in a supported
+            interactive terminal and otherwise logs stage boundaries.
+            ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
+            progress output.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files
@@ -576,6 +568,9 @@ def prepare_canonical_folder(
         show_progress=progress_mode,
     )
 
+    canonical_output_relation = df_clean
+    addr_count = df_clean.count("*").fetchone()[0]
+
     # Write parquet files
     tf_path = (
         join_remote_path(output_folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
@@ -593,7 +588,8 @@ def prepare_canonical_folder(
         con,
         inverted_index,
         idx_path,
-        sort_columns=INVERTED_INDEX_SORT_COLUMNS,
+        order_by=INVERTED_INDEX_ORDER_BY,
+        compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
     )
 
     canonical_paths: list[str | Path]
@@ -606,9 +602,9 @@ def prepare_canonical_folder(
         )
         _write_parquet_artefact(
             con,
-            df_clean,
+            canonical_output_relation,
             addr_path,
-            sort_columns=CANONICAL_SORT_COLUMNS,
+            sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -622,53 +618,47 @@ def prepare_canonical_folder(
         if not output_is_remote:
             Path(chunk_dir).mkdir(parents=True, exist_ok=True)
 
-        uid = uuid4().hex
-        input_table = f"__ukam_prepare_canonical_clean_{uid}"
-        hash_key = _resolve_chunk_hash_key(df_clean.columns)
-        con.execute(f"DROP VIEW IF EXISTS {input_table}")
-        con.execute(f"DROP TABLE IF EXISTS {input_table}")
-        df_clean.create(input_table)
-
-        try:
-            canonical_paths = []
-            for chunk_index in range(output_chunk_count):
-                started_at = time.perf_counter()
-                chunk_query = con.sql(f"""
-                    SELECT *
-                    FROM {input_table}
-                    WHERE (abs(hash({hash_key})) % {output_chunk_count}) = {chunk_index}
-                """)
-                chunk_path = (
-                    join_remote_path(
-                        str(chunk_dir),
-                        _chunk_file_name(chunk_index, output_chunk_count),
-                    )
-                    if output_is_remote
-                    else Path(chunk_dir)
-                    / _chunk_file_name(chunk_index, output_chunk_count)
+        output_chunk_size = (addr_count + output_chunk_count - 1) // output_chunk_count
+        canonical_paths = []
+        for chunk_index in range(output_chunk_count):
+            started_at = time.perf_counter()
+            first_id = chunk_index * output_chunk_size + 1
+            last_id = min(
+                (chunk_index + 1) * output_chunk_size,
+                addr_count,
+            )
+            chunk_query = con.sql(f"""
+                SELECT *
+                FROM ({canonical_output_relation.sql_query()}) AS canonical
+                WHERE canonical.ukam_address_id BETWEEN {first_id} AND {last_id}
+            """)
+            chunk_path = (
+                join_remote_path(
+                    str(chunk_dir),
+                    _chunk_file_name(chunk_index, output_chunk_count),
                 )
-                _write_parquet_artefact(
-                    con,
-                    chunk_query,
-                    chunk_path,
-                    sort_columns=CANONICAL_SORT_COLUMNS,
-                    drop_columns=canonical_drop_columns,
-                )
-                chunk_count = chunk_query.count("*").fetchone()[0]
-                canonical_paths.append(chunk_path)
-                logger.debug(
-                    "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
-                    chunk_index + 1,
-                    output_chunk_count,
-                    chunk_path,
-                    chunk_count,
-                    _format_elapsed(time.perf_counter() - started_at),
-                )
-        finally:
-            con.execute(f"DROP TABLE IF EXISTS {input_table}")
+                if output_is_remote
+                else Path(chunk_dir) / _chunk_file_name(chunk_index, output_chunk_count)
+            )
+            _write_parquet_artefact(
+                con,
+                chunk_query,
+                chunk_path,
+                sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
+                drop_columns=canonical_drop_columns,
+            )
+            chunk_count = chunk_query.count("*").fetchone()[0]
+            canonical_paths.append(chunk_path)
+            logger.debug(
+                "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
+                chunk_index + 1,
+                output_chunk_count,
+                chunk_path,
+                chunk_count,
+                _format_elapsed(time.perf_counter() - started_at),
+            )
 
     # Compute row counts once (avoids repeated full scans)
-    addr_count = df_clean.count("*").fetchone()[0]
     tf_count = tf_table.count("*").fetchone()[0]
     idx_count = inverted_index.count("*").fetchone()[0]
 
