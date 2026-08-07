@@ -152,6 +152,8 @@ def test_clean_data_using_precomputed_rel_tok_freq(
 
     # Confirm we get the expected number of records out
     assert no_chunk_count == chunked_count == 5000
+    assert "__ukam_row_id" not in no_chunk_rel.columns
+    assert "__ukam_row_id" not in chunked_rel.columns
 
     # Confirm all columns match
     chunked_columns_excl_tf = set(chunked_rel.columns)
@@ -161,6 +163,18 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         f"only_in_no_chunk={set(no_chunk_rel.columns) - chunked_columns_excl_tf}, "
         f"only_in_chunked={chunked_columns_excl_tf - set(no_chunk_rel.columns)}"
     )
+
+    ordered_columns = "postcode, unique_id, clean_full_address, ukam_address_id"
+    assert (
+        no_chunk_rel.order(ordered_columns).fetchall()
+        == chunked_rel.order(ordered_columns).fetchall()
+    )
+    assert [
+        row[0]
+        for row in no_chunk_rel.order(ordered_columns)
+        .select("ukam_address_id")
+        .fetchall()
+    ] == list(range(1, no_chunk_count + 1))
 
 
 @pytest.mark.parametrize("use_data_specific_tfs", [True, False])
@@ -194,10 +208,29 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
         term_frequency_lookup=tf_lookup,
     )
     chunked_hist = (
-        chunked.order("unique_id").select("token_rel_freq_arr_hist").fetchall()[:50]
+        chunked.order("unique_id")
+        .select(
+            "unusual_tokens_arr",
+            "extremely_unusual_tokens_arr",
+            "token_rel_freq_arr_hist",
+            "common_end_tokens_hist",
+        )
+        .fetchall()[:50]
     )
 
-    # First 50 records should have identical histograms
+    no_chunk_hist = (
+        no_chunk.order("unique_id")
+        .select(
+            "unusual_tokens_arr",
+            "extremely_unusual_tokens_arr",
+            "token_rel_freq_arr_hist",
+            "common_end_tokens_hist",
+        )
+        .fetchall()[:50]
+    )
+
+    assert "very_unusual_tokens_arr" not in no_chunk.columns
+    assert "very_unusual_tokens_arr" not in chunked.columns
     assert no_chunk_hist == chunked_hist, (
         "Token frequency histograms differ for "
         f"use_data_specific_tfs={use_data_specific_tfs}"

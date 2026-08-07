@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import duckdb
 import pyarrow
+import pyarrow.parquet as pyarrow_parquet
 import pytest
 
 from uk_address_matcher import prepare_canonical_folder
@@ -482,9 +483,7 @@ def test_prepare_show_progress_true_emits_live_output(
     assert all(value is True for value in enabled_values)
 
 
-def test_prepare_logs_sparse_info_and_debug_progress(
-    con, canonical_data, tmp_path, caplog
-):
+def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
         prepare_canonical_folder(
             canonical_data,
@@ -497,12 +496,6 @@ def test_prepare_logs_sparse_info_and_debug_progress(
     info_messages = [
         record.getMessage() for record in caplog.records if record.levelno == logging.INFO
     ]
-    debug_messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.DEBUG
-    ]
-
     assert any(
         message.startswith("Cleaning for TF derivation:") and "records across" in message
         for message in info_messages
@@ -521,16 +514,12 @@ def test_prepare_logs_sparse_info_and_debug_progress(
     )
     assert any(
         message.startswith("Cleaning for TF derivation:") and "chunk 1/1" in message
-        for message in debug_messages
+        for message in info_messages
     )
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
         for message in info_messages
-    )
-    assert all(
-        all(glyph not in message for glyph in progress_glyphs)
-        for message in debug_messages
     )
 
 
@@ -686,7 +675,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "address_concat", "postcode"],
+        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
 
@@ -726,7 +715,22 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
 
     parquet_copies = [sql for sql in copy_sql if "FORMAT PARQUET" in sql]
     assert parquet_copies
+    assert all("PARQUET_VERSION V2" in sql for sql in parquet_copies)
     assert all("COMPRESSION ZSTD" in sql for sql in parquet_copies)
+    inverted_index_copies = [
+        sql for sql in parquet_copies if "ukam_inverted_index.parquet" in sql
+    ]
+    other_copies = [
+        sql for sql in parquet_copies if "ukam_inverted_index.parquet" not in sql
+    ]
+    assert len(inverted_index_copies) == 1
+    assert "COMPRESSION_LEVEL 22" in inverted_index_copies[0]
+    assert (
+        "ORDER BY index_strategy, left(key, 1), unique_ids, key"
+        in (inverted_index_copies[0])
+    )
+    assert all("COMPRESSION_LEVEL 15" in sql for sql in other_copies)
+    assert all("ROW_GROUP_SIZE 122880" in sql for sql in parquet_copies)
 
     assert _written("s3://bucket/output/prepared/ukam_term_frequencies.parquet")
     assert _written("s3://bucket/output/prepared/ukam_inverted_index.parquet")
@@ -761,7 +765,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "address_concat", "postcode"],
+        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
 
@@ -798,8 +802,6 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         add_debug_features=add_debug_features,
     )
 
-    clean_relation.create.assert_called_once()
-
     copy_sql = [
         call.args[0]
         for call in con.execute.call_args_list
@@ -825,6 +827,103 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     assert manifest_parameters[0][4] == json.dumps(
         {"add_debug_features": add_debug_features}
     )
+
+
+def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, tmp_path):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            (2::BIGINT, '2 BETA STREET', 'B2 2BB', 'z.parquet'),
+            (1::BIGINT, '1 ALPHA STREET', 'A1 1AA', 'z.parquet'),
+            (1::BIGINT, '1 ALPHA STREET', 'A1 1AA', 'a.parquet'),
+            (3::BIGINT, '3 ALPHA STREET', 'A1 1AA', 'a.parquet')
+        ) AS source(unique_id, address_concat, postcode, filename)
+    """)
+
+    prepare_canonical_folder(
+        canonical,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=2,
+        overwrite=True,
+    )
+
+    chunk_paths = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
+    addresses = con.read_parquet([str(path) for path in chunk_paths])
+    physical_ids = addresses.select("ukam_address_id").fetchall()
+
+    assert addresses.count("*").fetchone()[0] == 4
+    assert physical_ids == [(1,), (2,), (3,), (4,)]
+    assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
+    assert (
+        addresses.select("ukam_address_id").fetchall()
+        == addresses.order(
+            "postcode, unique_id, clean_full_address, filename, ukam_address_id"
+        )
+        .select("ukam_address_id")
+        .fetchall()
+    )
+
+    for path in chunk_paths:
+        parquet_file = pyarrow_parquet.ParquetFile(path)
+        assert parquet_file.metadata.format_version.startswith("2.")
+        metadata = con.execute(
+            """
+            SELECT row_group_num_rows, path_in_schema, compression, encodings
+            FROM parquet_metadata(?)
+            """,
+            [str(path)],
+        ).fetchall()
+        assert metadata
+        assert {row[2] for row in metadata} == {"ZSTD"}
+        assert max(row[0] for row in metadata) <= 122_880
+        id_encodings = [row[3] for row in metadata if row[1] == "ukam_address_id"]
+        assert id_encodings
+        assert all("DELTA_BINARY_PACKED" in encodings for encodings in id_encodings)
+
+    id_type = con.execute(
+        "DESCRIBE SELECT ukam_address_id FROM read_parquet(?)",
+        [str(chunk_paths[0])],
+    ).fetchone()[1]
+    assert id_type == "INTEGER"
+
+    inverted_index_path = tmp_path / "ukam_inverted_index.parquet"
+    inverted_index = con.read_parquet(str(inverted_index_path))
+    assert inverted_index.columns == ["key", "unique_ids", "index_strategy"]
+    assert [str(value) for value in inverted_index.types] == [
+        "VARCHAR",
+        "BIGINT[]",
+        "VARCHAR",
+    ]
+    inverted_index_row_count = inverted_index.count("*").fetchone()[0]
+    assert inverted_index_row_count > 0
+    assert (
+        inverted_index.select("key, index_strategy").distinct().count("*").fetchone()[0]
+        == inverted_index_row_count
+    )
+    assert (
+        inverted_index.fetchall()
+        == inverted_index.order(
+            "index_strategy, left(key, 1), unique_ids, key"
+        ).fetchall()
+    )
+
+    index_parquet_file = pyarrow_parquet.ParquetFile(inverted_index_path)
+    assert index_parquet_file.metadata.format_version.startswith("2.")
+    index_metadata = con.execute(
+        """
+        SELECT row_group_num_rows, path_in_schema, compression, encodings
+        FROM parquet_metadata(?)
+        """,
+        [str(inverted_index_path)],
+    ).fetchall()
+    assert index_metadata
+    assert {row[2] for row in index_metadata} == {"ZSTD"}
+    assert max(row[0] for row in index_metadata) <= 122_880
+    unique_ids_encodings = [
+        row[3] for row in index_metadata if row[1] == "unique_ids, list, element"
+    ]
+    assert unique_ids_encodings
+    assert all("DELTA_BINARY_PACKED" in encodings for encodings in unique_ids_encodings)
 
 
 def test_overwrite_clears_stale_files(con, canonical_data):

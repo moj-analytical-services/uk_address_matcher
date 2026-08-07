@@ -30,7 +30,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
             (3, 'B1', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'preserved-c'),
             (4, 'B2', 'NEW STATION RAINBOW LANE TAUNTON', 'preserved-d'),
             (5, 'C1', '9 SOLO ROAD YORK', 'preserved-e')
-        ) AS t(ukam_address_id, unique_id, clean_full_address, source_marker)
+        ) AS t(__ukam_row_id, unique_id, clean_full_address, source_marker)
         """
     )
 
@@ -39,7 +39,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
         input_relation,
         connection,
     )
-    assert result.columns.count("ukam_address_id") == 1
+    assert result.columns.count("__ukam_row_id") == 1
     actual = {
         unique_id: (distinguishing, common, source_marker)
         for unique_id, distinguishing, common, source_marker in result.project(
@@ -134,7 +134,7 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
             (2, 'U3', 'ALPHA RAINBOW LANE TAUNTON'),
             (3, 'U3', 'ALPHB RAINBOW LANE TAUNTON'),
             (4, 'U3', 'ALPHC RAINBOW LANE TAUNTON')
-        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        ) AS t(__ukam_row_id, unique_id, clean_full_address)
         """
     )
 
