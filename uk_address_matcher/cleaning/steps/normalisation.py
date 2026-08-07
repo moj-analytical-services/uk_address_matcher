@@ -101,10 +101,7 @@ def _extract_postcode_from_address() -> str:
 
 @pipeline_stage(
     name="rename_and_select_columns",
-    description=(
-        "Rename and select key columns for downstream processing "
-        "and assign ukam_address_id"
-    ),
+    description=("Rename and select key columns for downstream processing"),
     tags=["setup"],
 )
 def _rename_and_select_columns() -> str:
@@ -114,13 +111,11 @@ def _rename_and_select_columns() -> str:
         original_address_concat,
         address_concat,
         postcode,
-        ukam_address_id,
         * EXCLUDE (
             unique_id,
             original_address_concat,
             address_concat,
-            postcode,
-            ukam_address_id
+            postcode
         )
     FROM {input}
     """

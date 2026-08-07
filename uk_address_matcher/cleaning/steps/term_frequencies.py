@@ -31,7 +31,7 @@ def _add_term_frequencies_to_address_tokens():
     # 1. Explode to rows - we only need ID, Token, and Index
     exploded_tokens_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         UNNEST(address_without_numbers_tokenised) AS token,
         GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
     FROM {base}
@@ -41,7 +41,7 @@ def _add_term_frequencies_to_address_tokens():
     # We drop the Token string here. It is dead weight for the sort.
     joined_scalars_sql = """
     SELECT
-        e.ukam_address_id,
+        e.__ukam_row_id,
         e.token_idx,
         COALESCE(f.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -58,13 +58,13 @@ def _add_term_frequencies_to_address_tokens():
     # is unique within a group). This is ~3x faster with identical output.
     reaggregated_freqs_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
             s -> s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY ukam_address_id
+    GROUP BY __ukam_row_id
     """
 
     # 4. Zip the sorted frequencies back to the ORIGINAL token list
@@ -79,7 +79,7 @@ def _add_term_frequencies_to_address_tokens():
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.ukam_address_id = agg.ukam_address_id
+        ON base.__ukam_row_id = agg.__ukam_row_id
     """
 
     steps = [
@@ -109,7 +109,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     # 1. Explode to rows - we only need ID, Token, and Index
     exploded_tokens_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         UNNEST(address_without_numbers_tokenised) AS token,
         GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
     FROM {base}
@@ -119,7 +119,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     # We drop the Token string here. It is dead weight for the sort.
     joined_scalars_sql = """
     SELECT
-        e.ukam_address_id,
+        e.__ukam_row_id,
         e.token_idx,
         COALESCE(__ukam__tmp_rel_tok_freq.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -136,13 +136,13 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     # is unique within a group). This is ~3x faster with identical output.
     reaggregated_freqs_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
             s -> s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY ukam_address_id
+    GROUP BY __ukam_row_id
     """
 
     # 4. Zip the sorted frequencies back to the ORIGINAL token list
@@ -157,7 +157,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.ukam_address_id = agg.ukam_address_id
+        ON base.__ukam_row_id = agg.__ukam_row_id
     """
 
     steps = [
