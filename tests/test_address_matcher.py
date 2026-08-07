@@ -341,17 +341,6 @@ def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
         for message in info_messages
         if message.startswith("Applying term frequencies")
     ]
-    cleaned_debug_logs = [
-        message
-        for message in debug_messages
-        if message.startswith("Cleaning and preprocessing:")
-    ]
-    tf_debug_logs = [
-        message
-        for message in debug_messages
-        if message.startswith("Applying term frequencies:")
-    ]
-
     assert any(
         "Cleaning and preprocessing: 20,500 records across 2 chunks" == message
         for message in cleaned_info_logs
@@ -368,10 +357,10 @@ def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
         message.startswith("Applying term frequencies completed:")
         for message in tf_info_logs
     )
-    assert any("chunk 1/2" in message for message in cleaned_debug_logs)
-    assert any("chunk 2/2" in message for message in cleaned_debug_logs)
-    assert any("chunk 1/2" in message for message in tf_debug_logs)
-    assert any("chunk 2/2" in message for message in tf_debug_logs)
+    assert any("chunk 1/2" in message for message in cleaned_info_logs)
+    assert any("chunk 2/2" in message for message in cleaned_info_logs)
+    assert any("chunk 1/2" in message for message in tf_info_logs)
+    assert any("chunk 2/2" in message for message in tf_info_logs)
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
@@ -438,7 +427,7 @@ def test_matcher_progress_off_suppresses_stage_status_logs(
 
 
 def test_matcher_rejects_unknown_progress_mode(con, canonical_data, messy_data):
-    with pytest.raises(ValueError, match="show_progress must be a boolean"):
+    with pytest.raises(ValueError, match="show_progress must be one of"):
         AddressMatcher(
             canonical_addresses=canonical_data,
             addresses_to_match=messy_data,

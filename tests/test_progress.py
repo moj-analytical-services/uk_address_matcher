@@ -4,6 +4,7 @@ from io import StringIO
 
 import pytest
 
+from uk_address_matcher.logging.chunking import log_chunk_progress
 from uk_address_matcher.logging.progress import _ProgressBar, resolve_progress_mode
 
 
@@ -43,7 +44,7 @@ def test_resolve_progress_mode_accepts_boolean_and_named_values(
 
 
 def test_resolve_progress_mode_rejects_unknown_value() -> None:
-    with pytest.raises(ValueError, match="show_progress must be a boolean"):
+    with pytest.raises(ValueError, match="show_progress must be one of"):
         resolve_progress_mode("verbose")
 
 
@@ -67,3 +68,54 @@ def test_progress_bar_close_does_not_duplicate_newline_after_line_break() -> Non
     progress.close()
 
     assert stream.getvalue().count("\n") == 1
+
+
+def test_auto_logs_each_chunk_when_live_progress_is_unavailable(caplog) -> None:
+    caplog.set_level("INFO", logger="uk_address_matcher")
+
+    log_chunk_progress(
+        total_records=100,
+        processed_records=25,
+        stage_label="Cleaning",
+        progress_mode="auto",
+        chunk_index=0,
+        total_chunks=4,
+    )
+
+    assert "Cleaning: chunk 1/4, 25/100 records" in caplog.text
+
+
+def test_auto_keeps_live_progress_bar_without_chunk_logs(caplog) -> None:
+    stream = _TtyStringIO()
+    progress = _ProgressBar(label="Cleaning", total=100, stream=stream)
+    progress.update(25, completed_units=1)
+    caplog.set_level("DEBUG", logger="uk_address_matcher")
+
+    log_chunk_progress(
+        total_records=100,
+        processed_records=25,
+        stage_label="Cleaning",
+        progress_mode="auto",
+        progress=progress,
+        chunk_index=0,
+        total_chunks=4,
+    )
+
+    assert "chunk 1/4" not in caplog.text
+    assert "\n" not in stream.getvalue()
+
+
+@pytest.mark.parametrize("progress_mode", ["stages", "off"])
+def test_less_verbose_modes_suppress_chunk_logs(caplog, progress_mode) -> None:
+    caplog.set_level("DEBUG", logger="uk_address_matcher")
+
+    log_chunk_progress(
+        total_records=100,
+        processed_records=25,
+        stage_label="Cleaning",
+        progress_mode=progress_mode,
+        chunk_index=0,
+        total_chunks=4,
+    )
+
+    assert "chunk 1/4" not in caplog.text
