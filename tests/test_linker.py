@@ -101,6 +101,18 @@ def canonical_empty(duck_con):
     )
 
 
+@pytest.fixture
+def canonical_without_raw_address(duck_con):
+    return duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES (100::BIGINT, 'CANONICAL 1'::VARCHAR, 'POSTCODE 1'::VARCHAR)
+        ) AS t(unique_id, clean_full_address, postcode)
+        """
+    )
+
+
 def test_get_linker_raises_when_no_unresolved_rows(
     duck_con,
     resolved_only_matches,

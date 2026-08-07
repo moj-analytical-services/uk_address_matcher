@@ -23,7 +23,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     """Split each address around its longest suffix shared by a local neighbour."""
     tokenised_addresses_sql = r"""
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         unique_id,
         clean_full_address,
         regexp_split_to_array(clean_full_address, '\s+')::VARCHAR[] AS __tokens
@@ -32,7 +32,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
     neighbouring_addresses_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         unique_id,
         __tokens,
         lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
@@ -52,7 +52,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         ORDER BY
             reverse(clean_full_address),
             CAST(unique_id AS VARCHAR),
-            ukam_address_id
+            __ukam_row_id
     )
     """
 
@@ -92,7 +92,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
     suffix_lengths_sql = """
     SELECT
-        ukam_address_id,
+        __ukam_row_id,
         __tokens,
         {suffix_length_expressions}
     FROM {neighbouring_addresses} AS neighbours
@@ -103,7 +103,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
     maximum_suffix_lengths_sql = """
     SELECT
-        suffix_lengths.ukam_address_id,
+        suffix_lengths.__ukam_row_id,
         suffix_lengths.__tokens,
         greatest(
             __lag_1_common_suffix_length,
@@ -117,12 +117,12 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     """
 
     output_columns_sql = (
-        "input_address.*," if include_input_columns else "maximums.ukam_address_id,"
+        "input_address.*," if include_input_columns else "maximums.__ukam_row_id,"
     )
     output_source_sql = (
         "FROM {input} AS input_address\n"
         "LEFT JOIN {maximum_suffix_lengths} AS maximums\n"
-        "  ON input_address.ukam_address_id = maximums.ukam_address_id"
+        "  ON input_address.__ukam_row_id = maximums.__ukam_row_id"
         if include_input_columns
         else "FROM {maximum_suffix_lengths} AS maximums"
     )

@@ -20,7 +20,7 @@ def _prepare_match_candidates(
     canonical_sql = """
         SELECT
             ukam_address_id,
-            original_address_concat AS original_address_concat_canonical,
+            clean_full_address AS clean_full_address_canonical,
             postcode AS postcode_canonical
         FROM {canonical_addresses__ukam}
     """
@@ -32,7 +32,7 @@ def _prepare_match_candidates(
             {ukam_label_final}
             selected.resolved_canonical_id,
             selected.original_address_concat,
-            canon.original_address_concat_canonical,
+            canon.clean_full_address_canonical,
             selected.postcode,
             canon.postcode_canonical,
             selected.match_weight,

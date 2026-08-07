@@ -84,6 +84,7 @@ class MatchResult:
             "resolved_canonical_id",
             "ukam_label",
             "original_address_concat",
+            "clean_full_address_canonical",
             "original_address_concat_canonical",
             "match_reason",
             "match_weight",

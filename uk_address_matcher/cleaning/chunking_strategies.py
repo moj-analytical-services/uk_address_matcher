@@ -64,22 +64,47 @@ def _materialise_relation_with_ukam_address_id(
     con: DuckDBPyConnection,
     relation: DuckDBPyRelation,
     table_name: str,
-    *,
-    id_offset: int,
 ) -> DuckDBPyRelation:
-    source_query = relation.sql_query()
-
-    exclude_existing_id = (
-        "* EXCLUDE (ukam_address_id)," if "ukam_address_id" in relation.columns else "*,"
+    """Sort cleaned rows and assign matching public and private row IDs."""
+    source_columns = tuple(
+        column
+        for column in relation.columns
+        if column not in {"ukam_address_id", "__ukam_row_id"}
     )
-    relation_with_ids = con.sql(f"""
-        SELECT
-            {exclude_existing_id}
-            CAST(ROW_NUMBER() OVER () + {id_offset} AS INTEGER) AS ukam_address_id
-        FROM ({source_query}) AS src
-    """)
+    sort_columns = tuple(
+        column
+        for column in ("postcode", "unique_id", "clean_full_address", "filename")
+        if column in source_columns
+    )
+    required_sort_columns = {"postcode", "unique_id", "clean_full_address"}
+    if not required_sort_columns.issubset(sort_columns):
+        missing = sorted(required_sort_columns.difference(sort_columns))
+        raise ValueError(f"Cleaned relation is missing ordering columns: {missing}")
 
-    return _materialise_relation(con, relation_with_ids, table_name)
+    tie_breaker_columns = tuple(
+        column for column in source_columns if column not in sort_columns
+    )
+    order_columns = (*sort_columns, *tie_breaker_columns)
+    qualified_order = ", ".join(f'_ukam_src."{column}"' for column in order_columns)
+    source_projection = ", ".join(f'_ukam_src."{column}"' for column in source_columns)
+
+    _drop_table_and_registered_aliases(con, table_name)
+    con.execute(f"""
+        CREATE TABLE {table_name} AS
+        WITH numbered AS (
+            SELECT
+                CAST(ROW_NUMBER() OVER (ORDER BY {qualified_order}) AS INTEGER)
+                    AS ukam_address_id,
+                {source_projection}
+            FROM ({relation.sql_query()}) AS _ukam_src
+        )
+        SELECT
+            numbered.*,
+            CAST(numbered.ukam_address_id AS BIGINT) AS __ukam_row_id
+        FROM numbered
+        ORDER BY numbered.ukam_address_id
+    """)
+    return con.table(table_name)
 
 
 def _drop_tables_with_prefix(con: DuckDBPyConnection, prefix: str) -> None:
@@ -108,7 +133,7 @@ def clean_data_pre_term_frequencies(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional[DebugOptions] = None,
-    show_progress: ShowProgress = True,
+    show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Clean address data with foundational steps only (no term frequencies).
 
@@ -132,12 +157,10 @@ def clean_data_pre_term_frequencies(
     uid = _uid()
     input_name = f"__ukam_input_addresses_{uid}"
     con.register(input_name, address_table)
-    # For chunked processing, don't add ID yet - process chunks first
     total_rows = address_table.count("*").fetchone()[0]
 
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
     total_chunks = (total_rows + chunk_size - 1) // chunk_size
-    next_ukam_address_id_offset = 0
     processed_records = 0
     stage_label = "Cleaning and preprocessing"
     progress = _ProgressBar(
@@ -166,16 +189,15 @@ def clean_data_pre_term_frequencies(
                 WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
             """)
             chunk_table = f"__ukam_chunk_input_{uid}_{chunk_index}"
-            chunk = _materialise_relation_with_ukam_address_id(
+            chunk = _materialise_relation(
                 con,
                 chunk_query,
                 chunk_table,
-                id_offset=next_ukam_address_id_offset,
             )
             chunk_row_count = chunk.count("*").fetchone()[0]
 
-            # Process the chunk without address ID,
-            # applying debug options only on first iteration.
+            # Assign IDs only after all cleaned chunks have been combined.
+            # Apply debug options only on the first iteration.
             processed_chunk = _clean_data_pre_term_frequencies(
                 chunk,
                 con,
@@ -188,7 +210,6 @@ def clean_data_pre_term_frequencies(
                 processed_chunk.insert_into(f"__ukam_chunked_addresses_{uid}")
 
             processed_records += chunk_row_count
-            next_ukam_address_id_offset += chunk_row_count
             progress.update(
                 processed_records,
                 completed_units=chunk_index + 1,
@@ -219,7 +240,15 @@ def clean_data_pre_term_frequencies(
     _drop_table_and_registered_aliases(con, input_name)
     _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
 
-    return con.table(f"__ukam_chunked_addresses_{uid}")
+    chunked_table = f"__ukam_chunked_addresses_{uid}"
+    cleaned_table = f"__ukam_cleaned_{uid}"
+    _materialise_relation_with_ukam_address_id(
+        con,
+        con.table(chunked_table),
+        cleaned_table,
+    )
+    _drop_table_and_registered_aliases(con, chunked_table)
+    return con.table(cleaned_table)
 
 
 def derive_term_frequencies_table(
@@ -228,7 +257,7 @@ def derive_term_frequencies_table(
     num_of_chunks: int = 10,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    show_progress: ShowProgress = True,
+    show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Derive a term frequency lookup table from address data.
 
@@ -256,11 +285,10 @@ def derive_term_frequencies_table(
         num_of_chunks: Number of chunks to split the data into for cleaning.
             Set to 1 for no chunking.
         debug_options: Optional debug configuration for pipeline execution.
-        show_progress: ``True`` uses automatic live progress when supported;
-            ``False`` suppresses progress output. ``"auto"`` renders live
-            updates only in a supported interactive terminal and otherwise logs
-            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
-            suppresses progress output.
+        show_progress: ``"auto"`` renders live updates in a supported
+            interactive terminal and otherwise logs stage boundaries.
+            ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
+            progress output.
 
     Returns:
         Term frequency table with 'token' and 'rel_freq' columns.
@@ -278,7 +306,6 @@ def derive_term_frequencies_table(
     total_rows = address_table.count("*").fetchone()[0]
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
     total_chunks = (total_rows + chunk_size - 1) // chunk_size
-    next_ukam_address_id_offset = 0
     processed_records = 0
     stage_label = "Cleaning for TF derivation"
     progress = _ProgressBar(
@@ -309,11 +336,10 @@ def derive_term_frequencies_table(
                 WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
             """)
             chunk_table = f"__ukam_tf_chunk_input_{uid}_{chunk_index}"
-            chunk = _materialise_relation_with_ukam_address_id(
+            chunk = _materialise_relation(
                 con,
                 chunk_query,
                 chunk_table,
-                id_offset=next_ukam_address_id_offset,
             )
             chunk_row_count = chunk.count("*").fetchone()[0]
 
@@ -334,7 +360,6 @@ def derive_term_frequencies_table(
                 processed_chunk.insert_into(cleaned_table)
 
             processed_records += chunk_row_count
-            next_ukam_address_id_offset += chunk_row_count
             progress.update(
                 processed_records,
                 completed_units=chunk_index + 1,
@@ -395,7 +420,7 @@ def derive_inverted_index(
     strategies: list[PhysicalIndexStrategy] | None = None,
     *,
     debug_options: Optional["DebugOptions"] = None,
-    show_progress: ShowProgress = True,
+    show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Derive an inverted index from already-cleaned canonical data.
 
@@ -431,11 +456,10 @@ def derive_inverted_index(
         strategies: List of :class:`PhysicalIndexStrategy` instances. Defaults
             to :data:`DEFAULT_INDEXING_STRATEGIES` (trigram + bigram).
         debug_options: Optional debug configuration for pipeline execution.
-        show_progress: ``True`` uses automatic live progress when supported;
-            ``False`` suppresses progress output. ``"auto"`` renders live
-            updates only in a supported interactive terminal and otherwise logs
-            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
-            suppresses progress output.
+        show_progress: ``"auto"`` renders live updates in a supported
+            interactive terminal and otherwise logs stage boundaries.
+            ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
+            progress output.
 
     Returns:
         Inverted index table with ``key`` (VARCHAR), ``unique_ids`` (LIST),
@@ -593,7 +617,7 @@ def prepare_data_for_matching(
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
     debug_options: Optional[DebugOptions] = None,
-    show_progress: ShowProgress = True,
+    show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -621,11 +645,10 @@ def prepare_data_for_matching(
         debug_options: Optional debug configuration for pipeline execution.
             Note: Debug options are only applied on the first iteration to avoid
             excessive logging output.
-        show_progress: ``True`` uses automatic live progress when supported;
-            ``False`` suppresses progress output. ``"auto"`` renders live
-            updates only in a supported interactive terminal and otherwise logs
-            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
-            suppresses progress output.
+        show_progress: ``"auto"`` renders live updates in a supported
+            interactive terminal and otherwise logs stage boundaries.
+            ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
+            progress output.
 
     Returns:
         Cleaned address data with computed term frequencies, including numeric
@@ -666,6 +689,7 @@ def prepare_data_for_matching(
         debug_options=debug_options,
         show_progress=progress_mode,
     )
+    cleaned_table_name = cleaned_address_table.alias
 
     if derive_distinguishing_wrt_adjacent_records:
         distinguishing_pipeline = create_sql_pipeline(
@@ -724,8 +748,6 @@ def prepare_data_for_matching(
         enabled=progress_mode == "auto",
     )
 
-    # Get the underlying table name for direct access
-    cleaned_table_name = cleaned_address_table.alias
     if distinguishing_table_name is None:
         distinguishing_select_sql = ""
         distinguishing_join_sql = ""
@@ -735,7 +757,7 @@ def prepare_data_for_matching(
                 distinguishing.common_adj_start_tokens"""
         distinguishing_join_sql = f"""
             LEFT JOIN {distinguishing_table_name} AS distinguishing
-              ON cleaned.ukam_address_id = distinguishing.ukam_address_id
+              ON cleaned.__ukam_row_id = distinguishing.__ukam_row_id
         """
 
     if dataset_role == "canonical":
@@ -836,6 +858,16 @@ def prepare_data_for_matching(
     # Clean up inverted index table if it was registered
     if inv_idx_table_name == "__ukam_inverted_index":
         _drop_table_and_registered_aliases(con, inv_idx_table_name)
+
+    prepared_table = f"__ukam_prepared_{uid}"
+    _drop_table_and_registered_aliases(con, prepared_table)
+    con.execute(f"""
+        CREATE TABLE {prepared_table} AS
+        SELECT * EXCLUDE (__ukam_row_id)
+        FROM {processed_table}
+    """)
+    _drop_table_and_registered_aliases(con, processed_table)
+    con.execute(f"ALTER TABLE {prepared_table} RENAME TO {processed_table}")
 
     return con.table(processed_table)
 

@@ -5,8 +5,6 @@ import splink.comparison_level_library as cll
 from splink import SettingsCreator, block_on
 from splink.internals.misc import match_weight_to_bayes_factor
 
-from .blocking import old_blocking_rules
-
 toggle_u_probability_fix = True
 toggle_m_probability_fix = True
 
@@ -949,7 +947,18 @@ postcode_comparison = {
 }
 
 
-blocking_rules = old_blocking_rules + [block_on("postcode")]
+legacy_numeric_blocking_rules = [
+    (
+        "l.postcode = r.postcode and ((l.numeric_token_1 = r.numeric_token_1) "
+        "or (l.numeric_token_2 = r.numeric_token_2))"
+    ),
+    (
+        "l.postcode = r.postcode and ((l.numeric_token_2 = r.numeric_token_1) "
+        "or (l.numeric_token_1 = r.numeric_token_2))"
+    ),
+]
+
+blocking_rules = legacy_numeric_blocking_rules + [block_on("postcode")]
 
 
 def get_settings_for_training(

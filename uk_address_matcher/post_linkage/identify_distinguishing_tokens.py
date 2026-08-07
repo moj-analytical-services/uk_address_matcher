@@ -192,8 +192,8 @@ def improve_predictions_using_distinguishing_tokens(
                 candidate.match_probability,
                 candidate.unique_id_l,
                 candidate.unique_id_r,
-                candidate.original_address_concat_l,
-                candidate.original_address_concat_r,
+                candidate.clean_full_address_l,
+                candidate.clean_full_address_r,
                 candidate.ukam_address_id_l,
                 candidate.ukam_address_id_r,
                 candidate.postcode_l,
@@ -407,9 +407,9 @@ def improve_predictions_using_distinguishing_tokens(
             {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
             {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
             {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
-            original_address_concat_l,
+            clean_full_address_l,
             postcode_l,
-            original_address_concat_r,
+            clean_full_address_r,
             postcode_r,
             {retained_columns}
         FROM scored_candidates

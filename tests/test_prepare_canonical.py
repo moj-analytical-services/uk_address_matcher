@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import duckdb
 import pyarrow
+import pyarrow.parquet as pyarrow_parquet
 import pytest
 
 from uk_address_matcher import prepare_canonical_folder
@@ -273,6 +274,58 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
     assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
 
 
+@pytest.mark.parametrize("output_chunk_count", [1, 3])
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepared_canonical_schema_matches_debug_option(
+    con,
+    canonical_data,
+    tmp_path,
+    output_chunk_count,
+    add_debug_features,
+):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=output_chunk_count,
+        add_debug_features=add_debug_features,
+        overwrite=True,
+    )
+
+    if output_chunk_count == 1:
+        canonical_paths = [tmp_path / "ukam_canonical_addresses.parquet"]
+    else:
+        canonical_paths = sorted(
+            (tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet")
+        )
+
+    canonical_relation = con.read_parquet([str(path) for path in canonical_paths])
+    columns = set(canonical_relation.columns)
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+
+    assert "very_unusual_tokens_arr" not in columns
+    assert ("original_address_concat" in columns) is add_debug_features
+    assert "clean_full_address" in columns
+    assert canonical_relation.count("*").fetchone()[0] == 3
+    assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
+
+    for canonical_path in canonical_paths:
+        relative_name = str(canonical_path.relative_to(tmp_path))
+        physical_columns = set(con.read_parquet(str(canonical_path)).columns)
+        assert set(manifest["files"][relative_name]["columns"]) == physical_columns
+
+
+def test_old_manifest_without_preparation_options_still_loads(con, prepared_folder):
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("preparation_options")
+    manifest_path.write_text(json.dumps(manifest))
+
+    loaded = load_prepared_canonical_data(prepared_folder, con=con)
+
+    assert loaded.addresses.count("*").fetchone()[0] == 3
+
+
 def test_prepare_show_progress_false_suppresses_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):
@@ -430,9 +483,7 @@ def test_prepare_show_progress_true_emits_live_output(
     assert all(value is True for value in enabled_values)
 
 
-def test_prepare_logs_sparse_info_and_debug_progress(
-    con, canonical_data, tmp_path, caplog
-):
+def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
         prepare_canonical_folder(
             canonical_data,
@@ -445,12 +496,6 @@ def test_prepare_logs_sparse_info_and_debug_progress(
     info_messages = [
         record.getMessage() for record in caplog.records if record.levelno == logging.INFO
     ]
-    debug_messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.DEBUG
-    ]
-
     assert any(
         message.startswith("Cleaning for TF derivation:") and "records across" in message
         for message in info_messages
@@ -469,16 +514,12 @@ def test_prepare_logs_sparse_info_and_debug_progress(
     )
     assert any(
         message.startswith("Cleaning for TF derivation:") and "chunk 1/1" in message
-        for message in debug_messages
+        for message in info_messages
     )
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
         for message in info_messages
-    )
-    assert all(
-        all(glyph not in message for glyph in progress_glyphs)
-        for message in debug_messages
     )
 
 
@@ -619,7 +660,8 @@ def test_prepare_overwrite_true_succeeds(con, canonical_data):
         )
 
 
-def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_features):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
@@ -633,7 +675,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "address_concat", "postcode"],
+        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
 
@@ -657,6 +699,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
         "s3://bucket/input/canonical.csv",
         "s3://bucket/output/prepared",
         con=con,
+        add_debug_features=add_debug_features,
     )
 
     con.read_csv.assert_called_once_with("s3://bucket/input/canonical.csv")
@@ -672,7 +715,22 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
 
     parquet_copies = [sql for sql in copy_sql if "FORMAT PARQUET" in sql]
     assert parquet_copies
+    assert all("PARQUET_VERSION V2" in sql for sql in parquet_copies)
     assert all("COMPRESSION ZSTD" in sql for sql in parquet_copies)
+    inverted_index_copies = [
+        sql for sql in parquet_copies if "ukam_inverted_index.parquet" in sql
+    ]
+    other_copies = [
+        sql for sql in parquet_copies if "ukam_inverted_index.parquet" not in sql
+    ]
+    assert len(inverted_index_copies) == 1
+    assert "COMPRESSION_LEVEL 22" in inverted_index_copies[0]
+    assert (
+        "ORDER BY index_strategy, left(key, 1), unique_ids, key"
+        in (inverted_index_copies[0])
+    )
+    assert all("COMPRESSION_LEVEL 15" in sql for sql in other_copies)
+    assert all("ROW_GROUP_SIZE 122880" in sql for sql in parquet_copies)
 
     assert _written("s3://bucket/output/prepared/ukam_term_frequencies.parquet")
     assert _written("s3://bucket/output/prepared/ukam_inverted_index.parquet")
@@ -682,9 +740,18 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch):
         for call in con.execute.call_args_list
         if call.args
     )
+    manifest_parameters = [
+        call.args[1]
+        for call in con.execute.call_args_list
+        if len(call.args) > 1 and "preparation_options" in str(call.args[0])
+    ]
+    assert manifest_parameters[0][4] == json.dumps(
+        {"add_debug_features": add_debug_features}
+    )
 
 
-def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
+@pytest.mark.parametrize("add_debug_features", [False, True])
+def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_features):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
@@ -698,7 +765,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "address_concat", "postcode"],
+        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
 
@@ -732,9 +799,8 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
         "s3://bucket/output/prepared",
         con=con,
         output_chunk_count=2,
+        add_debug_features=add_debug_features,
     )
-
-    clean_relation.create.assert_called_once()
 
     copy_sql = [
         call.args[0]
@@ -753,6 +819,111 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch):
         "s3://bucket/output/prepared/ukam_canonical_addresses_chunks/"
         "canonical_addresses_chunk_00002_of_00002.parquet"
     )
+    manifest_parameters = [
+        call.args[1]
+        for call in con.execute.call_args_list
+        if len(call.args) > 1 and "preparation_options" in str(call.args[0])
+    ]
+    assert manifest_parameters[0][4] == json.dumps(
+        {"add_debug_features": add_debug_features}
+    )
+
+
+def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, tmp_path):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            (2::BIGINT, '2 BETA STREET', 'B2 2BB', 'z.parquet'),
+            (1::BIGINT, '1 ALPHA STREET', 'A1 1AA', 'z.parquet'),
+            (1::BIGINT, '1 ALPHA STREET', 'A1 1AA', 'a.parquet'),
+            (3::BIGINT, '3 ALPHA STREET', 'A1 1AA', 'a.parquet')
+        ) AS source(unique_id, address_concat, postcode, filename)
+    """)
+
+    prepare_canonical_folder(
+        canonical,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=2,
+        overwrite=True,
+    )
+
+    chunk_paths = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
+    addresses = con.read_parquet([str(path) for path in chunk_paths])
+    physical_ids = addresses.select("ukam_address_id").fetchall()
+
+    assert addresses.count("*").fetchone()[0] == 4
+    assert physical_ids == [(1,), (2,), (3,), (4,)]
+    assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
+    assert (
+        addresses.select("ukam_address_id").fetchall()
+        == addresses.order(
+            "postcode, unique_id, clean_full_address, filename, ukam_address_id"
+        )
+        .select("ukam_address_id")
+        .fetchall()
+    )
+
+    for path in chunk_paths:
+        parquet_file = pyarrow_parquet.ParquetFile(path)
+        assert parquet_file.metadata.format_version.startswith("2.")
+        metadata = con.execute(
+            """
+            SELECT row_group_num_rows, path_in_schema, compression, encodings
+            FROM parquet_metadata(?)
+            """,
+            [str(path)],
+        ).fetchall()
+        assert metadata
+        assert {row[2] for row in metadata} == {"ZSTD"}
+        assert max(row[0] for row in metadata) <= 122_880
+        id_encodings = [row[3] for row in metadata if row[1] == "ukam_address_id"]
+        assert id_encodings
+        assert all("DELTA_BINARY_PACKED" in encodings for encodings in id_encodings)
+
+    id_type = con.execute(
+        "DESCRIBE SELECT ukam_address_id FROM read_parquet(?)",
+        [str(chunk_paths[0])],
+    ).fetchone()[1]
+    assert id_type == "INTEGER"
+
+    inverted_index_path = tmp_path / "ukam_inverted_index.parquet"
+    inverted_index = con.read_parquet(str(inverted_index_path))
+    assert inverted_index.columns == ["key", "unique_ids", "index_strategy"]
+    assert [str(value) for value in inverted_index.types] == [
+        "VARCHAR",
+        "BIGINT[]",
+        "VARCHAR",
+    ]
+    inverted_index_row_count = inverted_index.count("*").fetchone()[0]
+    assert inverted_index_row_count > 0
+    assert (
+        inverted_index.select("key, index_strategy").distinct().count("*").fetchone()[0]
+        == inverted_index_row_count
+    )
+    assert (
+        inverted_index.fetchall()
+        == inverted_index.order(
+            "index_strategy, left(key, 1), unique_ids, key"
+        ).fetchall()
+    )
+
+    index_parquet_file = pyarrow_parquet.ParquetFile(inverted_index_path)
+    assert index_parquet_file.metadata.format_version.startswith("2.")
+    index_metadata = con.execute(
+        """
+        SELECT row_group_num_rows, path_in_schema, compression, encodings
+        FROM parquet_metadata(?)
+        """,
+        [str(inverted_index_path)],
+    ).fetchall()
+    assert index_metadata
+    assert {row[2] for row in index_metadata} == {"ZSTD"}
+    assert max(row[0] for row in index_metadata) <= 122_880
+    unique_ids_encodings = [
+        row[3] for row in index_metadata if row[1] == "unique_ids, list, element"
+    ]
+    assert unique_ids_encodings
+    assert all("DELTA_BINARY_PACKED" in encodings for encodings in unique_ids_encodings)
 
 
 def test_overwrite_clears_stale_files(con, canonical_data):
@@ -788,6 +959,7 @@ def test_manifest_contains_expected_fields(prepared_folder):
     assert "created_with_duckdb_version" in manifest
     assert manifest["row_counts"]["canonical_addresses"] == 3
     assert manifest["row_counts"]["canonical_output_chunks"] == 1
+    assert manifest["preparation_options"] == {"add_debug_features": False}
 
     # Per-file metadata
     assert "files" in manifest
