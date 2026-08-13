@@ -12,6 +12,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
     standarise_num_letter,
+    standarise_num_to_num,
     trim,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
@@ -200,6 +201,7 @@ def _clean_address_string_first_pass() -> str:
             replace_non_numeric_adjacent_underscores,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
+            standarise_num_to_num,
             # standarise_num_dash_num,  # left commented as in original
             separate_letter_num,
             standarise_num_letter,

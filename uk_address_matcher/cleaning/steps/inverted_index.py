@@ -75,9 +75,54 @@ class InvertedIndexPortfolio:
     lookup_strategies: tuple[InvertedIndexLookupStrategy, ...]
 
 
+def _range_aware_keys_sql_expr(keys_sql_expr: str) -> str:
+    """Add bounded scalar variants for numeric range tokens to a key expression."""
+    range_expansion_max_span = 20
+    range_expansion_available_sql = "len(__range_tokens) > 0"
+    range_tokens_sql = "__range_tokens"
+    range_positions_sql = f"""list_filter(
+        generate_series(1, len({range_tokens_sql})),
+        __position -> regexp_matches(
+            {range_tokens_sql}[__position], '^[0-9]{{1,5}}-[0-9]{{1,5}}$'
+        )
+        AND try_cast(split_part({range_tokens_sql}[__position], '-', 1) AS INTEGER)
+            <= try_cast(split_part({range_tokens_sql}[__position], '-', 2) AS INTEGER)
+        AND try_cast(split_part({range_tokens_sql}[__position], '-', 2) AS INTEGER)
+            - try_cast(split_part({range_tokens_sql}[__position], '-', 1) AS INTEGER)
+            + 1 <= {range_expansion_max_span}
+    )"""
+    range_variants_sql = f"""flatten(list_transform(
+        {range_positions_sql},
+        __position -> list_transform(
+            generate_series(
+                try_cast(split_part({range_tokens_sql}[__position], '-', 1) AS INTEGER),
+                try_cast(split_part({range_tokens_sql}[__position], '-', 2) AS INTEGER)
+            ),
+            __number -> list_transform(
+                {range_tokens_sql},
+                (__token, __token_position) -> CASE
+                    WHEN __token_position = __position THEN CAST(__number AS VARCHAR)
+                    ELSE __token
+                END
+            )
+        )
+    ))"""
+    variant_keys_sql_expr = keys_sql_expr.replace("__tokens", "__variant_tokens")
+    return f"""CASE
+        WHEN {range_expansion_available_sql} THEN list_concat(
+            {keys_sql_expr},
+            flatten(list_transform(
+                {range_variants_sql},
+                __variant_tokens -> {variant_keys_sql_expr}
+            ))
+        )
+        ELSE {keys_sql_expr}
+    END"""
+
+
 ADJACENT_TRIGRAM_KEYS = SignatureKeyGenerator(
     name="adjacent_trigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
@@ -87,12 +132,12 @@ CASE
                    || ' ' || __tokens[__i + 2]
         )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 
 ADJACENT_BIGRAM_KEYS = SignatureKeyGenerator(
     name="adjacent_bigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 2 THEN
         list_transform(
@@ -100,11 +145,11 @@ CASE
             __i -> __tokens[__i] || ' ' || __tokens[__i + 1]
         )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 SKIP1_TRIGRAM_KEYS = SignatureKeyGenerator(
     name="skip1_trigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 4 THEN list_concat(
         list_transform(
@@ -117,11 +162,11 @@ CASE
         )
     )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 SKIP1_BIGRAM_KEYS = SignatureKeyGenerator(
     name="skip1_bigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
@@ -129,11 +174,11 @@ CASE
             __i -> __tokens[__i] || ' ' || __tokens[__i + 2]
         )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 SKIP2_BIGRAM_KEYS = SignatureKeyGenerator(
     name="skip2_bigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 4 THEN
         list_transform(
@@ -141,11 +186,11 @@ CASE
             __i -> __tokens[__i] || ' ' || __tokens[__i + 3]
         )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 SKIP2_TRIGRAM_KEYS = SignatureKeyGenerator(
     name="skip2_trigram_keys",
-    keys_sql_expr="""\
+    keys_sql_expr=_range_aware_keys_sql_expr("""\
 CASE
     WHEN len(__tokens) >= 5 THEN list_concat(
         list_transform(
@@ -162,7 +207,7 @@ CASE
         )
     )
     ELSE []::VARCHAR[]
-END""",
+END"""),
 )
 
 TRIGRAM_INDEX = PhysicalIndexStrategy(
@@ -254,6 +299,12 @@ def _derive_keys_for_strategy(
     )
     def _stage():
         keys_expr = strategy.key_generator.keys_sql_expr
+        range_expansion_candidate_sql = """(
+            len(list_filter(
+                COALESCE(numeric_tokens, []::VARCHAR[]),
+                __numeric_value -> contains(__numeric_value, '-')
+            )) > 0
+        )"""
         filtered_expr = keys_expr
         if chunked:
             filtered_expr = (
@@ -267,7 +318,16 @@ def _derive_keys_for_strategy(
             unique_id,
             {filtered_expr} AS __index_keys
         FROM (
-            SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
+            SELECT
+                *,
+                regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens,
+                CASE
+                    WHEN {range_expansion_candidate_sql} THEN regexp_split_to_array(
+                        trim(clean_full_address),
+                        '\\s+'
+                    )
+                    ELSE []::VARCHAR[]
+                END AS __range_tokens
             FROM {{input}}
         ) AS tokenised
         """
@@ -331,9 +391,24 @@ def _lookup_keys_in_inverted_index(
         tags="inverted_index",
     )
     def _stage():
-        base_sql = """
-        SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
-        FROM {input}
+        range_expansion_candidate_sql = """(
+            len(list_filter(
+                COALESCE(numeric_tokens, []::VARCHAR[]),
+                __numeric_value -> contains(__numeric_value, '-')
+            )) > 0
+        )"""
+        base_sql = f"""
+        SELECT
+            *,
+            regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens,
+            CASE
+                WHEN {range_expansion_candidate_sql} THEN regexp_split_to_array(
+                    trim(clean_full_address),
+                    '\\s+'
+                )
+                ELSE []::VARCHAR[]
+            END AS __range_tokens
+        FROM {{input}}
         """
         union_parts = []
         for strategy in lookup_strategies:
@@ -438,7 +513,7 @@ def _lookup_keys_in_inverted_index(
         """
         final_sql = """
         SELECT
-            base.* EXCLUDE (__tokens),
+            base.* EXCLUDE (__tokens, __range_tokens),
             COALESCE(candidates.exploding_unique_ids, []) AS exploding_unique_ids,
             COALESCE(
                 scores.signature_score_map,

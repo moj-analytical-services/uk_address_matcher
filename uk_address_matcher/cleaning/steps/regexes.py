@@ -17,6 +17,21 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
+def standarise_num_to_num(input: str):
+    """Standardise numeric ranges written with the word TO.
+
+    Examples:
+        '23 TO 24' -> '23-24'
+        '230 TO 234' -> '230-234'
+    """
+    regex_pattern = (
+        r"(^|[^0-9A-Za-z-])"
+        r"(\d{1,5})\s+TO\s+(\d{1,5})"
+        r"([^0-9A-Za-z-]|$)"
+    )
+    return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2-\\3\\4', 'gi')"
+
+
 def standarise_num_dash_num(input: str):
     """
     Standardizes numeric ranges with dashes by removing spaces around the dash.
