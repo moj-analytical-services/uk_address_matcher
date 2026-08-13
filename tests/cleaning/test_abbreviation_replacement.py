@@ -167,6 +167,35 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
     ]
 
 
+def test_first_pass_normalises_numeric_to_ranges(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('55 TO 57 OLD STREET ROAD'),
+            ('FLAT 2 55 TO 57 OLD STREET ROAD'),
+            ('NOT A RANGE TO 57 OLD STREET ROAD'),
+            ('55 TO 57-59 OLD STREET ROAD'),
+            ('1-55 TO 57 OLD STREET ROAD')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+    rows = [row[0] for row in pipeline.run().fetchall()]
+
+    assert rows == [
+        "55-57 OLD STREET ROAD",
+        "FLAT 2 55-57 OLD STREET ROAD",
+        "NOT A RANGE TO 57 OLD STREET ROAD",
+        "55 TO 57-59 OLD STREET ROAD",
+        "1-55 TO 57 OLD STREET ROAD",
+    ]
+
+
 def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_con):
     input_rel = duck_con.sql(
         """

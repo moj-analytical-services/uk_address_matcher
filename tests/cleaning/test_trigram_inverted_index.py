@@ -156,7 +156,9 @@ class TestIndexingStrategySqlExpressions:
             WITH input AS (
                 SELECT
                     '9 LOVE LANE LONDON' AS clean_full_address,
-                    string_split('9 LOVE LANE LONDON', ' ') AS __tokens
+                    ['9']::VARCHAR[] AS numeric_tokens,
+                    string_split('9 LOVE LANE LONDON', ' ') AS __tokens,
+                    string_split('9 LOVE LANE LONDON', ' ') AS __range_tokens
             )
             SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
@@ -172,7 +174,9 @@ class TestIndexingStrategySqlExpressions:
             WITH input AS (
                 SELECT
                     'HIGH STREET' AS clean_full_address,
-                    string_split('HIGH STREET', ' ') AS __tokens
+                    []::VARCHAR[] AS numeric_tokens,
+                    string_split('HIGH STREET', ' ') AS __tokens,
+                    string_split('HIGH STREET', ' ') AS __range_tokens
             )
             SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
@@ -188,7 +192,9 @@ class TestIndexingStrategySqlExpressions:
             WITH input AS (
                 SELECT
                     '9 LOVE LANE LONDON' AS clean_full_address,
-                    string_split('9 LOVE LANE LONDON', ' ') AS __tokens
+                    ['9']::VARCHAR[] AS numeric_tokens,
+                    string_split('9 LOVE LANE LONDON', ' ') AS __tokens,
+                    string_split('9 LOVE LANE LONDON', ' ') AS __range_tokens
             )
             SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
@@ -204,13 +210,145 @@ class TestIndexingStrategySqlExpressions:
             WITH input AS (
                 SELECT
                     'LONDON' AS clean_full_address,
-                    string_split('LONDON', ' ') AS __tokens
+                    []::VARCHAR[] AS numeric_tokens,
+                    string_split('LONDON', ' ') AS __tokens,
+                    string_split('LONDON', ' ') AS __range_tokens
             )
             SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
         """).fetchone()[0]
 
         assert result == []
+
+    def test_range_candidate_gate_ignores_ordinary_numbers(self, duck_con):
+        """Test the range gate skips ordinary numbers and keeps dash ranges."""
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            RANGE_EXPANSION_CANDIDATE_SQL,
+        )
+
+        result = duck_con.sql(f"""
+            WITH input AS (
+                SELECT * FROM (VALUES
+                    ('100 HIGH STREET', ['100']::VARCHAR[]),
+                    ('1-2 OLD STREET', ['1-2']::VARCHAR[]),
+                    ('55-57 OLD STREET', ['55-57']::VARCHAR[])
+                ) AS rows(clean_full_address, numeric_tokens)
+            )
+            SELECT {RANGE_EXPANSION_CANDIDATE_SQL} AS is_candidate
+            FROM input
+        """).fetchall()
+
+        assert [row[0] for row in result] == [False, True, True]
+
+    def test_range_strategy_sql_preserves_and_expands_dash_range(self, duck_con):
+        """Test that bounded dash ranges retain their keys and add scalar keys."""
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            BIGRAM_INDEX,
+            TRIGRAM_INDEX,
+        )
+
+        result = duck_con.sql(f"""
+            WITH input AS (
+                SELECT
+                'FLAT 2 55-57 OLD STREET ROAD' AS clean_full_address,
+                string_split(
+                    'FLAT 2 55-57 OLD STREET ROAD', ' '
+                ) AS __tokens,
+                ['2', '55-57']::VARCHAR[] AS numeric_tokens,
+                string_split(
+                    'FLAT 2 55-57 OLD STREET ROAD', ' '
+                ) AS __range_tokens
+            )
+            SELECT
+                {BIGRAM_INDEX.keys_sql_expr} AS bigrams,
+                {TRIGRAM_INDEX.keys_sql_expr} AS trigrams
+            FROM input
+        """).fetchone()
+        bigrams = set(result[0])
+        trigrams = set(result[1])
+
+        assert {'2 55-57', '55-57 OLD'} <= bigrams
+        assert {'55 OLD', '56 OLD', '57 OLD'} <= bigrams
+        assert {'55-57 OLD STREET'} <= trigrams
+        assert {'55 OLD STREET', '56 OLD STREET', '57 OLD STREET'} <= trigrams
+
+    def test_range_strategy_sql_uses_cleaned_to_range(self, duck_con):
+        """Test that cleaned TO ranges retain their dash key and add scalars."""
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            BIGRAM_INDEX,
+            TRIGRAM_INDEX,
+        )
+
+        result = duck_con.sql(f"""
+            WITH input AS (
+                SELECT
+                'FLAT 2 55-57 OLD STREET ROAD' AS clean_full_address,
+                string_split(
+                    'FLAT 2 55-57 OLD STREET ROAD', ' '
+                ) AS __tokens,
+                ['2', '55-57']::VARCHAR[] AS numeric_tokens,
+                string_split(
+                    'FLAT 2 55-57 OLD STREET ROAD', ' '
+                ) AS __range_tokens
+            )
+            SELECT
+                {BIGRAM_INDEX.keys_sql_expr} AS bigrams,
+                {TRIGRAM_INDEX.keys_sql_expr} AS trigrams
+            FROM input
+        """).fetchone()
+        bigrams = set(result[0])
+        trigrams = set(result[1])
+
+        assert {'2 55-57', '55-57 OLD'} <= bigrams
+        assert '55-57 OLD STREET' in trigrams
+        assert {'55 OLD', '56 OLD', '57 OLD'} <= bigrams
+        assert {'55 OLD STREET', '56 OLD STREET', '57 OLD STREET'} <= trigrams
+
+    def test_range_strategy_sql_rejects_reversed_and_oversized_ranges(self, duck_con):
+        """Test that invalid spans do not produce scalarised keys."""
+        from uk_address_matcher.cleaning.steps.inverted_index import BIGRAM_INDEX
+
+        result = duck_con.sql(f"""
+            WITH input AS (
+                SELECT * FROM (VALUES
+                    ('57-55 OLD STREET ROAD',
+                     string_split('57-55 OLD STREET ROAD', ' '),
+                     ['57-55']::VARCHAR[],
+                     string_split('57-55 OLD STREET ROAD', ' ')),
+                    ('1-1000 OLD STREET ROAD',
+                     string_split('1-1000 OLD STREET ROAD', ' '),
+                     ['1-1000']::VARCHAR[],
+                     string_split('1-1000 OLD STREET ROAD', ' '))
+                 ) AS rows(clean_full_address, __tokens, numeric_tokens, __range_tokens)
+            )
+            SELECT {BIGRAM_INDEX.keys_sql_expr} AS bigrams
+            FROM input
+        """).fetchall()
+
+        assert '55 OLD' not in result[0][0]
+        assert '57 OLD' not in result[1][0]
+        assert '1 OLD' not in result[1][0]
+
+    def test_range_strategy_sql_expands_multiple_ranges_locally(self, duck_con):
+        """Test multiple ranges do not create full-address Cartesian variants."""
+        from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_INDEX
+
+        result = duck_con.sql(f"""
+            WITH input AS (
+                SELECT
+                    '1-2 ALPHA 3-4 ROAD' AS clean_full_address,
+                    string_split('1-2 ALPHA 3-4 ROAD', ' ') AS __tokens,
+                    ['1-2', '3-4']::VARCHAR[] AS numeric_tokens,
+                    string_split('1-2 ALPHA 3-4 ROAD', ' ') AS __range_tokens
+            )
+            SELECT {TRIGRAM_INDEX.keys_sql_expr} AS trigrams
+            FROM input
+        """).fetchone()[0]
+
+        assert '1-2 ALPHA 3-4' in result
+        assert '1 ALPHA 3-4' in result
+        assert '1-2 ALPHA 3' in result
+        assert '1 ALPHA 3' not in result
 
 
 class TestInvertedIndexBuilding:
@@ -495,6 +633,68 @@ class TestDeriveInvertedIndexFunction:
         """).fetchall()
         strategy_names = [row[0] for row in strategies]
         assert strategy_names == ["trigram"]
+
+    def test_range_expansion_keeps_one_posting_identity(self, duck_con):
+        """Test scalarised keys do not duplicate a canonical record identity."""
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            derive_inverted_index,
+            prepare_data_for_matching,
+        )
+
+        canonical_raw = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('range', 'FLAT 2 55-57 OLD STREET ROAD', 'SW1A 1AA')
+            ) AS t(unique_id, address_concat, postcode)
+        """)
+        canonical_clean = prepare_data_for_matching(
+            canonical_raw, duck_con, num_of_chunks=1
+        )
+        inverted_idx = derive_inverted_index(canonical_clean, duck_con)
+
+        posting = duck_con.sql("""
+            SELECT unique_ids
+            FROM inverted_idx
+            WHERE index_strategy = 'trigram'
+              AND key = '57 OLD STREET'
+        """).fetchone()
+
+        assert posting == (['range'],)
+
+    def test_range_expansion_recovers_scalar_messy_lookup(self, duck_con):
+        """Test dash and TO messy ranges find a scalar canonical address."""
+        from uk_address_matcher.cleaning.chunking_strategies import (
+            derive_inverted_index,
+            prepare_data_for_matching,
+        )
+
+        canonical = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('canonical', '57 OLD STREET ROAD', 'SW1A 1AA')
+            ) AS t(unique_id, address_concat, postcode)
+        """)
+        messy = duck_con.sql("""
+            SELECT * FROM (VALUES
+                ('dash', '55-57 OLD STREET ROAD', 'SW1A 1AA'),
+                ('to', '55 TO 57 OLD STREET ROAD', 'SW1A 1AA')
+            ) AS t(unique_id, address_concat, postcode)
+        """)
+        canonical_clean = prepare_data_for_matching(
+            canonical, duck_con, num_of_chunks=1, dataset_role="canonical"
+        )
+        inverted_idx = derive_inverted_index(canonical_clean, duck_con)
+        prepared_messy = prepare_data_for_matching(
+            messy,
+            duck_con,
+            num_of_chunks=1,
+            inverted_index=inverted_idx,
+            dataset_role="messy",
+        )
+
+        candidates = dict(
+            prepared_messy.select("unique_id, exploding_unique_ids").fetchall()
+        )
+
+        assert candidates == {'dash': ['canonical'], 'to': ['canonical']}
 
 
 class TestPrepareDataForMatchingWithInvertedIndex:
