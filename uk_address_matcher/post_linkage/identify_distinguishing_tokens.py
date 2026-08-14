@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-_POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
+from uk_address_matcher.post_linkage.token_classification import (
+    POSITIONAL_TOKENS_SQL,
+    structural_token_sql,
+)
 
 
 def improve_predictions_using_distinguishing_tokens(
@@ -30,6 +33,26 @@ def improve_predictions_using_distinguishing_tokens(
         )
     if "ukam_label_r" in df_predict.columns:
         retained_columns += "ukam_label_r, "
+
+    structural_defaults = {
+        "gamma_address_without_numbers": "99::INTEGER",
+        "gamma_postcode": "99::INTEGER",
+        "has_flat_indicator_r": "FALSE",
+        "flat_letter_r": "NULL::VARCHAR",
+        "flat_number_r": "NULL::VARCHAR",
+    }
+    structural_columns_sql = ",\n                ".join(
+        (
+            f"candidate.{column}"
+            if column in df_predict.columns
+            else f"{default} AS {column}"
+        )
+        for column, default in structural_defaults.items()
+    )
+    structural_bigram_sql = (
+        f"{structural_token_sql('entry.key[1]')} "
+        f"AND {structural_token_sql('entry.key[2]')}"
+    )
 
     eligibility_filter = ""
     if histogram_eligibility_column is not None:
@@ -198,6 +221,7 @@ def improve_predictions_using_distinguishing_tokens(
                 candidate.ukam_address_id_r,
                 candidate.postcode_l,
                 candidate.postcode_r,
+                {structural_columns_sql},
                 concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
                     .trim()
                     .upper()
@@ -214,13 +238,13 @@ def improve_predictions_using_distinguishing_tokens(
                             .trim()
                             .upper()
                             .regexp_split_to_array('\\s+'),
-                            token -> token IN {_POSITIONAL_TOKENS_SQL}
+                            token -> token IN {POSITIONAL_TOKENS_SQL}
                     )
                 ) AS positional_tokens_l,
                 list_distinct(
                     list_filter(
                         statistics.tokens_r,
-                            token -> token IN {_POSITIONAL_TOKENS_SQL}
+                            token -> token IN {POSITIONAL_TOKENS_SQL}
                     )
                 ) AS positional_tokens_r
             FROM token_addresses AS candidate
@@ -368,6 +392,14 @@ def improve_predictions_using_distinguishing_tokens(
                     map_values(overlapping_bigrams_this_l_and_r_filtered),
                     value -> 1.0 / (value * value)
                 )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
+                COALESCE(list_sum(list_transform(
+                    list_filter(
+                        map_entries(overlapping_bigrams_this_l_and_r_filtered),
+                        entry -> {structural_bigram_sql}
+                    ),
+                    entry -> 1.0 / (entry.value * entry.value)
+                )), 0.0) * {BIGRAM_REWARD_MULTIPLIER}
+                    AS structural_bigram_reward,
                 COALESCE(len(map_entries(
                     bigrams_elsewhere_in_block_but_not_this_filtered
                 )), 0)::DOUBLE
@@ -383,6 +415,7 @@ def improve_predictions_using_distinguishing_tokens(
             token_reward,
             token_absence_penalty,
             bigram_reward,
+            structural_bigram_reward,
             bigram_absence_penalty,
             missing_token_penalty,
             positional_conflict_penalty,
@@ -411,6 +444,11 @@ def improve_predictions_using_distinguishing_tokens(
             postcode_l,
             clean_full_address_r,
             postcode_r,
+            gamma_address_without_numbers,
+            gamma_postcode,
+            has_flat_indicator_r,
+            flat_letter_r,
+            flat_number_r,
             {retained_columns}
         FROM scored_candidates
     """).create(matches_table)
