@@ -173,14 +173,21 @@ def _get_linker(
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
     if additional_columns_to_retain:
+        available_columns = set(df_addresses_to_match.columns).intersection(
+            df_addresses_to_search_within.columns
+        )
         additional_columns_to_retain = [
             column
             for column in additional_columns_to_retain
             if column
             not in {"original_address_concat", "original_address_concat_canonical"}
+            and column in available_columns
         ]
-        settings_as_dict.setdefault("additional_columns_to_retain", [])
-        settings_as_dict["additional_columns_to_retain"] += additional_columns_to_retain
+        if additional_columns_to_retain:
+            settings_as_dict.setdefault("additional_columns_to_retain", [])
+            settings_as_dict["additional_columns_to_retain"] += (
+                additional_columns_to_retain
+            )
 
     # Use ukam_address_id as unique_id column name
     # (created as part of our cleaning process).
