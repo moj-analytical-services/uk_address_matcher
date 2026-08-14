@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    NumericRangeRerankerConfig,
+    rerank_shortlisted_predictions,
+)
+
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
 
 
@@ -20,13 +25,16 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_PUNISHMENT_MULTIPLIER: float = 1.15,
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
+    numeric_range_reranker: NumericRangeRerankerConfig | None = None,
 ) -> DuckDBPyRelation:
     matches_table = "__ukam__distinguishability_matches"
 
     retained_columns = ""
     if additional_columns_to_retain:
         retained_columns = "".join(
-            f"{column}_l, {column}_r, " for column in additional_columns_to_retain
+            f"{column}_l, {column}_r, "
+            for column in additional_columns_to_retain
+            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns
         )
     if "ukam_label_r" in df_predict.columns:
         retained_columns += "ukam_label_r, "
@@ -78,10 +86,43 @@ def improve_predictions_using_distinguishing_tokens(
         ) <= {top_n_matches}
     """).create("top_n_matches")
 
-    con.sql("""
+    reranker_source = "top_n_matches"
+    range_intermediate_columns = ""
+    range_projection = ""
+    range_adjustment_sql = ""
+    token_adjustment_alias = "mw_adjustment"
+    if numeric_range_reranker is not None:
+        reranked = rerank_shortlisted_predictions(
+            con,
+            con.table("top_n_matches"),
+            numeric_range_reranker,
+        )
+        reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
+        range_intermediate_columns = """
+                candidate.legacy_numeric_bits,
+                candidate.numeric_range_relationship,
+                candidate.numeric_range_guard_passed,
+                candidate.numeric_range_guard_reason,
+                candidate.numeric_range_base_bits,
+                candidate.numeric_range_tf_bits,
+                candidate.numeric_range_adjustment,
+        """
+        range_projection = """
+            legacy_numeric_bits,
+            numeric_range_relationship,
+            numeric_range_guard_passed,
+            numeric_range_guard_reason,
+            numeric_range_base_bits,
+            numeric_range_tf_bits,
+            numeric_range_adjustment,
+        """
+        range_adjustment_sql = " + numeric_range_adjustment"
+        token_adjustment_alias = "distinguishing_token_adjustment"
+
+    con.sql(f"""
         WITH intermediate AS (
             SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-            FROM top_n_matches
+            FROM {reranker_source}
         ),
         enriched AS (
             SELECT
@@ -207,6 +248,7 @@ def improve_predictions_using_distinguishing_tokens(
                 statistics.hist_overlapping_tokens_r_block_l,
                 statistics.hist_all_bigrams_in_block_l,
                 statistics.bigrams_r,
+                {range_intermediate_columns}
                 {retained_columns}
                 list_distinct(
                     list_filter(
@@ -380,6 +422,7 @@ def improve_predictions_using_distinguishing_tokens(
             ukam_address_id_r,
             ukam_address_id_l,
             match_weight AS match_weight_original,
+            {range_projection}
             token_reward,
             token_absence_penalty,
             bigram_reward,
@@ -391,8 +434,14 @@ def improve_predictions_using_distinguishing_tokens(
                 + bigram_reward
                 - bigram_absence_penalty
                 - missing_token_penalty
+                - positional_conflict_penalty AS {token_adjustment_alias},
+            token_reward
+                - token_absence_penalty
+                + bigram_reward
+                - bigram_absence_penalty
+                - missing_token_penalty
                 - positional_conflict_penalty AS mw_adjustment,
-            match_weight + mw_adjustment AS match_weight,
+            match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
             overlapping_tokens_this_l_and_r,
             tokens_elsewhere_in_block_but_not_this,
             hist_all_tokens_in_block_l,

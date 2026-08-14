@@ -92,6 +92,19 @@ def best_matches_with_distinguishability(
     if "ukam_label_r" in df_predict.columns:
         add_cols_select += "t.ukam_label_r, "
 
+    range_audit_columns = (
+        "legacy_numeric_bits",
+        "numeric_range_relationship",
+        "numeric_range_guard_passed",
+        "numeric_range_guard_reason",
+        "numeric_range_base_bits",
+        "numeric_range_tf_bits",
+        "numeric_range_adjustment",
+    )
+    add_cols_select += "".join(
+        f"t.{column}, " for column in range_audit_columns if column in df_predict.columns
+    )
+
     canonical_address_column = next(
         (
             column
