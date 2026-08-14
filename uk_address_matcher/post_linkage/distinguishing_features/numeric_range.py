@@ -160,9 +160,7 @@ def _stable_prediction_columns(relation: duckdb.DuckDBPyRelation) -> list[str]:
         or column.startswith("numeric_token_")
         or column == "legacy_numeric_bits"
     }
-    return [
-        column for column in relation.columns if column not in excluded_columns
-    ]
+    return [column for column in relation.columns if column not in excluded_columns]
 
 
 def project_splink_predictions(
@@ -215,7 +213,7 @@ def rerank_shortlisted_predictions(
     stable_columns = _stable_prediction_columns(relation)
     return con.sql(f"""
         SELECT
-            {', '.join(f'top_matches.{column}' for column in stable_columns)},
+            {", ".join(f"top_matches.{column}" for column in stable_columns)},
             adjustments.legacy_numeric_bits,
             COALESCE(adjustments.numeric_range_relationship, 'neutral')
                 AS numeric_range_relationship,
