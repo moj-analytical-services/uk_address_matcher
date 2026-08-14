@@ -150,7 +150,6 @@ class AddressMatcher:
         if cleaning_num_chunks < 1:
             raise ValueError("cleaning_num_chunks must be >= 1.")
         self.cleaning_num_chunks = cleaning_num_chunks
-
         if self.canonical_address_filter is not None and not isinstance(
             self.canonical_address_filter, str
         ):
@@ -232,6 +231,7 @@ class AddressMatcher:
             canonical_for_preparation = normalise_and_validate_raw_canonical(
                 self._raw_canonical
             )
+
             # Data is either raw or only pre-cleaned.  In both cases we need
             # term frequencies and the inverted index.  `prepare_data_for_matching`
             # handles pre-cleaned input correctly (it checks internally).
@@ -255,7 +255,6 @@ class AddressMatcher:
                 debug_options=self.debug_options,
                 show_progress=self.show_progress,
             )
-
             logger.debug("Building inverted index from canonical data")
             inverted_index = derive_inverted_index(
                 self._canonical_clean,
