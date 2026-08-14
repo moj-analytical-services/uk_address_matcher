@@ -109,6 +109,7 @@ class SplinkStage(MatchingStage):
         )
         from uk_address_matcher.post_linkage.distinguishing_features import (
             relation_markers,
+            structural_evidence,
         )
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
@@ -164,11 +165,25 @@ class SplinkStage(MatchingStage):
             use_bigrams=self.improve_use_bigrams,
             additional_columns_to_retain=self.additional_columns_to_retain,
         )
+        df_improved = structural_evidence.improve_predictions_using_structural_evidence(
+            df_predict=df_improved,
+            df_canonical=df_canonical,
+            con=con,
+        )
         df_improved = relation_markers.improve_predictions_using_relation_markers(
             df_predict=df_improved,
             con=con,
         )
-        self.improved_predictions_table = getattr(df_improved, "alias", None)
+        improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
+        con.execute(
+            "CREATE OR REPLACE TEMP VIEW "
+            + improved_table_name
+            + " AS SELECT * FROM ("
+            + df_improved.sql_query()
+            + ")"
+        )
+        df_improved = con.table(improved_table_name)
+        self.improved_predictions_table = improved_table_name
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
