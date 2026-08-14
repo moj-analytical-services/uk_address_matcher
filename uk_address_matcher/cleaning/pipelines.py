@@ -3,11 +3,13 @@ from typing import Optional
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
+    _add_numeric_range_lower_endpoint_tf,
     _add_numeric_term_frequencies_using_registered_df,
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
+    _derive_numeric_range,
     _extract_postcode_from_address,
     _first_unusual_token,
     _generalised_token_aliases,
@@ -92,6 +94,7 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
     _parse_out_sub_premise_location,
     _parse_out_business_unit,
     _parse_out_numbers,
+    _derive_numeric_range,
     _clean_address_string_second_pass,
     _split_numeric_tokens_to_cols,
     _tokenise_address_without_numbers,
@@ -186,6 +189,8 @@ def _clean_data_using_precomputed_rel_tok_freq(
         _add_term_frequencies_to_address_tokens_using_registered_df,
         _add_numeric_term_frequencies_using_registered_df,
     ] + QUEUE_POST_TF
+    if "numeric_range_attributes" in address_table.columns:
+        tf_and_post.insert(2, _add_numeric_range_lower_endpoint_tf)
     stage_queue = (
         pre_queue + tf_and_post + additional_stages
         if not pre_cleaned_addresses
