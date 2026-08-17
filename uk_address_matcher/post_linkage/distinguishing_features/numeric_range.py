@@ -65,41 +65,125 @@ def ensure_numeric_range_metadata(
 ) -> duckdb.DuckDBPyRelation:
     """Expose nullable valid range attributes as one internal struct.
 
-    Scalar evidence is derived later from the existing ``numeric_tokens``
-    column, so no scalar arrays are persisted for non-range rows. Existing
+    Scalar evidence is retained for the SQL blocking rules while the raw range
+    attribute list is replaced by the internal metadata struct. Existing
     prepared folders with ``numeric_range_attributes`` remain readable;
     genuinely incomplete inputs fail with a focused schema error.
     """
     if "numeric_range_metadata" in relation.columns:
         return relation
 
-    required_columns = {"numeric_range_attributes", "numeric_tokens"}
-    missing_columns = sorted(required_columns.difference(relation.columns))
+    missing_columns = []
+    if "numeric_tokens" not in relation.columns:
+        missing_columns.append("numeric_tokens")
+    if not {"numeric_range_attributes", "numeric_range"}.intersection(relation.columns):
+        missing_columns.append("numeric_range_attributes or numeric_range")
     if missing_columns:
         raise ValueError(
             "Numeric-range reranking requires numeric_range_metadata or these "
             f"columns: {', '.join(missing_columns)}"
         )
+    if "numeric_range_attributes" in relation.columns:
+        range_attributes_sql = "numeric_range_attributes"
+        range_is_null_sql = "numeric_range_attributes IS NULL"
+        range_column = "numeric_range_attributes"
+    else:
+        return con.sql(f"""
+            WITH input AS (
+                SELECT *
+                FROM ({relation.sql_query()}) AS input
+            ),
+            attributes AS (
+                SELECT
+                    input.* EXCLUDE (numeric_range),
+                    CASE
+                        WHEN numeric_range IS NULL THEN NULL
+                        ELSE [struct_pack(
+                            raw := numeric_range.raw,
+                            lower := numeric_range.lower,
+                            upper := numeric_range.upper,
+                            width := numeric_range.width,
+                            lower_suffix := NULL::VARCHAR,
+                            upper_suffix := NULL::VARCHAR,
+                            role := 1::UTINYINT,
+                            flags := 0::UTINYINT,
+                            lower_tf := NULL::DOUBLE
+                        )]
+                    END AS numeric_range_attributes
+                FROM input
+            )
+            SELECT
+                attributes.* EXCLUDE (numeric_range_attributes),
+                COALESCE(len(numeric_range_attributes), 0)::UINTEGER
+                    AS numeric_range_count,
+                list_extract(numeric_range_attributes, 1).lower
+                    AS numeric_range_start,
+                list_extract(numeric_range_attributes, 1).upper
+                    AS numeric_range_end,
+                list_extract(numeric_range_attributes, 1).lower_suffix
+                    AS numeric_range_start_suffix,
+                list_extract(numeric_range_attributes, 1).upper_suffix
+                    AS numeric_range_end_suffix,
+                list_extract(numeric_range_attributes, 1).role
+                    AS numeric_range_role,
+                list_extract(numeric_range_attributes, 1).flags
+                    AS numeric_range_flags,
+                list_transform(
+                    list_filter(
+                        numeric_tokens,
+                        token -> NOT regexp_matches(
+                            token,
+                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                        )
+                    ),
+                    token -> TRY_CAST(regexp_extract(token, '\\d{{1,5}}', 0)
+                        AS UINTEGER)
+                ) AS numeric_scalar_tokens,
+                list_transform(
+                    list_filter(
+                        numeric_tokens,
+                        token -> NOT regexp_matches(
+                            token,
+                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                        )
+                    ),
+                    token -> NULLIF(regexp_replace(token, '\\d', '', 'g'), '')
+                ) AS numeric_scalar_suffixes,
+                list_transform(
+                    list_filter(
+                        numeric_tokens,
+                        token -> NOT regexp_matches(
+                            token,
+                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                        )
+                    ),
+                    token -> 0::UTINYINT
+                ) AS numeric_scalar_roles,
+                numeric_range_attributes,
+                CASE
+                    WHEN numeric_range_attributes IS NULL THEN NULL
+                    ELSE struct_pack(
+                        range_count := len(numeric_range_attributes)::UTINYINT,
+                        range_attributes := numeric_range_attributes
+                    )
+                END AS numeric_range_metadata
+            FROM attributes
+        """)
+    range_attributes_sql = "numeric_range_attributes"
+    range_is_null_sql = "numeric_range_attributes IS NULL"
+    range_column = "numeric_range_attributes"
     excluded_columns = {
-        column
-        for column in (
-            "numeric_range_count",
-            "numeric_range_attributes",
-            "numeric_scalar_tokens",
-            "numeric_scalar_suffixes",
-            "numeric_scalar_roles",
-        )
-        if column in relation.columns
+        range_column,
     }
 
     return con.sql(f"""
         SELECT
             input.* EXCLUDE ({", ".join(sorted(excluded_columns))}),
             CASE
-                WHEN numeric_range_attributes IS NULL THEN NULL
+                WHEN {range_is_null_sql} THEN NULL
                 ELSE struct_pack(
-                    range_count := len(numeric_range_attributes)::UTINYINT,
-                    range_attributes := numeric_range_attributes
+                    range_count := len({range_attributes_sql})::UTINYINT,
+                    range_attributes := {range_attributes_sql}
                 )
             END AS numeric_range_metadata
         FROM ({relation.sql_query()}) AS input
@@ -153,12 +237,29 @@ def add_legacy_numeric_bits(
 
 
 def _stable_prediction_columns(relation: duckdb.DuckDBPyRelation) -> list[str]:
+    range_blocking_columns = {
+        f"{column}_{side}"
+        for column in (
+            "numeric_range_count",
+            "numeric_range_start",
+            "numeric_range_end",
+            "numeric_range_start_suffix",
+            "numeric_range_end_suffix",
+            "numeric_range_role",
+            "numeric_range_flags",
+            "numeric_scalar_tokens",
+            "numeric_scalar_suffixes",
+            "numeric_scalar_roles",
+        )
+        for side in ("l", "r")
+    }
     excluded_columns = {
         column
         for column in relation.columns
         if column.startswith(("gamma_", "bf_", "tf_"))
         or column.startswith("numeric_token_")
         or column == "legacy_numeric_bits"
+        or column in range_blocking_columns
     }
     return [column for column in relation.columns if column not in excluded_columns]
 
@@ -190,8 +291,13 @@ def rerank_shortlisted_predictions(
     neutral diagnostics and a zero adjustment, so callers do not need a second
     numeric-specific branch in their scoring SQL.
     """
+    range_candidate_columns = sorted(
+        (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
+        | _PAIR_KEY_COLUMNS
+        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
+    )
     range_candidates = con.sql(f"""
-        SELECT *
+        SELECT {", ".join(range_candidate_columns)}
         FROM ({relation.sql_query()}) AS shortlist
         WHERE (
             COALESCE(numeric_range_metadata_l.range_count, 0) = 1
