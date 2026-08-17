@@ -98,6 +98,10 @@ reranking is mandatory.
 
 #### Reranked Hackney results vs baseline
 
+The latest `run_benchmarking.py` pass used the valid-range-only canonical
+variant, the Hackney dataset, threshold `8.0`, and baseline run
+`d141fb4f525014b2`. The fresh run is `cb5320a263c7a10f`.
+
 | Metric | Baseline | Always-on reranker | Change |
 | --- | ---: | ---: | ---: |
 | Correct matches | 112,876 | 112,899 | +23 |
@@ -124,6 +128,20 @@ This may look like a small gain, but there were only a potential 143 labelled ro
 represent a 16% to 29% recovery of that small population, which is a meaningful improvement in the context of a high-precision, high-recall matching system.
 
 Of those recoverable records, many are unmatchable having flat and unit numbers that we cannot discover in our canonical data.
+
+The valid-range-only canonical reduced runtime by approximately 1.69s versus
+the previous shortlist-only pass and by 1.13s versus the earlier wide-schema
+always-on pass. It preserved all 112,899 correct matches while removing one
+false positive relative to the wide-schema run. The persisted manifest records
+the repository `HEAD` commit; these measurements were run against the current
+working tree as well.
+
+Artefacts:
+
+- [manifest](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/manifest.json)
+- [comparison report](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_report_d141fb4f525014b2_vs_cb5320a263c7a10f.md)
+- [comparison summary](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_summary_d141fb4f525014b2_vs_cb5320a263c7a10f.json)
+- [precision-recall overlay](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/charts/precision_recall_overlay_d141fb4f525014b2_vs_cb5320a263c7a10f.html)
 
 ## JSON Range Blocking Trial
 
@@ -153,9 +171,9 @@ slice produced no incremental candidates. The remaining audit rows are:
 Full review extract, including every messy address beside its labelled target
 address, postcode status, classification, and recovery expectation:
 
-The review extract and machine-readable benchmark are retained with the local
-experiment outputs; they are not linked here because those artefacts are not
-available from GitHub.
+- [hard-to-reach Markdown review](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.md)
+- [hard-to-reach CSV extract](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.csv)
+- [machine-readable exact-range benchmark](../../benchmarking/outputs/numeric_range_json_blocking_20260816_exact_range/summary.json)
 
 ## Current Version Results
 
@@ -254,7 +272,6 @@ projection. The latest persisted comparison is the current reference for this
 working tree; broader rollout still benefits from pooled runs on an identical
 frozen messy cohort and canonical dataset, with postcode-status stratification
 and candidate-count parity.
-
 ## Promotion Candidate: Bounded Key-First Reranking
 
 The promoted implementation keeps one unified Splink score, but changes the
