@@ -91,7 +91,9 @@ def _derive_numeric_range(
                             THEN 8 ELSE 0
                         END
                         + CASE
-                            WHEN regexp_matches(clean_full_address, '\\b(REF|REFERENCE)\\b')
+                            WHEN regexp_matches(
+                                clean_full_address, '\\b(REF|REFERENCE)\\b'
+                            )
                             THEN 16 ELSE 0
                         END
                     )::UTINYINT,
@@ -102,6 +104,45 @@ def _derive_numeric_range(
     )
     SELECT
         * EXCLUDE (range_tokens, parsed_range_attributes),
+        len(parsed_range_attributes)::UINTEGER AS numeric_range_count,
+        list_extract(parsed_range_attributes, 1).lower AS numeric_range_start,
+        list_extract(parsed_range_attributes, 1).upper AS numeric_range_end,
+        list_extract(parsed_range_attributes, 1).lower_suffix
+            AS numeric_range_start_suffix,
+        list_extract(parsed_range_attributes, 1).upper_suffix
+            AS numeric_range_end_suffix,
+        list_extract(parsed_range_attributes, 1).role AS numeric_range_role,
+        list_extract(parsed_range_attributes, 1).flags AS numeric_range_flags,
+        list_transform(
+            list_filter(
+                numeric_tokens,
+                token -> NOT regexp_matches(
+                    token,
+                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                )
+            ),
+            token -> TRY_CAST(regexp_extract(token, '\\d{{1,5}}', 0) AS UINTEGER)
+        ) AS numeric_scalar_tokens,
+        list_transform(
+            list_filter(
+                numeric_tokens,
+                token -> NOT regexp_matches(
+                    token,
+                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                )
+            ),
+            token -> NULLIF(regexp_replace(token, '\\d', '', 'g'), '')
+        ) AS numeric_scalar_suffixes,
+        list_transform(
+            list_filter(
+                numeric_tokens,
+                token -> NOT regexp_matches(
+                    token,
+                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                )
+            ),
+            token -> 0::UTINYINT
+        ) AS numeric_scalar_roles,
         CASE
             WHEN len(list_filter(
                 parsed_range_attributes,
