@@ -4,7 +4,7 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     NumericRangeRerankerConfig,
-    rerank_shortlisted_predictions,
+    build_numeric_range_candidate_pool,
 )
 
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
@@ -68,34 +68,96 @@ def improve_predictions_using_distinguishing_tokens(
         """
 
     con.sql(f"""
-        SELECT *
-        FROM df_predict
-        WHERE match_weight > {match_weight_threshold}
+        WITH grouped AS (
+            SELECT
+                unique_id_l,
+                unique_id_r,
+                max_by(
+                    struct_pack(
+                        ukam_address_id_l := ukam_address_id_l,
+                        ukam_address_id_r := ukam_address_id_r,
+                        match_weight := match_weight
+                    ),
+                    struct_pack(
+                        match_weight := match_weight,
+                        ukam_address_id_r := ukam_address_id_r,
+                        ukam_address_id_l := ukam_address_id_l
+                    )
+                ) AS best
+            FROM df_predict
+            WHERE match_weight > {match_weight_threshold}
+            GROUP BY unique_id_l, unique_id_r
+        )
+        SELECT
+            unique_id_l,
+            unique_id_r,
+            best.ukam_address_id_l AS ukam_address_id_l,
+            best.ukam_address_id_r AS ukam_address_id_r,
+            best.match_weight AS match_weight
+        FROM grouped
+    """).create("good_match_keys")
+
+    candidate_search_depth = top_n_matches
+    if numeric_range_reranker is not None:
+        candidate_search_depth = max(
+            top_n_matches,
+            numeric_range_reranker.numeric_search_depth,
+        )
+    con.sql(f"""
+        WITH grouped AS (
+            SELECT
+                unique_id_r,
+                max_by(
+                    struct_pack(
+                        unique_id_l := unique_id_l,
+                        ukam_address_id_l := ukam_address_id_l,
+                        ukam_address_id_r := ukam_address_id_r
+                    ),
+                    struct_pack(
+                        match_weight := match_weight,
+                        unique_id_l := unique_id_l
+                    ),
+                    {candidate_search_depth}
+                ) AS candidates
+            FROM good_match_keys
+            GROUP BY unique_id_r
+        )
+        SELECT
+            unique_id_r,
+            unnest(candidates, recursive := true)
+        FROM grouped
+    """).create("candidate_search_keys")
+    con.sql(f"""
+        SELECT prediction.*
+        FROM df_predict AS prediction
+        INNER JOIN candidate_search_keys AS candidate
+          ON candidate.unique_id_l = prediction.unique_id_l
+         AND candidate.unique_id_r = prediction.unique_id_r
+         AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
+         AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
+        WHERE prediction.match_weight > {match_weight_threshold}
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r, unique_id_l
-            ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
+            PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+            ORDER BY
+                prediction.match_weight DESC,
+                prediction.ukam_address_id_r DESC,
+                prediction.ukam_address_id_l DESC
         ) = 1
     """).create("good_matches")
 
-    con.sql(f"""
-        SELECT *
-        FROM good_matches
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
-            ORDER BY match_weight DESC, unique_id_l DESC
-        ) <= {top_n_matches}
-    """).create("top_n_matches")
-
-    reranker_source = "top_n_matches"
+    reranker_source = ""
     range_intermediate_columns = ""
     range_projection = ""
     range_adjustment_sql = ""
     token_adjustment_alias = "mw_adjustment"
     if numeric_range_reranker is not None:
-        reranked = rerank_shortlisted_predictions(
+        reranked = build_numeric_range_candidate_pool(
             con,
-            con.table("top_n_matches"),
+            con.table("good_matches"),
             numeric_range_reranker,
+            top_n_matches=top_n_matches,
+            numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
+            numeric_search_depth=numeric_range_reranker.numeric_search_depth,
         )
         reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
         range_intermediate_columns = """
@@ -118,6 +180,16 @@ def improve_predictions_using_distinguishing_tokens(
         """
         range_adjustment_sql = " + numeric_range_adjustment"
         token_adjustment_alias = "distinguishing_token_adjustment"
+    else:
+        con.sql(f"""
+            SELECT *
+            FROM good_matches
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY unique_id_r
+                ORDER BY match_weight DESC, unique_id_l DESC
+            ) <= {top_n_matches}
+        """).create("top_n_matches")
+        reranker_source = "top_n_matches"
 
     con.sql(f"""
         WITH intermediate AS (

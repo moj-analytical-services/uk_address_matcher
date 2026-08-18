@@ -11,29 +11,14 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class NumericRangeRerankerConfig:
-    """Controls the postcode-agnostic numeric-range reranking strategy.
-
-    The reranker starts with Splink's ordinary score, then considers only a
-    shortlisted pair where one address has exactly one numeric range and the
-    other has scalar numeric tokens. A scalar matching a valid range endpoint
-    receives the endpoint evidence; a scalar strictly inside a short, plain
-    range receives the weaker interior evidence. Reversed, equal, suffixed,
-    reference-like, and over-wide ranges are not treated as ordinary ranges.
-
-    The evidence is guarded by the pair's non-numeric Splink weight and by
-    ``flat_identity``: a strong conflicting flat identity prevents the repair.
-    The final adjustment replaces weak legacy numeric evidence with the guarded
-    range evidence, adds a small lower-endpoint TF bonus, and is capped by
-    ``maximum_adjustment_bits``. Postcode is deliberately not consulted here;
-    postcode-aware candidate generation remains Splink's responsibility.
-    """
-
     maximum_adjustment_bits: float = 20.0
     minimum_non_numeric_bits: float = -100.0
     endpoint_match_bits: float = 6.0
     interior_match_bits: float = 5.5
     lower_endpoint_tf_weight: float = 0.05
     maximum_interior_span: int = 25
+    numeric_candidate_slots: int = 1
+    numeric_search_depth: int = 6
 
 
 _RANGE_STRUCT_COLUMNS = {
@@ -63,13 +48,7 @@ def ensure_numeric_range_metadata(
     con: duckdb.DuckDBPyConnection,
     relation: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    """Expose nullable valid range attributes as one internal struct.
-
-    Scalar evidence is retained for the SQL blocking rules while the raw range
-    attribute list is replaced by the internal metadata struct. Existing
-    prepared folders with ``numeric_range_attributes`` remain readable;
-    genuinely incomplete inputs fail with a focused schema error.
-    """
+    """Expose nullable valid range attributes as one internal struct."""
     if "numeric_range_metadata" in relation.columns:
         return relation
 
@@ -83,11 +62,7 @@ def ensure_numeric_range_metadata(
             "Numeric-range reranking requires numeric_range_metadata or these "
             f"columns: {', '.join(missing_columns)}"
         )
-    if "numeric_range_attributes" in relation.columns:
-        range_attributes_sql = "numeric_range_attributes"
-        range_is_null_sql = "numeric_range_attributes IS NULL"
-        range_column = "numeric_range_attributes"
-    else:
+    if "numeric_range_attributes" not in relation.columns:
         return con.sql(f"""
             WITH input AS (
                 SELECT *
@@ -136,8 +111,9 @@ def ensure_numeric_range_metadata(
                             '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
                         )
                     ),
-                    token -> TRY_CAST(regexp_extract(token, '\\d{{1,5}}', 0)
-                        AS UINTEGER)
+                    token -> TRY_CAST(
+                        regexp_extract(token, '\\d{{1,5}}', 0) AS UINTEGER
+                    )
                 ) AS numeric_scalar_tokens,
                 list_transform(
                     list_filter(
@@ -169,21 +145,15 @@ def ensure_numeric_range_metadata(
                 END AS numeric_range_metadata
             FROM attributes
         """)
-    range_attributes_sql = "numeric_range_attributes"
-    range_is_null_sql = "numeric_range_attributes IS NULL"
-    range_column = "numeric_range_attributes"
-    excluded_columns = {
-        range_column,
-    }
 
     return con.sql(f"""
         SELECT
-            input.* EXCLUDE ({", ".join(sorted(excluded_columns))}),
+            input.* EXCLUDE (numeric_range_attributes),
             CASE
-                WHEN {range_is_null_sql} THEN NULL
+                WHEN numeric_range_attributes IS NULL THEN NULL
                 ELSE struct_pack(
-                    range_count := len({range_attributes_sql})::UTINYINT,
-                    range_attributes := {range_attributes_sql}
+                    range_count := len(numeric_range_attributes)::UTINYINT,
+                    range_attributes := numeric_range_attributes
                 )
             END AS numeric_range_metadata
         FROM ({relation.sql_query()}) AS input
@@ -226,11 +196,16 @@ def add_legacy_numeric_bits(
     prediction relation.
     """
     _validate_legacy_numeric_factors(relation)
-    prediction_columns = ", ".join(_stable_prediction_columns(relation))
+    prediction_columns = list(_stable_prediction_columns(relation))
+    prediction_columns.extend(
+        column
+        for column in sorted(_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
+        if column in relation.columns and column not in prediction_columns
+    )
 
     return con.sql(f"""
         SELECT
-            {prediction_columns},
+            {", ".join(prediction_columns)},
             {_legacy_numeric_bits_sql()}
         FROM ({relation.sql_query()}) AS predictions
     """)
@@ -291,31 +266,7 @@ def rerank_shortlisted_predictions(
     neutral diagnostics and a zero adjustment, so callers do not need a second
     numeric-specific branch in their scoring SQL.
     """
-    range_candidate_columns = sorted(
-        (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
-        | _PAIR_KEY_COLUMNS
-        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
-    )
-    range_candidates = con.sql(f"""
-        SELECT {", ".join(range_candidate_columns)}
-        FROM ({relation.sql_query()}) AS shortlist
-        WHERE (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 1
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 0
-        )
-        OR (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 0
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 1
-        )
-    """)
-    range_candidates_with_bits = add_legacy_numeric_bits(con, range_candidates)
-    adjustments = build_numeric_range_adjustments(
-        con,
-        range_candidates_with_bits,
-        config,
-    )
-    adjustment_name = f"__ukam_numeric_range_adjustments_{_uid()}"
-    adjustments.create(adjustment_name)
+    adjustment_name = _materialise_numeric_range_adjustments(con, relation, config)
     stable_columns = _stable_prediction_columns(relation)
     return con.sql(f"""
         SELECT
@@ -340,6 +291,159 @@ def rerank_shortlisted_predictions(
          AND adjustments.ukam_address_id_l = top_matches.ukam_address_id_l
          AND adjustments.ukam_address_id_r = top_matches.ukam_address_id_r
     """)
+
+
+def build_numeric_range_candidate_pool(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+    config: NumericRangeRerankerConfig,
+    *,
+    top_n_matches: int,
+    numeric_candidate_slots: int,
+    numeric_search_depth: int | None = None,
+) -> duckdb.DuckDBPyRelation:
+    """Return a bounded shortlist using one unified numeric-adjusted score."""
+    if top_n_matches < 1:
+        raise ValueError("top_n_matches must be at least 1")
+    if numeric_candidate_slots < 0:
+        raise ValueError("numeric_candidate_slots cannot be negative")
+
+    stable_columns = _stable_prediction_columns(relation)
+    pair_keys = sorted(_PAIR_KEY_COLUMNS - {"match_weight"})
+    pair_key_projection = ", ".join(pair_keys)
+    pair_join = " AND ".join(
+        f"pool.{column} = candidate.{column}" for column in pair_keys
+    )
+    adjustment_join = " AND ".join(
+        f"adjustments.{column} = candidate.{column}" for column in pair_keys
+    )
+    search_depth = max(top_n_matches, numeric_search_depth or top_n_matches)
+    search_top_name = f"__ukam_numeric_search_top_{_uid()}"
+    con.sql(f"""
+        SELECT {pair_key_projection}, match_weight
+        FROM ({relation.sql_query()}) AS candidate
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY unique_id_r
+            ORDER BY match_weight DESC, unique_id_l DESC
+        ) <= {search_depth}
+    """).create(search_top_name)
+    raw_top_name = f"__ukam_numeric_raw_top_{_uid()}"
+    con.sql(f"""
+        SELECT {pair_key_projection}
+        FROM {search_top_name}
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY unique_id_r
+            ORDER BY match_weight DESC, unique_id_l DESC
+        ) <= {top_n_matches}
+    """).create(raw_top_name)
+
+    adjustment_input_columns = sorted(
+        (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
+        | _PAIR_KEY_COLUMNS
+        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
+    )
+    search_join = " AND ".join(
+        f"search.{column} = candidate.{column}" for column in pair_keys
+    )
+    adjustment_input = con.sql(f"""
+        SELECT {", ".join(f"candidate.{column}" for column in adjustment_input_columns)}
+        FROM ({relation.sql_query()}) AS candidate
+        INNER JOIN {search_top_name} AS search ON {search_join}
+    """)
+    adjustment_name = _materialise_numeric_range_adjustments(
+        con,
+        adjustment_input,
+        config,
+    )
+
+    pool_name = raw_top_name
+    if numeric_candidate_slots:
+        numeric_top_name = f"__ukam_numeric_top_{_uid()}"
+        con.sql(f"""
+                        SELECT {pair_key_projection}
+                        FROM {adjustment_name}
+                        WHERE numeric_range_guard_passed
+                            AND numeric_range_adjustment > 0.0
+            QUALIFY ROW_NUMBER() OVER (
+                                PARTITION BY unique_id_r
+                ORDER BY
+                                        match_weight + numeric_range_adjustment DESC,
+                                        unique_id_l DESC
+            ) <= {numeric_candidate_slots}
+        """).create(numeric_top_name)
+        pool_name = f"__ukam_numeric_candidate_pool_{_uid()}"
+        con.sql(f"""
+            SELECT * FROM {raw_top_name}
+            UNION
+            SELECT * FROM {numeric_top_name}
+        """).create(pool_name)
+
+    return con.sql(f"""
+        WITH candidate_pool AS (
+            SELECT
+                {", ".join(f"candidate.{column}" for column in stable_columns)},
+                adjustments.legacy_numeric_bits,
+                COALESCE(adjustments.numeric_range_relationship, 'neutral')
+                    AS numeric_range_relationship,
+                COALESCE(adjustments.numeric_range_guard_passed, FALSE)
+                    AS numeric_range_guard_passed,
+                COALESCE(
+                    adjustments.numeric_range_guard_reason,
+                    'neutral_or_ineligible'
+                ) AS numeric_range_guard_reason,
+                COALESCE(adjustments.numeric_range_base_bits, 0.0)
+                    AS numeric_range_base_bits,
+                COALESCE(adjustments.numeric_range_tf_bits, 0.0)
+                    AS numeric_range_tf_bits,
+                COALESCE(adjustments.numeric_range_adjustment, 0.0)
+                    AS numeric_range_adjustment
+                    FROM ({relation.sql_query()}) AS candidate
+                    INNER JOIN {pool_name} AS pool ON {pair_join}
+            LEFT JOIN {adjustment_name} AS adjustments
+              ON {adjustment_join}
+        )
+        SELECT *
+        FROM candidate_pool
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY unique_id_r
+            ORDER BY
+                match_weight + numeric_range_adjustment DESC,
+                unique_id_l DESC
+        ) <= {top_n_matches}
+    """)
+
+
+def _materialise_numeric_range_adjustments(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+    config: NumericRangeRerankerConfig,
+) -> str:
+    range_candidate_columns = sorted(
+        (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
+        | _PAIR_KEY_COLUMNS
+        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
+    )
+    range_candidates = con.sql(f"""
+        SELECT {", ".join(range_candidate_columns)}
+        FROM ({relation.sql_query()}) AS candidates
+        WHERE (
+            COALESCE(numeric_range_metadata_l.range_count, 0) = 1
+            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 0
+        )
+        OR (
+            COALESCE(numeric_range_metadata_l.range_count, 0) = 0
+            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 1
+        )
+    """)
+    range_candidates_with_bits = add_legacy_numeric_bits(con, range_candidates)
+    adjustments = build_numeric_range_adjustments(
+        con,
+        range_candidates_with_bits,
+        config,
+    )
+    adjustment_name = f"__ukam_numeric_range_adjustments_{_uid()}"
+    adjustments.create(adjustment_name)
+    return adjustment_name
 
 
 def build_numeric_range_adjustments(
@@ -599,6 +703,7 @@ def build_numeric_range_adjustments(
             unique_id_r,
             ukam_address_id_l,
             ukam_address_id_r,
+            match_weight,
             numeric_range_relationship,
             numeric_range_guard_passed,
             numeric_range_guard_reason,
