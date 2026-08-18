@@ -96,9 +96,7 @@ reranking is mandatory.
 
 ## Latest Persisted Benchmark
 
-The latest `run_benchmarking.py` pass used the valid-range-only canonical
-variant, the Hackney dataset, threshold `8.0`, and baseline run
-`d141fb4f525014b2`. The fresh run is `cb5320a263c7a10f`.
+#### Reranked Hackney results vs baseline
 
 | Metric | Baseline | Always-on reranker | Change |
 | --- | ---: | ---: | ---: |
@@ -110,19 +108,22 @@ variant, the Hackney dataset, threshold `8.0`, and baseline run
 | PR-AUC | 0.586019 | 0.586221 | +0.000202 |
 | Total runtime | 31.58s | 32.53s | +0.95s |
 
-The valid-range-only canonical reduced runtime by approximately 1.69s versus
-the previous shortlist-only pass and by 1.13s versus the earlier wide-schema
-always-on pass. It preserved all 112,899 correct matches while removing one
-false positive relative to the wide-schema run. The persisted manifest records
-the repository `HEAD` commit; these measurements were run against the current
-working tree as well.
+### Records Rescued
 
-Artefacts:
+On the frozen Hackney cohort, the reranker rescued 23 additional correct
+matches, reduced false positives by 4, and reduced unmatched rows by 19 at
+the selected threshold. Across the pooled cohort repetitions, it rescued 27 to
+30 additional correct matches, reduced false positives by 6 to 7, and reduced
+unmatched rows by 23. Across the historical Hackney threshold matrix, the
+current formulation rescued 18 to 42 additional correct matches as the
+maximum-width threshold increased from 6 to 12. The promoted bounded key-first
+variant added one further true positive over the previous combined default in
+the final pooled benchmark, with the same false-positive count.
 
-- [manifest](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/manifest.json)
-- [comparison report](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_report_d141fb4f525014b2_vs_cb5320a263c7a10f.md)
-- [comparison summary](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_summary_d141fb4f525014b2_vs_cb5320a263c7a10f.json)
-- [precision-recall overlay](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/charts/precision_recall_overlay_d141fb4f525014b2_vs_cb5320a263c7a10f.html)
+This may look like a small gain, but there were only a potential 143 labelled rows in the frozen Hackney cohort that could have been rescued by the numeric-range reranker. The 23 to 42 additional correct matches
+represent a 16% to 29% recovery of that small population, which is a meaningful improvement in the context of a high-precision, high-recall matching system.
+
+Of those recoverable records, many are unmatchable having flat and unit numbers that we cannot discover in our canonical data.
 
 ## JSON Range Blocking Trial
 
@@ -152,9 +153,9 @@ slice produced no incremental candidates. The remaining audit rows are:
 Full review extract, including every messy address beside its labelled target
 address, postcode status, classification, and recovery expectation:
 
-- [hard-to-reach Markdown review](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.md)
-- [hard-to-reach CSV extract](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.csv)
-- [machine-readable exact-range benchmark](../../benchmarking/outputs/numeric_range_json_blocking_20260816_exact_range/summary.json)
+The review extract and machine-readable benchmark are retained with the local
+experiment outputs; they are not linked here because those artefacts are not
+available from GitHub.
 
 ## Current Version Results
 
@@ -253,3 +254,71 @@ projection. The latest persisted comparison is the current reference for this
 working tree; broader rollout still benefits from pooled runs on an identical
 frozen messy cohort and canonical dataset, with postcode-status stratification
 and candidate-count parity.
+
+## Promotion Candidate: Bounded Key-First Reranking
+
+The promoted implementation keeps one unified Splink score, but changes the
+execution shape before distinguishing-token histograms:
+
+1. Deduplicate raw predictions with a narrow `max_by` key relation.
+2. Keep only the raw top six pair keys per messy record for numeric consideration.
+3. Calculate range adjustments only for those six rows.
+4. Union the raw top five with at most one positive numeric candidate.
+5. Join the bounded pool back to the wide Splink rows and select the final top
+   five by the single adjusted score.
+6. Run the existing token and relation-marker scoring only on that final five.
+
+The default configuration is now:
+
+```python
+NumericRangeRerankerConfig(
+    maximum_adjustment_bits=20.0,
+    minimum_non_numeric_bits=-100.0,
+    endpoint_match_bits=6.0,
+    interior_match_bits=5.5,
+    lower_endpoint_tf_weight=0.05,
+    maximum_interior_span=25,
+    numeric_candidate_slots=1,
+    numeric_search_depth=6,
+)
+```
+
+The existing fixed relationship values were retained for promotion because the
+aggregate calibration was too coarse to replace contextual evidence safely:
+canonical-range endpoint evidence was about 0.62 bits, messy-range endpoint
+evidence about 1.15 bits, canonical-range interior evidence about 2.0-2.5 bits,
+and messy-range interior evidence was unstable. A one-bit pooled trial produced
+337,448 TP / 3,610 FP, below the retained configuration.
+
+### Final Pooled Benchmark
+
+The final persisted arm used the range-aware prepared canonical folder, `MW=10`,
+the current stage definition, and the defaults above:
+
+| Run | TP | FP | Matched | Unmatched | Precision | Recall | F1 | PR-AUC | Runtime |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Previous combined default | 337,452 | 3,610 | 341,062 | 7,625 | 98.9415% | 96.7779% | 97.8478% | 0.339654 | 65.60s |
+| Bounded key-first | 337,453 | 3,610 | 341,063 | 7,624 | 98.9415% | 96.7782% | 97.8479% | 0.339656 | 54.40s |
+
+The final run is `range_maxby_bounded6_slots1_default_20260818`.
+
+The earlier key-first bounded repetition was `range_keyfirst_bounded6_slots1_default_20260817`:
+337,454 TP / 3,609 FP / 341,063 matched / 55.16s. The one-row differences are
+within benchmark run variation; both repetitions show the same quality and
+approximately 10-11 seconds lower runtime than the previous wide reranker path.
+
+### Alternatives Rejected
+
+| Alternative | Result | Decision |
+|---|---|---|
+| No numeric admission, key-first control | 337,452 TP / 3,610 FP / 56.18s | Keep one rank-six slot; small positive signal |
+| One-bit endpoint/interior evidence | 337,448 TP / 3,610 FP / 59.98s | Reject; weaker quality and slower run |
+| Search depth 10, two numeric slots | Multi-GB spill; no persisted result | Reject on resource risk |
+| Retaining precomputed scalar arrays on every prediction | Increased memory/spill | Reject; parse only the eligible narrow relation |
+| Softmax or unconditional exact-range bonus | No calibration support | Reject; changes Splink score semantics or double-counts shared building ranges |
+
+The resource improvement comes from moving the expensive wide-row materialisation
+after narrow key ranking, not from reducing the numeric evidence. The final
+implementation still reparses scalar token lists, but only on the bounded numeric
+search relation; retaining six scalar arrays on every prediction was measurably
+more expensive and was not promoted.
