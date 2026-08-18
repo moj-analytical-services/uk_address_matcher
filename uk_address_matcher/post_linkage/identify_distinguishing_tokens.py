@@ -29,6 +29,18 @@ def improve_predictions_using_distinguishing_tokens(
 ) -> DuckDBPyRelation:
     matches_table = "__ukam__distinguishability_matches"
 
+    if numeric_range_reranker is not None:
+        required_range_columns = {
+            "numeric_range_metadata_l",
+            "numeric_range_metadata_r",
+            "numeric_tokens_l",
+            "numeric_tokens_r",
+            "flat_identity_l",
+            "flat_identity_r",
+        }
+        if not required_range_columns.issubset(df_predict.columns):
+            numeric_range_reranker = None
+
     retained_columns = ""
     if additional_columns_to_retain:
         retained_columns = "".join(

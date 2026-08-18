@@ -92,6 +92,33 @@ def _align_distinguishing_token_columns(
     return df_addresses_to_match, df_addresses_to_search_within
 
 
+def _align_numeric_range_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add typed nullable range endpoints where an input schema lacks them."""
+
+    def align_relation(relation: DuckDBPyRelation) -> DuckDBPyRelation:
+        missing_columns = [
+            column
+            for column in ("numeric_range_start", "numeric_range_end")
+            if column not in relation.columns
+        ]
+        if missing_columns:
+            relation = relation.select(
+                "*, "
+                + ", ".join(
+                    f"CAST(NULL AS UINTEGER) AS {column}" for column in missing_columns
+                )
+            )
+        return relation
+
+    return (
+        align_relation(df_addresses_to_match),
+        align_relation(df_addresses_to_search_within),
+    )
+
+
 def _get_linker(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -161,6 +188,13 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_distinguishing_token_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_numeric_range_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )

@@ -66,9 +66,6 @@ class SplinkStage(MatchingStage):
             use the library defaults.
         retain_intermediate_calculation_columns: Retain Splink comparison
             columns needed for debugging and waterfall charts.
-        numeric_range_reranker: Configuration for the postcode-agnostic
-            numeric-range score repair. The default configuration is always
-            applied to Splink shortlists.
     """
 
     # Prediction threshold for initial Splink predict() call
@@ -96,19 +93,11 @@ class SplinkStage(MatchingStage):
     # Whether to retain intermediate calculation columns (for debugging)
     retain_intermediate_calculation_columns: bool = False
 
-    numeric_range_reranker: NumericRangeRerankerConfig = field(
-        default_factory=NumericRangeRerankerConfig,
-        repr=False,
-    )
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        if self.numeric_range_reranker is None:
-            raise ValueError("numeric_range_reranker is always enabled")
 
     def find_matches(
         self,
@@ -139,24 +128,42 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
-        df_unmatched = ensure_numeric_range_metadata(con, df_unmatched)
-        df_canonical = ensure_numeric_range_metadata(con, df_canonical)
-        range_input_columns = [
-            "numeric_range_metadata",
-            "numeric_tokens",
-            "flat_identity",
-        ]
-        missing_range_columns = [
-            column
-            for column in range_input_columns
-            if column not in df_unmatched.columns or column not in df_canonical.columns
-        ]
-        if missing_range_columns:
-            raise ValueError(
-                "Numeric-range reranking requires shared columns: "
-                f"{', '.join(missing_range_columns)}"
-            )
-        numeric_range_reranker = self.numeric_range_reranker
+        numeric_range_reranker = NumericRangeRerankerConfig()
+        range_source_columns = {"numeric_range_attributes", "numeric_range"}
+        range_metadata_available = (
+            bool(range_source_columns.intersection(df_canonical.columns))
+            and bool(range_source_columns.intersection(df_unmatched.columns))
+            and "numeric_tokens" in df_canonical.columns
+            and "numeric_tokens" in df_unmatched.columns
+            and "flat_identity" in df_canonical.columns
+            and "flat_identity" in df_unmatched.columns
+        )
+        if range_metadata_available:
+            df_unmatched = ensure_numeric_range_metadata(con, df_unmatched)
+            df_canonical = ensure_numeric_range_metadata(con, df_canonical)
+            range_input_columns = [
+                "numeric_range_metadata",
+                "numeric_tokens",
+                "flat_identity",
+            ]
+        else:
+            numeric_range_reranker = None
+            range_input_columns = []
+            range_columns_to_drop = [
+                column
+                for column in (
+                    "numeric_range_attributes",
+                    "numeric_range_metadata",
+                    "numeric_scalar_tokens",
+                    "numeric_scalar_suffixes",
+                    "numeric_scalar_roles",
+                )
+                if column in df_unmatched.columns and column not in df_canonical.columns
+            ]
+            if range_columns_to_drop:
+                df_unmatched = df_unmatched.select(
+                    f"* EXCLUDE ({', '.join(range_columns_to_drop)})"
+                )
         linker_columns = list(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))
@@ -209,6 +216,7 @@ class SplinkStage(MatchingStage):
             additional_columns_to_retain=[
                 column
                 for column in linker_columns
+                if column not in range_input_columns
                 if f"{column}_l" in df_predict_ddb.columns
                 and f"{column}_r" in df_predict_ddb.columns
             ]
