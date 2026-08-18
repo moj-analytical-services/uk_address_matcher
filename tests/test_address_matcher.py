@@ -297,6 +297,43 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
 
 
+def test_legacy_prepared_canonical_skips_numeric_range_reranking(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "legacy_without_numeric_range"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    legacy_path = prepared_folder / "ukam_canonical_addresses.legacy.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT * EXCLUDE (
+                numeric_range_attributes
+            )
+            FROM read_parquet('{canonical_path}')
+        ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    legacy_path.rename(canonical_path)
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[SplinkStage()],
+        show_progress=False,
+    ).match()
+
+    assert result.matches().count("*").fetchone()[0] > 0
+
+
 def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
     con,
     caplog,

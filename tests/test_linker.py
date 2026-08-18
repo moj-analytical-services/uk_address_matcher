@@ -9,6 +9,7 @@ from uk_address_matcher import AddressMatcher
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import (
     _align_distinguishing_token_columns,
+    _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
     _sanitise_null_comparison_levels,
@@ -156,6 +157,26 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
     assert aligned_canonical.project("distinguishing_adj_start_tokens").fetchone() == (
         ["FLAT", "A"],
     )
+
+
+def test_align_numeric_range_columns_adds_typed_null_endpoints(duck_con):
+    messy = duck_con.sql("SELECT 1 AS unique_id")
+    canonical = duck_con.sql(
+        "SELECT 2 AS unique_id, 20::UINTEGER AS numeric_range_start"
+    )
+
+    aligned_messy, aligned_canonical = _align_numeric_range_columns(
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project(
+        "numeric_range_start, numeric_range_end"
+    ).fetchone() == (None, None)
+    assert aligned_canonical.project(
+        "numeric_range_start, numeric_range_end"
+    ).fetchone() == (20, None)
+    assert str(aligned_messy.types[-2:]) == "[UINTEGER, UINTEGER]"
 
 
 def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
