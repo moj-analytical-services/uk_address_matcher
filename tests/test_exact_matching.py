@@ -6,6 +6,12 @@ from uk_address_matcher import (
 )
 from uk_address_matcher.linking_model.matching import runner as matching_runner
 from uk_address_matcher.linking_model.matching.runner import _run_matching
+from uk_address_matcher.linking_model.matching.stages.exact_match import (
+    _exact_matches,
+)
+from uk_address_matcher.linking_model.matching.stages.peeled import (
+    _peeled_address_matches,
+)
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
@@ -719,6 +725,378 @@ def test_peeled_address_matching_match_reason(duck_con, peeled_test_data):
     assert peeled_reason in match_reasons, (
         f"Should have at least one peeled_address match. Got: {match_reasons}"
     )
+
+
+def test_peeled_address_partial_postcode_matching(duck_con):
+    """Match peeled addresses with an outward postcode and one inward edit."""
+    df_messy = _address_relation_from_values(
+        duck_con,
+        """
+        (
+            1,
+            '123 PARK AVENUE NEWTOWN HACKNEY LONDON',
+            '123 PARK AVENUE NEWTOWN HACKNEY LONDON',
+            'PR5 2AB',
+            CAST([] AS VARCHAR[]),
+            ARRAY['123']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            1::BIGINT
+        ),
+        (
+            2,
+            '50 MAIN ROAD HACKNEY LONDON',
+            '50 MAIN ROAD HACKNEY LONDON',
+            'PR5 3BC',
+            CAST([] AS VARCHAR[]),
+            ARRAY['50']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            2::BIGINT
+        ),
+        (
+            3,
+            '75 OAK DRIVE HACKNEY LONDON',
+            '75 OAK DRIVE HACKNEY LONDON',
+            'PR5 4AB',
+            CAST([] AS VARCHAR[]),
+            ARRAY['75']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            3::BIGINT
+        ),
+        (
+            4,
+            '60 SIDE ROAD HACKNEY LONDON',
+            '60 SIDE ROAD HACKNEY LONDON',
+            'PR5 5BC',
+            CAST([] AS VARCHAR[]),
+            ARRAY['60']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            4::BIGINT
+        )
+        """,
+    )
+    df_canonical = _address_relation_from_values(
+        duck_con,
+        """
+        (
+            1001,
+            '123 PARK AVENUE NEWTOWN',
+            '123 PARK AVENUE NEWTOWN',
+            'PR5 2AA',
+            CAST([] AS VARCHAR[]),
+            ARRAY['123']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            101::BIGINT
+        ),
+        (
+            1002,
+            '123 PARK AVENUE NEWTOWN',
+            '123 PARK AVENUE NEWTOWN',
+            'PR5 2AB',
+            CAST([] AS VARCHAR[]),
+            ARRAY['123']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            102::BIGINT
+        ),
+        (
+            1003,
+            '50 MAIN ROAD',
+            '50 MAIN ROAD',
+            'PR5 3BA',
+            CAST([] AS VARCHAR[]),
+            ARRAY['50']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            103::BIGINT
+        ),
+        (
+            1004,
+            '75 OAK DRIVE',
+            '75 OAK DRIVE',
+            'PR6 4AA',
+            CAST([] AS VARCHAR[]),
+            ARRAY['75']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            104::BIGINT
+        ),
+        (
+            1005,
+            '60 SIDE ROAD',
+            '60 SIDE ROAD',
+            'PR5 5XY',
+            CAST([] AS VARCHAR[]),
+            ARRAY['60']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            105::BIGINT
+        )
+        """,
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[
+            ExactMatchStage(),
+            PeeledAddressStage(inward_postcode_levenshtein=1),
+        ],
+    )
+
+    results_df = results.fetchdf().set_index("ukam_address_id")
+
+    assert results_df.loc[1, "resolved_canonical_id"] == 1002
+    assert results_df.loc[1, "match_reason"] == MatchReason.PEELED_ADDRESS.value
+    assert results_df.loc[2, "resolved_canonical_id"] == 1003
+    assert (
+        results_df.loc[2, "match_reason"]
+        == MatchReason.PEELED_ADDRESS_PARTIAL_POSTCODE.value
+    )
+    assert results_df["resolved_canonical_id"].isna().loc[3]
+    assert results_df["resolved_canonical_id"].isna().loc[4]
+
+    baseline_results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[
+            ExactMatchStage(),
+            PeeledAddressStage(inward_postcode_levenshtein=0),
+        ],
+    )
+    baseline_df = baseline_results.fetchdf().set_index("ukam_address_id")
+    assert baseline_df["resolved_canonical_id"].isna().loc[2]
+
+    two_edit_results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[
+            ExactMatchStage(),
+            PeeledAddressStage(inward_postcode_levenshtein=2),
+        ],
+    )
+    assert (
+        two_edit_results.fetchdf()
+        .set_index("ukam_address_id")
+        .loc[4, "resolved_canonical_id"]
+        == 1005
+    )
+
+
+def test_inward_postcode_levenshtein_cap_applies_to_exact_matches(duck_con):
+    df_messy = _address_relation_from_values(
+        duck_con,
+        """
+        (
+            1,
+            '10 MAIN ROAD',
+            '10 MAIN ROAD',
+            'AA1 1AB',
+            CAST([] AS VARCHAR[]),
+            ARRAY['10']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            1::BIGINT
+        )
+        """,
+    )
+
+    def canonical(postcode: str):
+        return _address_relation_from_values(
+            duck_con,
+            f"""
+            (
+                1001,
+                '10 MAIN ROAD',
+                '10 MAIN ROAD',
+                '{postcode}',
+                CAST([] AS VARCHAR[]),
+                ARRAY['10']::VARCHAR[],
+                FALSE,
+                NULL::VARCHAR,
+                NULL::VARCHAR,
+                NULL::VARCHAR,
+                FALSE,
+                NULL::VARCHAR,
+                NULL::VARCHAR,
+                101::BIGINT
+            )
+            """,
+        )
+
+    no_match, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=canonical("AA1 1AC"),
+        stages=[ExactMatchStage(enable_flat_retraction=False)],
+    )
+    assert no_match.fetchdf()["resolved_canonical_id"].isna().all()
+
+    one_edit, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=canonical("AA1 1AC"),
+        stages=[
+            ExactMatchStage(
+                enable_flat_retraction=False,
+                inward_postcode_levenshtein=1,
+            )
+        ],
+    )
+    one_edit_df = one_edit.fetchdf()
+    assert one_edit_df.loc[0, "resolved_canonical_id"] == 1001
+    assert (
+        one_edit_df.loc[0, "match_reason"]
+        == MatchReason.EXACT_PARTIAL_POSTCODE.value
+    )
+
+    two_edits, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=canonical("AA1 1CD"),
+        stages=[
+            ExactMatchStage(
+                enable_flat_retraction=False,
+                inward_postcode_levenshtein=2,
+            )
+        ],
+    )
+    assert two_edits.fetchdf().loc[0, "resolved_canonical_id"] == 1001
+
+
+def test_zero_inward_postcode_levenshtein_skips_sql_function():
+    exact_steps = _exact_matches(inward_postcode_levenshtein=0)
+    peeled_steps = _peeled_address_matches(inward_postcode_levenshtein=0)
+
+    assert all(
+        "levenshtein(" not in step.sql.lower() for step in exact_steps.steps
+    )
+    assert all(
+        "levenshtein(" not in step.sql.lower() for step in peeled_steps.steps
+    )
+    assert any(
+        "levenshtein(" in step.sql.lower()
+        for step in _exact_matches(inward_postcode_levenshtein=1).steps
+    )
+    assert any(
+        "levenshtein(" in step.sql.lower()
+        for step in _peeled_address_matches(inward_postcode_levenshtein=1).steps
+    )
+
+
+def test_positive_peeled_cap_uses_single_pass_join():
+    steps = _peeled_address_matches(inward_postcode_levenshtein=1).steps
+    step_names = [step.name for step in steps]
+
+    assert step_names == [
+        "messy_peeled",
+        "canonical_peeled",
+        "single_pass_messy",
+        "single_pass_canonical",
+        "single_pass_candidates",
+        "single_pass_ranked",
+        "peeled_address_matches",
+    ]
+    assert "partial_messy_residual" not in step_names
+
+
+@pytest.mark.parametrize("stage", [ExactMatchStage, PeeledAddressStage])
+@pytest.mark.parametrize("value", [-1, True])
+def test_inward_postcode_levenshtein_requires_non_negative_integer(stage, value):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        stage(inward_postcode_levenshtein=value)
+
+
+def test_exact_matching_can_reject_multiple_canonical_entities(duck_con):
+    df_messy = _address_relation_from_values(duck_con, NO_WS_MESSY_ROW_SQL)
+    df_canonical = _address_relation_from_values(
+        duck_con,
+        f"""
+        {NO_WS_CANONICAL_ROW_SQL},
+        (
+            1002,
+            '12HIGHROAD',
+            '12HIGHROAD',
+            'AA1 1AA',
+            CAST([] AS VARCHAR[]),
+            ARRAY['12']::VARCHAR[],
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            FALSE,
+            NULL::VARCHAR,
+            NULL::VARCHAR,
+            11::BIGINT
+        )
+        """,
+    )
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage(require_unique_match=True)],
+    )
+
+    assert results.fetchdf()["resolved_canonical_id"].isna().all()
 
 
 def test_peeled_address_multi_word_token_handling(duck_con):

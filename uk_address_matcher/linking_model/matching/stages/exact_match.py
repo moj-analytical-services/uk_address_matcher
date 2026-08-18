@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from uk_address_matcher.linking_model.matching.input_filters import (
     _restrict_canonical_to_messy_postcodes,
+    _validate_inward_postcode_levenshtein,
 )
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
@@ -83,9 +84,18 @@ class ExactMatchStage(MatchingStage):
        parsed-unit heuristics and flat-field compatibility checks
 
     Set ``enable_flat_retraction=False`` to skip phase 3.
+
+    Set ``inward_postcode_levenshtein`` to a positive integer to allow the
+    exact-address phase to tolerate that many inward postcode edits; the
+    default ``0`` skips the fuzzy postcode phase.
     """
 
     enable_flat_retraction: bool = True
+    require_unique_match: bool = False
+    inward_postcode_levenshtein: int = 0
+
+    def __post_init__(self) -> None:
+        _validate_inward_postcode_levenshtein(self.inward_postcode_levenshtein)
 
     def find_matches(
         self,
@@ -103,10 +113,14 @@ class ExactMatchStage(MatchingStage):
         return run_sql_pipeline(
             con=con,
             pipeline_stages=[
-                _restrict_canonical_to_messy_postcodes("exact"),
+                _restrict_canonical_to_messy_postcodes(
+                    "outward" if self.inward_postcode_levenshtein > 0 else "exact"
+                ),
                 _exact_matches(
                     "__ukam__tmp_messy_addresses",
                     enable_flat_retraction=self.enable_flat_retraction,
+                    require_unique_match=self.require_unique_match,
+                    inward_postcode_levenshtein=self.inward_postcode_levenshtein,
                 ),
             ],
             stage_name=stage_name,
@@ -127,6 +141,8 @@ def _exact_matches(
     messy_input_name: MessyInputName = "__ukam__tmp_messy_addresses",
     *,
     enable_flat_retraction: bool = True,
+    require_unique_match: bool = False,
+    inward_postcode_levenshtein: int = 0,
 ) -> list[CTEStep]:
     """Find deterministic matches using exact, no-whitespace and FLAT phases.
 
@@ -143,6 +159,12 @@ def _exact_matches(
         If ``True``, run phase 3 and emit
         ``exact_flat_retraction: match after removing FLAT keyword`` when it
         yields an unambiguous candidate. If ``False``, skip phase 3.
+    require_unique_match:
+        If ``True``, reject a messy row when its exact candidates resolve to
+        more than one distinct canonical entity.
+    inward_postcode_levenshtein:
+        Maximum inward postcode Levenshtein distance for the optional fuzzy
+        postcode phase. A value of ``0`` skips that phase entirely.
     """
     exact_value = MatchReason.EXACT.value
     exact_no_whitespace_value = MatchReason.EXACT_NO_WHITESPACE.value
@@ -276,7 +298,23 @@ def _exact_matches(
         SELECT * FROM {no_ws_candidates}
     """
 
-    ranked_pre_flat_candidates_sql = """
+    if require_unique_match:
+        unique_candidates_sql = """
+            SELECT candidates.*
+            FROM {all_ranked_candidates} AS candidates
+            SEMI JOIN (
+                SELECT ukam_address_id
+                FROM {all_ranked_candidates}
+                GROUP BY ukam_address_id
+                HAVING COUNT(DISTINCT resolved_canonical_id) = 1
+            ) AS unique_messy
+                ON unique_messy.ukam_address_id = candidates.ukam_address_id
+        """
+        candidate_source = "unique_exact_candidates"
+    else:
+        candidate_source = "all_ranked_candidates"
+
+    ranked_pre_flat_candidates_sql = f"""
         SELECT
             candidates.ukam_address_id,
             candidates.canonical_ukam_address_id,
@@ -288,7 +326,7 @@ def _exact_matches(
                     candidates.match_priority,
                     candidates.canonical_ukam_address_id
             ) AS rn
-        FROM {all_ranked_candidates} AS candidates
+        FROM {{{candidate_source}}} AS candidates
     """
 
     pre_flat_matches_sql = """
@@ -310,6 +348,11 @@ def _exact_matches(
         CTEStep("ranked_pre_flat_candidates", ranked_pre_flat_candidates_sql),
         CTEStep("pre_flat_matches", pre_flat_matches_sql),
     ]
+    if require_unique_match:
+        steps.insert(
+            5,
+            CTEStep("unique_exact_candidates", unique_candidates_sql),
+        )
 
     if enable_flat_retraction:
         flat_compatibility_condition = _flat_field_compatibility_sql()
@@ -413,5 +456,92 @@ def _exact_matches(
         exact_matches_sql = "SELECT * FROM {pre_flat_matches}"
 
     steps.append(CTEStep("exact_matches", exact_matches_sql))
+
+    if inward_postcode_levenshtein > 0:
+        fuzzy_messy_residual_sql = """
+            SELECT messy.*
+            FROM {messy_keys} AS messy
+            ANTI JOIN {exact_matches} AS matched
+                ON matched.ukam_address_id = messy.ukam_address_id
+        """
+
+        fuzzy_candidates_sql = f"""
+            SELECT
+                messy.ukam_address_id,
+                canon.canonical_ukam_address_id,
+                canon.canonical_unique_id AS resolved_canonical_id,
+                '{MatchReason.EXACT_PARTIAL_POSTCODE.value}'::ENUM {enum_values}
+                    AS match_reason
+            FROM {{fuzzy_messy_residual}} AS messy
+            INNER JOIN {{canon_keys}} AS canon
+                ON split_part(messy.postcode, ' ', 1)
+                    = split_part(canon.postcode, ' ', 1)
+                AND levenshtein(
+                    split_part(messy.postcode, ' ', 2),
+                    split_part(canon.postcode, ' ', 2)
+                ) <= {inward_postcode_levenshtein}
+                AND messy.postcode <> canon.postcode
+                AND (
+                    messy.clean_full_address = canon.clean_full_address
+                    OR (
+                        messy.clean_full_address <> canon.clean_full_address
+                        AND messy.clean_full_address_no_ws
+                            = canon.clean_full_address_no_ws
+                        AND messy.clean_full_address_no_ws <> ''
+                    )
+                )
+            WHERE split_part(messy.postcode, ' ', 2) <> ''
+            AND split_part(canon.postcode, ' ', 2) <> ''
+        """
+
+        fuzzy_candidate_source = "fuzzy_candidates"
+        if require_unique_match:
+            fuzzy_unique_candidates_sql = """
+                SELECT candidates.*
+                FROM {fuzzy_candidates} AS candidates
+                SEMI JOIN (
+                    SELECT ukam_address_id
+                    FROM {fuzzy_candidates}
+                    GROUP BY ukam_address_id
+                    HAVING COUNT(DISTINCT resolved_canonical_id) = 1
+                ) AS unique_messy
+                    ON unique_messy.ukam_address_id = candidates.ukam_address_id
+            """
+            fuzzy_candidate_source = "fuzzy_unique_candidates"
+
+        fuzzy_matches_sql = f"""
+            SELECT
+                ukam_address_id,
+                canonical_ukam_address_id,
+                resolved_canonical_id,
+                match_reason
+            FROM {{{fuzzy_candidate_source}}}
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY ukam_address_id
+                ORDER BY canonical_ukam_address_id
+            ) = 1
+        """
+
+        steps.extend(
+            [
+                CTEStep("fuzzy_messy_residual", fuzzy_messy_residual_sql),
+                CTEStep("fuzzy_candidates", fuzzy_candidates_sql),
+            ]
+        )
+        if require_unique_match:
+            steps.append(CTEStep("fuzzy_unique_candidates", fuzzy_unique_candidates_sql))
+        steps.extend(
+            [
+                CTEStep("fuzzy_matches", fuzzy_matches_sql),
+                CTEStep(
+                    "exact_matches_with_inward_postcode",
+                    """
+                    SELECT * FROM {exact_matches}
+                    UNION ALL
+                    SELECT * FROM {fuzzy_matches}
+                    """,
+                ),
+            ]
+        )
 
     return steps
