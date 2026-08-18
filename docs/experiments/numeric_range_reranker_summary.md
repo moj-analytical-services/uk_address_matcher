@@ -97,7 +97,6 @@ reranking is mandatory.
 ## Latest Persisted Benchmark
 
 #### Reranked Hackney results vs baseline
-
 The latest `run_benchmarking.py` pass used the valid-range-only canonical
 variant, the Hackney dataset, threshold `8.0`, and baseline run
 `d141fb4f525014b2`. The fresh run is `cb5320a263c7a10f`.
@@ -113,7 +112,6 @@ variant, the Hackney dataset, threshold `8.0`, and baseline run
 | Total runtime | 31.58s | 32.53s | +0.95s |
 
 ### Records Rescued
-
 On the frozen Hackney cohort, the reranker rescued 23 additional correct
 matches, reduced false positives by 4, and reduced unmatched rows by 19 at
 the selected threshold. Across the pooled cohort repetitions, it rescued 27 to
@@ -135,13 +133,6 @@ always-on pass. It preserved all 112,899 correct matches while removing one
 false positive relative to the wide-schema run. The persisted manifest records
 the repository `HEAD` commit; these measurements were run against the current
 working tree as well.
-
-Artefacts:
-
-- [manifest](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/manifest.json)
-- [comparison report](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_report_d141fb4f525014b2_vs_cb5320a263c7a10f.md)
-- [comparison summary](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/comparison_summary_d141fb4f525014b2_vs_cb5320a263c7a10f.json)
-- [precision-recall overlay](../../benchmarking/results/hackney/2026-08-14/cb5320a263c7a10f/charts/precision_recall_overlay_d141fb4f525014b2_vs_cb5320a263c7a10f.html)
 
 ## JSON Range Blocking Trial
 
@@ -171,9 +162,9 @@ slice produced no incremental candidates. The remaining audit rows are:
 Full review extract, including every messy address beside its labelled target
 address, postcode status, classification, and recovery expectation:
 
-- [hard-to-reach Markdown review](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.md)
-- [hard-to-reach CSV extract](../../benchmarking/outputs/numeric_window_audit_pooled_20260814/hard_to_reach_records.csv)
-- [machine-readable exact-range benchmark](../../benchmarking/outputs/numeric_range_json_blocking_20260816_exact_range/summary.json)
+The review extract and machine-readable benchmark are retained with the local
+experiment outputs; they are not linked here because those artefacts are not
+available from GitHub.
 
 ## Current Version Results
 
