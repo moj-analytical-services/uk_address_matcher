@@ -1002,10 +1002,7 @@ def test_inward_postcode_levenshtein_cap_applies_to_exact_matches(duck_con):
     )
     one_edit_df = one_edit.fetchdf()
     assert one_edit_df.loc[0, "resolved_canonical_id"] == 1001
-    assert (
-        one_edit_df.loc[0, "match_reason"]
-        == MatchReason.EXACT_PARTIAL_POSTCODE.value
-    )
+    assert one_edit_df.loc[0, "match_reason"] == MatchReason.EXACT_PARTIAL_POSTCODE.value
 
     two_edits, _ = _run_matching(
         con=duck_con,
@@ -1025,12 +1022,8 @@ def test_zero_inward_postcode_levenshtein_skips_sql_function():
     exact_steps = _exact_matches(inward_postcode_levenshtein=0)
     peeled_steps = _peeled_address_matches(inward_postcode_levenshtein=0)
 
-    assert all(
-        "levenshtein(" not in step.sql.lower() for step in exact_steps.steps
-    )
-    assert all(
-        "levenshtein(" not in step.sql.lower() for step in peeled_steps.steps
-    )
+    assert all("levenshtein(" not in step.sql.lower() for step in exact_steps.steps)
+    assert all("levenshtein(" not in step.sql.lower() for step in peeled_steps.steps)
     assert any(
         "levenshtein(" in step.sql.lower()
         for step in _exact_matches(inward_postcode_levenshtein=1).steps

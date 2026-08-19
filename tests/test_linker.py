@@ -161,18 +161,17 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
 
 def test_align_numeric_range_columns_adds_typed_null_endpoints(duck_con):
     messy = duck_con.sql("SELECT 1 AS unique_id")
-    canonical = duck_con.sql(
-        "SELECT 2 AS unique_id, 20::UINTEGER AS numeric_range_start"
-    )
+    canonical = duck_con.sql("SELECT 2 AS unique_id, 20::UINTEGER AS numeric_range_start")
 
     aligned_messy, aligned_canonical = _align_numeric_range_columns(
         messy,
         canonical,
     )
 
-    assert aligned_messy.project(
-        "numeric_range_start, numeric_range_end"
-    ).fetchone() == (None, None)
+    assert aligned_messy.project("numeric_range_start, numeric_range_end").fetchone() == (
+        None,
+        None,
+    )
     assert aligned_canonical.project(
         "numeric_range_start, numeric_range_end"
     ).fetchone() == (20, None)
