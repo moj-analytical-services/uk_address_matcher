@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import duckdb
 
 from uk_address_matcher.labelling.canonical import (
+    ADDITIONAL_COLUMNS_TO_RETAIN,
     CANONICAL_PAGE_SIZE,
     CanonicalSource,
     find_canonical_record,
@@ -28,6 +29,8 @@ from uk_address_matcher.labelling.canonical import (
 )
 
 DEFAULT_PAGE_SIZE = 20
+REVIEW_PREFETCH_SIZE = 5
+REVIEW_PREFETCH_DELAY_SECONDS = 1.0
 ALLOWED_PAGE_SIZES = {10, 20, 50, 100}
 ALLOWED_MATCH_STAGES = {"exact", "peeled", "splink", "unique_trigram", "unmatched"}
 RECORD_SORT_COLUMNS = {
@@ -277,6 +280,15 @@ def _ensure_state_database(bundle: Bundle) -> None:
                 selected_candidate_rank BIGINT, created_at_utc TIMESTAMPTZ NOT NULL
             )
         """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS review_prefetch_cache (
+                cache_key VARCHAR NOT NULL,
+                unique_id VARCHAR NOT NULL,
+                queue_position INTEGER NOT NULL,
+                payload_json VARCHAR NOT NULL,
+                PRIMARY KEY (cache_key, unique_id)
+            )
+        """)
     finally:
         connection.close()
 
@@ -382,6 +394,11 @@ def _bootstrap_payload(
                 None if canonical_source is None else canonical_source.display_name
             ),
             "page_size": CANONICAL_PAGE_SIZE,
+            "additional_canonical_columns": (
+                []
+                if canonical_source is None
+                else list(canonical_source.additional_canonical_columns)
+            ),
             "warning": (
                 "No canonical path provided. If you wish to view canonical data in "
                 "this app, relaunch the application with canonical_data_path."
@@ -529,12 +546,42 @@ def _records_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, A
     }
 
 
-def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, Any]:
+def _additional_canonical_values(
+    source: CanonicalSource | None,
+    record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if source is None or record is None:
+        return {}
+    return {
+        column: record[column]
+        for column in source.additional_canonical_columns
+        if column in record and record[column] not in (None, "")
+    }
+
+
+def _review_record_payload(
+    bundle: Bundle,
+    query: dict[str, list[str]],
+    canonical_source: CanonicalSource | None = None,
+) -> dict[str, Any]:
     unique_id = query.get("unique_id", [""])[0]
     if not unique_id:
         raise ValueError("unique_id is required")
     filters = _parse_record_filters(query)
     where_clause, parameters = _record_filter_sql(filters)
+    include_current = query.get("include_current", ["false"])[0].lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if include_current:
+        where_clause = (
+            f"WHERE ({where_clause.removeprefix('WHERE ')}) OR unique_id = ?"
+            if where_clause
+            else "WHERE unique_id = ?"
+        )
+        parameters.append(str(unique_id))
     cleaned_address = (
         "messy_cleaned_address"
         if "messy_cleaned_address" in bundle.review_columns
@@ -575,6 +622,42 @@ def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[
     finally:
         connection.close()
     candidates = _normalise_candidates(result.pop("candidates"))
+    current_label = result.get("current_label")
+    current_details = None
+    if current_label is not None and canonical_source is not None:
+        current_details = find_canonical_record(canonical_source, current_label)
+    if current_details is None and current_label is not None:
+        if str(current_label) == str(result.get("resolved_label_id")):
+            current_details = {
+                "canonical_address": result.get("resolved_canonical_address"),
+                "canonical_postcode": result.get("resolved_canonical_postcode"),
+            }
+        else:
+            current_details = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if str(candidate.get("label_id")) == str(current_label)
+                ),
+                None,
+            )
+    resolved_details = None
+    if result.get("resolved_label_id") is not None and canonical_source is not None:
+        resolved_details = find_canonical_record(
+            canonical_source, result["resolved_label_id"]
+        )
+    result["current_label_address"] = (
+        current_details.get("canonical_address") if current_details else None
+    )
+    result["current_label_postcode"] = (
+        current_details.get("canonical_postcode") if current_details else None
+    )
+    result["current_label_additional_columns"] = _additional_canonical_values(
+        canonical_source, current_details
+    )
+    result["resolved_canonical_additional_columns"] = _additional_canonical_values(
+        canonical_source, resolved_details
+    )
     navigation = {
         "position": result.pop("review_position"),
         "total": result.pop("review_total"),
@@ -583,6 +666,152 @@ def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[
     }
     result["candidates"] = candidates
     return {"record": result, "navigation": navigation}
+
+
+def _review_cache_key(query: dict[str, list[str]]) -> str:
+    filters = {
+        key: values
+        for key, values in query.items()
+        if key not in {"unique_id", "include_current"}
+    }
+    return json.dumps(filters, sort_keys=True, separators=(",", ":"))
+
+
+class _ReviewPrefetchCache:
+    def __init__(
+        self,
+        bundle: Bundle,
+        canonical_source: CanonicalSource | None,
+        *,
+        delay_seconds: float = REVIEW_PREFETCH_DELAY_SECONDS,
+    ) -> None:
+        self._bundle = bundle
+        self._canonical_source = canonical_source
+        self._delay_seconds = delay_seconds
+        self._condition = threading.Condition()
+        self._cache_key: str | None = None
+        self._ready_version = 0
+        self._task: tuple[int, float, dict[str, list[str]], str] | None = None
+        self._version = 0
+        self._closed = False
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def get(
+        self, query: dict[str, list[str]], unique_id: str
+    ) -> dict[str, Any] | None:
+        cache_key = _review_cache_key(query)
+        with self._condition:
+            if self._cache_key != cache_key or self._ready_version != self._version:
+                return None
+        connection = duckdb.connect(str(self._bundle.state_file), read_only=True)
+        try:
+            row = connection.execute(
+                """SELECT payload_json FROM review_prefetch_cache
+                WHERE cache_key = ? AND unique_id = ?""",
+                [cache_key, unique_id],
+            ).fetchone()
+        finally:
+            connection.close()
+        return json.loads(row[0]) if row else None
+
+    def schedule(self, query: dict[str, list[str]], start_unique_id: str | None) -> None:
+        if not start_unique_id:
+            return
+        filters = {
+            key: list(values)
+            for key, values in query.items()
+            if key not in {"unique_id", "include_current"}
+        }
+        with self._condition:
+            self._version += 1
+            self._ready_version = 0
+            self._task = (
+                self._version,
+                time.monotonic() + self._delay_seconds,
+                filters,
+                str(start_unique_id),
+            )
+            self._condition.notify()
+
+    def clear(self) -> None:
+        with self._condition:
+            self._version += 1
+            self._ready_version = 0
+            self._cache_key = None
+            self._task = None
+            self._condition.notify()
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify()
+        self._worker.join(timeout=2)
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._closed and self._task is None:
+                    self._condition.wait()
+                if self._closed:
+                    return
+                version, ready_at, query, unique_id = self._task
+                remaining = ready_at - time.monotonic()
+                if remaining > 0:
+                    self._condition.wait(remaining)
+                    continue
+                self._task = None
+            try:
+                payloads = self._build_payloads(query, unique_id)
+            except Exception:
+                payloads = []
+            with self._condition:
+                if self._closed:
+                    return
+                if version != self._version:
+                    continue
+                cache_key = _review_cache_key(query)
+                self._store(cache_key, payloads)
+                self._cache_key = cache_key
+                self._ready_version = version
+
+    def _build_payloads(
+        self, query: dict[str, list[str]], unique_id: str
+    ) -> list[tuple[str, dict[str, Any]]]:
+        payloads: list[tuple[str, dict[str, Any]]] = []
+        current_id: str | None = unique_id
+        while current_id and len(payloads) < REVIEW_PREFETCH_SIZE:
+            request_query = {key: list(values) for key, values in query.items()}
+            request_query["unique_id"] = [current_id]
+            try:
+                payload = _review_record_payload(
+                    self._bundle, request_query, self._canonical_source
+                )
+            except ValueError:
+                break
+            payloads.append((current_id, payload))
+            current_id = payload["navigation"]["next_unique_id"]
+        return payloads
+
+    def _store(self, cache_key: str, payloads: list[tuple[str, dict[str, Any]]]) -> None:
+        connection = duckdb.connect(str(self._bundle.state_file))
+        try:
+            connection.execute("DELETE FROM review_prefetch_cache")
+            if payloads:
+                connection.executemany(
+                    "INSERT INTO review_prefetch_cache VALUES (?, ?, ?, ?)",
+                    [
+                        (
+                            cache_key,
+                            unique_id,
+                            position,
+                            json.dumps(payload, default=_json_default),
+                        )
+                        for position, (unique_id, payload) in enumerate(payloads)
+                    ],
+                )
+        finally:
+            connection.close()
 
 
 def _record_for_validation(bundle: Bundle, unique_id: str) -> dict[str, Any]:
@@ -810,6 +1039,7 @@ def _handler_factory(
     canonical_source: CanonicalSource | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     static_root = files("uk_address_matcher.labelling.app")
+    prefetch_cache = _ReviewPrefetchCache(bundle, canonical_source)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args: Any) -> None:
@@ -892,7 +1122,19 @@ def _handler_factory(
                     return
                 if path == "/api/review-record":
                     session.touch()
-                    self._send(HTTPStatus.OK, _review_record_payload(bundle, query))
+                    unique_id = query.get("unique_id", [""])[0]
+                    review_payload = prefetch_cache.get(query, unique_id)
+                    if review_payload is None:
+                        review_payload = _review_record_payload(
+                            bundle, query, canonical_source
+                        )
+                    prefetch_cache.schedule(
+                        query, review_payload["navigation"]["next_unique_id"]
+                    )
+                    self._send(
+                        HTTPStatus.OK,
+                        review_payload,
+                    )
                     return
                 if path == "/api/canonical-search":
                     session.touch()
@@ -926,6 +1168,9 @@ def _handler_factory(
                             "unique_id_query": result.unique_id_query,
                             "postcode": result.postcode,
                             "address_query": result.address_query,
+                            "additional_canonical_columns": list(
+                                result.additional_canonical_columns
+                            ),
                             "rows": result.rows,
                         },
                     )
@@ -957,13 +1202,21 @@ def _handler_factory(
                     return
                 if path == "/api/labels":
                     session.touch()
+                    saved_label = _save_label(
+                        bundle, payload, input_dataset, canonical_source
+                    )
+                    prefetch_cache.schedule(
+                        parse_qs(str(payload.get("review_query", ""))),
+                        payload.get("next_unique_id"),
+                    )
                     self._send(
                         HTTPStatus.CREATED,
-                        _save_label(bundle, payload, input_dataset, canonical_source),
+                        saved_label,
                     )
                     return
                 if path == "/api/undo":
                     session.touch()
+                    prefetch_cache.clear()
                     self._send(HTTPStatus.OK, _undo_last_label(bundle, input_dataset))
                     return
                 self._send(HTTPStatus.NOT_FOUND, {"error": "API route not found"})
@@ -975,15 +1228,17 @@ def _handler_factory(
                     {"error": f"Unexpected server error: {error}"},
                 )
 
+    Handler.prefetch_cache = prefetch_cache
     return Handler
 
 
-def launch_labelling_app(
+def _launch_labelling_app_beta(
     labelling_bundle_path: str | Path = Path("ukam_labelling_bundle"),
     *,
     input_dataset_path: str | Path,
     input_dataset_label_column: str = "ukam_label",
     canonical_address_path: str | Path | None = None,
+    additional_canonical_columns: tuple[str, ...] = ADDITIONAL_COLUMNS_TO_RETAIN,
     port: int = 0,
     open_browser: bool = True,
 ) -> None:
@@ -998,12 +1253,13 @@ def launch_labelling_app(
         label_column=input_dataset_label_column,
     )
     _ensure_state_database(bundle)
-    canonical_source = load_canonical_source(canonical_address_path)
-    session = SessionState(600)
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", port),
-        _handler_factory(bundle, input_dataset, session, canonical_source),
+    canonical_source = load_canonical_source(
+        canonical_address_path,
+        additional_canonical_columns=additional_canonical_columns,
     )
+    session = SessionState(600)
+    handler = _handler_factory(bundle, input_dataset, session, canonical_source)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={session.token}"
     print(f"UKAM labelling tool: {url}", flush=True)  # noqa: T201
     print(  # noqa: T201
@@ -1028,6 +1284,9 @@ def launch_labelling_app(
         stop.set()
         server.server_close()
         thread.join(timeout=2)
+        prefetch_cache = getattr(handler, "prefetch_cache", None)
+        if prefetch_cache is not None:
+            prefetch_cache.close()
 
 
 def main() -> None:
@@ -1039,7 +1298,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     arguments = parser.parse_args()
-    launch_labelling_app(
+    _launch_labelling_app_beta(
         arguments.labelling_bundle,
         input_dataset_path=arguments.input_dataset,
         input_dataset_label_column=arguments.input_label_column,

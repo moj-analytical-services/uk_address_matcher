@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ DISPLAY_ADDRESS_COLUMNS = (
     "clean_full_address",
     "cleaned_full_address",
 )
+ADDITIONAL_COLUMNS_TO_RETAIN = ("classificationcode", "floorlevel")
+_UK_POSTCODE_PATTERN = re.compile(
+    r"^(?:GIR 0AA|[A-Z][A-HJ-Y]?\d[A-Z\d]? \d[A-Z]{2})$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -30,10 +36,20 @@ class CanonicalSource:
     postcode_column: str
     cleaned_address_column: str
     display_address_column: str
+    additional_canonical_columns: tuple[str, ...] = ()
 
     @property
     def display_name(self) -> str:
         return self.supplied_path.name
+
+    def columns_to_retain(self) -> tuple[str, ...]:
+        return (
+            self.unique_id_column,
+            self.postcode_column,
+            self.cleaned_address_column,
+            self.display_address_column,
+            *self.additional_canonical_columns,
+        )
 
 
 @dataclass(frozen=True)
@@ -45,6 +61,7 @@ class CanonicalSearchPage:
     unique_id_query: str
     postcode: str | None
     address_query: str
+    additional_canonical_columns: tuple[str, ...]
     rows: list[dict[str, Any]]
 
 
@@ -54,6 +71,17 @@ def _quote_identifier(value: str) -> str:
 
 def _quote_sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def _find_available_columns(
+    available_columns: frozenset[str], candidates: tuple[str, ...]
+) -> tuple[str, ...]:
+    columns_by_lowercase = {column.lower(): column for column in available_columns}
+    return tuple(
+        columns_by_lowercase[candidate.lower()]
+        for candidate in candidates
+        if candidate.lower() in columns_by_lowercase
+    )
 
 
 def _resolve_canonical_parquet_paths(supplied_path: Path) -> list[Path]:
@@ -74,6 +102,8 @@ def _resolve_canonical_parquet_paths(supplied_path: Path) -> list[Path]:
 
 def load_canonical_source(
     canonical_data_path: str | Path | None,
+    *,
+    additional_canonical_columns: tuple[str, ...] = ADDITIONAL_COLUMNS_TO_RETAIN,
 ) -> CanonicalSource | None:
     if canonical_data_path is None:
         return None
@@ -117,6 +147,9 @@ def load_canonical_source(
         (column for column in DISPLAY_ADDRESS_COLUMNS if column in available_columns),
         cleaned_address_column,
     )
+    available_additional_columns = _find_available_columns(
+        available_columns, additional_canonical_columns
+    )
     return CanonicalSource(
         supplied_path=supplied_path,
         parquet_paths=tuple(parquet_paths),
@@ -125,6 +158,7 @@ def load_canonical_source(
         postcode_column="postcode",
         cleaned_address_column=cleaned_address_column,
         display_address_column=display_address_column,
+        additional_canonical_columns=available_additional_columns,
     )
 
 
@@ -146,15 +180,22 @@ def normalise_postcode_search(value: str | None) -> str | None:
     return compact if len(compact) <= 3 else f"{compact[:-3]} {compact[-3:]}"
 
 
+def _is_valid_spaced_postcode(value: str | None) -> bool:
+    return (
+        value is not None
+        and _UK_POSTCODE_PATTERN.fullmatch(str(value).strip()) is not None
+    )
+
+
 def _canonical_columns(source: CanonicalSource) -> tuple[str, str, str, str]:
-    return tuple(
-        _quote_identifier(column)
-        for column in (
-            source.unique_id_column,
-            source.postcode_column,
-            source.cleaned_address_column,
-            source.display_address_column,
-        )
+    columns = source.columns_to_retain()[:4]
+    return tuple(_quote_identifier(column) for column in columns)
+
+
+def _additional_columns_sql(source: CanonicalSource) -> str:
+    return "".join(
+        f", CAST({_quote_identifier(column)} AS VARCHAR) AS {_quote_identifier(column)}"
+        for column in source.additional_canonical_columns
     )
 
 
@@ -191,17 +232,27 @@ def search_canonical_data(
     unique_id, postcode_column, cleaned_address, display_address = _canonical_columns(
         source
     )
+    additional_columns = _additional_columns_sql(source)
     conditions = [f"{unique_id} IS NOT NULL"]
     parameters: list[Any] = []
     if cleaned_unique_id_query:
         conditions.append(f"contains(upper(CAST({unique_id} AS VARCHAR)), upper(?))")
         parameters.append(cleaned_unique_id_query)
     if normalised_postcode is not None:
-        conditions.append(f"{postcode_column} = ?")
-        parameters.append(normalised_postcode)
-    if cleaned_query:
+        compact_postcode = normalised_postcode.replace(" ", "")
+        postcode_expression = (
+            f"upper(replace(CAST({postcode_column} AS VARCHAR), ' ', ''))"
+        )
+        if _is_valid_spaced_postcode(postcode):
+            conditions.append(f"{postcode_expression} = upper(?)")
+        else:
+            conditions.append(f"contains({postcode_expression}, upper(?))")
+        parameters.append(compact_postcode)
+    address_tokens = cleaned_query.split()
+    cleaned_query = " ".join(address_tokens)
+    for token in address_tokens:
         conditions.append(f"contains(upper({cleaned_address}), upper(?))")
-        parameters.append(cleaned_query)
+        parameters.append(token)
     offset = (page - 1) * CANONICAL_PAGE_SIZE
     query = f"""
         SELECT
@@ -209,6 +260,7 @@ def search_canonical_data(
             CAST({display_address} AS VARCHAR) AS canonical_address,
             CAST({cleaned_address} AS VARCHAR) AS cleaned_address,
             CAST({postcode_column} AS VARCHAR) AS canonical_postcode
+            {additional_columns}
         FROM {canonical_scan_sql(source)}
         WHERE {" AND ".join(conditions)}
         ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id
@@ -228,6 +280,7 @@ def search_canonical_data(
         unique_id_query=cleaned_unique_id_query,
         postcode=normalised_postcode,
         address_query=cleaned_query,
+        additional_canonical_columns=source.additional_canonical_columns,
         rows=rows[:CANONICAL_PAGE_SIZE],
     )
 
@@ -241,12 +294,14 @@ def find_canonical_record(
     unique_id, postcode_column, cleaned_address, display_address = _canonical_columns(
         source
     )
+    additional_columns = _additional_columns_sql(source)
     query = f"""
         SELECT
             CAST({unique_id} AS VARCHAR) AS canonical_id,
             CAST({display_address} AS VARCHAR) AS canonical_address,
             CAST({cleaned_address} AS VARCHAR) AS cleaned_address,
             CAST({postcode_column} AS VARCHAR) AS canonical_postcode
+            {additional_columns}
         FROM {canonical_scan_sql(source)}
         WHERE CAST({unique_id} AS VARCHAR) = ?
         ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id
