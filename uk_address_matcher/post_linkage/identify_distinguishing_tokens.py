@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    NumericRangeRerankerConfig,
+    build_numeric_range_candidate_pool,
+)
+
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
 
 
@@ -20,13 +25,28 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_PUNISHMENT_MULTIPLIER: float = 1.15,
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
+    numeric_range_reranker: NumericRangeRerankerConfig | None = None,
 ) -> DuckDBPyRelation:
     matches_table = "__ukam__distinguishability_matches"
+
+    if numeric_range_reranker is not None:
+        required_range_columns = {
+            "numeric_range_metadata_l",
+            "numeric_range_metadata_r",
+            "numeric_tokens_l",
+            "numeric_tokens_r",
+            "flat_identity_l",
+            "flat_identity_r",
+        }
+        if not required_range_columns.issubset(df_predict.columns):
+            numeric_range_reranker = None
 
     retained_columns = ""
     if additional_columns_to_retain:
         retained_columns = "".join(
-            f"{column}_l, {column}_r, " for column in additional_columns_to_retain
+            f"{column}_l, {column}_r, "
+            for column in additional_columns_to_retain
+            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns
         )
     if "ukam_label_r" in df_predict.columns:
         retained_columns += "ukam_label_r, "
@@ -60,28 +80,133 @@ def improve_predictions_using_distinguishing_tokens(
         """
 
     con.sql(f"""
-        SELECT *
-        FROM df_predict
-        WHERE match_weight > {match_weight_threshold}
+        WITH grouped AS (
+            SELECT
+                unique_id_l,
+                unique_id_r,
+                max_by(
+                    struct_pack(
+                        ukam_address_id_l := ukam_address_id_l,
+                        ukam_address_id_r := ukam_address_id_r,
+                        match_weight := match_weight
+                    ),
+                    struct_pack(
+                        match_weight := match_weight,
+                        ukam_address_id_r := ukam_address_id_r,
+                        ukam_address_id_l := ukam_address_id_l
+                    )
+                ) AS best
+            FROM df_predict
+            WHERE match_weight > {match_weight_threshold}
+            GROUP BY unique_id_l, unique_id_r
+        )
+        SELECT
+            unique_id_l,
+            unique_id_r,
+            best.ukam_address_id_l AS ukam_address_id_l,
+            best.ukam_address_id_r AS ukam_address_id_r,
+            best.match_weight AS match_weight
+        FROM grouped
+    """).create("good_match_keys")
+
+    candidate_search_depth = top_n_matches
+    if numeric_range_reranker is not None:
+        candidate_search_depth = max(
+            top_n_matches,
+            numeric_range_reranker.numeric_search_depth,
+        )
+    con.sql(f"""
+        WITH grouped AS (
+            SELECT
+                unique_id_r,
+                max_by(
+                    struct_pack(
+                        unique_id_l := unique_id_l,
+                        ukam_address_id_l := ukam_address_id_l,
+                        ukam_address_id_r := ukam_address_id_r
+                    ),
+                    struct_pack(
+                        match_weight := match_weight,
+                        unique_id_l := unique_id_l
+                    ),
+                    {candidate_search_depth}
+                ) AS candidates
+            FROM good_match_keys
+            GROUP BY unique_id_r
+        )
+        SELECT
+            unique_id_r,
+            unnest(candidates, recursive := true)
+        FROM grouped
+    """).create("candidate_search_keys")
+    con.sql(f"""
+        SELECT prediction.*
+        FROM df_predict AS prediction
+        INNER JOIN candidate_search_keys AS candidate
+          ON candidate.unique_id_l = prediction.unique_id_l
+         AND candidate.unique_id_r = prediction.unique_id_r
+         AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
+         AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
+        WHERE prediction.match_weight > {match_weight_threshold}
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r, unique_id_l
-            ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
+            PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+            ORDER BY
+                prediction.match_weight DESC,
+                prediction.ukam_address_id_r DESC,
+                prediction.ukam_address_id_l DESC
         ) = 1
     """).create("good_matches")
 
-    con.sql(f"""
-        SELECT *
-        FROM good_matches
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
-            ORDER BY match_weight DESC, unique_id_l DESC
-        ) <= {top_n_matches}
-    """).create("top_n_matches")
+    reranker_source = ""
+    range_intermediate_columns = ""
+    range_projection = ""
+    range_adjustment_sql = ""
+    token_adjustment_alias = "mw_adjustment"
+    if numeric_range_reranker is not None:
+        reranked = build_numeric_range_candidate_pool(
+            con,
+            con.table("good_matches"),
+            numeric_range_reranker,
+            top_n_matches=top_n_matches,
+            numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
+            numeric_search_depth=numeric_range_reranker.numeric_search_depth,
+        )
+        reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
+        range_intermediate_columns = """
+                candidate.legacy_numeric_bits,
+                candidate.numeric_range_relationship,
+                candidate.numeric_range_guard_passed,
+                candidate.numeric_range_guard_reason,
+                candidate.numeric_range_base_bits,
+                candidate.numeric_range_tf_bits,
+                candidate.numeric_range_adjustment,
+        """
+        range_projection = """
+            legacy_numeric_bits,
+            numeric_range_relationship,
+            numeric_range_guard_passed,
+            numeric_range_guard_reason,
+            numeric_range_base_bits,
+            numeric_range_tf_bits,
+            numeric_range_adjustment,
+        """
+        range_adjustment_sql = " + numeric_range_adjustment"
+        token_adjustment_alias = "distinguishing_token_adjustment"
+    else:
+        con.sql(f"""
+            SELECT *
+            FROM good_matches
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY unique_id_r
+                ORDER BY match_weight DESC, unique_id_l DESC
+            ) <= {top_n_matches}
+        """).create("top_n_matches")
+        reranker_source = "top_n_matches"
 
-    con.sql("""
+    con.sql(f"""
         WITH intermediate AS (
             SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-            FROM top_n_matches
+            FROM {reranker_source}
         ),
         enriched AS (
             SELECT
@@ -207,6 +332,7 @@ def improve_predictions_using_distinguishing_tokens(
                 statistics.hist_overlapping_tokens_r_block_l,
                 statistics.hist_all_bigrams_in_block_l,
                 statistics.bigrams_r,
+                {range_intermediate_columns}
                 {retained_columns}
                 list_distinct(
                     list_filter(
@@ -380,6 +506,7 @@ def improve_predictions_using_distinguishing_tokens(
             ukam_address_id_r,
             ukam_address_id_l,
             match_weight AS match_weight_original,
+            {range_projection}
             token_reward,
             token_absence_penalty,
             bigram_reward,
@@ -391,8 +518,14 @@ def improve_predictions_using_distinguishing_tokens(
                 + bigram_reward
                 - bigram_absence_penalty
                 - missing_token_penalty
+                - positional_conflict_penalty AS {token_adjustment_alias},
+            token_reward
+                - token_absence_penalty
+                + bigram_reward
+                - bigram_absence_penalty
+                - missing_token_penalty
                 - positional_conflict_penalty AS mw_adjustment,
-            match_weight + mw_adjustment AS match_weight,
+            match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
             overlapping_tokens_this_l_and_r,
             tokens_elsewhere_in_block_but_not_this,
             hist_all_tokens_in_block_l,

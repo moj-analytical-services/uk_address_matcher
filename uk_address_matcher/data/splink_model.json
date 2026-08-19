@@ -53,6 +53,10 @@
       "sql_dialect": "duckdb"
     },
     {
+      "blocking_rule": "l.postcode = r.postcode AND l.numeric_range_start = r.numeric_range_start AND l.numeric_range_end = r.numeric_range_end",
+      "sql_dialect": "duckdb"
+    },
+    {
       "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
       "sql_dialect": "duckdb",
       "arrays_to_explode": [

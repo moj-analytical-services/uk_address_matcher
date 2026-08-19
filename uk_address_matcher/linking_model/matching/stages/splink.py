@@ -4,6 +4,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    NumericRangeRerankerConfig,
+    ensure_numeric_range_metadata,
+    project_splink_predictions,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -123,6 +128,46 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        numeric_range_reranker = NumericRangeRerankerConfig()
+        range_source_columns = {"numeric_range_attributes", "numeric_range"}
+        range_metadata_available = (
+            bool(range_source_columns.intersection(df_canonical.columns))
+            and bool(range_source_columns.intersection(df_unmatched.columns))
+            and "numeric_tokens" in df_canonical.columns
+            and "numeric_tokens" in df_unmatched.columns
+            and "flat_identity" in df_canonical.columns
+            and "flat_identity" in df_unmatched.columns
+        )
+        if range_metadata_available:
+            df_unmatched = ensure_numeric_range_metadata(con, df_unmatched)
+            df_canonical = ensure_numeric_range_metadata(con, df_canonical)
+            range_input_columns = [
+                "numeric_range_metadata",
+                "numeric_tokens",
+                "flat_identity",
+            ]
+        else:
+            numeric_range_reranker = None
+            range_input_columns = []
+            range_columns_to_drop = [
+                column
+                for column in (
+                    "numeric_range_attributes",
+                    "numeric_range_metadata",
+                    "numeric_scalar_tokens",
+                    "numeric_scalar_suffixes",
+                    "numeric_scalar_roles",
+                )
+                if column in df_unmatched.columns and column not in df_canonical.columns
+            ]
+            if range_columns_to_drop:
+                df_unmatched = df_unmatched.select(
+                    f"* EXCLUDE ({', '.join(range_columns_to_drop)})"
+                )
+        linker_columns = list(self.additional_columns_to_retain or [])
+        linker_columns.extend(range_input_columns)
+        linker_columns = list(dict.fromkeys(linker_columns))
+
         # Step 1: Build linker
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
@@ -130,10 +175,8 @@ class SplinkStage(MatchingStage):
             con=con,
             include_full_postcode_block=self.include_full_postcode_block,
             include_outside_postcode_block=self.include_outside_postcode_block,
-            additional_columns_to_retain=self.additional_columns_to_retain,
-            retain_intermediate_calculation_columns=(
-                self.retain_intermediate_calculation_columns
-            ),
+            additional_columns_to_retain=linker_columns or None,
+            retain_intermediate_calculation_columns=True,
             settings=self.settings,
         )
 
@@ -145,12 +188,20 @@ class SplinkStage(MatchingStage):
         )
         df_predict_ddb = df_predict.as_duckdbpyrelation()
 
+        prediction_output = project_splink_predictions(
+            con,
+            df_predict_ddb,
+            retain_intermediate_calculation_columns=(
+                self.retain_intermediate_calculation_columns
+            ),
+        )
+
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
             "CREATE OR REPLACE TEMP VIEW "
             + table_name
             + " AS SELECT * FROM ("
-            + df_predict_ddb.sql_query()
+            + prediction_output.sql_query()
             + ")"
         )
         self.predictions_table = table_name
@@ -162,7 +213,15 @@ class SplinkStage(MatchingStage):
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
             use_bigrams=self.improve_use_bigrams,
-            additional_columns_to_retain=self.additional_columns_to_retain,
+            additional_columns_to_retain=[
+                column
+                for column in linker_columns
+                if column not in range_input_columns
+                if f"{column}_l" in df_predict_ddb.columns
+                and f"{column}_r" in df_predict_ddb.columns
+            ]
+            or None,
+            numeric_range_reranker=numeric_range_reranker,
         )
         df_improved = relation_markers.improve_predictions_using_relation_markers(
             df_predict=df_improved,
@@ -193,6 +252,21 @@ class SplinkStage(MatchingStage):
                 f"OR distinguishability >= {self.final_distinguishability_threshold})"
             )
 
+        range_audit_projection = ""
+        range_audit_projection = "".join(
+            f", best_match.{column}"
+            for column in (
+                "legacy_numeric_bits",
+                "numeric_range_relationship",
+                "numeric_range_guard_passed",
+                "numeric_range_guard_reason",
+                "numeric_range_base_bits",
+                "numeric_range_tf_bits",
+                "numeric_range_adjustment",
+            )
+            if column in df_best.columns
+        )
+
         return con.sql(f"""
             SELECT
                 best_match.ukam_address_id_r AS ukam_address_id,
@@ -201,6 +275,7 @@ class SplinkStage(MatchingStage):
                 '{splink_label}' AS match_reason,
                 best_match.match_weight,
                 best_match.distinguishability
+                {range_audit_projection}
             FROM (
                 SELECT *
                 FROM {df_best_name}
