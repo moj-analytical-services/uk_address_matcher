@@ -34,7 +34,7 @@ _CANONICAL_COLUMNS: tuple[str, ...] = ()
 logger = logging.getLogger("uk_address_matcher")
 
 
-def export_labelling_bundle(
+def _export_labelling_bundle_beta(
     match_result: MatchResult,
     output_directory: str | Path = DEFAULT_LABELLING_BUNDLE_DIRECTORY,
     *,
