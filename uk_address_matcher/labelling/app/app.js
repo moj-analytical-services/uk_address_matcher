@@ -215,23 +215,23 @@ function select(row) {
       uncertain: "uncertain",
     }[row.current_decision] || "";
   node.append(new Option("Select label...", "", false, !current));
+  const modelCandidate = candidates(row).find(
+      (candidate) => candidate.is_model_selection,
+    ),
+    modelLabel = row.resolved_label_id ?? modelCandidate?.label_id;
   const seen = new Set();
   const add = (value, label, name) => {
-    if (seen.has(label)) return;
-    seen.add(label);
+    if (seen.has(value)) return;
+    seen.add(value);
     node.append(new Option(name, value, false, current === value));
   };
+  if (modelLabel != null && modelLabel !== "")
+    add("model", String(modelLabel), `Predicted value - ${modelLabel}`);
   if (row.imported_label)
     add(
       "existing",
       String(row.imported_label),
       `Existing label - ${row.imported_label}`,
-    );
-  if (row.resolved_label_id)
-    add(
-      "model",
-      String(row.resolved_label_id),
-      `Accept model - ${row.resolved_label_id}`,
     );
   candidates(row).forEach((candidate, index) =>
     add(
@@ -285,6 +285,8 @@ async function save(row, value) {
   }
 }
 function review(id) {
+  sessionStorage.setItem("ukam-review-filter-query", reviewFilterQuery());
+  sessionStorage.setItem("ukam-last-review-id", id);
   location.hash = `review/${encodeURIComponent(id)}`;
   view("review");
 }
@@ -644,6 +646,33 @@ function reviewId() {
 function display(value, fallback = "Not available") {
   return value == null || value === "" ? fallback : String(value);
 }
+function canonicalColumnLabel(column) {
+  const key = String(column).toLowerCase();
+  if (key === "classificationcode" || key === "classification_code")
+    return "OS classification";
+  if (key === "floorlevel" || key === "floor_level") return "Floor level";
+  return String(column)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+function renderCanonicalAdditionalFields(container, values) {
+  const fields = Object.entries(values || {}).filter(
+    ([, value]) => value != null && value !== "",
+  );
+  container.replaceChildren(
+    ...fields.map(([column, value]) => {
+      const field = document.createElement("div");
+      field.className = "review-canonical-additional-field";
+      field.append(
+        text("span", canonicalColumnLabel(column), "review-canonical-field-label"),
+        text("span", value, "review-canonical-field-value"),
+      );
+      return field;
+    }),
+  );
+  container.hidden = !container.hasChildNodes();
+}
 function metric(value, applicable = true) {
   if (!applicable) return "Not applicable";
   const number = Number(value);
@@ -732,6 +761,20 @@ function renderReview() {
       record.resolved_canonical_postcode,
     );
   }
+  $("review-sticky-messy-address").textContent = display(
+    record.messy_cleaned_address || messyAddress,
+  );
+  $("review-sticky-messy-postcode").textContent = display(messyPostcode, "");
+  $("review-sticky-canonical-address").textContent = matched
+    ? display(record.resolved_canonical_address)
+    : "No accepted canonical match";
+  $("review-sticky-canonical-postcode").textContent = matched
+    ? display(record.resolved_canonical_postcode, "")
+    : "";
+  renderCanonicalAdditionalFields(
+    $("review-canonical-additional-fields"),
+    matched ? record.resolved_canonical_additional_columns : {},
+  );
   const splink = record.match_stage === "splink",
     score = $("review-score");
   $("review-stage").replaceChildren(
@@ -770,6 +813,17 @@ function renderReview() {
     : record.is_labelled
       ? "Decision recorded without a canonical label."
       : "Not labelled yet.";
+  const currentLabelDetails = [
+    record.current_label_address,
+    record.current_label_postcode,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+  $("review-current-label-details").textContent = currentLabelDetails
+    ? `Points to: ${currentLabelDetails}`
+    : record.current_label
+      ? "Canonical target unavailable"
+      : "";
   updateReviewAccept();
 }
 function candidateRow(candidate) {
@@ -835,6 +889,7 @@ function updateReviewAccept() {
 }
 async function loadReview(
   id = reviewId() || sessionStorage.getItem("ukam-last-review-id"),
+  includeCurrent = false,
 ) {
   if (!id) return showReviewEmpty();
   try {
@@ -842,6 +897,7 @@ async function loadReview(
       sessionStorage.getItem("ukam-review-filter-query") || reviewFilterQuery(),
     );
     parameters.set("unique_id", id);
+    if (includeCurrent) parameters.set("include_current", "true");
     const payload = await api(`/api/review-record?${parameters}`);
     state.review.record = payload.record;
     state.review.navigation = payload.navigation;
@@ -853,27 +909,76 @@ async function loadReview(
     showReviewEmpty();
   }
 }
-function openReview(id) {
-  sessionStorage.setItem("ukam-review-filter-query", reviewFilterQuery());
-  sessionStorage.setItem("ukam-last-review-id", id);
-  location.hash = `review/${encodeURIComponent(id)}`;
+async function refreshSavedReview() {
+  state.bootstrap = await api("/api/bootstrap");
+  $("label-progress").textContent =
+    `${state.bootstrap.labelled_records} / ${state.bootstrap.total_records}`;
+  await load();
+}
+function showReviewComplete() {
+  reviewElements.content.hidden = true;
+  reviewElements.complete.hidden = false;
+  resetReviewScroll();
+}
+function resetReviewScroll() {
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+async function advanceAfterReviewSave(nextId) {
+  if (nextId) {
+    location.hash = `review/${encodeURIComponent(nextId)}`;
+  } else {
+    showReviewComplete();
+  }
+  if (nextId) resetReviewScroll();
+  refreshSavedReview().catch((error) => toast(error.message));
+}
+async function saveCanonicalSelection(canonicalRecord) {
+  const record = state.review.record;
+  if (!record) {
+    toast("Open a record in Review before selecting a canonical result.");
+    return;
+  }
+  const nextId = state.review.navigation?.next_unique_id;
+  try {
+    await api("/api/labels", {
+      method: "POST",
+      body: JSON.stringify({
+        unique_id: record.unique_id,
+        decision: "select_canonical",
+        ukam_label: canonicalRecord.canonical_id,
+        selected_candidate_rank: null,
+        next_unique_id: nextId,
+        review_query: reviewFilterQuery(),
+      }),
+    });
+    await advanceAfterReviewSave(nextId);
+    toast("Label saved");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 function navigateReview(direction) {
   const id =
     state.review.navigation?.[
       direction === "previous" ? "previous_unique_id" : "next_unique_id"
     ];
-  if (id) location.hash = `review/${encodeURIComponent(id)}`;
+    if (id) {
+      resetReviewScroll();
+      location.hash = `review/${encodeURIComponent(id)}`;
+    }
 }
 async function saveReviewDecision(decision) {
   const record = state.review.record,
     candidate = selectedReviewCandidate();
   if (!record) return;
+  const nextId = state.review.navigation?.next_unique_id;
   let payload = {
     unique_id: record.unique_id,
     decision,
     ukam_label: null,
     selected_candidate_rank: null,
+    next_unique_id: nextId,
+    review_query: reviewFilterQuery(),
   };
   if (decision === "accept") {
     if (record.match_stage === "splink") {
@@ -891,12 +996,8 @@ async function saveReviewDecision(decision) {
   }
   try {
     await api("/api/labels", { method: "POST", body: JSON.stringify(payload) });
+    await advanceAfterReviewSave(nextId);
     toast("Label saved");
-    if (state.review.navigation.next_unique_id) navigateReview("next");
-    else {
-      reviewElements.content.hidden = true;
-      reviewElements.complete.hidden = false;
-    }
   } catch (error) {
     toast(error.message);
   }
@@ -933,15 +1034,12 @@ reviewElements.undo.onclick = () => undoReviewDecision();
 reviewElements.accept.onclick = () => saveReviewDecision("accept");
 $("review-no-match").onclick = () => saveReviewDecision("no_match");
 $("review-uncertain").onclick = () => saveReviewDecision("uncertain");
-$("review-skip").onclick = () =>
-  state.review.navigation?.next_unique_id
-    ? navigateReview("next")
-    : ((reviewElements.content.hidden = true),
-      (reviewElements.complete.hidden = false));
+$("review-skip").onclick = () => {
+  if (state.review.navigation?.next_unique_id) navigateReview("next");
+  else showReviewComplete();
+};
 $("review-complete-previous").onclick = () => navigateReview("previous");
 $("review-complete-overview").onclick = () => (location.hash = "overview");
-const existingReview = review;
-if (typeof existingReview === "function") review = (id) => openReview(id);
 if (location.hash.startsWith("#review")) loadReview();
 (() => {
   const c = {
@@ -957,17 +1055,36 @@ if (location.hash.startsWith("#review")) loadReview();
     page: $("canonical-page-number"),
     message: $("canonical-results-message"),
     table: $("canonical-results-table-shell"),
+    headerRow: $("canonical-results-header-row"),
+    actionHeading: $("canonical-action-heading"),
     body: $("canonical-results-body"),
     previous: $("canonical-previous"),
     next: $("canonical-next"),
     summary: $("canonical-pagination-summary"),
     pagination: $("canonical-pagination"),
-    reviewSearch: $("review-search-canonical"),
-    selection: $("review-canonical-search-selection"),
-    selectionId: $("review-search-selection-id"),
-    selectionAddress: $("review-search-selection-address"),
-    clearSelection: $("review-clear-search-selection"),
   };
+  const requiredCanonicalElements = [
+    c.unavailable,
+    c.content,
+    c.uniqueId,
+    c.postcode,
+    c.address,
+    c.usePostcode,
+    c.search,
+    c.clear,
+    c.status,
+    c.page,
+    c.message,
+    c.table,
+    c.headerRow,
+    c.actionHeading,
+    c.body,
+    c.previous,
+    c.next,
+    c.summary,
+    c.pagination,
+  ];
+  if (requiredCanonicalElements.some((element) => !element)) return;
   state.canonical = {
     available: false,
     page: 1,
@@ -976,32 +1093,9 @@ if (location.hash.startsWith("#review")) loadReview();
     hasNext: false,
     loading: false,
     initialisedReviewId: null,
-    pendingSelection: null,
+    additionalColumns: [],
   };
   const format = (value) => Number(value).toLocaleString("en-GB");
-  const pending = (record) => {
-    let selection = state.canonical.pendingSelection;
-    if (!selection) {
-      try {
-        selection = JSON.parse(
-          sessionStorage.getItem("ukam-pending-canonical-selection") || "null",
-        );
-      } catch {
-        sessionStorage.removeItem("ukam-pending-canonical-selection");
-      }
-      if (selection) state.canonical.pendingSelection = selection;
-    }
-    return selection &&
-      record &&
-      String(selection.messy_unique_id) === String(record.unique_id)
-      ? selection
-      : null;
-  };
-  const clearPending = () => {
-    state.canonical.pendingSelection = null;
-    sessionStorage.removeItem("ukam-pending-canonical-selection");
-    c.selection.hidden = true;
-  };
   const reset = () => {
     c.body.replaceChildren();
     c.table.hidden = true;
@@ -1020,6 +1114,16 @@ if (location.hash.startsWith("#review")) loadReview();
     c.next.disabled = state.canonical.loading || !state.canonical.hasNext;
     c.pagination.hidden =
       !state.canonical.hasPrevious && !state.canonical.hasNext;
+  };
+  const renderAdditionalHeadings = () => {
+    c.headerRow
+      .querySelectorAll("[data-canonical-additional-column]")
+      .forEach((heading) => heading.remove());
+    state.canonical.additionalColumns.forEach((column) => {
+      const heading = text("th", canonicalColumnLabel(column));
+      heading.dataset.canonicalAdditionalColumn = column;
+      c.headerRow.insertBefore(heading, c.actionHeading);
+    });
   };
   const appendHighlight = (node, value, needle) => {
     node.replaceChildren();
@@ -1048,25 +1152,7 @@ if (location.hash.startsWith("#review")) loadReview();
     if (!node.hasChildNodes()) node.textContent = source || "Not available";
   };
   const selectResult = (record) => {
-    const reviewRecord = state.review.record;
-    if (!reviewRecord) {
-      toast("Open a record in Review before selecting a canonical result.");
-      return;
-    }
-    const selection = {
-      messy_unique_id: String(reviewRecord.unique_id),
-      canonical_id: String(record.canonical_id),
-      canonical_address: record.canonical_address,
-      cleaned_address: record.cleaned_address,
-      canonical_postcode: record.canonical_postcode,
-    };
-    state.canonical.pendingSelection = selection;
-    sessionStorage.setItem(
-      "ukam-pending-canonical-selection",
-      JSON.stringify(selection),
-    );
-    toast("Canonical record selected");
-    location.hash = `review/${encodeURIComponent(reviewRecord.unique_id)}`;
+    saveCanonicalSelection(record);
   };
   const renderRows = () => {
     c.body.replaceChildren();
@@ -1092,6 +1178,9 @@ if (location.hash.startsWith("#review")) loadReview();
         postcode = text("td", record.canonical_postcode || "-"),
         action = document.createElement("td"),
         button = text("button", "Use this record", "use-canonical-button");
+      const additional = state.canonical.additionalColumns.map((column) =>
+        text("td", record[column] || "-"),
+      );
       appendHighlight(
         cleaned,
         record.cleaned_address,
@@ -1100,7 +1189,7 @@ if (location.hash.startsWith("#review")) loadReview();
       button.type = "button";
       button.onclick = () => selectResult(record);
       action.append(button);
-      row.append(id, cleaned, postcode, action);
+      row.append(id, cleaned, postcode, ...additional, action);
       row.ondblclick = () => selectResult(record);
       c.body.append(row);
     });
@@ -1134,6 +1223,12 @@ if (location.hash.startsWith("#review")) loadReview();
       state.canonical.hasPrevious = payload.has_previous;
       state.canonical.hasNext = payload.has_next;
       state.canonical.addressQuery = payload.address_query || "";
+      state.canonical.additionalColumns = Array.isArray(
+        payload.additional_canonical_columns,
+      )
+        ? payload.additional_canonical_columns
+        : state.canonical.additionalColumns;
+      renderAdditionalHeadings();
       renderRows();
     } catch (error) {
       c.message.hidden = false;
@@ -1163,70 +1258,11 @@ if (location.hash.startsWith("#review")) loadReview();
       reset();
     }
   };
-  const renderSelection = (record) => {
-    const selection = pending(record);
-    c.selection.hidden = !selection;
-    if (!selection) return;
-    c.selectionId.textContent = selection.canonical_id;
-    c.selectionAddress.textContent = [
-      selection.cleaned_address,
-      selection.canonical_postcode,
-    ]
-      .filter(Boolean)
-      .join(" - ");
-  };
   const oldRender = renderReview;
   renderReview = () => {
     oldRender();
     prepare();
-    renderSelection(state.review.record);
   };
-  const oldAccept = updateReviewAccept;
-  updateReviewAccept = () => {
-    const selection = pending(state.review.record);
-    if (selection) {
-      reviewElements.accept.hidden = false;
-      reviewElements.accept.textContent = "Use canonical search selection";
-      return;
-    }
-    oldAccept();
-  };
-  const oldSave = saveReviewDecision;
-  saveReviewDecision = async (decision) => {
-    const selection = pending(state.review.record);
-    if (decision !== "accept" || !selection) return oldSave(decision);
-    const record = state.review.record;
-    try {
-      await api("/api/labels", {
-        method: "POST",
-        body: JSON.stringify({
-          unique_id: record.unique_id,
-          decision: "select_canonical",
-          ukam_label: selection.canonical_id,
-          selected_candidate_rank: null,
-        }),
-      });
-      clearPending();
-      toast("Label saved");
-      if (state.review.navigation.next_unique_id) navigateReview("next");
-      else {
-        reviewElements.content.hidden = true;
-        reviewElements.complete.hidden = false;
-      }
-    } catch (error) {
-      toast(error.message);
-    }
-  };
-  $("review-candidate-body").addEventListener(
-    "change",
-    () => {
-      if (pending(state.review.record)) {
-        clearPending();
-        updateReviewAccept();
-      }
-    },
-    true,
-  );
   c.search.onclick = () => {
     state.canonical.page = 1;
     load();
@@ -1257,18 +1293,6 @@ if (location.hash.startsWith("#review")) loadReview();
       scrollTo({ top: 0, behavior: "smooth" });
     }
   };
-  c.reviewSearch.onclick = () => {
-    if (!state.canonical.available) {
-      toast("Canonical data is not available.");
-      return;
-    }
-    c.content.scrollIntoView({ behavior: "smooth", block: "start" });
-    c.postcode.focus();
-  };
-  c.clearSelection.onclick = () => {
-    clearPending();
-    updateReviewAccept();
-  };
   [c.postcode, c.address].forEach(
     (input) =>
       (input.onkeydown = (event) => {
@@ -1283,6 +1307,12 @@ if (location.hash.startsWith("#review")) loadReview();
     if (!state.bootstrap) return setTimeout(initialise, 25);
     const config = state.bootstrap.canonical_search || {};
     state.canonical.available = Boolean(config.available);
+    state.canonical.additionalColumns = Array.isArray(
+      config.additional_canonical_columns,
+    )
+      ? config.additional_canonical_columns
+      : [];
+    renderAdditionalHeadings();
     c.unavailable.hidden = state.canonical.available;
     c.content.hidden = !state.canonical.available;
     prepare();
