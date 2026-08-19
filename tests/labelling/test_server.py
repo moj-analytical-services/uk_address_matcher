@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import duckdb
 import pytest
 
+import uk_address_matcher.labelling.server as server_module
 from tests.labelling.test_state import create_test_bundle
 from uk_address_matcher.labelling.canonical import load_canonical_source
 from uk_address_matcher.labelling.server import (
@@ -21,11 +22,12 @@ from uk_address_matcher.labelling.server import (
     _bootstrap_payload,
     _ensure_state_database,
     _handler_factory,
+    _launch_labelling_app_beta,
     _load_bundle,
     _load_input_dataset,
     _records_payload,
+    _ReviewPrefetchCache,
     _save_label,
-    launch_labelling_app,
 )
 
 
@@ -170,7 +172,38 @@ def test_server_requires_token_and_serves_application_shell(
     assert isinstance(payload, str)
     assert 'id="score-range-min"' in payload
     assert 'id="review-current-label-value"' in payload
+    assert 'id="review-canonical-additional-fields"' in payload
+    assert 'id="canonical-results-header-row"' in payload
+    assert 'id="review-cards"' in payload
+    assert 'id="review-sticky-context"' in payload
+    assert 'id="review-sticky-messy-address"' in payload
+    assert 'id="review-sticky-canonical-address"' in payload
+    assert payload.index('id="review-sticky-context"') < payload.index(
+        'id="review-cards"'
+    )
+    assert 'id="review-next"' in payload
+    assert 'id="review-complete"' in payload
     assert 'id="review-content"' in payload
+    assert 'id="review-search-canonical"' not in payload
+
+    status, payload = request(base_url, "/app.css")
+    assert status == 200
+    assert ".review-sticky-context {\n  position: sticky;\n  top: 117px;" in payload
+    assert "align-self: start" in payload
+    assert ".review-sticky-context.is-active" not in payload
+    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)" in payload
+    assert "#review-canonical-card .review-canonical-additional-field" in payload
+    assert "grid-template-rows: auto auto" in payload
+
+    status, payload = request(base_url, "/app.js")
+    assert status == 200
+    assert "IntersectionObserver" not in payload
+    assert "setReviewStickyActive" not in payload
+    assert "Predicted value -" in payload
+    assert "function resetReviewScroll()" in payload
+    assert 'window.scrollTo({ top: 0, behavior: "auto" })' in payload
+    assert "reviewSearch" not in payload
+    assert "review-sticky-sentinel" not in payload
 
     status, payload = request(base_url, "/api/bootstrap", token=session.token)
     assert status == 200
@@ -220,6 +253,24 @@ def test_records_and_review_share_score_and_stage_filters(
     assert payload == {
         "error": "The requested record does not exist in the current filtered review set"
     }
+
+
+def test_review_prefetch_cache_stores_the_next_review_payload(tmp_path: Path) -> None:
+    bundle = _load_bundle(create_api_test_bundle(tmp_path / "bundle"))
+    _ensure_state_database(bundle)
+    cache = _ReviewPrefetchCache(bundle, None, delay_seconds=0)
+    try:
+        cache.schedule({}, "messy-2")
+        deadline = time.monotonic() + 1
+        payload = None
+        while time.monotonic() < deadline and payload is None:
+            payload = cache.get({}, "messy-2")
+            time.sleep(0.01)
+        assert payload is not None
+        assert payload["record"]["unique_id"] == "messy-2"
+        assert payload["navigation"]["next_unique_id"] is None
+    finally:
+        cache.close()
 
 
 def test_records_support_score_sorting_and_mismatch_filter(tmp_path: Path) -> None:
@@ -459,11 +510,61 @@ def test_load_bundle_rejects_unsupported_data_format(tmp_path: Path) -> None:
 @pytest.mark.parametrize("port", [-1, 65_536])
 def test_launch_rejects_invalid_port(port: int) -> None:
     with pytest.raises(ValueError, match="port"):
-        launch_labelling_app(
+        _launch_labelling_app_beta(
             input_dataset_path="messy_addresses.parquet",
             port=port,
             open_browser=False,
         )
+
+
+def test_launch_passes_additional_canonical_columns_to_source_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 12345)
+
+        def __init__(self, address: object, handler: object) -> None:
+            captured["address"] = address
+            captured["handler"] = handler
+
+        def serve_forever(self, poll_interval: float) -> None:
+            return
+
+        def server_close(self) -> None:
+            return
+
+    def fake_load_canonical_source(
+        _path: object, *, additional_canonical_columns: tuple[str, ...]
+    ) -> None:
+        captured["additional_canonical_columns"] = additional_canonical_columns
+
+    monkeypatch.setattr(server_module, "_load_bundle", lambda _path: object())
+    monkeypatch.setattr(
+        server_module,
+        "_load_input_dataset",
+        lambda _bundle, _path, label_column: object(),
+    )
+    monkeypatch.setattr(server_module, "_ensure_state_database", lambda _bundle: None)
+    monkeypatch.setattr(
+        server_module,
+        "_handler_factory",
+        lambda _bundle, _input_dataset, _session, _canonical_source: object(),
+    )
+    monkeypatch.setattr(server_module, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setattr(
+        server_module, "load_canonical_source", fake_load_canonical_source
+    )
+
+    _launch_labelling_app_beta(
+        input_dataset_path="messy_addresses.parquet",
+        canonical_address_path="canonical.parquet",
+        additional_canonical_columns=("floorlevel",),
+        open_browser=False,
+    )
+
+    assert captured["additional_canonical_columns"] == ("floorlevel",)
 
 
 def test_session_state_expires_after_configured_interval() -> None:
@@ -551,7 +652,9 @@ def test_handler_serves_static_html_bytes(tmp_path: Path) -> None:
             f"http://127.0.0.1:{server.server_address[1]}/?token={session.token}"
         ) as response:
             assert response.headers.get_content_type() == "text/html"
-            assert b"UKAM" in response.read()
+            body = response.read()
+            assert b"UKAM" in body
+            assert b'id="review-no-candidates"' in body
     finally:
         server.shutdown()
         server.server_close()
@@ -654,9 +757,11 @@ def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
             """COPY (
                 SELECT 'canonical-1' AS unique_id,
                     '1 TEST ROAD' AS original_address_concat,
-                    '1 TEST ROAD' AS clean_full_address, 'E1 1AA' AS postcode
+                    '1 TEST ROAD' AS clean_full_address, 'E1 1AA' AS postcode,
+                    'RD06' AS classificationcode, '1' AS floorlevel
                 UNION ALL
-                SELECT 'canonical-2', '2 TEST ROAD', '2 TEST ROAD', 'E1 1AA'
+                SELECT 'canonical-2', '2 TEST ROAD', '2 TEST ROAD', 'E1 1AA',
+                    'RD06', '2'
             ) TO ? (FORMAT PARQUET)""",
             [str(canonical_file)],
         )
@@ -684,6 +789,7 @@ def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
             "available": True,
             "source_name": "canonical.parquet",
             "page_size": 100,
+            "additional_canonical_columns": ["classificationcode", "floorlevel"],
             "warning": None,
         }
 
@@ -698,6 +804,8 @@ def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
             "canonical-1",
             "canonical-2",
         ]
+        assert payload["rows"][0]["classificationcode"] == "RD06"
+        assert payload["rows"][0]["floorlevel"] == "1"
 
         status, payload = request(
             base_url,
@@ -738,6 +846,20 @@ def test_canonical_search_api_and_selection_validation(tmp_path: Path) -> None:
         assert status == 201
         assert payload["decision"] == "select_canonical"
         assert payload["ukam_label"] == "canonical-2"
+
+        status, payload = request(
+            base_url,
+            "/api/review-record?unique_id=messy-1&include_current=true",
+            token=session.token,
+        )
+        assert status == 200
+        assert payload["record"]["current_label"] == "canonical-2"
+        assert payload["record"]["current_label_address"] == "2 TEST ROAD"
+        assert payload["record"]["current_label_postcode"] == "E1 1AA"
+        assert payload["record"]["current_label_additional_columns"] == {
+            "classificationcode": "RD06",
+            "floorlevel": "2",
+        }
     finally:
         server.shutdown()
         server.server_close()
