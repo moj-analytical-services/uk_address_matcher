@@ -400,8 +400,7 @@ th {
 }
 .canonical-header button,
 .canonical-search-panel button,
-.canonical-results footer button,
-.canonical-search-selection button {
+.canonical-results footer button {
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid #c9b7ff;
@@ -583,34 +582,6 @@ th {
   color: #fff;
   text-align: left;
   border-radius: 6px;
-}
-.canonical-search-selection {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 18px;
-  margin: 18px 0;
-  padding: 14px 16px;
-  background: #faf8ff;
-  border: 1px solid #c9b7ff;
-  border-radius: 6px;
-}
-.canonical-search-selection span {
-  display: block;
-  color: #667085;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.canonical-search-selection strong {
-  display: block;
-  margin-top: 3px;
-  color: #5925dc;
-}
-.canonical-search-selection p {
-  margin: 4px 0 0;
-  color: #475467;
-  font-size: 12px;
 }
 @media (max-width: 900px) {
   .canonical-search-panel {
@@ -1324,6 +1295,42 @@ tbody tr:hover td {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+#review-canonical-card .review-canonical-additional-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 18px;
+  width: calc(100% - 36px);
+  margin: 0 18px 18px;
+  border-top: 1px solid #98a2b33d;
+}
+#review-canonical-card .review-canonical-additional-field {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  min-width: 0;
+  padding: 12px 0;
+}
+#review-canonical-card .review-canonical-additional-field + .review-canonical-additional-field {
+  padding-left: 18px;
+  border-left: 1px solid #98a2b33d;
+}
+#review-canonical-card .review-canonical-field-label,
+#review-canonical-card .review-canonical-field-value {
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+#review-canonical-card .review-canonical-field-label {
+  padding-bottom: 6px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+#review-canonical-card .review-canonical-field-value {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .review-card p {
   padding: 60px 18px;
   text-align: center;
@@ -1335,6 +1342,71 @@ tbody tr:hover td {
 .review-actions {
   max-width: 1380px;
   margin: 18px auto 0;
+}
+.review-sticky-context {
+  position: sticky;
+  top: 117px;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-self: start;
+  width: 100%;
+  max-width: 1380px;
+  margin: 0 auto 18px;
+  padding: 10px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 2px 8px #10182812;
+}
+.review-sticky-record {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.review-sticky-record > span {
+  color: #475467;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.review-sticky-record > strong,
+.review-sticky-record > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-sticky-record > strong {
+  font-size: 14px;
+}
+.review-sticky-record > small {
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-sticky-record.messy {
+  border-color: #bfd4ff;
+  background: #eef4ff;
+}
+.review-sticky-record.messy > span,
+.review-sticky-record.messy > strong {
+  color: #175cd3;
+}
+.review-sticky-record.canonical {
+  border-color: #b8dfc6;
+  background: #e9f8ef;
+}
+.review-sticky-record.canonical > span,
+.review-sticky-record.canonical > strong {
+  color: #18794e;
 }
 .review-summary h2 {
   background: #f9fafb;
@@ -1469,6 +1541,14 @@ tbody tr:hover td {
   margin-top: 2px;
   color: #101828;
   font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.review-current-label-details {
+  display: block;
+  margin-top: 3px;
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 .review-actions .accept {

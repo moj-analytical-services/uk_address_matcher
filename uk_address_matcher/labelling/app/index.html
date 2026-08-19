@@ -264,7 +264,23 @@
             ><strong id="review-position">Record 1 of 1</strong
             ><button id="review-next" class="review-button">Next &rarr;</button>
           </div>
-          <div class="review-cards">
+          <aside
+            id="review-sticky-context"
+            class="review-sticky-context"
+            aria-label="Current record summary"
+          >
+            <div class="review-sticky-record messy">
+              <span>Messy input</span>
+              <strong id="review-sticky-messy-address"></strong>
+              <small id="review-sticky-messy-postcode"></small>
+            </div>
+            <div class="review-sticky-record canonical">
+              <span>Model suggestion</span>
+              <strong id="review-sticky-canonical-address"></strong>
+              <small id="review-sticky-canonical-postcode"></small>
+            </div>
+          </aside>
+          <div id="review-cards" class="review-cards">
             <article class="review-card messy-card">
               <div class="review-card-header messy-card-header">
                 <h2>Messy input record</h2>
@@ -309,11 +325,16 @@
                   <dt>Postcode</dt>
                   <dd id="review-canonical-postcode"></dd>
                 </dl>
+                <div
+                  id="review-canonical-additional-fields"
+                  class="review-canonical-additional-fields"
+                  hidden
+                ></div>
               </div>
               <p id="review-no-canonical" hidden>No accepted canonical match</p>
             </article>
           </div>
-          <section class="review-summary">
+          <section id="review-summary" class="review-summary">
             <h2>Match summary</h2>
             <dl>
               <div>
@@ -338,20 +359,6 @@
               </div>
             </dl>
           </section>
-          <section
-            id="review-canonical-search-selection"
-            class="canonical-search-selection"
-            hidden
-          >
-            <div>
-              <span>Canonical search selection</span
-              ><strong id="review-search-selection-id"></strong>
-              <p id="review-search-selection-address"></p>
-            </div>
-            <button id="review-clear-search-selection" type="button">
-              Clear
-            </button>
-          </section>
           <section id="review-candidates" class="review-candidates" hidden>
             <h2 id="review-candidates-heading">
               Candidates considered by reranker
@@ -361,8 +368,8 @@
               candidate set, but the match should still be checked against the
               input record.
             </p>
-            <p id="review-no-candidates" class="review-warning" hidden>
-              No retained candidate data is available for this Splink record.
+            <p id="review-no-candidates" class="review-info" hidden>
+              No candidates were retained for reranking.
             </p>
             <div class="candidate-table-shell">
               <table>
@@ -460,11 +467,11 @@
               <div id="canonical-results-table-shell" hidden>
                 <table>
                   <thead>
-                    <tr>
+                    <tr id="canonical-results-header-row">
                       <th>Canonical ID</th>
                       <th>Cleaned address</th>
                       <th>Postcode</th>
-                      <th>Action</th>
+                      <th id="canonical-action-heading">Action</th>
                     </tr>
                   </thead>
                   <tbody id="canonical-results-body"></tbody>
@@ -486,7 +493,12 @@
                 >&#127991;</span
               ><span>
                 <span class="review-current-label-heading">Current label</span
-                ><strong id="review-current-label-value"></strong> </span
+                ><strong id="review-current-label-value"></strong
+                ><span
+                  id="review-current-label-details"
+                  class="review-current-label-details"
+                ></span>
+              </span
             ></span>
             <div>
               <button id="review-undo" class="review-button" type="button">
@@ -494,12 +506,6 @@
               </button>
               <button id="review-accept" class="review-button accept">
                 Accept model match</button
-              ><button
-                id="review-search-canonical"
-                class="review-button"
-                type="button"
-              >
-                Go to canonical search</button
               ><button id="review-no-match" class="review-button">
                 No match</button
               ><button id="review-uncertain" class="review-button">
