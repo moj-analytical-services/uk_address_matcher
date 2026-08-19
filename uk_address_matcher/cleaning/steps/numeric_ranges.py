@@ -16,9 +16,12 @@ def _derive_numeric_range(
     WITH classified_tokens AS (
         SELECT
             input.*,
-            regexp_extract_all(
-                clean_full_address,
-                '\\b\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?\\b'
+            list_filter(
+                numeric_tokens,
+                token -> regexp_matches(
+                    token,
+                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
+                )
             ) AS range_tokens
         FROM {{input}} AS input
     ),
