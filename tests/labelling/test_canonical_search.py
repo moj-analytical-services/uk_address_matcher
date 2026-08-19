@@ -16,7 +16,9 @@ from uk_address_matcher.labelling.canonical import (
 )
 
 
-def write_canonical_data(path: Path, *, include_cleaned: bool = True) -> None:
+def write_canonical_data(
+    path: Path, *, include_cleaned: bool = True, include_long_postcode: bool = False
+) -> None:
     records: list[tuple[str | None, str, str, str]] = []
     for index in range(200):
         canonical_id = f"CANON_{index:04d}"
@@ -43,6 +45,15 @@ def write_canonical_data(path: Path, *, include_cleaned: bool = True) -> None:
             (None, "NULL ID STREET", "NULL ID STREET", "N16 5FD"),
         ]
     )
+    if include_long_postcode:
+        records.append(
+            (
+                "LONG_POSTCODE",
+                "LONG POSTCODE TEST ROAD",
+                "LONG POSTCODE TEST ROAD",
+                "ME5 8RY",
+            )
+        )
     random.Random(42).shuffle(records)
     connection = duckdb.connect()
     try:
@@ -72,6 +83,27 @@ def write_canonical_data(path: Path, *, include_cleaned: bool = True) -> None:
         connection.close()
 
 
+def write_classified_canonical_data(path: Path) -> None:
+    source_path = path.with_name("base-canonical.parquet")
+    write_canonical_data(source_path)
+    source_sql = str(source_path).replace("'", "''")
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            f"""COPY (
+                SELECT *,
+                    CASE WHEN unique_id IS NULL THEN 'RD99' ELSE 'RD06' END
+                        AS classificationcode,
+                    CASE WHEN unique_id IS NULL THEN NULL ELSE '2' END
+                        AS floorlevel
+                FROM read_parquet('{source_sql}')
+            ) TO ? (FORMAT PARQUET)""",
+            [str(path)],
+        )
+    finally:
+        connection.close()
+
+
 def test_loads_direct_file_and_prepared_folder_layouts(tmp_path: Path) -> None:
     direct_file = tmp_path / "canonical.parquet"
     write_canonical_data(direct_file)
@@ -80,6 +112,12 @@ def test_loads_direct_file_and_prepared_folder_layouts(tmp_path: Path) -> None:
     assert direct_source is not None
     assert direct_source.display_address_column == "original_address_concat"
     assert direct_source.cleaned_address_column == "clean_full_address"
+    assert direct_source.columns_to_retain() == (
+        "unique_id",
+        "postcode",
+        "clean_full_address",
+        "original_address_concat",
+    )
 
     prepared_folder = tmp_path / "prepared"
     prepared_folder.mkdir()
@@ -126,6 +164,12 @@ def test_search_returns_stable_pages_and_literal_substrings(
     page_four = search_canonical_data(
         source, postcode="E5 8RY", address_query="STREET", page=4
     )
+    partial_postcode = search_canonical_data(
+        source, postcode="E5", address_query=None, page=1
+    )
+    tokenised_address = search_canonical_data(
+        source, postcode=None, address_query="LONDON 199", page=1
+    )
 
     assert len(page_one.rows) == CANONICAL_PAGE_SIZE
     assert len(page_two.rows) == CANONICAL_PAGE_SIZE
@@ -146,6 +190,9 @@ def test_search_returns_stable_pages_and_literal_substrings(
     assert page_two.has_next is True
     assert page_four.has_previous is True
     assert page_four.has_next is False
+    assert partial_postcode.has_next is True
+    assert {row["canonical_postcode"] for row in partial_postcode.rows} == {"E5 8RY"}
+    assert len(tokenised_address.rows) == 2
     duplicate_id_rows = search_canonical_data(
         source, postcode="E5 8RY", address_query="199 TEST STREET", page=1
     ).rows
@@ -207,3 +254,45 @@ def test_search_validation_lookup_and_parquet_plan(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert "PARQUET_SCAN" in str(plan).upper() or "READ_PARQUET" in str(plan).upper()
+
+
+def test_valid_spaced_postcode_uses_exact_matching(tmp_path: Path) -> None:
+    path = tmp_path / "canonical.parquet"
+    write_canonical_data(path, include_long_postcode=True)
+    source = load_canonical_source(path)
+    assert source is not None
+
+    exact_postcode = search_canonical_data(source, postcode="E5 8RY", page=1)
+    unspaced_postcode = search_canonical_data(
+        source, postcode="E58RY", address_query="LONG POSTCODE", page=1
+    )
+    partial_postcode = search_canonical_data(
+        source, postcode="E5 8R", address_query="LONG POSTCODE", page=1
+    )
+
+    assert {row["canonical_postcode"] for row in exact_postcode.rows} == {"E5 8RY"}
+    assert [row["canonical_postcode"] for row in unspaced_postcode.rows] == ["ME5 8RY"]
+    assert [row["canonical_postcode"] for row in partial_postcode.rows] == ["ME5 8RY"]
+
+
+def test_search_returns_additional_canonical_columns(tmp_path: Path) -> None:
+    path = tmp_path / "classified-canonical.parquet"
+    write_classified_canonical_data(path)
+
+    source = load_canonical_source(path)
+    assert source is not None
+    assert source.additional_canonical_columns == ("classificationcode", "floorlevel")
+
+    page = search_canonical_data(source, postcode="E5", page=1)
+
+    assert page.rows
+    assert page.additional_canonical_columns == ("classificationcode", "floorlevel")
+    assert {row["classificationcode"] for row in page.rows} == {"RD06"}
+    assert {row["floorlevel"] for row in page.rows} == {"2"}
+    assert find_canonical_record(source, "CANON_0000")["classificationcode"] == "RD06"
+
+    floor_only_source = load_canonical_source(
+        path, additional_canonical_columns=("floorlevel", "missing")
+    )
+    assert floor_only_source is not None
+    assert floor_only_source.additional_canonical_columns == ("floorlevel",)

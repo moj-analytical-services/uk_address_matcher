@@ -8,7 +8,7 @@ import pyarrow
 import pytest
 
 from uk_address_matcher import AddressMatcher, ExactMatchStage, SplinkStage
-from uk_address_matcher.labelling import export_labelling_bundle
+from uk_address_matcher.labelling import _export_labelling_bundle_beta
 
 
 def _relation(con: duckdb.DuckDBPyConnection, records: list[dict[str, str]]):
@@ -55,7 +55,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
 
     monkeypatch.chdir(tmp_path)
     caplog.set_level(logging.INFO, logger="uk_address_matcher")
-    bundle_path = result.export_labelling_bundle()
+    bundle_path = result._export_labelling_bundle_beta()
 
     assert bundle_path == (tmp_path / "ukam_labelling_bundle").resolve()
     assert (bundle_path / "review_data.parquet").is_file()
@@ -101,7 +101,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
     assert rows[1][5] == 0
     assert rows[1][6] == []
 
-    custom_bundle_path = export_labelling_bundle(
+    custom_bundle_path = _export_labelling_bundle_beta(
         result,
         tmp_path / "custom_bundle",
     )
@@ -151,7 +151,7 @@ def test_exports_reranked_splink_candidates(tmp_path):
         ],
     ).match()
 
-    bundle_path = result.export_labelling_bundle(tmp_path / "splink_bundle")
+    bundle_path = result._export_labelling_bundle_beta(tmp_path / "splink_bundle")
     with duckdb.connect() as fresh_con:
         candidate_count, candidates = fresh_con.execute(
             """
@@ -206,7 +206,7 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
         stages=[ExactMatchStage()],
     ).match()
 
-    bundle_path = result.export_labelling_bundle(tmp_path / "review_bundle")
+    bundle_path = result._export_labelling_bundle_beta(tmp_path / "review_bundle")
     with duckdb.connect() as fresh_con:
         row = fresh_con.execute(
             """
@@ -231,6 +231,6 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
     assert not any(column.startswith("top_candidate_") for column in columns)
 
     with pytest.raises(FileExistsError, match="already exists"):
-        result.export_labelling_bundle(bundle_path)
-    result.export_labelling_bundle(bundle_path, overwrite=True)
+        result._export_labelling_bundle_beta(bundle_path)
+    result._export_labelling_bundle_beta(bundle_path, overwrite=True)
     con.close()

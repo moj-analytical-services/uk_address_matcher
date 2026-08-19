@@ -98,6 +98,16 @@ def test_candidate_validation_and_page_sizes(tmp_path: Path) -> None:
         _records_payload(bundle, {"page_size": ["25"]})
 
 
+def test_records_payload_exposes_model_target_for_label_selector(tmp_path: Path) -> None:
+    bundle = _load_bundle(create_test_bundle(tmp_path / "bundle"))
+    _ensure_state_database(bundle)
+
+    row = _records_payload(bundle, {"page_size": ["20"]})["rows"][0]
+
+    assert row["resolved_label_id"] == "label-1"
+    assert row["top_candidates"][0]["label_id"] == "label-1"
+
+
 def test_review_record_returns_candidates_and_navigation(tmp_path: Path) -> None:
     bundle = _load_bundle(create_test_bundle(tmp_path / "bundle"))
     _ensure_state_database(bundle)
