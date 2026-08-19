@@ -4,6 +4,7 @@ from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
+    merge_split_flat_number,
     move_flat_to_front,
     remove_apostrophes,
     remove_commas_periods,
@@ -204,6 +205,7 @@ def _clean_address_string_first_pass() -> str:
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
+            merge_split_flat_number,
             # remove_repeated_tokens,   # left commented as in original
             trim,
         ],
