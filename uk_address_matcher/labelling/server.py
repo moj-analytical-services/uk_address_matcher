@@ -697,9 +697,7 @@ class _ReviewPrefetchCache:
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
 
-    def get(
-        self, query: dict[str, list[str]], unique_id: str
-    ) -> dict[str, Any] | None:
+    def get(self, query: dict[str, list[str]], unique_id: str) -> dict[str, Any] | None:
         cache_key = _review_cache_key(query)
         with self._condition:
             if self._cache_key != cache_key or self._ready_version != self._version:
