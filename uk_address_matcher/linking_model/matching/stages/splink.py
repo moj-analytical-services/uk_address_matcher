@@ -147,13 +147,14 @@ class SplinkStage(MatchingStage):
 
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
+            "CREATE OR REPLACE TEMP TABLE "
             + table_name
             + " AS SELECT * FROM ("
             + df_predict_ddb.sql_query()
             + ")"
         )
         self.predictions_table = table_name
+        df_predict_ddb = con.table(table_name)
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(
