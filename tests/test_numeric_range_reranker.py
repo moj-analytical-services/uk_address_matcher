@@ -5,7 +5,7 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     NumericRangeRerankerConfig,
     build_numeric_range_adjustments,
     build_numeric_range_candidate_pool,
-    ensure_numeric_range_metadata,
+    ensure_numeric_range_struct,
 )
 
 _RANGE_TYPE = (
@@ -32,14 +32,14 @@ def _attribute(
     return (
         "struct_pack("
         f"raw := '{raw}', lower := {lower}::UINTEGER, "
-        f"upper := {upper}::UINTEGER, width := {upper - lower}::UINTEGER, "
+        f"upper := {upper}::UINTEGER, width := {max(0, upper - lower)}::UINTEGER, "
         f"lower_suffix := {lower_suffix_sql}, upper_suffix := {upper_suffix_sql}, "
         f"role := {role}::UTINYINT, flags := {flags}::UTINYINT, "
         f"lower_tf := {lower_tf_sql})"
     )
 
 
-def test_legacy_numeric_range_is_normalised_for_reranking():
+def test_numeric_range_struct_is_preserved_for_reranking():
     con = duckdb.connect()
     relation = con.sql("""
         SELECT
@@ -58,11 +58,24 @@ def test_legacy_numeric_range_is_normalised_for_reranking():
             ) AS numeric_range
     """)
 
-    metadata = ensure_numeric_range_metadata(con, relation)
-    range_metadata = metadata.select("numeric_range_metadata").fetchone()[0]
+    normalised = ensure_numeric_range_struct(relation)
+    numeric_range = normalised.select("numeric_range").fetchone()[0]
 
-    assert range_metadata["range_count"] == 1
-    assert range_metadata["range_attributes"][0]["lower"] == 20
+    assert numeric_range["lower"] == 20
+    assert numeric_range["upper"] == 23
+
+
+def test_missing_numeric_range_is_normalised_to_typed_null():
+    con = duckdb.connect()
+    relation = con.sql("SELECT 'C1' AS unique_id")
+
+    normalised = ensure_numeric_range_struct(relation)
+    numeric_range = normalised.select("numeric_range").fetchone()[0]
+
+    assert numeric_range is None
+    range_type = normalised.types[normalised.columns.index("numeric_range")]
+    assert "lower UINTEGER" in str(range_type)
+    assert "lower_tf DOUBLE" in str(range_type)
 
 
 def test_splink_owns_numeric_range_reranker_configuration():
@@ -294,11 +307,15 @@ def _range_candidates(con):
             scalar_value if suffix_value == "NULL" else scalar_value + suffix_value
         )
         numeric_tokens_sql = f"['{numeric_token}']::VARCHAR[]"
+        range_l_sql = (
+            f"NULL::{_RANGE_TYPE}" if count_l == 0 else f"list_extract({attrs_l}, 1)"
+        )
+        range_r_sql = (
+            f"NULL::{_RANGE_TYPE}" if count_r == 0 else f"list_extract({attrs_r}, 1)"
+        )
         value_rows.append(
             f"('{case_id}', 'L{index}', 'R{index}', {index}, {index + 1000}, "
-            f"{count_l}::UTINYINT, {attrs_l}, {count_r}::UTINYINT, {attrs_r}, "
-            f"{scalars_l}::UINTEGER[], {suffixes_l}::VARCHAR[], {roles_l}::UTINYINT[], "
-            f"{scalars_l}::UINTEGER[], {suffixes_l}::VARCHAR[], {roles_l}::UTINYINT[], "
+            f"{range_l_sql}, {range_r_sql}, "
             f"{numeric_tokens_sql}, {numeric_tokens_sql}, "
             f"{flat_l}::VARCHAR, {flat_r}::VARCHAR, {legacy}::DOUBLE, {weight}::DOUBLE)"
         )
@@ -309,37 +326,14 @@ def _range_candidates(con):
         ) AS candidates(
             case_id, unique_id_l, unique_id_r,
             ukam_address_id_l, ukam_address_id_r,
-            numeric_range_count_l, numeric_range_attributes_l,
-            numeric_range_count_r, numeric_range_attributes_r,
-            numeric_scalar_tokens_l, numeric_scalar_suffixes_l,
-            numeric_scalar_roles_l, numeric_scalar_tokens_r,
-            numeric_scalar_suffixes_r, numeric_scalar_roles_r,
+            numeric_range_l, numeric_range_r,
             numeric_tokens_l, numeric_tokens_r,
             flat_identity_l, flat_identity_r,
             legacy_numeric_bits, match_weight
         )
         """
     )
-    return con.sql(
-        f"""
-        SELECT
-            * EXCLUDE (
-                numeric_range_count_l,
-                numeric_range_attributes_l,
-                numeric_range_count_r,
-                numeric_range_attributes_r
-            ),
-            struct_pack(
-                range_count := numeric_range_count_l,
-                range_attributes := numeric_range_attributes_l
-            ) AS numeric_range_metadata_l,
-            struct_pack(
-                range_count := numeric_range_count_r,
-                range_attributes := numeric_range_attributes_r
-            ) AS numeric_range_metadata_r
-        FROM ({relation.sql_query()}) AS relation
-        """
-    )
+    return relation
 
 
 def test_numeric_range_adjustments_are_postcode_agnostic_and_guarded():
@@ -374,7 +368,7 @@ def test_numeric_range_adjustments_are_postcode_agnostic_and_guarded():
     assert rows["L11"] == ("scalar_range_endpoint", True, 5.0)
     assert rows["L12"] == ("scalar_range_endpoint", True, 0.0)
     assert rows["L13"][0:2] == ("scalar_range_endpoint", True)
-    assert "L14" not in rows
+    assert rows["L14"][0:2] == ("scalar_range_endpoint", True)
 
 
 def test_numeric_range_adjustment_respects_configured_cap():
@@ -395,17 +389,13 @@ def test_numeric_range_adjustment_respects_configured_cap():
 
 def test_numeric_range_candidate_pool_can_rescue_raw_rank_six():
     con = duckdb.connect()
-    empty = f"[]::{_RANGE_TYPE}[]"
+    empty = f"NULL::{_RANGE_TYPE}"
     candidate_rows = []
     for rank in range(1, 7):
-        range_count = 1 if rank == 6 else 0
-        range_attributes = f"[{_attribute('20-23', 20, 23)}]" if rank == 6 else empty
+        numeric_range = _attribute("20-23", 20, 23) if rank == 6 else empty
         candidate_rows.append(
             f"('L{rank}', 'M', {rank}, 100, {21.0 - rank}::DOUBLE, "
-            f"{range_count}::UTINYINT, {range_attributes}, "
-            f"0::UTINYINT, {empty}, ['20']::VARCHAR[], ['20']::VARCHAR[], "
-            "[20]::UINTEGER[], [NULL]::VARCHAR[], [0]::UTINYINT[], "
-            "[20]::UINTEGER[], [NULL]::VARCHAR[], [0]::UTINYINT[], "
+            f"{numeric_range}, {empty}, ['20']::VARCHAR[], ['20']::VARCHAR[], "
             "NULL::VARCHAR, NULL::VARCHAR, "
             "2.0::DOUBLE, 1.0::DOUBLE, 1.0::DOUBLE, "
             "1.0::DOUBLE, 1.0::DOUBLE, 1.0::DOUBLE)"
@@ -414,31 +404,14 @@ def test_numeric_range_candidate_pool_can_rescue_raw_rank_six():
         WITH candidates AS (
             SELECT * FROM (VALUES {", ".join(candidate_rows)}) AS rows(
                 unique_id_l, unique_id_r, ukam_address_id_l, ukam_address_id_r,
-                match_weight, range_count_l, range_attributes_l,
-                range_count_r, range_attributes_r, numeric_tokens_l,
-                numeric_tokens_r, numeric_scalar_tokens_l,
-                numeric_scalar_suffixes_l, numeric_scalar_roles_l,
-                numeric_scalar_tokens_r, numeric_scalar_suffixes_r,
-                numeric_scalar_roles_r, flat_identity_l, flat_identity_r,
+                match_weight, numeric_range_l, numeric_range_r,
+                numeric_tokens_l, numeric_tokens_r, flat_identity_l, flat_identity_r,
                 bf_numeric_token_1, bf_numeric_token_2, bf_numeric_token_3,
                 bf_tf_adj_numeric_token_1, bf_tf_adj_numeric_token_2,
                 bf_tf_adj_numeric_token_3
             )
         )
-        SELECT
-            * EXCLUDE (
-                range_count_l, range_attributes_l,
-                range_count_r, range_attributes_r
-            ),
-            struct_pack(
-                range_count := range_count_l,
-                range_attributes := range_attributes_l
-            ) AS numeric_range_metadata_l,
-            struct_pack(
-                range_count := range_count_r,
-                range_attributes := range_attributes_r
-            ) AS numeric_range_metadata_r
-        FROM candidates
+        SELECT * FROM candidates
     """)
 
     result = build_numeric_range_candidate_pool(
@@ -481,14 +454,16 @@ def test_numeric_window_metadata_is_derived_only_from_supported_tokens():
     )
     matcher._resolve_canonical_data()
     rows = (
-        matcher._canonical_clean.project("unique_id, numeric_range_attributes")
+        matcher._canonical_clean.project("unique_id, numeric_range")
         .order("unique_id")
         .fetchall()
     )
 
-    assert len(rows[0][1]) == 1
+    assert rows[0][1]["lower"] == 20
+    assert rows[0][1]["upper"] == 23
     assert rows[1][1] is None
-    assert len(rows[2][1]) == 1
+    assert rows[2][1]["lower"] == 20
+    assert rows[2][1]["upper"] == 23
     con.close()
 
 
@@ -519,9 +494,8 @@ def test_enabled_splink_path_collapses_intermediate_numeric_columns():
     prediction_columns = con.table(stage.predictions_table).columns
 
     assert "legacy_numeric_bits" not in prediction_columns
-    assert "numeric_range_metadata_l" in prediction_columns
-    assert "numeric_range_metadata_r" in prediction_columns
-    assert "numeric_range_count_l" not in prediction_columns
+    assert "numeric_range_l" in prediction_columns
+    assert "numeric_range_r" in prediction_columns
     assert not any(column.startswith("bf_") for column in prediction_columns)
     assert not any(column.startswith("gamma_") for column in prediction_columns)
     assert not any(column.startswith("tf_") for column in prediction_columns)

@@ -297,10 +297,10 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
 
 
-def test_legacy_prepared_canonical_skips_numeric_range_reranking(
+def test_prepared_canonical_without_numeric_range_still_matches(
     con, canonical_data, messy_data, tmp_path
 ):
-    prepared_folder = tmp_path / "legacy_without_numeric_range"
+    prepared_folder = tmp_path / "without_numeric_range"
     prepare_canonical_folder(
         canonical_data,
         output_folder=prepared_folder,
@@ -309,19 +309,21 @@ def test_legacy_prepared_canonical_skips_numeric_range_reranking(
     )
 
     canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
-    legacy_path = prepared_folder / "ukam_canonical_addresses.legacy.parquet"
+    without_range_path = (
+        prepared_folder / "ukam_canonical_addresses.without_range.parquet"
+    )
     con.execute(
         f"""
         COPY (
             SELECT * EXCLUDE (
-                numeric_range_attributes
+                numeric_range
             )
             FROM read_parquet('{canonical_path}')
-        ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        ) TO '{without_range_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
     )
     canonical_path.unlink()
-    legacy_path.rename(canonical_path)
+    without_range_path.rename(canonical_path)
 
     result = AddressMatcher(
         canonical_addresses=prepared_folder,
