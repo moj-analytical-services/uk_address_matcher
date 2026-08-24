@@ -22,8 +22,8 @@ class NumericRangeRerankerConfig:
 
 
 _RANGE_STRUCT_COLUMNS = {
-    "numeric_range_metadata_l",
-    "numeric_range_metadata_r",
+    "numeric_range_l",
+    "numeric_range_r",
     "numeric_tokens_l",
     "numeric_tokens_r",
     "flat_identity_l",
@@ -43,121 +43,22 @@ _LEGACY_NUMERIC_FACTOR_COLUMNS = [
     *(f"bf_tf_adj_numeric_token_{position}" for position in range(1, 4)),
 ]
 
+_NUMERIC_RANGE_STRUCT_TYPE = (
+    "STRUCT(raw VARCHAR, lower UINTEGER, upper UINTEGER, width UINTEGER, "
+    "lower_suffix VARCHAR, upper_suffix VARCHAR, role UTINYINT, "
+    "flags UTINYINT, lower_tf DOUBLE)"
+)
 
-def ensure_numeric_range_metadata(
-    con: duckdb.DuckDBPyConnection,
+
+def ensure_numeric_range_struct(
     relation: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    """Expose nullable valid range attributes as one internal struct."""
-    if "numeric_range_metadata" in relation.columns:
+    """Expose the current numeric-range struct, or a typed NULL when absent."""
+    if "numeric_range" in relation.columns:
         return relation
-
-    missing_columns = []
-    if "numeric_tokens" not in relation.columns:
-        missing_columns.append("numeric_tokens")
-    if not {"numeric_range_attributes", "numeric_range"}.intersection(relation.columns):
-        missing_columns.append("numeric_range_attributes or numeric_range")
-    if missing_columns:
-        raise ValueError(
-            "Numeric-range reranking requires numeric_range_metadata or these "
-            f"columns: {', '.join(missing_columns)}"
-        )
-    if "numeric_range_attributes" not in relation.columns:
-        return con.sql(f"""
-            WITH input AS (
-                SELECT *
-                FROM ({relation.sql_query()}) AS input
-            ),
-            attributes AS (
-                SELECT
-                    input.* EXCLUDE (numeric_range),
-                    CASE
-                        WHEN numeric_range IS NULL THEN NULL
-                        ELSE [struct_pack(
-                            raw := numeric_range.raw,
-                            lower := numeric_range.lower,
-                            upper := numeric_range.upper,
-                            width := numeric_range.width,
-                            lower_suffix := NULL::VARCHAR,
-                            upper_suffix := NULL::VARCHAR,
-                            role := 1::UTINYINT,
-                            flags := 0::UTINYINT,
-                            lower_tf := NULL::DOUBLE
-                        )]
-                    END AS numeric_range_attributes
-                FROM input
-            )
-            SELECT
-                attributes.* EXCLUDE (numeric_range_attributes),
-                COALESCE(len(numeric_range_attributes), 0)::UINTEGER
-                    AS numeric_range_count,
-                list_extract(numeric_range_attributes, 1).lower
-                    AS numeric_range_start,
-                list_extract(numeric_range_attributes, 1).upper
-                    AS numeric_range_end,
-                list_extract(numeric_range_attributes, 1).lower_suffix
-                    AS numeric_range_start_suffix,
-                list_extract(numeric_range_attributes, 1).upper_suffix
-                    AS numeric_range_end_suffix,
-                list_extract(numeric_range_attributes, 1).role
-                    AS numeric_range_role,
-                list_extract(numeric_range_attributes, 1).flags
-                    AS numeric_range_flags,
-                list_transform(
-                    list_filter(
-                        numeric_tokens,
-                        token -> NOT regexp_matches(
-                            token,
-                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                        )
-                    ),
-                    token -> TRY_CAST(
-                        regexp_extract(token, '\\d{{1,5}}', 0) AS UINTEGER
-                    )
-                ) AS numeric_scalar_tokens,
-                list_transform(
-                    list_filter(
-                        numeric_tokens,
-                        token -> NOT regexp_matches(
-                            token,
-                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                        )
-                    ),
-                    token -> NULLIF(regexp_replace(token, '\\d', '', 'g'), '')
-                ) AS numeric_scalar_suffixes,
-                list_transform(
-                    list_filter(
-                        numeric_tokens,
-                        token -> NOT regexp_matches(
-                            token,
-                            '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                        )
-                    ),
-                    token -> 0::UTINYINT
-                ) AS numeric_scalar_roles,
-                numeric_range_attributes,
-                CASE
-                    WHEN numeric_range_attributes IS NULL THEN NULL
-                    ELSE struct_pack(
-                        range_count := len(numeric_range_attributes)::UTINYINT,
-                        range_attributes := numeric_range_attributes
-                    )
-                END AS numeric_range_metadata
-            FROM attributes
-        """)
-
-    return con.sql(f"""
-        SELECT
-            input.* EXCLUDE (numeric_range_attributes),
-            CASE
-                WHEN numeric_range_attributes IS NULL THEN NULL
-                ELSE struct_pack(
-                    range_count := len(numeric_range_attributes)::UTINYINT,
-                    range_attributes := numeric_range_attributes
-                )
-            END AS numeric_range_metadata
-        FROM ({relation.sql_query()}) AS input
-    """)
+    return relation.select(
+        f"*, CAST(NULL AS {_NUMERIC_RANGE_STRUCT_TYPE}) AS numeric_range"
+    )
 
 
 def _validate_legacy_numeric_factors(relation: duckdb.DuckDBPyRelation) -> None:
@@ -212,29 +113,12 @@ def add_legacy_numeric_bits(
 
 
 def _stable_prediction_columns(relation: duckdb.DuckDBPyRelation) -> list[str]:
-    range_blocking_columns = {
-        f"{column}_{side}"
-        for column in (
-            "numeric_range_count",
-            "numeric_range_start",
-            "numeric_range_end",
-            "numeric_range_start_suffix",
-            "numeric_range_end_suffix",
-            "numeric_range_role",
-            "numeric_range_flags",
-            "numeric_scalar_tokens",
-            "numeric_scalar_suffixes",
-            "numeric_scalar_roles",
-        )
-        for side in ("l", "r")
-    }
     excluded_columns = {
         column
         for column in relation.columns
         if column.startswith(("gamma_", "bf_", "tf_"))
         or column.startswith("numeric_token_")
         or column == "legacy_numeric_bits"
-        or column in range_blocking_columns
     }
     return [column for column in relation.columns if column not in excluded_columns]
 
@@ -427,12 +311,12 @@ def _materialise_numeric_range_adjustments(
         SELECT {", ".join(range_candidate_columns)}
         FROM ({relation.sql_query()}) AS candidates
         WHERE (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 1
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 0
+            numeric_range_l IS NOT NULL
+            AND numeric_range_r IS NULL
         )
         OR (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 0
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 1
+            numeric_range_l IS NULL
+            AND numeric_range_r IS NOT NULL
         )
     """)
     range_candidates_with_bits = add_legacy_numeric_bits(con, range_candidates)
@@ -475,12 +359,12 @@ def build_numeric_range_adjustments(
         SELECT *
         FROM {source_name} AS candidate
         WHERE (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 1
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 0
+            numeric_range_l IS NOT NULL
+            AND numeric_range_r IS NULL
         )
         OR (
-            COALESCE(numeric_range_metadata_l.range_count, 0) = 0
-            AND COALESCE(numeric_range_metadata_r.range_count, 0) = 1
+            numeric_range_l IS NULL
+            AND numeric_range_r IS NOT NULL
         )
     """).create(range_candidate_name)
 
@@ -489,18 +373,8 @@ def build_numeric_range_adjustments(
         WITH attributes AS (
             SELECT
                 candidate.*,
-                CASE WHEN COALESCE(numeric_range_metadata_l.range_count, 0) = 1
-                    THEN list_extract(
-                        numeric_range_metadata_l.range_attributes, 1
-                    )
-                    ELSE NULL
-                END AS range_l,
-                CASE WHEN COALESCE(numeric_range_metadata_r.range_count, 0) = 1
-                    THEN list_extract(
-                        numeric_range_metadata_r.range_attributes, 1
-                    )
-                    ELSE NULL
-                END AS range_r,
+                numeric_range_l AS range_l,
+                numeric_range_r AS range_r,
                 match_weight - legacy_numeric_bits AS non_numeric_bits
             FROM {range_candidate_name} AS candidate
         ),

@@ -31,8 +31,8 @@ def improve_predictions_using_distinguishing_tokens(
 
     if numeric_range_reranker is not None:
         required_range_columns = {
-            "numeric_range_metadata_l",
-            "numeric_range_metadata_r",
+            "numeric_range_l",
+            "numeric_range_r",
             "numeric_tokens_l",
             "numeric_tokens_r",
             "flat_identity_l",
