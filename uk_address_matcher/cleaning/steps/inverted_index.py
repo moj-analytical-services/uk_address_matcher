@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from uk_address_matcher.cleaning.steps.inverted_index_strategies import (
+    InvertedIndexPortfolio as InvertedIndexBuildPortfolio,
+    range_context_ctes,
+)
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
-
-BASE_POSTING_CAP = 20
 
 
 @dataclass(frozen=True)
@@ -168,12 +170,12 @@ END""",
 TRIGRAM_INDEX = PhysicalIndexStrategy(
     name="trigram",
     key_generator=ADJACENT_TRIGRAM_KEYS,
-    maximum_posting_size=BASE_POSTING_CAP,
+    maximum_posting_size=InvertedIndexBuildPortfolio().posting_caps()["trigram"],
 )
 BIGRAM_INDEX = PhysicalIndexStrategy(
     name="bigram",
     key_generator=ADJACENT_BIGRAM_KEYS,
-    maximum_posting_size=BASE_POSTING_CAP,
+    maximum_posting_size=InvertedIndexBuildPortfolio().posting_caps()["bigram"],
 )
 TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="trigram",
@@ -314,6 +316,8 @@ def _build_inverted_index_from_keys(strategy: PhysicalIndexStrategy):
 
 def _lookup_keys_in_inverted_index(
     strategies: Sequence[InvertedIndexLookupStrategy] | None = None,
+    *,
+    canonical_range_slots_table: str | None = None,
 ):
     """Create the transient source-key lookup stage."""
     lookup_strategies = tuple(strategies or DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES)
@@ -350,10 +354,150 @@ def _lookup_keys_in_inverted_index(
                 f"{contributes_evidence} AS __contributes_signature_evidence, "
                 f"{strategy.maximum_posting_size} AS __maximum_posting_size, "
                 f"{strategy.transformation_cost} AS __transformation_cost, "
-                f"{strategy.lookup_precedence} AS __lookup_precedence "
+                f"{strategy.lookup_precedence} AS __lookup_precedence, "
+                "NULL::UINTEGER AS __probe_value, "
+                "NULL::VARCHAR AS __probe_context, "
+                "NULL::UTINYINT AS __probe_role, "
+                "FALSE AS __requires_range_verification "
                 "FROM {base}"
             )
         unnested_keys_sql = " UNION ALL ".join(union_parts)
+
+        if canonical_range_slots_table is not None:
+            portfolio = InvertedIndexBuildPortfolio()
+            ranges = portfolio.numeric_ranges
+            range_context_sql = range_context_ctes(
+                source_name="{base}",
+                portfolio=portfolio,
+            )
+            unnested_keys_sql = f"""
+            WITH ordinary_requested AS (
+                {unnested_keys_sql}
+            ),
+            scalar_positions AS (
+                SELECT
+                    base.unique_id,
+                    base.__tokens,
+                    token,
+                    token_position,
+                    row_number() OVER (
+                        PARTITION BY base.unique_id
+                        ORDER BY token_position
+                    ) AS scalar_ordinal
+                FROM {{base}} AS base
+                CROSS JOIN UNNEST(base.__tokens)
+                    WITH ORDINALITY AS tokens(token, token_position)
+                WHERE base.numeric_range_count = 0
+                  AND len(base.numeric_scalar_tokens) > 0
+                  AND regexp_full_match(token, '\\d{{1,5}}')
+            ),
+            scalar_values AS (
+                SELECT
+                    scalar_positions.*,
+                    list_extract(base.numeric_scalar_tokens, scalar_ordinal)
+                        AS probe_value,
+                    list_extract(base.numeric_scalar_suffixes, scalar_ordinal)
+                        AS probe_suffix,
+                    list_extract(base.numeric_scalar_roles, scalar_ordinal)
+                        AS probe_role
+                FROM scalar_positions
+                                INNER JOIN {{base}} AS base
+                                    ON base.unique_id = scalar_positions.unique_id
+                                WHERE list_extract(
+                                    base.numeric_scalar_tokens, scalar_ordinal
+                                ) = try_cast(token AS UINTEGER)
+                  AND COALESCE(
+                    list_extract(base.numeric_scalar_suffixes, scalar_ordinal), ''
+                  ) = ''
+            ),
+            masked_scalars AS (
+                SELECT
+                    scalar_values.*,
+                    list_concat(
+                        CASE WHEN token_position > 1
+                            THEN list_slice(__tokens, 1, token_position - 1)
+                            ELSE []::VARCHAR[]
+                        END,
+                        ['{ranges.mask_token}']::VARCHAR[],
+                        CASE WHEN token_position < len(__tokens)
+                            THEN list_slice(__tokens, token_position + 1, len(__tokens))
+                            ELSE []::VARCHAR[]
+                        END
+                    ) AS masked_tokens
+                FROM scalar_values
+            ),
+            scalar_contexts AS (
+                SELECT *, array_to_string(
+                    list_slice(masked_tokens, token_position - 1, token_position), ' '
+                ) AS context
+                FROM masked_scalars WHERE token_position > 1
+                UNION ALL
+                SELECT *, array_to_string(
+                    list_slice(masked_tokens, token_position, token_position + 1), ' '
+                ) AS context
+                FROM masked_scalars WHERE token_position < len(masked_tokens)
+                UNION ALL
+                SELECT *, array_to_string(
+                    list_slice(masked_tokens, token_position - 2, token_position), ' '
+                ) AS context
+                FROM masked_scalars WHERE token_position > 2
+                UNION ALL
+                SELECT *, array_to_string(
+                    list_slice(masked_tokens, token_position - 1, token_position + 1), ' '
+                ) AS context
+                FROM masked_scalars
+                WHERE token_position > 1 AND token_position < len(masked_tokens)
+                UNION ALL
+                SELECT *, array_to_string(
+                    list_slice(masked_tokens, token_position, token_position + 2), ' '
+                ) AS context
+                FROM masked_scalars
+                WHERE token_position + 2 <= len(masked_tokens)
+            ),
+            scalar_range_requested AS (
+                SELECT
+                    unique_id AS __messy_uid,
+                    'NRB16|' || context || '|B='
+                        || floor(probe_value / {ranges.bucket_width})::BIGINT::VARCHAR
+                            AS __key,
+                    '{ranges.context_strategy_name}' AS __source_strategy,
+                    '{ranges.context_strategy_name}' AS __lookup_strategy,
+                    'candidate_only' AS __evidence_mode,
+                    FALSE AS __contributes_signature_evidence,
+                    {ranges.context_posting_cap} AS __maximum_posting_size,
+                    0 AS __transformation_cost,
+                    0 AS __lookup_precedence,
+                    probe_value AS __probe_value,
+                    context AS __probe_context,
+                    probe_role AS __probe_role,
+                    TRUE AS __requires_range_verification
+                FROM scalar_contexts
+            ),
+            {range_context_sql},
+            exact_range_requested AS (
+                SELECT
+                    unique_id AS __messy_uid,
+                    'NRX1|' || context || '|R=' || range_start::VARCHAR
+                        || ':' || range_end::VARCHAR AS __key,
+                    '{ranges.exact_strategy_name}' AS __source_strategy,
+                    '{ranges.exact_strategy_name}' AS __lookup_strategy,
+                    'candidate_only' AS __evidence_mode,
+                    FALSE AS __contributes_signature_evidence,
+                    {ranges.exact_posting_cap} AS __maximum_posting_size,
+                    0 AS __transformation_cost,
+                    0 AS __lookup_precedence,
+                    range_start AS __probe_value,
+                    context AS __probe_context,
+                    range_role AS __probe_role,
+                    TRUE AS __requires_range_verification
+                FROM range_contexts
+            )
+            SELECT * FROM ordinary_requested
+            UNION ALL
+            SELECT * FROM scalar_range_requested
+            UNION ALL
+            SELECT * FROM exact_range_requested
+            """
 
         requested_keys_sql = """
         SELECT *
@@ -375,7 +519,11 @@ def _lookup_keys_in_inverted_index(
             requested.__contributes_signature_evidence,
             requested.__evidence_mode,
             requested.__maximum_posting_size,
-            requested.__transformation_cost
+            requested.__transformation_cost,
+            requested.__probe_value,
+            requested.__probe_context,
+            requested.__probe_role,
+            requested.__requires_range_verification
         FROM {requested_keys} AS requested
         INNER JOIN __ukam_inverted_index AS index
             ON requested.__key = index.key
@@ -393,14 +541,38 @@ def _lookup_keys_in_inverted_index(
             __contributes_signature_evidence,
             __evidence_mode,
             __maximum_posting_size,
-            __transformation_cost
+            __transformation_cost,
+            __probe_value,
+            __probe_context,
+            __probe_role,
+            __requires_range_verification
         FROM {matched}, unnest(unique_ids) AS candidates(candidate_id)
         """
+        resolved_candidate_provenance_sql = "SELECT * FROM {candidate_provenance}"
+        if canonical_range_slots_table is not None:
+            resolved_candidate_provenance_sql = f"""
+            SELECT * FROM {{candidate_provenance}}
+            WHERE NOT __requires_range_verification
+            UNION ALL
+            SELECT candidate.*
+            FROM {{candidate_provenance}} AS candidate
+            INNER JOIN {canonical_range_slots_table} AS canonical_range
+                ON candidate.candidate_id = canonical_range.unique_id
+               AND candidate.__probe_context = canonical_range.context
+            WHERE candidate.__requires_range_verification
+              AND candidate.__probe_value BETWEEN canonical_range.range_start
+                  AND canonical_range.range_end
+              AND (
+                  candidate.__probe_role = canonical_range.range_role
+                  OR candidate.__probe_role = 0
+                  OR canonical_range.range_role = 0
+              )
+            """
         deduplicated_sql = """
         SELECT
             __messy_uid,
             list(DISTINCT candidate_id ORDER BY candidate_id) AS exploding_unique_ids
-        FROM {candidate_provenance}
+        FROM {resolved_candidate_provenance}
         WHERE candidate_id IS NOT NULL
         GROUP BY __messy_uid
         """
@@ -417,7 +589,7 @@ def _lookup_keys_in_inverted_index(
             SUM(
                 CASE WHEN __posting_list_size = 1 THEN 1 ELSE 0 END
             ) AS __unique_hits
-        FROM {candidate_provenance}
+        FROM {resolved_candidate_provenance}
         WHERE __contributes_signature_evidence
           AND __posting_list_size > 0
         GROUP BY __messy_uid, CAST(candidate_id AS VARCHAR)
@@ -461,6 +633,10 @@ def _lookup_keys_in_inverted_index(
                 CTEStep("requested_keys", requested_keys_sql),
                 CTEStep("matched", matched_sql),
                 CTEStep("candidate_provenance", provenance_sql),
+                CTEStep(
+                    "resolved_candidate_provenance",
+                    resolved_candidate_provenance_sql,
+                ),
                 CTEStep("deduplicated", deduplicated_sql),
                 CTEStep("cand_scores", cand_scores_sql),
                 CTEStep("score_map", score_map_sql),

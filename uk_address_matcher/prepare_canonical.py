@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
-from uk_address_matcher.cleaning.steps.inverted_index import (
-    BASE_INDEX_PORTFOLIO,
+from uk_address_matcher.cleaning.steps.inverted_index_strategies import (
+    InvertedIndexPortfolio,
 )
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
@@ -409,6 +409,7 @@ def _build_manifest(
     files_meta: dict[str, dict[str, object]],
     row_counts: dict[str, int],
     preparation_options: dict[str, object],
+    inverted_index_metadata: dict[str, object],
 ) -> dict[str, object]:
     """Build the manifest payload shared by local and remote writers."""
     from uk_address_matcher import __version__
@@ -419,16 +420,7 @@ def _build_manifest(
         "created_with_duckdb_version": created_with_duckdb_version,
         "row_counts": row_counts,
         "preparation_options": preparation_options,
-        "inverted_index_portfolio": {
-            "name": BASE_INDEX_PORTFOLIO.name,
-            "physical_indexes": [
-                {
-                    "name": strategy.name,
-                    "maximum_posting_size": strategy.maximum_posting_size,
-                }
-                for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
-            ],
-        },
+        "inverted_index_portfolio": inverted_index_metadata,
         "files": files_meta,
     }
 
@@ -661,6 +653,40 @@ def prepare_canonical_folder(
     # Compute row counts once (avoids repeated full scans)
     tf_count = tf_table.count("*").fetchone()[0]
     idx_count = inverted_index.count("*").fetchone()[0]
+    if {"index_strategy", "unique_ids"}.issubset(inverted_index.columns):
+        index_statistics_rows = con.sql(f"""
+            SELECT
+                index_strategy,
+                count(*) AS row_count,
+                sum(len(unique_ids)) AS membership_count,
+                max(len(unique_ids)) AS maximum_posting_size
+            FROM ({inverted_index.sql_query()}) AS inverted_index
+            GROUP BY index_strategy
+            ORDER BY index_strategy
+        """).fetchall()
+    else:
+        index_statistics_rows = []
+    index_statistics = {
+        "total_rows": idx_count,
+        "total_memberships": sum(int(row[2]) for row in index_statistics_rows),
+        "strategies": {
+            strategy: {
+                "rows": int(row_count),
+                "memberships": int(membership_count),
+                "maximum_posting_size": int(maximum_posting_size),
+            }
+            for (
+                strategy,
+                row_count,
+                membership_count,
+                maximum_posting_size,
+            ) in index_statistics_rows
+        },
+    }
+    inverted_index_metadata = {
+        "index_configuration": InvertedIndexPortfolio().to_manifest_dict(),
+        "index_statistics": index_statistics,
+    }
 
     logger.debug(
         "Wrote artefacts to '%s': %d addresses, %d term frequencies, %d index rows",
@@ -706,6 +732,7 @@ def prepare_canonical_folder(
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
             preparation_options={"add_debug_features": add_debug_features},
+            inverted_index_metadata=inverted_index_metadata,
         )
     else:
         _write_manifest_local(
@@ -715,6 +742,7 @@ def prepare_canonical_folder(
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
             preparation_options={"add_debug_features": add_debug_features},
+            inverted_index_metadata=inverted_index_metadata,
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)
@@ -728,6 +756,7 @@ def _write_manifest_local(
     artefact_columns: dict[str, list[str]],
     row_counts: dict[str, int],
     preparation_options: dict[str, object],
+    inverted_index_metadata: dict[str, object],
 ) -> None:
     """Write a JSON manifest recording provenance information.
 
@@ -745,12 +774,14 @@ def _write_manifest_local(
             "sha256": _sha256_file(p),
             "columns": artefact_columns.get(name, []),
         }
+    files_meta[PREPARED_INVERTED_INDEX_FILENAME].update(inverted_index_metadata)
 
     manifest = _build_manifest(
         created_with_duckdb_version=_duckdb.__version__,
         files_meta=files_meta,
         row_counts=row_counts,
         preparation_options=preparation_options,
+        inverted_index_metadata=inverted_index_metadata,
     )
 
     # Atomic write: write to a temp file then replace
@@ -769,6 +800,7 @@ def _write_manifest_remote(
     artefact_columns: dict[str, list[str]],
     row_counts: dict[str, int],
     preparation_options: dict[str, object],
+    inverted_index_metadata: dict[str, object],
 ) -> None:
     """Write a JSON manifest to a remote folder via DuckDB COPY."""
     import duckdb as _duckdb
@@ -781,12 +813,14 @@ def _write_manifest_remote(
             "sha256": None,
             "columns": artefact_columns.get(name, []),
         }
+    files_meta[PREPARED_INVERTED_INDEX_FILENAME].update(inverted_index_metadata)
 
     manifest = _build_manifest(
         created_with_duckdb_version=_duckdb.__version__,
         files_meta=files_meta,
         row_counts=row_counts,
         preparation_options=preparation_options,
+        inverted_index_metadata=inverted_index_metadata,
     )
 
     manifest_table = f"__ukam_manifest_{uuid4().hex}"

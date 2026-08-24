@@ -25,6 +25,9 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     _derive_keys_for_strategy,
     _lookup_keys_in_inverted_index,
 )
+from uk_address_matcher.cleaning.steps.inverted_index_strategies import (
+    build_index_chunk_sql,
+)
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
@@ -474,22 +477,42 @@ def derive_inverted_index(
     num_of_chunks = max(1, num_of_chunks)
 
     result_table = f"__ukam_derived_inverted_index_{uid}"
+    range_source_table = f"__ukam_inverted_index_range_source_{uid}"
     con.execute(f"DROP TABLE IF EXISTS {result_table}")
-    first_insert = True
+    con.execute(f"DROP TABLE IF EXISTS {range_source_table}")
+    range_source_available = False
+    if "numeric_range_attributes" in cleaned_address_table.columns:
+        range_attributes_sql = "numeric_range_attributes"
+        range_source_filter_sql = "numeric_range_attributes IS NOT NULL"
+        range_source_available = True
+    elif "numeric_range" in cleaned_address_table.columns:
+        range_attributes_sql = """
+            [struct_pack(
+                raw := numeric_range.raw,
+                lower := numeric_range.lower,
+                upper := numeric_range.upper,
+                width := numeric_range.width,
+                lower_suffix := NULL::VARCHAR,
+                upper_suffix := NULL::VARCHAR,
+                role := 1::UTINYINT,
+                flags := 0::UTINYINT,
+                lower_tf := NULL::DOUBLE
+            )]
+        """
+        range_source_filter_sql = "numeric_range IS NOT NULL"
+        range_source_available = True
+    else:
+        range_attributes_sql = None
+        range_source_filter_sql = None
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
+    first_insert = True
 
     for strategy in strategies:
         stage_label = f"Building inverted index ({strategy.name})"
         if num_of_chunks == 1:
             stage_started_at = time.perf_counter()
-            log_stage_start(
-                stage_label,
-                total_rows,
-                1,
-                progress_mode=progress_mode,
-            )
-            # Single-pass for this strategy
+            log_stage_start(stage_label, total_rows, 1, progress_mode=progress_mode)
             pipeline = create_sql_pipeline(
                 con,
                 input_rel=cleaned_address_table,
@@ -503,7 +526,6 @@ def derive_inverted_index(
                 ),
             )
             chunk_result = pipeline.run(debug_options if first_insert else None)
-
             if first_insert:
                 chunk_result.create(result_table)
                 first_insert = False
@@ -524,78 +546,114 @@ def derive_inverted_index(
                 time.perf_counter() - stage_started_at,
                 progress_mode=progress_mode,
             )
-        else:
-            # Chunked path for this strategy
-            stage_started_at = time.perf_counter()
-            progress = _ProgressBar(
-                label=stage_label,
-                total=total_rows,
-                total_units=num_of_chunks,
-                enabled=progress_mode == "auto",
-            )
-            log_stage_start(
-                stage_label,
-                total_rows,
-                num_of_chunks,
-                progress_mode=progress_mode,
-            )
-            try:
-                for chunk_index in range(num_of_chunks):
-                    chunk_started_at = time.perf_counter()
+            continue
 
-                    pipeline = create_sql_pipeline(
-                        con,
-                        input_rel=cleaned_address_table,
-                        stage_specs=[
-                            _derive_keys_for_strategy(
-                                strategy,
-                                num_of_chunks=num_of_chunks,
-                                chunk_index=chunk_index,
-                            ),
-                            _build_inverted_index_from_keys(strategy),
-                        ],
-                        pipeline_name=f"Build inverted index ({strategy.name})",
-                        pipeline_description=(
-                            f"Derive {strategy.name} keys and aggregate into inverted "
-                            f"index (chunk {chunk_index + 1}/{num_of_chunks})"
+        stage_started_at = time.perf_counter()
+        progress = _ProgressBar(
+            label=stage_label,
+            total=total_rows,
+            total_units=num_of_chunks,
+            enabled=progress_mode == "auto",
+        )
+        log_stage_start(
+            stage_label,
+            total_rows,
+            num_of_chunks,
+            progress_mode=progress_mode,
+        )
+        try:
+            for chunk_index in range(num_of_chunks):
+                chunk_started_at = time.perf_counter()
+                pipeline = create_sql_pipeline(
+                    con,
+                    input_rel=cleaned_address_table,
+                    stage_specs=[
+                        _derive_keys_for_strategy(
+                            strategy,
+                            num_of_chunks=num_of_chunks,
+                            chunk_index=chunk_index,
                         ),
-                    )
-                    chunk_result = pipeline.run(debug_options if first_insert else None)
+                        _build_inverted_index_from_keys(strategy),
+                    ],
+                    pipeline_name=f"Build inverted index ({strategy.name})",
+                    pipeline_description=(
+                        f"Derive {strategy.name} keys and aggregate into inverted "
+                        f"index (chunk {chunk_index + 1}/{num_of_chunks})"
+                    ),
+                )
+                chunk_result = pipeline.run(debug_options if first_insert else None)
+                if first_insert:
+                    chunk_result.create(result_table)
+                    first_insert = False
+                else:
+                    chunk_result.insert_into(result_table)
 
-                    if first_insert:
-                        chunk_result.create(result_table)
-                        first_insert = False
-                    else:
-                        chunk_result.insert_into(result_table)
+                processed_records = min(
+                    (chunk_index + 1)
+                    * ((total_rows + num_of_chunks - 1) // num_of_chunks),
+                    total_rows,
+                )
+                progress.update(processed_records, completed_units=chunk_index + 1)
+                log_chunk_progress(
+                    total_rows,
+                    processed_records,
+                    stage_label=stage_label,
+                    progress_mode=progress_mode,
+                    progress=progress,
+                    chunk_index=chunk_index,
+                    total_chunks=num_of_chunks,
+                    chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
+                )
+        finally:
+            progress.close()
 
-                    processed_records = min(
-                        (chunk_index + 1)
-                        * ((total_rows + num_of_chunks - 1) // num_of_chunks),
-                        total_rows,
-                    )
-                    progress.update(
-                        processed_records,
-                        completed_units=chunk_index + 1,
-                    )
-                    log_chunk_progress(
-                        total_rows,
-                        processed_records,
-                        stage_label=stage_label,
-                        progress_mode=progress_mode,
-                        progress=progress,
-                        chunk_index=chunk_index,
-                        total_chunks=num_of_chunks,
-                        chunk_elapsed_seconds=(time.perf_counter() - chunk_started_at),
-                    )
-            finally:
-                progress.close()
+        log_stage_complete(
+            stage_label,
+            total_rows,
+            time.perf_counter() - stage_started_at,
+            progress_mode=progress_mode,
+        )
 
-            log_stage_complete(
-                stage_label,
-                total_rows,
-                time.perf_counter() - stage_started_at,
-                progress_mode=progress_mode,
+    if range_source_available:
+        range_input = f"""
+            SELECT
+                unique_id,
+                clean_full_address,
+                {range_attributes_sql} AS numeric_range_attributes
+            FROM ({cleaned_address_table.sql_query()}) AS cleaned_canonical
+            WHERE {range_source_filter_sql}
+        """
+        con.execute(f"""
+            CREATE TEMP TABLE {range_source_table} AS
+            SELECT
+                unique_id,
+                regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens,
+                numeric_range_attributes
+            FROM ({range_input}) AS range_input
+            WHERE numeric_range_attributes IS NOT NULL
+        """)
+        range_started_at = time.perf_counter()
+        range_result = con.sql(
+            build_index_chunk_sql(
+                source_table=range_source_table,
+                chunk_index=0,
+                number_of_chunks=1,
+                range_source_table=range_source_table,
+                include_ordinary=False,
+                include_ranges=True,
             )
+        )
+        if first_insert:
+            range_result.create(result_table)
+        else:
+            range_result.insert_into(result_table)
+        con.execute(f"DROP TABLE IF EXISTS {range_source_table}")
+        log_stage_complete(
+            "Building inverted index (numeric ranges)",
+            total_rows,
+            time.perf_counter() - range_started_at,
+            progress_mode=progress_mode,
+        )
 
     return con.table(result_table)
 
@@ -613,6 +671,7 @@ def prepare_data_for_matching(
     inverted_index: Optional[DuckDBPyRelation] = None,
     _inverted_index_strategies: list[InvertedIndexLookupStrategy] | None = None,
     inverted_index_n: Optional[int] = None,
+    _canonical_range_slots_table: str | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
@@ -730,7 +789,12 @@ def prepare_data_for_matching(
 
     inverted_index_stages = (
         (
-            [_lookup_keys_in_inverted_index(lookup_strategies)]
+            [
+                _lookup_keys_in_inverted_index(
+                    lookup_strategies,
+                    canonical_range_slots_table=_canonical_range_slots_table,
+                )
+            ]
             if lookup_strategies != DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
             else list(QUEUE_INVERTED_INDEX_LOOKUP)
         )

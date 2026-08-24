@@ -12,6 +12,9 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 from uk_address_matcher.cleaning.steps.inverted_index import (
     MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
 )
+from uk_address_matcher.cleaning.steps.inverted_index_strategies import (
+    canonical_range_slots_sql,
+)
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
 )
@@ -181,6 +184,7 @@ class AddressMatcher:
         self._tf_table: duckdb.DuckDBPyRelation | None = None
         self._inverted_index_table_name: str | None = None
         self._messy_clean: duckdb.DuckDBPyRelation | None = None
+        self._canonical_range_slots_table_name: str | None = None
 
     def _register_inverted_index(
         self,
@@ -206,6 +210,49 @@ class AddressMatcher:
         )
         self._inverted_index_table_name = table_name
 
+    def _register_canonical_range_slots(
+        self,
+        canonical_clean: duckdb.DuckDBPyRelation,
+    ) -> None:
+        """Materialise eligible canonical ranges once for targeted verification."""
+        if self._canonical_range_slots_table_name is not None:
+            _drop_table_and_registered_aliases(
+                self.con,
+                self._canonical_range_slots_table_name,
+            )
+        columns = set(canonical_clean.columns)
+        if "numeric_range_attributes" in columns:
+            range_attributes_sql = "numeric_range_attributes"
+            source_filter_sql = "numeric_range_attributes IS NOT NULL"
+        elif "numeric_range" in columns:
+            range_attributes_sql = """
+                [struct_pack(
+                    raw := numeric_range.raw,
+                    lower := numeric_range.lower,
+                    upper := numeric_range.upper,
+                    width := numeric_range.width,
+                    lower_suffix := NULL::VARCHAR,
+                    upper_suffix := NULL::VARCHAR,
+                    role := 1::UTINYINT,
+                    flags := 0::UTINYINT,
+                    lower_tf := NULL::DOUBLE
+                )]
+            """
+            source_filter_sql = "numeric_range IS NOT NULL"
+        else:
+            self._canonical_range_slots_table_name = None
+            return
+        table_name = f"__ukam_canonical_range_slots_{_uid()}"
+        self.con.execute(
+            f"CREATE TEMP TABLE {table_name} AS "
+            + canonical_range_slots_sql(
+                source_table=f"({canonical_clean.sql_query()}) AS canonical",
+                range_attributes_sql=range_attributes_sql,
+                source_filter_sql=source_filter_sql,
+            )
+        )
+        self._canonical_range_slots_table_name = table_name
+
     @property
     def _inverted_index(self) -> duckdb.DuckDBPyRelation | None:
         """Return the registered inverted index relation, if available."""
@@ -224,6 +271,7 @@ class AddressMatcher:
                 canonical_address_filter=self.canonical_address_filter,
             )
             self._canonical_clean = prepared.addresses
+            self._register_canonical_range_slots(self._canonical_clean)
             self._tf_table = prepared.term_frequencies
             self._register_inverted_index(prepared.inverted_index)
 
@@ -255,6 +303,7 @@ class AddressMatcher:
                 debug_options=self.debug_options,
                 show_progress=self.show_progress,
             )
+            self._register_canonical_range_slots(self._canonical_clean)
             logger.debug("Building inverted index from canonical data")
             inverted_index = derive_inverted_index(
                 self._canonical_clean,
@@ -280,6 +329,7 @@ class AddressMatcher:
             inverted_index=self._inverted_index,
             _inverted_index_strategies=MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
             inverted_index_n=inverted_index_n,
+            _canonical_range_slots_table=self._canonical_range_slots_table_name,
             dataset_role="messy",
             debug_options=self.debug_options,
             show_progress=self.show_progress,
