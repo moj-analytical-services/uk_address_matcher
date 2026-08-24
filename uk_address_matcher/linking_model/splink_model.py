@@ -6,6 +6,9 @@ from contextlib import contextmanager
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from splink import DuckDBAPI, Linker, SettingsCreator
 
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    ensure_numeric_range_struct,
+)
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
 _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
@@ -96,26 +99,19 @@ def _align_numeric_range_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
 ) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
-    """Add typed nullable range endpoints where an input schema lacks them."""
+    """Normalise both inputs to one nullable numeric-range struct."""
 
     def align_relation(relation: DuckDBPyRelation) -> DuckDBPyRelation:
-        missing_columns = [
-            column
-            for column in ("numeric_range_start", "numeric_range_end")
-            if column not in relation.columns
+        relation = ensure_numeric_range_struct(relation)
+        aliases = [
+            f"numeric_range.{field} AS numeric_range_{field}"
+            for field in ("lower", "upper")
+            if f"numeric_range_{field}" not in relation.columns
         ]
-        if missing_columns:
-            relation = relation.select(
-                "*, "
-                + ", ".join(
-                    f"CAST(NULL AS UINTEGER) AS {column}" for column in missing_columns
-                )
-            )
-        return relation
+        return relation.select("*, " + ", ".join(aliases)) if aliases else relation
 
-    return (
-        align_relation(df_addresses_to_match),
-        align_relation(df_addresses_to_search_within),
+    return align_relation(df_addresses_to_match), align_relation(
+        df_addresses_to_search_within
     )
 
 
