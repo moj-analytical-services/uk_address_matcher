@@ -53,7 +53,7 @@
       "sql_dialect": "duckdb"
     },
     {
-      "blocking_rule": "l.postcode = r.postcode AND l.numeric_range_start = r.numeric_range_start AND l.numeric_range_end = r.numeric_range_end",
+      "blocking_rule": "l.postcode = r.postcode AND l.numeric_range IS NOT NULL AND r.numeric_range IS NOT NULL AND l.numeric_range_lower = r.numeric_range_lower AND l.numeric_range_upper = r.numeric_range_upper",
       "sql_dialect": "duckdb"
     },
     {

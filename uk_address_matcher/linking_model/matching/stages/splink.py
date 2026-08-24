@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     NumericRangeRerankerConfig,
-    ensure_numeric_range_metadata,
+    ensure_numeric_range_struct,
     project_splink_predictions,
 )
 
@@ -129,41 +129,25 @@ class SplinkStage(MatchingStage):
             return None
 
         numeric_range_reranker = NumericRangeRerankerConfig()
-        range_source_columns = {"numeric_range_attributes", "numeric_range"}
         range_metadata_available = (
-            bool(range_source_columns.intersection(df_canonical.columns))
-            and bool(range_source_columns.intersection(df_unmatched.columns))
+            "numeric_range" in df_canonical.columns
+            and "numeric_range" in df_unmatched.columns
             and "numeric_tokens" in df_canonical.columns
             and "numeric_tokens" in df_unmatched.columns
             and "flat_identity" in df_canonical.columns
             and "flat_identity" in df_unmatched.columns
         )
         if range_metadata_available:
-            df_unmatched = ensure_numeric_range_metadata(con, df_unmatched)
-            df_canonical = ensure_numeric_range_metadata(con, df_canonical)
+            df_unmatched = ensure_numeric_range_struct(df_unmatched)
+            df_canonical = ensure_numeric_range_struct(df_canonical)
             range_input_columns = [
-                "numeric_range_metadata",
+                "numeric_range",
                 "numeric_tokens",
                 "flat_identity",
             ]
         else:
             numeric_range_reranker = None
             range_input_columns = []
-            range_columns_to_drop = [
-                column
-                for column in (
-                    "numeric_range_attributes",
-                    "numeric_range_metadata",
-                    "numeric_scalar_tokens",
-                    "numeric_scalar_suffixes",
-                    "numeric_scalar_roles",
-                )
-                if column in df_unmatched.columns and column not in df_canonical.columns
-            ]
-            if range_columns_to_drop:
-                df_unmatched = df_unmatched.select(
-                    f"* EXCLUDE ({', '.join(range_columns_to_drop)})"
-                )
         linker_columns = list(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))

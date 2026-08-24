@@ -107,56 +107,11 @@ def _derive_numeric_range(
     )
     SELECT
         * EXCLUDE (range_tokens, parsed_range_attributes),
-        len(parsed_range_attributes)::UINTEGER AS numeric_range_count,
-        list_extract(parsed_range_attributes, 1).lower AS numeric_range_start,
-        list_extract(parsed_range_attributes, 1).upper AS numeric_range_end,
-        list_extract(parsed_range_attributes, 1).lower_suffix
-            AS numeric_range_start_suffix,
-        list_extract(parsed_range_attributes, 1).upper_suffix
-            AS numeric_range_end_suffix,
-        list_extract(parsed_range_attributes, 1).role AS numeric_range_role,
-        list_extract(parsed_range_attributes, 1).flags AS numeric_range_flags,
-        list_transform(
-            list_filter(
-                numeric_tokens,
-                token -> NOT regexp_matches(
-                    token,
-                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                )
-            ),
-            token -> TRY_CAST(regexp_extract(token, '\\d{{1,5}}', 0) AS UINTEGER)
-        ) AS numeric_scalar_tokens,
-        list_transform(
-            list_filter(
-                numeric_tokens,
-                token -> NOT regexp_matches(
-                    token,
-                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                )
-            ),
-            token -> NULLIF(regexp_replace(token, '\\d', '', 'g'), '')
-        ) AS numeric_scalar_suffixes,
-        list_transform(
-            list_filter(
-                numeric_tokens,
-                token -> NOT regexp_matches(
-                    token,
-                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                )
-            ),
-            token -> 0::UTINYINT
-        ) AS numeric_scalar_roles,
         CASE
-            WHEN len(list_filter(
-                parsed_range_attributes,
-                attribute -> (attribute.flags & 27) = 0
-            )) > 0
-            THEN list_filter(
-                parsed_range_attributes,
-                attribute -> (attribute.flags & 27) = 0
-            )
+            WHEN len(parsed_range_attributes) > 0
+            THEN list_extract(parsed_range_attributes, 1)
             ELSE NULL
-        END AS numeric_range_attributes
+        END AS numeric_range
     FROM range_attributes
     """
 
@@ -167,7 +122,7 @@ def _derive_numeric_range(
     tags=["term_frequency"],
 )
 def _add_numeric_range_lower_endpoint_tf() -> str:
-    """Add lower-endpoint TF without carrying numeric TF columns downstream."""
+    """Add lower-endpoint TF to the nullable numeric-range struct."""
     return """
     WITH tf_lookup AS (
         SELECT
@@ -178,23 +133,23 @@ def _add_numeric_range_lower_endpoint_tf() -> str:
         FROM __ukam__tmp_numeric_term_frequencies
     )
     SELECT
-        input.* EXCLUDE (numeric_range_attributes),
-        list_transform(
-            input.numeric_range_attributes,
-            attribute -> struct_pack(
-                raw := attribute.raw,
-                lower := attribute.lower,
-                upper := attribute.upper,
-                width := attribute.width,
-                lower_suffix := attribute.lower_suffix,
-                upper_suffix := attribute.upper_suffix,
-                role := attribute.role,
-                flags := attribute.flags,
+        input.* EXCLUDE (numeric_range),
+        CASE
+            WHEN input.numeric_range IS NULL THEN NULL
+            ELSE struct_pack(
+                raw := input.numeric_range.raw,
+                lower := input.numeric_range.lower,
+                upper := input.numeric_range.upper,
+                width := input.numeric_range.width,
+                lower_suffix := input.numeric_range.lower_suffix,
+                upper_suffix := input.numeric_range.upper_suffix,
+                role := input.numeric_range.role,
+                flags := input.numeric_range.flags,
                 lower_tf := lookup.values[
-                    CAST(attribute.lower AS VARCHAR)
+                    CAST(input.numeric_range.lower AS VARCHAR)
                 ]
             )
-        ) AS numeric_range_attributes
+        END AS numeric_range
     FROM {input} AS input
     CROSS JOIN tf_lookup AS lookup
     """

@@ -189,7 +189,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
         _add_term_frequencies_to_address_tokens_using_registered_df,
         _add_numeric_term_frequencies_using_registered_df,
     ] + QUEUE_POST_TF
-    if "numeric_range_attributes" in address_table.columns:
+    if not pre_cleaned_addresses or "numeric_range" in address_table.columns:
         tf_and_post.insert(2, _add_numeric_range_lower_endpoint_tf)
     stage_queue = (
         pre_queue + tf_and_post + additional_stages

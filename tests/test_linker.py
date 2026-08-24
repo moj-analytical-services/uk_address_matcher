@@ -159,23 +159,47 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
     )
 
 
-def test_align_numeric_range_columns_adds_typed_null_endpoints(duck_con):
+def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
     messy = duck_con.sql("SELECT 1 AS unique_id")
-    canonical = duck_con.sql("SELECT 2 AS unique_id, 20::UINTEGER AS numeric_range_start")
+    canonical = duck_con.sql(
+        """
+        SELECT
+            2 AS unique_id,
+            struct_pack(
+                raw := '20-23',
+                lower := 20::UINTEGER,
+                upper := 23::UINTEGER,
+                width := 3::UINTEGER,
+                lower_suffix := NULL::VARCHAR,
+                upper_suffix := NULL::VARCHAR,
+                role := 1::UTINYINT,
+                flags := 0::UTINYINT,
+                lower_tf := NULL::DOUBLE
+            ) AS numeric_range
+        """
+    )
 
     aligned_messy, aligned_canonical = _align_numeric_range_columns(
         messy,
         canonical,
     )
 
-    assert aligned_messy.project("numeric_range_start, numeric_range_end").fetchone() == (
-        None,
-        None,
+    assert aligned_messy.project("numeric_range").fetchone() == (None,)
+    assert aligned_messy.project(
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (None, None)
+    assert aligned_canonical.project(
+        "numeric_range.lower, numeric_range.upper"
+    ).fetchone() == (
+        20,
+        23,
     )
     assert aligned_canonical.project(
-        "numeric_range_start, numeric_range_end"
-    ).fetchone() == (20, None)
-    assert str(aligned_messy.types[-2:]) == "[UINTEGER, UINTEGER]"
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (20, 23)
+    range_type = aligned_messy.types[aligned_messy.columns.index("numeric_range")]
+    assert "lower UINTEGER" in str(range_type)
+    assert "lower_tf DOUBLE" in str(range_type)
 
 
 def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
