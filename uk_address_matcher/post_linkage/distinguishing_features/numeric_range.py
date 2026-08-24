@@ -113,29 +113,12 @@ def add_legacy_numeric_bits(
 
 
 def _stable_prediction_columns(relation: duckdb.DuckDBPyRelation) -> list[str]:
-    range_blocking_columns = {
-        f"{column}_{side}"
-        for column in (
-            "numeric_range_count",
-            "numeric_range_start",
-            "numeric_range_end",
-            "numeric_range_start_suffix",
-            "numeric_range_end_suffix",
-            "numeric_range_role",
-            "numeric_range_flags",
-            "numeric_scalar_tokens",
-            "numeric_scalar_suffixes",
-            "numeric_scalar_roles",
-        )
-        for side in ("l", "r")
-    }
     excluded_columns = {
         column
         for column in relation.columns
         if column.startswith(("gamma_", "bf_", "tf_"))
         or column.startswith("numeric_token_")
         or column == "legacy_numeric_bits"
-        or column in range_blocking_columns
     }
     return [column for column in relation.columns if column not in excluded_columns]
 
