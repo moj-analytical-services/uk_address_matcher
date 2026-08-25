@@ -9,7 +9,7 @@
       type="image/png"
       href="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/main/docs/site/assets/images/icon.png"
     />
-    <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
     <header>
@@ -21,15 +21,40 @@
       </div>
       <div>
         <span id="bundle-name">Loading bundle...</span
-        ><span id="session-countdown">10:00 remaining</span
-        ><span id="save-status">Autosaved</span>
+        ><span id="session-countdown">Waiting for local files</span
+        ><span id="save-status">Autosaved</span
+        ><button id="download-updates" type="button">Download updates</button>
       </div>
     </header>
     <nav>
       <button class="tab active" data-view="overview">Overview</button
       ><button class="tab" data-view="review">Review</button>
     </nav>
-    <main>
+    <section id="dataset-loader" class="dataset-loader">
+      <div class="dataset-loader-card">
+        <p class="eyebrow">Browser-native review</p>
+        <h1>Load a labelling bundle</h1>
+        <p>
+          Choose the bundle manifest and review data from your computer. The
+          selected files stay in this browser session.
+        </p>
+        <label>
+          Bundle manifest
+          <input id="bundle-manifest-file" type="file" accept=".json,application/json" />
+        </label>
+        <label>
+          Review data
+          <input id="review-data-file" type="file" accept=".parquet,.csv" />
+        </label>
+        <label>
+          Canonical Parquet files (optional)
+          <input id="canonical-data-files" type="file" accept=".parquet" multiple />
+        </label>
+        <button id="load-dataset" type="button">Load data</button>
+        <p id="dataset-loader-status" role="status"></p>
+      </div>
+    </section>
+    <main id="labelling-app" hidden>
       <section id="overview-view" class="view active">
         <div id="layout">
           <aside id="filters">
@@ -396,8 +421,8 @@
             <div>
               <h2>Canonical data is not available</h2>
               <p>
-                No canonical path was provided. Relaunch the app with a
-                canonical address path to search canonical records.
+                No canonical address data was supplied. Relaunch the local app
+                with a canonical Parquet path to search canonical records.
               </p>
             </div>
           </div>
@@ -539,17 +564,10 @@
     <div id="toast" hidden></div>
     <div id="session-overlay" hidden>
       <div>
-        <h2>Session closed</h2>
-        <p>
-          The local UKAM labelling session closed after ten minutes of
-          inactivity.
-        </p>
-        <p>
-          Your saved labels remain in the bundle. Relaunch the application to
-          continue.
-        </p>
+        <h2>Review unavailable</h2>
+        <p>DuckDB-WASM could not complete the browser review query.</p>
       </div>
     </div>
-    <script src="/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>
