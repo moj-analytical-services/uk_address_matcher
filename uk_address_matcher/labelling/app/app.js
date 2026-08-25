@@ -1,5 +1,7 @@
+import { loadBrowserStore } from "./browser.js";
+
 "use strict";
-const token = new URLSearchParams(location.search).get("token");
+let browserStore = null;
 const state = {
   page: 1,
   pageSize: 20,
@@ -7,8 +9,6 @@ const state = {
   total: 0,
   rows: [],
   bootstrap: null,
-  deadline: 0,
-  lastActivity: 0,
   sortBy: "unique_id",
   sortOrder: "asc",
 };
@@ -23,19 +23,8 @@ const el = {
   overlay: $("session-overlay"),
 };
 async function api(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-UKAM-Session-Token": token,
-      ...options.headers,
-    },
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw Error(data.error || `Request failed (${response.status})`);
-  }
-  return response.status === 204 ? null : response.json();
+  if (!browserStore) throw Error("Load a labelling bundle first.");
+  return browserStore.request(url, options);
 }
 function stages() {
   return [...document.querySelectorAll('input[name="stage"]:checked')].map(
@@ -81,9 +70,32 @@ function configureRange(prefix) {
       max.value = high.value;
       paint();
       min.dispatchEvent(new Event("input"));
+    },
+    syncFromInputs = (changed) => {
+      const value = (input, slider, fallback) => {
+        if (!input.value) return fallback;
+        const number = Number(input.value);
+        return Number.isFinite(number)
+          ? Math.min(Math.max(number, Number(slider.min)), Number(slider.max))
+          : Number(slider.value);
+      };
+      low.value = value(min, low, low.min);
+      high.value = value(max, high, high.max);
+      if (Number(low.value) > Number(high.value)) {
+        if (changed === min) {
+          high.value = low.value;
+          max.value = high.value;
+        } else {
+          low.value = high.value;
+          min.value = low.value;
+        }
+      }
+      paint();
     };
   low.oninput = sync;
   high.oninput = sync;
+  min.addEventListener("input", () => syncFromInputs(min));
+  max.addEventListener("input", () => syncFromInputs(max));
   paint();
 }
 function resetRanges() {
@@ -496,16 +508,7 @@ function expired(error) {
   console.error(error);
   el.overlay.hidden = false;
 }
-function activity() {
-  if (!state.bootstrap) return;
-  state.deadline = Date.now() + state.bootstrap.idle_timeout_seconds * 1000;
-  if (Date.now() - state.lastActivity > 15000) {
-    state.lastActivity = Date.now();
-    api("/api/activity", { method: "POST", body: "{}" }).catch(expired);
-  }
-}
 async function initialise() {
-  if (!token) return expired();
   document.querySelectorAll(".tab").forEach(
     (button) =>
       (button.onclick = () => {
@@ -592,9 +595,7 @@ async function initialise() {
       top: document.documentElement.scrollHeight,
       behavior: "smooth",
     });
-  ["pointerdown", "keydown", "change", "scroll"].forEach((name) =>
-    addEventListener(name, activity, { passive: true }),
-  );
+  $("download-updates").onclick = () => browserStore.downloadUpdates();
   view(location.hash.startsWith("#review") ? "review" : "overview");
   try {
     state.bootstrap = await api("/api/bootstrap");
@@ -602,25 +603,88 @@ async function initialise() {
     $("label-progress").textContent =
       `${state.bootstrap.labelled_records} / ${state.bootstrap.total_records}`;
     buildStageFilters(state.bootstrap.stage_counts);
-    activity();
+    $("session-countdown").textContent = "Stored locally";
     await load();
-    setInterval(() => {
-      const left = Math.ceil((state.deadline - Date.now()) / 1000);
-      if (left <= 0) return expired();
-      $("session-countdown").textContent =
-        `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} remaining`;
-    }, 1000);
   } catch (error) {
     expired(error);
   }
 }
-initialise();
+async function loadDataset(manifest, review, canonical, options = {}) {
+  const status = $("dataset-loader-status"),
+    button = $("load-dataset");
+  button.disabled = true;
+  status.textContent = "Starting DuckDB-WASM. Browser memory is limited; large files may fail to load.";
+  try {
+    browserStore = await loadBrowserStore(manifest, review, canonical, options);
+    $("dataset-loader").hidden = true;
+    $("labelling-app").hidden = false;
+    await initialise();
+  } catch (error) {
+    browserStore = null;
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+async function loadSelectedDataset() {
+  await loadDataset(
+    $("bundle-manifest-file").files[0],
+    $("review-data-file").files[0],
+    [...$("canonical-data-files").files],
+  );
+}
+async function fileFromUrl(url, name) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load local file ${name}.`);
+  const blob = await response.blob();
+  return new File([blob], name, { type: blob.type });
+}
+function lazyFileFromUrl(url, name) {
+  return {
+    name,
+    url: new URL(url, location.href).href,
+    async arrayBuffer() {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Could not load local file ${name}.`);
+      return response.arrayBuffer();
+    },
+  };
+}
+async function loadConfiguredDataset() {
+  try {
+    const response = await fetch("/api/local-config");
+    if (!response.ok || !response.headers.get("content-type")?.includes("json")) return;
+    const config = await response.json();
+    if (!config.bundle) return;
+    const manifest = await fileFromUrl(
+      config.bundle.manifest_url,
+      config.bundle.manifest_name,
+    );
+    const review = await fileFromUrl(
+      config.bundle.review_url,
+      config.bundle.review_name,
+    );
+    const canonical = await Promise.all(
+      (config.canonical_urls || []).map((item) =>
+        lazyFileFromUrl(item.url, item.name),
+      ),
+    );
+    await loadDataset(manifest, review, canonical, {
+      remoteEventsUrl: config.events_url,
+      nativeCanonicalSearchUrl: config.canonical_search_url,
+    });
+  } catch (error) {
+    $("dataset-loader-status").textContent = error.message;
+  }
+}
+$("load-dataset").onclick = loadSelectedDataset;
 state.review = {
   record: null,
   navigation: null,
   selectedCandidateLabel: null,
   loading: false,
 };
+loadConfiguredDataset();
 const reviewElements = {
   empty: $("review-empty"),
   content: $("review-content"),
@@ -722,7 +786,9 @@ function renderReview() {
   reviewElements.empty.hidden = true;
   reviewElements.complete.hidden = true;
   reviewElements.content.hidden = false;
-  reviewElements.position.textContent = `Record ${navigation.position} of ${navigation.total}`;
+  reviewElements.position.textContent = Number.isInteger(navigation.position)
+    ? `Record ${navigation.position} of ${navigation.total}`
+    : "Preparing review navigation...";
   reviewElements.previous.disabled = !navigation.previous_unique_id;
   reviewElements.next.disabled = !navigation.next_unique_id;
   $("review-messy-id").textContent = display(record.unique_id);
@@ -904,6 +970,11 @@ async function loadReview(
     state.review.selectedCandidateLabel = initialCandidate(payload.record);
     sessionStorage.setItem("ukam-last-review-id", payload.record.unique_id);
     renderReview();
+    api(`/api/review-navigation?${parameters}`).then((navigation) => {
+      if (state.review.record?.unique_id !== payload.record.unique_id) return;
+      state.review.navigation = navigation;
+      renderReview();
+    }).catch((error) => toast(error.message));
   } catch (error) {
     toast(error.message);
     showReviewEmpty();
@@ -920,17 +991,35 @@ function showReviewComplete() {
   reviewElements.complete.hidden = false;
   resetReviewScroll();
 }
+let pendingReviewSaves = Promise.resolve();
+
+function queueReviewSave(payload) {
+  el.save.textContent = "Saving...";
+  pendingReviewSaves = pendingReviewSaves
+    .catch(() => {})
+    .then(async () => {
+      await api("/api/labels", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      el.save.textContent = "Autosaved";
+    })
+    .catch((error) => {
+      el.save.textContent = "Save failed";
+      toast(error.message);
+    });
+}
+
 function resetReviewScroll() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
-async function advanceAfterReviewSave(nextId) {
+function advanceAfterReviewSave(nextId) {
   if (nextId) {
     location.hash = `review/${encodeURIComponent(nextId)}`;
   } else {
     showReviewComplete();
   }
   if (nextId) resetReviewScroll();
-  refreshSavedReview().catch((error) => toast(error.message));
 }
 async function saveCanonicalSelection(canonicalRecord) {
   const record = state.review.record;
@@ -939,23 +1028,16 @@ async function saveCanonicalSelection(canonicalRecord) {
     return;
   }
   const nextId = state.review.navigation?.next_unique_id;
-  try {
-    await api("/api/labels", {
-      method: "POST",
-      body: JSON.stringify({
-        unique_id: record.unique_id,
-        decision: "select_canonical",
-        ukam_label: canonicalRecord.canonical_id,
-        selected_candidate_rank: null,
-        next_unique_id: nextId,
-        review_query: reviewFilterQuery(),
-      }),
-    });
-    await advanceAfterReviewSave(nextId);
-    toast("Label saved");
-  } catch (error) {
-    toast(error.message);
-  }
+  const payload = {
+    unique_id: record.unique_id,
+    decision: "select_canonical",
+    ukam_label: canonicalRecord.canonical_id,
+    selected_candidate_rank: null,
+    next_unique_id: nextId,
+    review_query: reviewFilterQuery(),
+  };
+  advanceAfterReviewSave(nextId);
+  queueReviewSave(payload);
 }
 function navigateReview(direction) {
   const id =
@@ -994,13 +1076,8 @@ async function saveReviewDecision(decision) {
       payload.selected_candidate_rank = 1;
     }
   }
-  try {
-    await api("/api/labels", { method: "POST", body: JSON.stringify(payload) });
-    await advanceAfterReviewSave(nextId);
-    toast("Label saved");
-  } catch (error) {
-    toast(error.message);
-  }
+  advanceAfterReviewSave(nextId);
+  queueReviewSave(payload);
 }
 async function undoReviewDecision() {
   try {
@@ -1293,7 +1370,7 @@ if (location.hash.startsWith("#review")) loadReview();
       scrollTo({ top: 0, behavior: "smooth" });
     }
   };
-  [c.postcode, c.address].forEach(
+  [c.uniqueId, c.postcode, c.address].forEach(
     (input) =>
       (input.onkeydown = (event) => {
         if (event.key === "Enter") {
