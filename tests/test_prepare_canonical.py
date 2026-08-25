@@ -246,14 +246,21 @@ def test_prepare_accepts_list_of_local_csv_paths(con, tmp_path):
         output_chunk_count=2,
     )
 
-    chunk_files = sorted(
-        (tmp_path / "prepared" / "ukam_canonical_addresses_chunks").glob("*.parquet")
+    assert (tmp_path / "prepared" / "ukam_canonical_addresses_chunks").is_dir()
+    assert (
+        len(
+            list(
+                (tmp_path / "prepared" / "ukam_canonical_addresses_chunks").glob(
+                    "*.parquet"
+                )
+            )
+        )
+        == 2
     )
-    assert len(chunk_files) == 2
     assert (tmp_path / "prepared" / "ukam_manifest.json").exists()
 
 
-def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_path):
+def test_local_prepare_writes_chunked_parquet_output(con, canonical_data, tmp_path):
     prepare_canonical_folder(
         canonical_data,
         output_folder=tmp_path,
@@ -263,13 +270,8 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
     )
 
     chunk_dir = tmp_path / "ukam_canonical_addresses_chunks"
-    chunk_files = sorted(chunk_dir.glob("*.parquet"))
-
-    assert chunk_dir.exists()
-    assert len(chunk_files) == 3
-    assert chunk_files[0].name == "canonical_addresses_chunk_00001_of_00003.parquet"
-    assert chunk_files[1].name == "canonical_addresses_chunk_00002_of_00003.parquet"
-    assert chunk_files[2].name == "canonical_addresses_chunk_00003_of_00003.parquet"
+    assert chunk_dir.is_dir()
+    assert len(list(chunk_dir.glob("*.parquet"))) == 3
     assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
 
 
@@ -791,16 +793,43 @@ def test_manifest_contains_expected_fields(prepared_folder):
     assert "created_at" in manifest
     assert "created_with_duckdb_version" in manifest
     assert manifest["row_counts"]["canonical_addresses"] == 3
-    assert manifest["row_counts"]["canonical_output_chunks"] == 1
+    assert manifest["row_counts"]["canonical_output_chunks"] == 0
 
     # Per-file metadata
     assert "files" in manifest
-    addr_meta = manifest["files"]["ukam_canonical_addresses.parquet"]
-    assert "size_bytes" in addr_meta
-    assert "sha256" in addr_meta
-    assert "columns" in addr_meta
-    assert isinstance(addr_meta["columns"], list)
-    assert len(addr_meta["columns"]) > 0
+    canonical_meta = manifest["files"]["ukam_canonical_addresses.parquet"]
+    assert "size_bytes" in canonical_meta
+    assert "sha256" in canonical_meta
+    assert "unique_id" in canonical_meta["columns"]
+    assert set(manifest["files"]) == {
+        "ukam_canonical_addresses.parquet",
+        "ukam_term_frequencies.parquet",
+        "ukam_inverted_index.parquet",
+    }
+
+
+def test_prepared_parquet_contains_expected_artefacts(prepared_folder):
+    connection = duckdb.connect()
+    try:
+        assert connection.read_parquet(
+            str(prepared_folder / "ukam_canonical_addresses.parquet")
+        ).count("*").fetchone() == (3,)
+        assert (
+            connection.read_parquet(
+                str(prepared_folder / "ukam_term_frequencies.parquet")
+            )
+            .count("*")
+            .fetchone()[0]
+            > 0
+        )
+        assert (
+            connection.read_parquet(str(prepared_folder / "ukam_inverted_index.parquet"))
+            .count("*")
+            .fetchone()[0]
+            > 0
+        )
+    finally:
+        connection.close()
 
 
 def test_manifest_version_mismatch_warns(con, prepared_folder):
@@ -849,7 +878,7 @@ def test_load_prepared_data_has_expected_row_counts(con, prepared_folder):
     assert result.inverted_index.count("*").fetchone()[0] > 0
 
 
-def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):
+def test_local_manifest_row_audit(con, canonical_data, tmp_path):
     prepare_canonical_folder(
         canonical_data,
         output_folder=tmp_path,
@@ -859,16 +888,15 @@ def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):
     )
 
     manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
-    chunk_files = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
-
-    total_rows_across_chunks = sum(
-        con.read_parquet(str(chunk_path)).count("*").fetchone()[0]
-        for chunk_path in chunk_files
+    canonical_row_count = (
+        con.read_parquet(str(tmp_path / "ukam_canonical_addresses_chunks" / "*.parquet"))
+        .count("*")
+        .fetchone()[0]
     )
 
     assert manifest["row_counts"]["canonical_addresses"] == 3
     assert manifest["row_counts"]["canonical_output_chunks"] == 3
-    assert total_rows_across_chunks == manifest["row_counts"]["canonical_addresses"]
+    assert canonical_row_count == manifest["row_counts"]["canonical_addresses"]
 
 
 def test_load_reads_chunked_canonical_layout(con, canonical_data, tmp_path):
@@ -896,8 +924,8 @@ def test_invalid_folder_raises(con):
         load_prepared_canonical_data("/tmp/nonexistent_folder_xyz_123", con=con)
 
 
-def test_corrupt_parquet_raises(con, prepared_folder):
-    """A corrupt Parquet file should be caught during validation."""
+def test_corrupt_local_parquet_raises(con, prepared_folder):
+    """A corrupt local canonical Parquet file should be caught during validation."""
     corrupt_path = prepared_folder / "ukam_canonical_addresses.parquet"
     corrupt_path.write_bytes(b"not a parquet file")
 
