@@ -83,6 +83,7 @@ exclude_docs: |
 nav:
   - Overview: index.md
   - Getting started: get_started.md
+  - Address labelling tool: address_labeller.md
   - Choosing a matching threshold: choosing_a_matching_threshold.md
   - Optimising accuracy: optimising_accuracy.md
   - Working with Ordnance Survey data: ordnance_survey.md
