@@ -70,6 +70,7 @@
     "SOUTH AYRSHIRE",
     "WEST GLAMORGAN",
     "WEST YORKSHIRE",
+    "BLAENAU GWENT",
     "BRO MORGANNWG",
     "CENTRAL WALES",
     "COUNTY ANTRIM",
@@ -104,8 +105,7 @@
     "CLACKMANNANSHIRE",
     "ABERDEENSHIRE",
     "GILFACH-GOCH",
-    "PONT-Y-CLUN",
-    "BLAENAU GWENT"
+  "PONT-Y-CLUN"
   ],
   "single_tokens": [
     "NORTHAMPTONSHIRE",
