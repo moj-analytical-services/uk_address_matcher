@@ -97,7 +97,8 @@ applyTo:
   - whether the comparison curve is generally above or below the baseline,
   - whether gains are concentrated at particular recall bands,
   - whether the comparison increases false positives materially,
-  - whether the lower panel shows mostly positive or negative precision gaps.
+  - whether the lower panel shows mostly positive or negative reductions in false
+    positives.
 - If the overlay chart contradicts a simple headline-metric story, say so explicitly.
 - Include the overlay chart path in the experiment artefact list whenever it exists.
 

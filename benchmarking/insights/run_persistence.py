@@ -96,7 +96,7 @@ def _vega_lite_html(*, title: str, chart_definition: dict[str, Any]) -> str:
 <body>
     <div class=\"card\">
         <h1>{title}</h1>
-        <p>Overlayed precision-recall curves with recall-aligned precision deltas.</p>
+        <p>Overlayed precision-recall curves with recall-aligned reductions in false positives.</p>
         <div id=\"chart\"></div>
     </div>
     <script>
