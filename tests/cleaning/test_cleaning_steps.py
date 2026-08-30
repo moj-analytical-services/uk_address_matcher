@@ -10,6 +10,7 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+    _separate_unusual_tokens,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
@@ -18,6 +19,29 @@ def _run_single_stage(stage_factory, input_relation, connection):
     pipeline = DuckDBPipeline(connection, input_relation)
     pipeline.add_step(stage_factory())
     return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():
+    connection = duckdb.connect()
+    input_relation = connection.sql("""
+        SELECT [
+            {'tok': 'CLEEVE', 'rel_freq': 5e-5},
+            {'tok': 'ALCESTER', 'rel_freq': 5e-5},
+            {'tok': 'BENHOLMS', 'rel_freq': 5e-8},
+            {'tok': 'TILLYDRON', 'rel_freq': 5e-8}
+        ] AS token_rel_freq_arr
+    """)
+
+    result = _run_single_stage(
+        _separate_unusual_tokens,
+        input_relation,
+        connection,
+    ).fetchone()
+
+    assert result[-2:] == (
+        ["CLEEVE", "ALCESTER"],
+        ["BENHOLMS", "TILLYDRON"],
+    )
 
 
 def test_separate_distinguishing_tokens_uses_valid_local_neighbours():

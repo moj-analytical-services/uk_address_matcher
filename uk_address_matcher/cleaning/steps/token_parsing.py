@@ -19,6 +19,7 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     *,
     include_input_columns: bool = True,
+    carry_neighbour_tokens: bool = True,
 ):
     """Split each address around its longest suffix shared by a local neighbour."""
     tokenised_addresses_sql = r"""
@@ -30,23 +31,25 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     FROM {input} AS input_address
     """
 
+    neighbour_value = "__tokens" if carry_neighbour_tokens else "clean_full_address"
+    neighbour_suffix = "tokens" if carry_neighbour_tokens else "address"
     neighbouring_addresses_sql = """
     SELECT
         __ukam_row_id,
         unique_id,
         __tokens,
         lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
-        lag(clean_full_address, 1) OVER address_order AS __lag_1_address,
+        lag({neighbour_value}, 1) OVER address_order AS __lag_1_{neighbour_suffix},
         lag(unique_id, 2) OVER address_order AS __lag_2_unique_id,
-        lag(clean_full_address, 2) OVER address_order AS __lag_2_address,
+        lag({neighbour_value}, 2) OVER address_order AS __lag_2_{neighbour_suffix},
         lag(unique_id, 3) OVER address_order AS __lag_3_unique_id,
-        lag(clean_full_address, 3) OVER address_order AS __lag_3_address,
+        lag({neighbour_value}, 3) OVER address_order AS __lag_3_{neighbour_suffix},
         lead(unique_id, 1) OVER address_order AS __lead_1_unique_id,
-        lead(clean_full_address, 1) OVER address_order AS __lead_1_address,
+        lead({neighbour_value}, 1) OVER address_order AS __lead_1_{neighbour_suffix},
         lead(unique_id, 2) OVER address_order AS __lead_2_unique_id,
-        lead(clean_full_address, 2) OVER address_order AS __lead_2_address,
+        lead({neighbour_value}, 2) OVER address_order AS __lead_2_{neighbour_suffix},
         lead(unique_id, 3) OVER address_order AS __lead_3_unique_id,
-        lead(clean_full_address, 3) OVER address_order AS __lead_3_address
+        lead({neighbour_value}, 3) OVER address_order AS __lead_3_{neighbour_suffix}
     FROM {tokenised_addresses} AS tokenised
     WINDOW address_order AS (
         ORDER BY
@@ -54,7 +57,9 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
             CAST(unique_id AS VARCHAR),
             __ukam_row_id
     )
-    """
+    """.replace("{neighbour_value}", neighbour_value).replace(
+        "{neighbour_suffix}", neighbour_suffix
+    )
 
     neighbour_names = (
         "lag_1",
@@ -68,7 +73,9 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     for neighbour_name in neighbour_names:
         neighbour_id = f"__{neighbour_name}_unique_id"
         neighbour_tokens = (
-            f"regexp_split_to_array(__{neighbour_name}_address, '\\s+')::VARCHAR[]"
+            f"__{neighbour_name}_tokens"
+            if carry_neighbour_tokens
+            else f"regexp_split_to_array(__{neighbour_name}_address, '\\s+')::VARCHAR[]"
         )
         suffix_length_expressions.append(f"""
         CASE
@@ -560,27 +567,26 @@ def _parse_out_business_unit():
 
     sql = f"""
     SELECT
-        i.*,
-
-        -- Extract the business unit type (UNIT, SUITE, OFFICE, etc.)
+        i.* EXCLUDE (__business_unit_match),
         NULLIF(
-            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 1)),
+            UPPER(i.__business_unit_match.business_unit_type),
             ''
         ) AS business_unit_type,
-
-        -- Extract the business unit identifier (A, 5, 5A, etc.)
         NULLIF(
-            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 2)),
+            UPPER(i.__business_unit_match.business_unit_id),
             ''
         ) AS business_unit_id,
-
-        -- Boolean indicator for having a business unit
-        regexp_matches(
-            i.clean_full_address,
-            '\\b({keywords_pattern})S?\\s+([A-Za-z]?\\d{{1,4}}[A-Za-z]?|[A-Za-z])\\b'
-        ) AS has_business_unit
-
-    FROM {{input}} i
+        i.__business_unit_match.business_unit_type != '' AS has_business_unit
+    FROM (
+        SELECT
+            source.*,
+            regexp_extract(
+                source.clean_full_address,
+                '{singular_pattern}',
+                ['business_unit_type', 'business_unit_id']
+            ) AS __business_unit_match
+        FROM {{input}} AS source
+    ) AS i
     """
     return sql
 

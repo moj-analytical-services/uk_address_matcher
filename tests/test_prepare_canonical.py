@@ -360,9 +360,9 @@ def test_prepare_progress_stages_logs_boundaries_without_chunk_updates(
 
     messages = [record.getMessage() for record in caplog.records]
 
-    assert any(message.startswith("Cleaning for TF derivation:") for message in messages)
+    assert any(message.startswith("Cleaning and preprocessing:") for message in messages)
     assert any(
-        message.startswith("Cleaning for TF derivation completed:")
+        message.startswith("Cleaning and preprocessing completed:")
         for message in messages
     )
     assert not any("chunk 1/" in message for message in messages)
@@ -382,7 +382,6 @@ def test_prepare_progress_off_suppresses_stage_status_logs(
         )
 
     stage_prefixes = (
-        "Cleaning for TF derivation",
         "Cleaning and preprocessing",
         "Applying term frequencies",
         "Building inverted index",
@@ -497,11 +496,11 @@ def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, ca
         record.getMessage() for record in caplog.records if record.levelno == logging.INFO
     ]
     assert any(
-        message.startswith("Cleaning for TF derivation:") and "records across" in message
+        message.startswith("Cleaning and preprocessing:") and "records across" in message
         for message in info_messages
     )
     assert any(
-        message.startswith("Cleaning for TF derivation completed:")
+        message.startswith("Cleaning and preprocessing completed:")
         for message in info_messages
     )
     assert any(
@@ -513,7 +512,7 @@ def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, ca
         for message in info_messages
     )
     assert any(
-        message.startswith("Cleaning for TF derivation:") and "chunk 1/1" in message
+        message.startswith("Cleaning and preprocessing:") and "chunk 1/1" in message
         for message in info_messages
     )
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
@@ -681,8 +680,13 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
 
     monkeypatch.setattr(
         chunking_strategies,
-        "derive_term_frequencies_table",
-        lambda data, con, num_of_chunks, show_progress=True: tf_relation,
+        "clean_data_pre_term_frequencies",
+        lambda data, con, num_of_chunks, show_progress=True: clean_relation,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_derive_term_frequencies_from_precleaned",
+        lambda data, con: tf_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -729,7 +733,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         "ORDER BY index_strategy, left(key, 1), unique_ids, key"
         in (inverted_index_copies[0])
     )
-    assert all("COMPRESSION_LEVEL 15" in sql for sql in other_copies)
+    assert all("COMPRESSION_LEVEL 6" in sql for sql in other_copies)
     assert all("ROW_GROUP_SIZE 122880" in sql for sql in parquet_copies)
 
     assert _written("s3://bucket/output/prepared/ukam_term_frequencies.parquet")
@@ -780,8 +784,13 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
 
     monkeypatch.setattr(
         chunking_strategies,
-        "derive_term_frequencies_table",
-        lambda data, con, num_of_chunks, show_progress=True: tf_relation,
+        "clean_data_pre_term_frequencies",
+        lambda data, con, num_of_chunks, show_progress=True: clean_relation,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_derive_term_frequencies_from_precleaned",
+        lambda data, con: tf_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,

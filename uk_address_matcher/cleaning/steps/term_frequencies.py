@@ -115,8 +115,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     FROM {base}
     """
 
-    # 2. Join to frequencies - we ONLY keep the Frequency (Float) and the Index (Int)
-    # We drop the Token string here. It is dead weight for the sort.
+    # 2. Join to frequencies - keep only the frequency and token position.
     joined_scalars_sql = """
     SELECT
         e.__ukam_row_id,
@@ -127,13 +126,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         ON e.token = __ukam__tmp_rel_tok_freq.token
     """
 
-    # 3. Aggregate the frequencies back into a per-address array.
-    # A plain `list(rel_freq ORDER BY token_idx)` forces DuckDB to run an
-    # ordered list aggregate, which sorts within every group during the
-    # aggregation and dominates the cleaning plan. Instead we collect a single
-    # `list(struct(idx, freq))` (one aggregate, so idx/freq stay aligned) and
-    # sort it once with `list_sort` (token_idx is the leading struct field and
-    # is unique within a group). This is ~3x faster with identical output.
+    # 3. Aggregate frequencies back into each address's original token order.
     reaggregated_freqs_sql = """
     SELECT
         __ukam_row_id,
@@ -145,9 +138,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     GROUP BY __ukam_row_id
     """
 
-    # 4. Zip the sorted frequencies back to the ORIGINAL token list
-    # This guarantees order (because the original list is the source of truth)
-    # and constructs the Structs at the very last moment
+    # 4. Zip the frequencies back to the original token list.
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
@@ -342,7 +333,12 @@ def _separate_unusual_tokens():
             list_filter(
                 list_select(
                     token_rel_freq_arr,
-                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                    list_grade_up(
+                        list_transform(
+                            token_rel_freq_arr,
+                            (x, i) -> struct_pack(rel_freq := x.rel_freq, token_idx := i)
+                        )
+                    )
                 ),
                 x -> x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
             ),
@@ -352,7 +348,12 @@ def _separate_unusual_tokens():
             list_filter(
                 list_select(
                     token_rel_freq_arr,
-                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                    list_grade_up(
+                        list_transform(
+                            token_rel_freq_arr,
+                            (x, i) -> struct_pack(rel_freq := x.rel_freq, token_idx := i)
+                        )
+                    )
                 ),
                 x -> x.rel_freq < 1e-7
             ),

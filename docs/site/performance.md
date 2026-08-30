@@ -11,11 +11,14 @@ Note that runtimes depend on whether the canonical data covers a local council r
 | 1. Create data package and API key | 5 minutes | 5 minutes |
 | 2. Install Python, uv, and `uk_address_matcher` | 5 minutes | 5 minutes |
 | 3. Download and process OS data into a flat file | 5 seconds[^1] | 4 minutes[^2] |
-| 4. Pre-process indexes and features | Not necessary | 4 min 50 sec |
+| 4. Pre-process indexes and features | Not necessary | 8 min 58 sec[^3] |
 | 5. Match 100,000 records | 18 seconds | 26 seconds |
 
 [^1]: Plus ~15 seconds to download the data.
 [^2]: Plus ~18 minutes to download the data.
+[^3]: See [Canonical preparation runtime](#canonical-preparation-runtime) for
+    the benchmark configuration, stage breakdown, and comparison with the
+    previous implementation.
 
 These timings are measured on a MacBook Pro M4 Max.
 
@@ -374,3 +377,56 @@ The full precision-recall curve is shown below:
 	"schema-url": "assets/charts/mid_sussex_precision_recall.json"
 }
 ```
+
+## Canonical preparation runtime
+
+??? info "How the 8 min 58 sec timing was measured"
+    The current refactored `prepare_canonical_folder()` path completed in
+    **537.531 seconds (8 min 57.5 sec)** for 71,438,939 national-scale NGD
+    canonical rows. This is the complete one-time preparation job, not just
+    address text normalization.
+
+    The run used a MacBook Pro M4 Max, DuckDB 1.5.0, 14 DuckDB threads, a 16 GB
+    DuckDB memory limit, 10 work chunks, and eight canonical output shards. Road
+    features were enabled. Peak process memory was 17.38 GiB and DuckDB spilled
+    approximately 97 GB of temporary data to disk.
+
+    | Stage | Time | Share |
+    | --- | ---: | ---: |
+    | Shared foundational cleaning | 61.672s | 11.47% |
+    | Deterministic ID assignment | 111.690s | 20.78% |
+    | Term-frequency aggregation | 2.442s | 0.45% |
+    | Adjacent distinguishing | 71.897s | 13.38% |
+    | Post-TF feature processing | 80.876s | 15.05% |
+    | In-place finalization | 0.268s | 0.05% |
+    | Bigram and trigram indexes | 65.606s | 12.21% |
+    | Road enrichment | 64.715s | 12.04% |
+    | TF/index serialization and canonical exports | 76.720s | 14.27% |
+    | Manifest finalization | 1.277s | 0.24% |
+
+    The measured stages account for 537.163 seconds; setup and transitions
+    account for the remaining 0.368 seconds. Foundational cleaning itself takes
+    61.672 seconds. IDs, adjacent-record features, term-frequency features, and
+    all canonical columns are finalized after 328.845 seconds (5 min 28.8 sec).
+    Index construction, road enrichment, Parquet serialization, and manifest
+    generation bring the complete prepared folder to 537.531 seconds.
+
+    The benchmark includes all work performed by `prepare_canonical_folder()`:
+    canonical cleaning, deterministic IDs, term frequencies, adjacent-record
+    features, physical indexes, road features, Parquet output, and manifest
+    generation. It excludes downloading NGD and transforming the source product
+    into the input flat file; those are covered separately by step 3 above.
+
+    Before the refactor, the matched road-enabled path took 1,918.331 seconds
+    (31 min 58.3 sec). The current path is 72.0% faster. It produced 1,928,966,850
+    bytes of prepared output, 2.20% more than the old road-enabled baseline.
+
+    The full comparison found no term-frequency or inverted-index differences
+    and no physical-order violations across the eight canonical shards. There
+    were 401 canonical rows whose only difference was the now-deterministic
+    ordering of equal-frequency entries in the unusual-token arrays; all other
+    persisted values were unchanged.
+
+    These figures are indicative rather than a hardware-independent guarantee.
+    Available memory, temporary-disk speed, source schema, enabled features, and
+    output-shard count can materially affect national-scale preparation time.
