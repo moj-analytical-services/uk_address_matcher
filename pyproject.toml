@@ -38,6 +38,12 @@ linting = [
     "ruff>=0.6,<1.0"
 ]
 
+model-training = [
+    "joblib>=1.4",
+    "pandas>=2.2",
+    "scikit-learn>=1.7,<2",
+]
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
