@@ -441,6 +441,7 @@ def prepare_canonical_folder(
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
+    derive_road_blocking_keys: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
@@ -473,6 +474,9 @@ def prepare_canonical_folder(
             `ukam_canonical_addresses_chunks/`.
         derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
             leading tokens that distinguish suffix-similar nearby records.
+        derive_road_blocking_keys: Whether to derive road-based blocking keys and
+            their cardinality flags. Disable only when benchmarking or when no
+            configured matching stage uses road blocking.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -492,6 +496,7 @@ def prepare_canonical_folder(
             and `overwrite` is `False`.
     """
     from uk_address_matcher.cleaning.chunking_strategies import (
+        _add_canonical_road_blocking_keys,
         _derive_term_frequencies_from_precleaned,
         clean_data_pre_term_frequencies,
         derive_inverted_index,
@@ -570,6 +575,15 @@ def prepare_canonical_folder(
         num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
     )
+
+    if derive_road_blocking_keys:
+        logger.debug("Deriving canonical road blocking keys")
+        df_clean = _add_canonical_road_blocking_keys(
+            df_clean,
+            con,
+            num_of_chunks=num_of_chunks,
+        )
+        logger.debug("Canonical road blocking keys derived")
 
     canonical_output_relation = df_clean
     addr_count = df_clean.count("*").fetchone()[0]

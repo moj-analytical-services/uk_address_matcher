@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -10,6 +11,7 @@ from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
     QUEUE_INVERTED_INDEX_LOOKUP,
     QUEUE_INVERTED_INDEX_SELF,
+    QUEUE_ROADLIKE_PLACE_PREPARATION,
     _clean_data_pre_term_frequencies,
     _clean_data_using_precomputed_rel_tok_freq,
     _create_term_frequency_tables,
@@ -26,6 +28,11 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     _build_inverted_index_from_scalar_keys,
     _derive_keys_for_strategy,
     _lookup_keys_in_inverted_index,
+)
+from uk_address_matcher.cleaning.steps.roadlike_places import (
+    derive_top_1_road_keys,
+    roadlike_place_catalog_sql,
+    roadlike_place_prepared_candidate_sql,
 )
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
@@ -50,6 +57,8 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+ROAD_SCORING_CHUNK_ROWS = 10_000_000
 
 
 def _materialise_relation(
@@ -129,6 +138,291 @@ def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
     num_of_chunks = max(1, min(num_of_chunks, max_chunks))
     chunk_size = (total_records + num_of_chunks - 1) // num_of_chunks
     return max(1, chunk_size)
+
+
+def _add_canonical_road_blocking_keys(
+    canonical_addresses: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    *,
+    num_of_chunks: int = 1,
+    require_catalogue_support: bool = True,
+) -> DuckDBPyRelation:
+    """Add compact, global road-key cardinalities used by selective blockers."""
+    preference_order = []
+    if "filename" in canonical_addresses.columns:
+        preference_order.append("""
+            CASE filename
+                WHEN 'add_gb_builtaddress.parquet' THEN 1
+                WHEN 'add_gb_royalmailaddress.parquet' THEN 2
+                ELSE 3
+            END
+        """)
+    preference_order.extend(
+        column
+        for column in ("clean_full_address", "postcode", "ukam_address_id")
+        if column in canonical_addresses.columns
+    )
+    uid = _uid()
+    preferred_table = f"__ukam_canonical_road_preferred_{uid}"
+    road_keys_table = f"__ukam_canonical_road_keys_{uid}"
+    chunk_keys_table = f"__ukam_canonical_road_chunk_{uid}"
+    enriched_table = f"__ukam_canonical_with_road_{uid}"
+    preferred_columns = [
+        "unique_id",
+        "clean_full_address",
+        "postcode",
+        "numeric_tokens",
+    ]
+    if "rightmost_numeric_position" in canonical_addresses.columns:
+        preferred_columns.append("rightmost_numeric_position")
+    preserve_insertion_order = bool(
+        con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
+    )
+    con.execute("SET preserve_insertion_order = false")
+    try:
+        _drop_table_and_registered_aliases(con, preferred_table)
+        con.execute(f"""
+            CREATE TEMPORARY TABLE {preferred_table} AS
+            SELECT {", ".join(preferred_columns)}
+            FROM ({canonical_addresses.sql_query()}) AS source
+            QUALIFY row_number() OVER (
+                PARTITION BY unique_id
+                ORDER BY {", ".join(preference_order)}
+            ) = 1
+        """)
+        preferred_addresses = con.table(preferred_table)
+        preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])
+    except Exception:
+        con.execute(
+            f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
+        )
+        raise
+    required_chunks = max(
+        1,
+        (preferred_row_count + ROAD_SCORING_CHUNK_ROWS - 1) // ROAD_SCORING_CHUNK_ROWS,
+    )
+    road_chunk_count = min(max(1, num_of_chunks), required_chunks)
+    _drop_table_and_registered_aliases(con, road_keys_table)
+    try:
+        for chunk_index in range(road_chunk_count):
+            if road_chunk_count == 1:
+                chunk = preferred_addresses
+            else:
+                chunk = con.sql(f"""
+                    SELECT *
+                    FROM {preferred_table}
+                    WHERE hash(CAST(unique_id AS VARCHAR)) % {road_chunk_count}
+                        = {chunk_index}
+                """)
+            chunk_keys = derive_top_1_road_keys(
+                con,
+                chunk,
+                output_table=chunk_keys_table,
+                require_catalogue_support=require_catalogue_support,
+            )
+            if chunk_index == 0:
+                con.execute(f"""
+                    CREATE TEMPORARY TABLE {road_keys_table} AS
+                    SELECT * FROM ({chunk_keys.sql_query()})
+                """)
+            else:
+                con.execute(f"""
+                    INSERT INTO {road_keys_table}
+                    SELECT * FROM ({chunk_keys.sql_query()})
+                """)
+            _drop_table_and_registered_aliases(con, chunk_keys_table)
+    except Exception:
+        _drop_table_and_registered_aliases(con, road_keys_table)
+        raise
+    finally:
+        _drop_table_and_registered_aliases(con, chunk_keys_table)
+        _drop_table_and_registered_aliases(con, preferred_table)
+        con.execute(
+            f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
+        )
+    source_columns = ", ".join(
+        f'canonical."{column}"' for column in canonical_addresses.columns
+    )
+    enriched = con.sql(f"""
+        WITH road_n1_frequency AS (
+            SELECT
+                road_features.road_1_norm,
+                canonical.numeric_token_1,
+                count(*) AS address_count,
+                sum(count(*)) OVER (
+                    PARTITION BY road_features.road_1_norm
+                ) AS road_address_count
+            FROM ({canonical_addresses.sql_query()}) AS canonical
+            JOIN {road_keys_table} AS road_features USING (unique_id)
+            WHERE road_features.road_1_norm IS NOT NULL
+            GROUP BY road_features.road_1_norm, canonical.numeric_token_1
+        ), road_frequency AS (
+            SELECT
+                road_1_norm,
+                max(road_address_count) AS address_count
+            FROM road_n1_frequency
+            GROUP BY road_1_norm
+        )
+        SELECT
+            {source_columns},
+            road_features.road_1_norm,
+            coalesce(road_frequency.address_count, 0) <= 1000
+                AS road_frequency_lte_1000,
+            coalesce(road_n1_frequency.address_count, 0) <= 32
+                AS road_n1_block_size_lte_32
+        FROM ({canonical_addresses.sql_query()}) AS canonical
+        LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
+        LEFT JOIN road_frequency USING (road_1_norm)
+        LEFT JOIN road_n1_frequency USING (road_1_norm, numeric_token_1)
+    """)
+    return _materialise_relation(con, enriched, enriched_table)
+
+
+def derive_roadlike_places(
+    canonical_address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    output_path: Path | str,
+    *,
+    postcode_districts_per_batch: int | None = None,
+    debug_options: Optional[DebugOptions] = None,
+    show_progress: ShowProgress = "auto",
+) -> DuckDBPyRelation:
+    """Build a global roadlike-place catalogue from canonical addresses.
+
+    The input must already be canonical-cleaned, including ``clean_full_address``
+    and ``numeric_tokens``. Road-specific prepared fields are materialized once;
+    candidate extraction is a single pass by default. Postcode-district batching
+    is available only as a memory-constrained fallback.
+    """
+    if postcode_districts_per_batch is not None and postcode_districts_per_batch < 1:
+        raise ValueError("postcode_districts_per_batch must be at least 1")
+
+    required_columns = {"unique_id", "clean_full_address", "postcode", "numeric_tokens"}
+    missing_columns = sorted(required_columns.difference(canonical_address_table.columns))
+    if missing_columns:
+        raise ValueError(
+            "Canonical address table must be cleaned before deriving roadlike places; "
+            f"missing columns: {missing_columns}"
+        )
+
+    progress_mode = resolve_progress_mode(show_progress)
+    uid = _uid()
+    prepared_table = f"__ukam_roadlike_prepared_{uid}"
+    candidates_table = f"__ukam_roadlike_candidates_{uid}"
+    catalogue_table = f"__ukam_roadlike_places_{uid}"
+    total_rows = canonical_address_table.count("*").fetchone()[0]
+    if total_rows == 0:
+        raise ValueError(
+            "Supplied address table has no records. Please provide a non-empty table."
+        )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_label = "Building roadlike-place catalogue"
+    started_at = time.perf_counter()
+    log_stage_start(
+        stage_label,
+        total_rows,
+        1,
+        progress_mode=progress_mode,
+    )
+    preparation = create_sql_pipeline(
+        con,
+        input_rel=canonical_address_table,
+        stage_specs=QUEUE_ROADLIKE_PLACE_PREPARATION,
+        pipeline_name="Prepare roadlike-place input",
+        pipeline_description=(
+            "Derive suffix-peeled tokens and rightmost numeric anchors once"
+        ),
+    ).run(debug_options)
+    con.execute(
+        f"CREATE TEMPORARY TABLE {prepared_table} AS "
+        f"SELECT * FROM ({preparation.sql_query()}) AS prepared"
+    )
+    con.execute(f"ANALYZE {prepared_table}")
+
+    district_expression = "coalesce(nullif(postcode_district, ''), '__UNKNOWN__')"
+    if postcode_districts_per_batch is None:
+        candidate_sources = [prepared_table]
+    else:
+        districts = [
+            district
+            for (district,) in con.sql(
+                f"SELECT DISTINCT {district_expression} FROM {prepared_table} ORDER BY 1"
+            ).fetchall()
+        ]
+        candidate_sources = []
+        for start_index in range(0, len(districts), postcode_districts_per_batch):
+            district_values = ", ".join(
+                "'" + district.replace("'", "''") + "'"
+                for district in districts[
+                    start_index : start_index + postcode_districts_per_batch
+                ]
+            )
+            candidate_sources.append(
+                f"(SELECT * FROM {prepared_table} "
+                f"WHERE {district_expression} IN ({district_values}))"
+            )
+
+    total_batches = len(candidate_sources)
+    progress = _ProgressBar(
+        label=stage_label,
+        total=total_rows,
+        total_units=total_batches,
+        enabled=progress_mode == "auto",
+    )
+    con.execute(f"DROP TABLE IF EXISTS {candidates_table}")
+    processed_rows = 0
+
+    try:
+        for batch_index, candidate_source in enumerate(candidate_sources, start=1):
+            batch_started_at = time.perf_counter()
+            batch_input = con.sql(f"SELECT * FROM {candidate_source}")
+            batch_rows = batch_input.count("*").fetchone()[0]
+            candidates = con.sql(roadlike_place_prepared_candidate_sql(candidate_source))
+            if batch_index == 1:
+                con.execute(
+                    f"CREATE TEMPORARY TABLE {candidates_table} AS "
+                    f"SELECT * FROM ({candidates.sql_query()}) AS candidates"
+                )
+            else:
+                candidates.insert_into(candidates_table)
+
+            processed_rows += batch_rows
+            progress.update(processed_rows, completed_units=batch_index)
+            log_chunk_progress(
+                total_rows,
+                processed_rows,
+                stage_label=stage_label,
+                progress_mode=progress_mode,
+                progress=progress,
+                chunk_index=batch_index - 1,
+                total_chunks=total_batches,
+                chunk_elapsed_seconds=time.perf_counter() - batch_started_at,
+            )
+    finally:
+        progress.close()
+        _drop_table_and_registered_aliases(con, prepared_table)
+
+    con.execute(f"ANALYZE {candidates_table}")
+    con.execute(f"DROP TABLE IF EXISTS {catalogue_table}")
+    con.execute(
+        f"CREATE TABLE {catalogue_table} AS "
+        f"{roadlike_place_catalog_sql(candidates_table)}"
+    )
+    escaped_output_path = str(output_path).replace("'", "''")
+    con.execute(
+        f"COPY {catalogue_table} TO '{escaped_output_path}' "
+        "(FORMAT PARQUET, COMPRESSION ZSTD)"
+    )
+    _drop_table_and_registered_aliases(con, candidates_table)
+    log_stage_complete(
+        stage_label,
+        total_rows,
+        time.perf_counter() - started_at,
+        progress_mode=progress_mode,
+    )
+    return con.table(catalogue_table)
 
 
 def clean_data_pre_term_frequencies(

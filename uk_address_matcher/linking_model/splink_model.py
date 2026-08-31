@@ -12,8 +12,6 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
 _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
-
-
 def _get_model_settings_dict():
     with (
         pkg_resources.files("uk_address_matcher.data")
@@ -127,6 +125,7 @@ def _get_linker(
     retain_intermediate_calculation_columns=False,
     retain_matching_columns=True,
     settings: SettingsCreator | None = None,
+    additional_blocking_rules: list[str] | None = None,
 ) -> Linker:
     # Check if either input dataset contains a source_dataset column
     if (
@@ -293,6 +292,12 @@ def _get_linker(
 
     if not include_outside_postcode_block:
         brs = [{"blocking_rule": "l.postcode = r.postcode"}]
+
+    if additional_blocking_rules:
+        brs.extend(
+            {"blocking_rule": rule, "sql_dialect": "duckdb"}
+            for rule in additional_blocking_rules
+        )
 
     settings_as_dict["blocking_rules_to_generate_predictions"] = brs
 

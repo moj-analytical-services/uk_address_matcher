@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional
 
+from uk_address_matcher.cleaning.steps.roadlike_places import (
+    ROAD_FEATURE_COLUMNS,
+    add_road_blocking_features,
+)
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     NumericRangeRerankerConfig,
@@ -15,6 +20,78 @@ if TYPE_CHECKING:
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+ROAD_NUMERIC_BLOCKING_RULES = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_2 = r.numeric_token_2",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_2",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_2 = r.numeric_token_1",
+)
+ROAD_OUTWARD_BLOCKING_RULE = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.outward_postcode = r.outward_postcode"
+)
+ROAD_EXACT_RANGE_BLOCKING_RULE = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_range_lower = r.numeric_range_lower "
+    "AND l.numeric_range_upper = r.numeric_range_upper"
+)
+ROAD_UNUSUAL_1_BLOCKING_RULE = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1)"
+)
+ROAD_UNUSUAL_1_CROSS_BLOCKING_RULE = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2)"
+)
+ROAD_EXTREMELY_UNUSUAL_1_BLOCKING_RULE = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND list_extract(l.extremely_unusual_tokens_arr, 1) "
+    "= list_extract(r.extremely_unusual_tokens_arr, 1)"
+)
+ROAD_ONLY_BLOCKING_RULE = "l.road_1_norm = r.road_1_norm"
+SELECTIVE_ROAD_BLOCKING_RULES = (
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND r.road_frequency_lte_1000",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND r.road_n1_block_size_lte_32",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND l.flat_letter = r.flat_letter",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND l.numeric_token_2 = r.numeric_token_2",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND list_extract(l.unusual_tokens_arr, 1) "
+    "= list_extract(r.unusual_tokens_arr, 1)",
+    "l.road_1_norm = r.road_1_norm "
+    "AND l.numeric_token_1 = r.numeric_token_1 "
+    "AND list_extract(l.unusual_tokens_arr, 2) "
+    "= list_extract(r.unusual_tokens_arr, 2)",
+)
+
+
+def _required_canonical_road_blocking_columns(
+    road_blocking_rules: tuple[str, ...],
+) -> set[str]:
+    eligibility_columns = {
+        "road_frequency_lte_1000",
+        "road_n1_block_size_lte_8",
+        "road_n1_block_size_lte_32",
+    }
+    return {
+        column
+        for column in eligibility_columns
+        if any(f"r.{column}" in rule for rule in road_blocking_rules)
+    }
 
 
 @dataclass(repr=False)
@@ -66,6 +143,9 @@ class SplinkStage(MatchingStage):
             use the library defaults.
         retain_intermediate_calculation_columns: Retain Splink comparison
             columns needed for debugging and waterfall charts.
+        road_blocking_rules: Scalar equality rules to append for candidate
+            generation. This derives the road blocking key but does not score it.
+            Use ``SELECTIVE_ROAD_BLOCKING_RULES`` for the screened profile.
     """
 
     # Prediction threshold for initial Splink predict() call
@@ -93,11 +173,18 @@ class SplinkStage(MatchingStage):
     # Whether to retain intermediate calculation columns (for debugging)
     retain_intermediate_calculation_columns: bool = False
 
+    road_blocking_rules: tuple[str, ...] = ()
+    canonical_road_keys_path: str | None = None
+    canonical_road_cardinality_path: str | None = None
+
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
+    phase_timings: dict[str, float] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def find_matches(
         self,
@@ -128,6 +215,56 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        self.phase_timings = {}
+        phase_started = perf_counter()
+        if self.road_blocking_rules:
+            df_unmatched = add_road_blocking_features(con, df_unmatched)
+            if self.canonical_road_cardinality_path is not None:
+                df_unmatched = df_unmatched.select(
+                    "*, TRUE AS road_n1_block_size_lte_8"
+                )
+            required_canonical_columns = _required_canonical_road_blocking_columns(
+                self.road_blocking_rules
+            )
+            if self.canonical_road_keys_path is None:
+                df_canonical = add_road_blocking_features(con, df_canonical)
+            else:
+                retained_columns = [
+                    column
+                    for column in df_unmatched.columns
+                    if column not in set(ROAD_FEATURE_COLUMNS).difference({"road_1_norm"})
+                ]
+                df_unmatched = df_unmatched.select(", ".join(retained_columns))
+                escaped_road_keys_path = self.canonical_road_keys_path.replace(
+                    "'", "''"
+                )
+                df_canonical = con.sql(
+                    "SELECT canonical.*, road.road_1_norm, road.outward_postcode "
+                    f"FROM ({df_canonical.sql_query()}) AS canonical "
+                    f"LEFT JOIN read_parquet('{escaped_road_keys_path}') AS road "
+                    "USING (ukam_address_id)"
+                )
+            if self.canonical_road_cardinality_path is not None:
+                escaped_cardinality_path = self.canonical_road_cardinality_path.replace(
+                    "'", "''"
+                )
+                df_canonical = con.sql(
+                    "SELECT canonical.*, "
+                    "coalesce(cardinality.road_n1_block_size <= 8, FALSE) "
+                    "AS road_n1_block_size_lte_8 "
+                    f"FROM ({df_canonical.sql_query()}) AS canonical "
+                    f"LEFT JOIN read_parquet('{escaped_cardinality_path}') "
+                    "AS cardinality USING (road_1_norm, numeric_token_1)"
+                )
+            missing_canonical_columns = sorted(
+                required_canonical_columns.difference(df_canonical.columns)
+            )
+            if missing_canonical_columns:
+                raise ValueError(
+                    "Selective road blocking requires canonical eligibility fields "
+                    f"{missing_canonical_columns}. Re-run canonical preparation."
+                )
+
         numeric_range_reranker = NumericRangeRerankerConfig()
         range_metadata_available = (
             "numeric_range" in df_canonical.columns
@@ -151,8 +288,12 @@ class SplinkStage(MatchingStage):
         linker_columns = list(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))
+        self.phase_timings["road_and_reranker_preparation"] = (
+            perf_counter() - phase_started
+        )
 
         # Step 1: Build linker
+        phase_started = perf_counter()
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
             df_addresses_to_search_within=df_canonical,
@@ -162,11 +303,14 @@ class SplinkStage(MatchingStage):
             additional_columns_to_retain=linker_columns or None,
             retain_intermediate_calculation_columns=True,
             settings=self.settings,
+            additional_blocking_rules=list(self.road_blocking_rules),
         )
 
         self.linker = linker
+        self.phase_timings["linker_setup"] = perf_counter() - phase_started
 
         # Step 2: Predict
+        phase_started = perf_counter()
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
@@ -189,8 +333,10 @@ class SplinkStage(MatchingStage):
             + ")"
         )
         self.predictions_table = table_name
+        self.phase_timings["raw_prediction"] = perf_counter() - phase_started
 
         # Step 3: Improve predictions using distinguishing tokens
+        phase_started = perf_counter()
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_ddb,
             con=con,
@@ -212,9 +358,11 @@ class SplinkStage(MatchingStage):
             con=con,
         )
         self.improved_predictions_table = getattr(df_improved, "alias", None)
+        self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
+        phase_started = perf_counter()
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
@@ -225,6 +373,9 @@ class SplinkStage(MatchingStage):
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
         df_best.create(df_best_name)
         self.best_matches_table = df_best_name
+        self.phase_timings["best_match_materialisation"] = (
+            perf_counter() - phase_started
+        )
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value

@@ -7,6 +7,10 @@ from splink.internals.testing import is_in_level
 
 from uk_address_matcher import AddressMatcher
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
+from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
+from uk_address_matcher.linking_model.matching.stages.splink import (
+    SELECTIVE_ROAD_BLOCKING_RULES,
+)
 from uk_address_matcher.linking_model.splink_model import (
     _align_distinguishing_token_columns,
     _align_numeric_range_columns,
@@ -301,6 +305,67 @@ def test_sanitise_null_comparison_level_removes_probabilities():
     sanitised = _sanitise_null_comparison_levels(settings)
 
     assert sanitised["comparisons"][0]["comparison_levels"][0] == {"is_null_level": True}
+
+
+def test_linker_adds_scalar_road_blocking_rules_without_road_scoring(duck_con):
+    canonical = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('c1', '12 HIGH STREET', 'AB1 2CD')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    messy = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('m1', '12 HIGH STREET', 'AB1 2CD')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    canonical_clean = add_road_blocking_features(
+        duck_con,
+        prepare_data_for_matching(canonical, duck_con, num_of_chunks=1),
+    )
+    messy_clean = add_road_blocking_features(
+        duck_con,
+        prepare_data_for_matching(messy, duck_con, num_of_chunks=1),
+    )
+
+    linker = _get_linker(
+        messy_clean,
+        canonical_clean,
+        con=duck_con,
+        include_full_postcode_block=True,
+        include_outside_postcode_block=False,
+        additional_blocking_rules=[
+            "l.road_1_norm = r.road_1_norm "
+            "AND l.numeric_token_1 = r.numeric_token_1"
+        ],
+    )
+
+    rule_text = " ".join(
+        str(rule) for rule in linker._settings_obj._blocking_rules_to_generate_predictions
+    )
+    comparison_columns = {
+        comparison["output_column_name"]
+        for comparison in _get_model_settings_dict()["comparisons"]
+    }
+
+    assert "l.road_1_norm = r.road_1_norm" in rule_text
+    assert "inferred_road" not in comparison_columns
+    assert "inferred_road_top_2" not in comparison_columns
+
+
+def test_selective_road_blocking_profile_uses_only_screened_scalar_keys():
+    assert len(SELECTIVE_ROAD_BLOCKING_RULES) == 6
+    assert all(
+        "l.road_1_norm = r.road_1_norm" in rule
+        for rule in SELECTIVE_ROAD_BLOCKING_RULES
+    )
+    assert any(
+        "r.road_frequency_lte_1000" in rule
+        for rule in SELECTIVE_ROAD_BLOCKING_RULES
+    )
+    assert any(
+        "r.road_n1_block_size_lte_32" in rule
+        for rule in SELECTIVE_ROAD_BLOCKING_RULES
+    )
 
 
 def test_distinguishing_token_comparison_contributes_expected_match_weights(duck_con):

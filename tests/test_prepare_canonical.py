@@ -102,6 +102,35 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_manifest.json").exists()
 
 
+def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con):
+    prepared = load_prepared_canonical_data(prepared_folder, con)
+
+    assert {
+        "road_1_norm",
+        "road_frequency_lte_1000",
+        "road_n1_block_size_lte_32",
+    }.issubset(prepared.addresses.columns)
+
+
+def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
+    output_folder = tmp_path / "without_road_keys"
+
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=output_folder,
+        con=con,
+        derive_road_blocking_keys=False,
+    )
+    prepared = load_prepared_canonical_data(output_folder, con)
+
+    assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
+    assert {
+        "road_1_norm",
+        "road_frequency_lte_1000",
+        "road_n1_block_size_lte_32",
+    }.isdisjoint(prepared.addresses.columns)
+
+
 def test_progress_bar_disabled_writes_nothing():
     stream = _FakeStream(isatty_value=True)
     progress = _ProgressBar(label="Testing", total=10, enabled=False, stream=stream)
@@ -695,6 +724,11 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     )
     monkeypatch.setattr(
         chunking_strategies,
+        "_add_canonical_road_blocking_keys",
+        lambda addresses, con, **kwargs: addresses,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
         "derive_inverted_index",
         lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
     )
@@ -796,6 +830,11 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         chunking_strategies,
         "prepare_data_for_matching",
         lambda *args, **kwargs: clean_relation,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_add_canonical_road_blocking_keys",
+        lambda addresses, con, **kwargs: addresses,
     )
     monkeypatch.setattr(
         chunking_strategies,

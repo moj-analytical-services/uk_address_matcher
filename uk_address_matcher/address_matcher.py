@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 from uk_address_matcher.cleaning.chunking_strategies import (
+    _add_canonical_road_blocking_keys,
     derive_inverted_index,
     derive_term_frequencies_table,
     prepare_data_for_matching,
@@ -255,6 +256,15 @@ class AddressMatcher:
                 debug_options=self.debug_options,
                 show_progress=self.show_progress,
             )
+            if any(
+                isinstance(stage, SplinkStage) and stage.road_blocking_rules
+                for stage in self.stages
+            ):
+                self._canonical_clean = _add_canonical_road_blocking_keys(
+                    self._canonical_clean,
+                    self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
+                )
             logger.debug("Building inverted index from canonical data")
             inverted_index = derive_inverted_index(
                 self._canonical_clean,
