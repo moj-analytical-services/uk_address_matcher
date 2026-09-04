@@ -48,6 +48,10 @@ build-backend = "setuptools.build_meta"
     "data/*.csv",
     "data/*.json",
     "analysis/chart_defs/*.json",
+    "labelling/app/*.css",
+    "labelling/app/*.html",
+    "labelling/app/*.js",
+    "labelling/app/*.png",
 ]
 
 [tool.setuptools.packages.find]
