@@ -66,8 +66,6 @@ def validate_source_relations(
 
     label_type = _column_type(con, canonical_relation, canonical_label_column)
     canonical_id_type = _column_type(con, canonical_relation, "unique_id")
-    if "ukam_label" in messy_relation.columns:
-        _validate_label_compatibility(con, messy_relation, label_type)
     return canonical_id_type, label_type
 
 

@@ -209,11 +209,22 @@ function candidateDetails(row) {
     });
 }
 function candidates(row) {
-  return Array.isArray(row.top_candidates)
-    ? row.top_candidates.filter(
+  const list = row.top_candidates || row.candidates;
+  return Array.isArray(list)
+    ? list.filter(
         (candidate) => candidate && candidate.label_id != null,
       )
     : [];
+}
+function currentDisplayLabel(record) {
+  if (!record.current_label) return null;
+  if (String(record.current_label) === String(record.resolved_label_id))
+    return record.resolved_canonical_id || record.current_label;
+  return (
+    candidates(record).find(
+      (candidate) => String(candidate.label_id) === String(record.current_label),
+    )?.canonical_id || record.current_label
+  );
 }
 function select(row) {
   const node = document.createElement("select");
@@ -230,7 +241,7 @@ function select(row) {
   const modelCandidate = candidates(row).find(
       (candidate) => candidate.is_model_selection,
     ),
-    modelLabel = row.resolved_label_id ?? modelCandidate?.label_id;
+    modelLabel = row.resolved_canonical_id ?? modelCandidate?.canonical_id;
   const seen = new Set();
   const add = (value, label, name) => {
     if (seen.has(value)) return;
@@ -249,7 +260,7 @@ function select(row) {
     add(
       `candidate:${index}`,
       String(candidate.label_id),
-      `Candidate ${candidate.rank ?? index + 1} - ${candidate.label_id}`,
+      `Candidate ${candidate.rank ?? index + 1} - ${candidate.canonical_id || candidate.label_id}`,
     ),
   );
   node.append(
@@ -307,7 +318,7 @@ function render() {
   if (!state.rows.length) {
     const row = document.createElement("tr"),
       cell = text("td", "No records match the selected filters.");
-    cell.colSpan = 9;
+    cell.colSpan = 10;
     row.append(cell);
     el.body.append(row);
     return;
@@ -347,10 +358,10 @@ function render() {
         "cleaned-detail",
       );
     const suggestion = document.createElement("td");
-    suggestion.className = "canonical";
+    suggestion.className = "model-suggestion";
     if (record.resolved_label_id) {
       suggestion.append(
-        text("div", record.resolved_label_id, "primary"),
+        text("div", record.resolved_canonical_id, "primary"),
         text(
           "div",
           record.resolved_canonical_address || "Address unavailable",
@@ -364,6 +375,18 @@ function render() {
         "candidate-details",
       );
     } else suggestion.textContent = "No accepted match";
+    const currentLabel = document.createElement("td");
+    currentLabel.className = "current-label";
+    const currentLabelValue = currentDisplayLabel(record);
+    if (currentLabelValue) {
+      currentLabel.append(text("div", currentLabelValue, "primary"));
+      if (record.current_label_clean_full_address)
+        currentLabel.append(
+          text("div", record.current_label_clean_full_address, "primary"),
+        );
+      if (record.current_label_postcode)
+        currentLabel.append(text("div", record.current_label_postcode, "secondary"));
+    } else currentLabel.textContent = "Not labelled";
     const stage = text(
       "span",
       {
@@ -394,6 +417,7 @@ function render() {
       text("td", record.unique_id, "primary"),
       messy,
       suggestion,
+      currentLabel,
       stageCell,
       text("td", weightText, matchWeightClass(record.match_weight)),
       text(
@@ -514,6 +538,7 @@ async function initialise() {
       (button.onclick = () => {
         location.hash = button.dataset.view;
         view(button.dataset.view);
+        if (button.dataset.view === "overview") load();
       }),
   );
   addEventListener("hashchange", () =>
@@ -603,7 +628,13 @@ async function initialise() {
     $("label-progress").textContent =
       `${state.bootstrap.labelled_records} / ${state.bootstrap.total_records}`;
     buildStageFilters(state.bootstrap.stage_counts);
-    $("session-countdown").textContent = "Stored locally";
+    const savedToBundle = browserStore.remoteEventsUrl;
+    $("session-countdown").textContent = savedToBundle
+      ? "Saved to bundle/labelled_review_data.parquet"
+      : "Saved in browser";
+    $("session-countdown").title = savedToBundle
+      ? `Events: ${browserStore.labelledReviewPath?.replace(/labelled_review_data\.parquet$/, "labelling_updates.json")}\nLabelled review: ${browserStore.labelledReviewPath}`
+      : "Download updates to keep a portable copy outside this browser.";
     await load();
   } catch (error) {
     expired(error);
@@ -614,23 +645,63 @@ async function loadDataset(manifest, review, canonical, options = {}) {
     button = $("load-dataset");
   button.disabled = true;
   status.textContent = "Starting DuckDB-WASM. Browser memory is limited; large files may fail to load.";
+  const previousStore = browserStore;
+  browserStore = null;
+  if (previousStore) await previousStore.close();
   try {
     browserStore = await loadBrowserStore(manifest, review, canonical, options);
     $("dataset-loader").hidden = true;
     $("labelling-app").hidden = false;
+    if (!browserStore.remoteEventsUrl)
+      $("session-countdown").textContent = "Saved in browser";
     await initialise();
   } catch (error) {
     browserStore = null;
+    $("dataset-loader").hidden = false;
+    $("labelling-app").hidden = true;
     status.textContent = error.message;
   } finally {
     button.disabled = false;
   }
 }
 async function loadSelectedDataset() {
+  const bundleFiles = [...$("bundle-directory").files];
+  const manifest = bundleFiles.find((file) => file.name === "manifest.json");
+  if (!manifest) {
+    $("dataset-loader-status").textContent =
+      "Select the folder containing manifest.json and the review data file.";
+    return;
+  }
+  let manifestPayload;
+  try {
+    manifestPayload = JSON.parse(await manifest.text());
+  } catch {
+    $("dataset-loader-status").textContent = "Bundle manifest is not valid JSON.";
+    return;
+  }
+  const reviewName = String(manifestPayload.data_file || "review_data.parquet");
+  const review = bundleFiles.find((file) => file.name === reviewName);
+  if (!review) {
+    $("dataset-loader-status").textContent =
+      `The selected bundle folder is missing ${reviewName}.`;
+    return;
+  }
+  const canonicalName = manifestPayload.canonical_data_file;
+  const bundleCanonical = canonicalName
+    ? bundleFiles.find((file) => file.name === canonicalName)
+    : null;
+  if (canonicalName && !bundleCanonical) {
+    $("dataset-loader-status").textContent =
+      `The selected bundle folder is missing ${canonicalName}.`;
+    return;
+  }
   await loadDataset(
-    $("bundle-manifest-file").files[0],
-    $("review-data-file").files[0],
-    [...$("canonical-data-files").files],
+    manifest,
+    review,
+    [
+      ...(bundleCanonical ? [bundleCanonical] : []),
+      ...$("canonical-data-files").files,
+    ],
   );
 }
 async function fileFromUrl(url, name) {
@@ -653,9 +724,17 @@ function lazyFileFromUrl(url, name) {
 async function loadConfiguredDataset() {
   try {
     const response = await fetch("/api/local-config");
-    if (!response.ok || !response.headers.get("content-type")?.includes("json")) return;
+    if (!response.ok || !response.headers.get("content-type")?.includes("json")) {
+      $("dataset-loader").hidden = false;
+      return;
+    }
     const config = await response.json();
-    if (!config.bundle) return;
+    if (!config.bundle) {
+      $("dataset-loader").hidden = false;
+      return;
+    }
+    $("dataset-loader").hidden = true;
+    $("labelling-app").hidden = false;
     const manifest = await fileFromUrl(
       config.bundle.manifest_url,
       config.bundle.manifest_name,
@@ -672,8 +751,11 @@ async function loadConfiguredDataset() {
     await loadDataset(manifest, review, canonical, {
       remoteEventsUrl: config.events_url,
       nativeCanonicalSearchUrl: config.canonical_search_url,
+      labelledReviewPath: config.labelled_review_path,
     });
   } catch (error) {
+    $("dataset-loader").hidden = false;
+    $("labelling-app").hidden = true;
     $("dataset-loader-status").textContent = error.message;
   }
 }
@@ -683,6 +765,8 @@ state.review = {
   navigation: null,
   selectedCandidateLabel: null,
   loading: false,
+  pendingDecision: null,
+  saveFailed: false,
 };
 loadConfiguredDataset();
 const reviewElements = {
@@ -775,6 +859,8 @@ function selectedReviewCandidate() {
 }
 function showReviewEmpty() {
   state.review.record = null;
+  state.review.pendingDecision = null;
+  state.review.saveFailed = false;
   reviewElements.content.hidden = true;
   reviewElements.complete.hidden = true;
   reviewElements.empty.hidden = false;
@@ -811,13 +897,7 @@ function renderReview() {
   $("review-canonical-fields").hidden = !matched;
   $("review-no-canonical").hidden = matched;
   if (matched) {
-    $("review-canonical-label").textContent = display(record.resolved_label_id);
-    const showId =
-      record.resolved_canonical_id &&
-      String(record.resolved_canonical_id) !== String(record.resolved_label_id);
-    $("review-canonical-id-term").hidden = !showId;
-    $("review-canonical-id").hidden = !showId;
-    $("review-canonical-id").textContent = display(
+    $("review-canonical-label").textContent = display(
       record.resolved_canonical_id,
     );
     $("review-canonical-address").textContent = display(
@@ -874,23 +954,63 @@ function renderReview() {
       ...list.map((candidate) => candidateRow(candidate)),
     );
   }
-  $("review-current-label-value").textContent = record.current_label
-    ? record.current_label
-    : record.is_labelled
-      ? "Decision recorded without a canonical label."
-      : "Not labelled yet.";
-  const currentLabelDetails = [
-    record.current_label_address,
-    record.current_label_postcode,
-  ]
-    .filter(Boolean)
-    .join(" - ");
-  $("review-current-label-details").textContent = currentLabelDetails
-    ? `Points to: ${currentLabelDetails}`
-    : record.current_label
-      ? "Canonical target unavailable"
-      : "";
+  renderCurrentDecision();
   updateReviewAccept();
+}
+function decisionPresentation(record) {
+  const pending = state.review.pendingDecision;
+  const decision = pending?.decision || record.current_decision;
+  const details = pending || {
+    label: currentDisplayLabel(record),
+    address: record.current_label_address,
+    postcode: record.current_label_postcode,
+  };
+  const presentations = {
+    accept_model: ["accepted", "Model match accepted"],
+    select_candidate: ["accepted", "Candidate match selected"],
+    select_canonical: ["accepted", "Canonical match selected"],
+    imported: ["accepted", "Model match accepted"],
+    use_existing: ["neutral", "Existing label retained"],
+    no_match: ["no-match", "No match"],
+    uncertain: ["uncertain", "Marked uncertain"],
+  };
+  const [type, title] = presentations[decision] || ["neutral", "Not yet labelled"];
+  return { type, title, ...details };
+}
+function renderCurrentDecision() {
+  const record = state.review.record;
+  if (!record) return;
+  const decision = decisionPresentation(record);
+  const panel = $("review-current-decision");
+  panel.className = `current-decision current-decision-${decision.type}`;
+  $("review-current-decision-icon").textContent =
+    decision.type === "accepted"
+      ? "\u2713"
+      : decision.type === "uncertain"
+        ? "?"
+        : decision.type === "no-match"
+          ? "\u00d7"
+          : "";
+  $("review-current-decision-title").textContent = decision.title;
+  const label = $("review-current-decision-id");
+  label.textContent = decision.label || "";
+  label.parentElement.hidden = !decision.label;
+  const address = [decision.address, decision.postcode].filter(Boolean).join(" \u00b7 ");
+  const addressNode = $("review-current-decision-address");
+  addressNode.textContent = address;
+  addressNode.title = address;
+  addressNode.hidden = !address;
+  const persistence = $("review-current-decision-persistence");
+  persistence.textContent = state.review.saving
+    ? "Saving..."
+    : state.review.saveFailed
+      ? "Save failed"
+      : decision.type === "neutral" && !decision.label
+        ? ""
+        : "\u2713 Saved";
+  persistence.className = state.review.saveFailed
+    ? "current-decision-save-failed"
+    : "current-decision-persistence";
 }
 function candidateRow(candidate) {
   const row = document.createElement("tr"),
@@ -909,7 +1029,7 @@ function candidateRow(candidate) {
   if (radio.checked) row.classList.add("candidate-selected");
   const values = [
     candidate.rank,
-    candidate.label_id,
+    candidate.canonical_id || candidate.label_id,
     candidate.canonical_address,
     candidate.canonical_postcode,
     metric(candidate.splink_match_weight),
@@ -947,11 +1067,36 @@ function updateReviewAccept() {
       record &&
       (record.match_stage !== "splink" ? record.resolved_label_id : candidate);
   reviewElements.accept.hidden = !canAccept;
+  const currentDecision = state.review.pendingDecision?.decision || record.current_decision;
+  [["review-no-match", "no_match", "No match"], ["review-uncertain", "uncertain", "Uncertain"]].forEach(
+    ([id, decision, label]) => {
+      const button = $(id);
+      const isSelected = currentDecision === decision;
+      button.classList.toggle("is-selected", isSelected);
+      button.setAttribute("aria-pressed", String(isSelected));
+      button.textContent = isSelected ? `\u2713 ${label}` : label;
+    },
+  );
   if (!canAccept) return;
   const model = record.match_stage !== "splink" || candidate.is_model_selection;
-  reviewElements.accept.textContent = model
-    ? "Accept model match"
-    : "Use selected candidate";
+  const selected = model
+    ? currentDecision === "accept_model"
+    : currentDecision === "select_candidate";
+  reviewElements.accept.classList.toggle("is-selected", selected);
+  reviewElements.accept.setAttribute("aria-pressed", String(selected));
+  reviewElements.accept.textContent = selected
+    ? model
+      ? "\u2713 Model match accepted"
+      : "\u2713 Candidate match selected"
+    : model
+      ? "Accept model match"
+      : "Use selected candidate";
+}
+function prefetchNextReview(navigation, parameters) {
+  if (!navigation.next_unique_id) return;
+  const prefetchParameters = new URLSearchParams(parameters);
+  prefetchParameters.set("unique_id", navigation.next_unique_id);
+  api(`/api/review-record?${prefetchParameters}`).catch(() => {});
 }
 async function loadReview(
   id = reviewId() || sessionStorage.getItem("ukam-last-review-id"),
@@ -968,12 +1113,15 @@ async function loadReview(
     state.review.record = payload.record;
     state.review.navigation = payload.navigation;
     state.review.selectedCandidateLabel = initialCandidate(payload.record);
+    state.review.pendingDecision = null;
+    state.review.saveFailed = false;
     sessionStorage.setItem("ukam-last-review-id", payload.record.unique_id);
     renderReview();
     api(`/api/review-navigation?${parameters}`).then((navigation) => {
       if (state.review.record?.unique_id !== payload.record.unique_id) return;
       state.review.navigation = navigation;
       renderReview();
+      prefetchNextReview(navigation, parameters);
     }).catch((error) => toast(error.message));
   } catch (error) {
     toast(error.message);
@@ -993,21 +1141,52 @@ function showReviewComplete() {
 }
 let pendingReviewSaves = Promise.resolve();
 
-function queueReviewSave(payload) {
+function queueReviewSave(payload, displayLabel = null) {
+  state.review.pendingDecision = {
+    decision: payload.decision,
+    label: displayLabel || payload.ukam_label,
+    address: payload.clean_full_address,
+    postcode: payload.postcode,
+  };
+  state.review.saveFailed = false;
+  renderCurrentDecision();
+  updateReviewAccept();
   el.save.textContent = "Saving...";
-  pendingReviewSaves = pendingReviewSaves
+  const save = pendingReviewSaves
     .catch(() => {})
-    .then(async () => {
-      await api("/api/labels", {
+    .then(() =>
+      api("/api/labels", {
         method: "POST",
         body: JSON.stringify(payload),
-      });
+      }),
+    );
+  pendingReviewSaves = save;
+  return save.then(
+    () => {
       el.save.textContent = "Autosaved";
-    })
-    .catch((error) => {
+    },
+    (error) => {
       el.save.textContent = "Save failed";
+      state.review.saveFailed = true;
+      renderCurrentDecision();
       toast(error.message);
-    });
+      throw error;
+    },
+  );
+}
+function setReviewSaving(saving) {
+  state.review.saving = saving;
+  renderCurrentDecision();
+  [
+    reviewElements.accept,
+    $("review-no-match"),
+    $("review-uncertain"),
+    $("review-clear"),
+    $("review-use-existing"),
+    reviewElements.undo,
+  ].forEach((button) => {
+    if (button) button.disabled = saving;
+  });
 }
 
 function resetReviewScroll() {
@@ -1023,7 +1202,7 @@ function advanceAfterReviewSave(nextId) {
 }
 async function saveCanonicalSelection(canonicalRecord) {
   const record = state.review.record;
-  if (!record) {
+  if (!record || state.review.saving) {
     toast("Open a record in Review before selecting a canonical result.");
     return;
   }
@@ -1032,12 +1211,21 @@ async function saveCanonicalSelection(canonicalRecord) {
     unique_id: record.unique_id,
     decision: "select_canonical",
     ukam_label: canonicalRecord.canonical_id,
+    clean_full_address: canonicalRecord.cleaned_address || canonicalRecord.canonical_address,
+    postcode: canonicalRecord.canonical_postcode,
     selected_candidate_rank: null,
     next_unique_id: nextId,
     review_query: reviewFilterQuery(),
   };
-  advanceAfterReviewSave(nextId);
-  queueReviewSave(payload);
+  setReviewSaving(true);
+  try {
+    await queueReviewSave(payload, canonicalRecord.canonical_unique_id);
+    advanceAfterReviewSave(nextId);
+  } catch {
+    return;
+  } finally {
+    setReviewSaving(false);
+  }
 }
 function navigateReview(direction) {
   const id =
@@ -1052,12 +1240,14 @@ function navigateReview(direction) {
 async function saveReviewDecision(decision) {
   const record = state.review.record,
     candidate = selectedReviewCandidate();
-  if (!record) return;
+  if (!record || state.review.saving) return;
   const nextId = state.review.navigation?.next_unique_id;
   let payload = {
     unique_id: record.unique_id,
     decision,
     ukam_label: null,
+    clean_full_address: null,
+    postcode: null,
     selected_candidate_rank: null,
     next_unique_id: nextId,
     review_query: reviewFilterQuery(),
@@ -1069,15 +1259,33 @@ async function saveReviewDecision(decision) {
         ? "accept_model"
         : "select_candidate";
       payload.ukam_label = String(candidate.label_id);
+      payload.clean_full_address = candidate.canonical_address;
+      payload.postcode = candidate.canonical_postcode;
       payload.selected_candidate_rank = candidate.rank ?? null;
     } else {
       payload.decision = "accept_model";
       payload.ukam_label = record.resolved_label_id;
+      payload.clean_full_address = record.resolved_canonical_address;
+      payload.postcode = record.resolved_canonical_postcode;
       payload.selected_candidate_rank = 1;
     }
   }
-  advanceAfterReviewSave(nextId);
-  queueReviewSave(payload);
+  setReviewSaving(true);
+  try {
+    await queueReviewSave(
+      payload,
+      decision === "accept"
+        ? record.match_stage === "splink"
+          ? candidate?.canonical_id
+          : record.resolved_canonical_id
+        : null,
+    );
+    advanceAfterReviewSave(nextId);
+  } catch {
+    return;
+  } finally {
+    setReviewSaving(false);
+  }
 }
 async function undoReviewDecision() {
   try {
@@ -1250,7 +1458,11 @@ if (location.hash.startsWith("#review")) loadReview();
     c.status.textContent = `Showing canonical records ${format(first)}-${format(last)}`;
     state.canonical.rows.forEach((record) => {
       const row = document.createElement("tr"),
-        id = text("td", record.canonical_id, "primary"),
+        id = text(
+          "td",
+          record.canonical_unique_id || record.canonical_id,
+          "primary",
+        ),
         cleaned = document.createElement("td"),
         postcode = text("td", record.canonical_postcode || "-"),
         action = document.createElement("td"),

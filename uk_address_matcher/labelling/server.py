@@ -12,15 +12,18 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import duckdb
 
-from .updates import apply_labelling_updates
+from .updates import _normalise_event, apply_labelling_updates
 
 SUPPORTED_DATA_SUFFIXES = {".csv", ".parquet"}
 CANONICAL_PAGE_SIZE = 100
+LABELLED_REVIEW_DATA_FILE = "labelled_review_data.parquet"
+USER_LABEL_COLUMN = "ukam_user_label"
 _FULL_POSTCODE_PATTERN = re.compile(r"^(?:GIR 0AA|[A-Z][A-HJ-Y]?\d[A-Z\d]? \d[A-Z]{2})$")
 
 
@@ -144,6 +147,7 @@ def _canonical_search_payload(
         cursor = connection.execute(
             f"""
             SELECT CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_id,
+                CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_unique_id,
                 CAST({_quote_identifier(display)} AS VARCHAR) AS canonical_address,
                 CAST({_quote_identifier(cleaned)} AS VARCHAR) AS cleaned_address,
                 CAST({_quote_identifier(postcode_column)} AS VARCHAR) AS canonical_postcode
@@ -182,9 +186,8 @@ class LocalLabellingFiles:
     bundle_root: Path | None
     manifest_path: Path | None
     review_path: Path | None
+    bundle_canonical_path: Path | None
     canonical_paths: tuple[Path, ...]
-    input_path: Path | None
-    input_label_column: str
 
 
 def _data_file_from_manifest(bundle_root: Path) -> tuple[Path, dict[str, Any]]:
@@ -233,35 +236,36 @@ def _canonical_files(path: str | Path | None) -> tuple[Path, ...]:
 
 def _local_files(
     labelling_bundle_path: str | Path | None,
-    input_dataset_path: str | Path | None,
-    input_dataset_label_column: str,
     canonical_address_path: str | Path | None,
 ) -> LocalLabellingFiles:
     bundle_root = None
     manifest_path = None
     review_path = None
+    bundle_canonical_path = None
     if labelling_bundle_path is not None:
         bundle_root = Path(labelling_bundle_path).expanduser().resolve()
         if not bundle_root.is_dir():
             raise NotADirectoryError(
                 f"Labelling bundle must be a directory: {bundle_root}"
             )
-        review_path, _ = _data_file_from_manifest(bundle_root)
+        review_path, manifest = _data_file_from_manifest(bundle_root)
         manifest_path = bundle_root / "manifest.json"
-    input_path = None
-    if input_dataset_path is not None:
-        input_path = Path(input_dataset_path).expanduser().resolve()
-        if not input_path.is_file():
-            raise FileNotFoundError(f"Input dataset not found: {input_path}")
-        if input_path.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-            raise ValueError(f"Input dataset must be CSV or Parquet: {input_path}")
+        canonical_data_file = manifest.get("canonical_data_file")
+        if canonical_data_file:
+            bundle_canonical_path = (bundle_root / str(canonical_data_file)).resolve()
+            if (
+                not bundle_canonical_path.is_relative_to(bundle_root)
+                or not bundle_canonical_path.is_file()
+            ):
+                raise FileNotFoundError(
+                    f"Bundle canonical data file not found: {bundle_canonical_path}"
+                )
     return LocalLabellingFiles(
         bundle_root,
         manifest_path,
         review_path,
+        bundle_canonical_path,
         _canonical_files(canonical_address_path),
-        input_path,
-        input_dataset_label_column,
     )
 
 
@@ -309,22 +313,27 @@ def _write_events(fileset: LocalLabellingFiles, events: list[dict[str, Any]]) ->
     temporary_path.replace(updates_path)
 
 
-def _apply_input_dataset(fileset: LocalLabellingFiles) -> None:
-    if fileset.bundle_root is None or fileset.input_path is None:
+def _materialise_labelled_review(fileset: LocalLabellingFiles) -> None:
+    if fileset.bundle_root is None or fileset.review_path is None:
         return
     apply_labelling_updates(
         fileset.bundle_root,
         fileset.bundle_root / "labelling_updates.json",
-        fileset.input_path,
-        input_dataset_label_column=fileset.input_label_column,
+        fileset.review_path,
+        input_dataset_label_column=USER_LABEL_COLUMN,
+        output_path=fileset.bundle_root / LABELLED_REVIEW_DATA_FILE,
+        include_label_details=True,
     )
 
 
 def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
     local_files: dict[str, Path] = {}
+    event_lock = Lock()
     if fileset.manifest_path is not None:
         local_files["manifest.json"] = fileset.manifest_path
         local_files["review_data" + fileset.review_path.suffix] = fileset.review_path
+        if fileset.bundle_canonical_path is not None:
+            local_files["canonical_data.parquet"] = fileset.bundle_canonical_path
         for index, path in enumerate(fileset.canonical_paths):
             local_files[f"canonical/{index}{path.suffix}"] = path
 
@@ -341,7 +350,6 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
             _write_body(self.wfile, body)
 
         def _send_file(self, path: Path, content_type: str | None = None) -> None:
-            body = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header(
                 "Content-Type",
@@ -349,9 +357,11 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
                 or mimetypes.guess_type(path.name)[0]
                 or "application/octet-stream",
             )
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(path.stat().st_size))
             self.end_headers()
-            _write_body(self.wfile, body)
+            with path.open("rb") as source:
+                while chunk := source.read(64 * 1024):
+                    _write_body(self.wfile, chunk)
 
         def _config(self) -> dict[str, Any]:
             if fileset.manifest_path is None:
@@ -364,31 +374,52 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
                     "manifest_name": fileset.manifest_path.name,
                     "review_name": fileset.review_path.name,
                 },
-                "canonical_urls": [
-                    {
-                        "url": f"/api/local-file/canonical/{index}{path.suffix}",
-                        "name": path.name,
-                    }
-                    for index, path in enumerate(fileset.canonical_paths)
-                ],
+                "canonical_urls": (
+                    [
+                        {
+                            "url": "/api/local-file/canonical_data.parquet",
+                            "name": fileset.bundle_canonical_path.name,
+                        }
+                    ]
+                    if fileset.bundle_canonical_path is not None
+                    else [
+                        {
+                            "url": f"/api/local-file/canonical/{index}{path.suffix}",
+                            "name": path.name,
+                        }
+                        for index, path in enumerate(fileset.canonical_paths)
+                    ]
+                ),
                 "canonical_search_url": (
-                    "/api/canonical-search" if fileset.canonical_paths else None
+                    "/api/canonical-search"
+                    if fileset.canonical_paths and fileset.bundle_canonical_path is None
+                    else None
                 ),
                 "events_url": "/api/events",
+                "labelled_review_path": str(
+                    fileset.bundle_root / LABELLED_REVIEW_DATA_FILE
+                ),
             }
 
         def _save_event(self, event: dict[str, Any]) -> None:
-            events = _read_events(fileset)
-            events = [
-                item for item in events if item.get("event_id") != event.get("event_id")
-            ]
-            events.append(event)
-            _write_events(fileset, events)
-            try:
-                _apply_input_dataset(fileset)
-            except Exception:
-                _write_events(fileset, [item for item in events if item is not event])
-                raise
+            if fileset.manifest_path is None:
+                raise ValueError("A labelling bundle is required to save events")
+            manifest = json.loads(fileset.manifest_path.read_text(encoding="utf-8"))
+            event = _normalise_event(event, str(manifest.get("bundle_id", "")))
+            with event_lock:
+                previous_events = _read_events(fileset)
+                events = [
+                    item
+                    for item in previous_events
+                    if item.get("event_id") != event["event_id"]
+                ]
+                events.append(event)
+                try:
+                    _write_events(fileset, events)
+                    _materialise_labelled_review(fileset)
+                except Exception:
+                    _write_events(fileset, previous_events)
+                    raise
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -396,7 +427,8 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
                 self._send(HTTPStatus.OK, self._config())
                 return
             if parsed.path == "/api/events":
-                self._send(HTTPStatus.OK, {"events": _read_events(fileset)})
+                with event_lock:
+                    self._send(HTTPStatus.OK, {"events": _read_events(fileset)})
                 return
             if parsed.path == "/api/canonical-search":
                 try:
@@ -432,7 +464,7 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 event = json.loads(self.rfile.read(length))
-                if not isinstance(event, dict) or not event.get("event_id"):
+                if not isinstance(event, dict):
                     raise ValueError("Invalid labelling event")
                 self._save_event(event)
             except Exception as error:
@@ -445,15 +477,20 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             event_id = parse_qs(urlparse(self.path).query).get("event_id", [""])[0]
-            events = _read_events(fileset)
-            remaining = [event for event in events if event.get("event_id") != event_id]
-            _write_events(fileset, remaining)
-            try:
-                _apply_input_dataset(fileset)
-            except Exception as error:
-                _write_events(fileset, events)
-                self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            if not event_id:
+                self._send(HTTPStatus.BAD_REQUEST, {"error": "event_id is required"})
                 return
+            with event_lock:
+                events = _read_events(fileset)
+                remaining = [
+                    event for event in events if event.get("event_id") != event_id
+                ]
+                try:
+                    _write_events(fileset, remaining)
+                    _materialise_labelled_review(fileset)
+                except Exception:
+                    _write_events(fileset, events)
+                    raise
             self._send(HTTPStatus.OK, {"deleted": event_id})
 
     return Handler
@@ -462,8 +499,6 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
 def _launch_labelling_app_beta(
     labelling_bundle_path: str | Path | None = None,
     *,
-    input_dataset_path: str | Path | None = None,
-    input_dataset_label_column: str = "ukam_label",
     canonical_address_path: str | Path | None = None,
     port: int = 0,
     open_browser: bool = True,
@@ -472,8 +507,6 @@ def _launch_labelling_app_beta(
         raise ValueError("port must be between 0 and 65535")
     fileset = _local_files(
         labelling_bundle_path,
-        input_dataset_path,
-        input_dataset_label_column,
         canonical_address_path,
     )
     server = ThreadingHTTPServer(
@@ -494,16 +527,12 @@ def _launch_labelling_app_beta(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Launch the local UKAM labelling tool")
     parser.add_argument("--labelling-bundle", type=Path)
-    parser.add_argument("--input-dataset", type=Path)
-    parser.add_argument("--input-label-column", default="ukam_label")
     parser.add_argument("--canonical-address-path", type=Path)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     arguments = parser.parse_args()
     _launch_labelling_app_beta(
         arguments.labelling_bundle,
-        input_dataset_path=arguments.input_dataset,
-        input_dataset_label_column=arguments.input_label_column,
         canonical_address_path=arguments.canonical_address_path,
         port=arguments.port,
         open_browser=not arguments.no_browser,
