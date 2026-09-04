@@ -9,7 +9,7 @@
       type="image/png"
       href="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/main/docs/site/assets/images/icon.png"
     />
-    <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
     <header>
@@ -21,15 +21,36 @@
       </div>
       <div>
         <span id="bundle-name">Loading bundle...</span
-        ><span id="session-countdown">10:00 remaining</span
-        ><span id="save-status">Autosaved</span>
+        ><span id="session-countdown">Waiting for local files</span
+        ><span id="save-status">Autosaved</span
+        ><button id="download-updates" type="button">Download updates</button>
       </div>
     </header>
     <nav>
       <button class="tab active" data-view="overview">Overview</button
       ><button class="tab" data-view="review">Review</button>
     </nav>
-    <main>
+    <section id="dataset-loader" class="dataset-loader" hidden>
+      <div class="dataset-loader-card">
+        <p class="eyebrow">Browser-native review</p>
+        <h1>Load a labelling bundle</h1>
+        <p>
+          Choose the folder containing your labelling bundle. The selected
+          files stay in this browser session.
+        </p>
+        <label>
+          Labelling bundle folder
+          <input id="bundle-directory" type="file" webkitdirectory multiple />
+        </label>
+        <label>
+          Canonical Parquet files (optional)
+          <input id="canonical-data-files" type="file" accept=".parquet" multiple />
+        </label>
+        <button id="load-dataset" type="button">Load data</button>
+        <p id="dataset-loader-status" role="status"></p>
+      </div>
+    </section>
+    <main id="labelling-app" hidden>
       <section id="overview-view" class="view active">
         <div id="layout">
           <aside id="filters">
@@ -161,7 +182,7 @@
               /></label>
               <label
                 class="toggle"
-                title="Show records where an existing label differs from the model suggestion"
+                title="Show records where the current label differs from the model suggestion"
                 >Model mismatches only
                 <input
                   id="mismatches-only"
@@ -203,6 +224,7 @@
                     <th>Unique ID</th>
                     <th>Messy address</th>
                     <th>Model suggestion</th>
+                    <th>Current label</th>
                     <th>Match stage</th>
                     <th>
                       <button
@@ -237,7 +259,7 @@
                 </thead>
                 <tbody id="records-body">
                   <tr>
-                    <td colspan="9">Loading...</td>
+                    <td colspan="10">Loading...</td>
                   </tr>
                 </tbody>
               </table>
@@ -264,7 +286,23 @@
             ><strong id="review-position">Record 1 of 1</strong
             ><button id="review-next" class="review-button">Next &rarr;</button>
           </div>
-          <div class="review-cards">
+          <aside
+            id="review-sticky-context"
+            class="review-sticky-context"
+            aria-label="Current record summary"
+          >
+            <div class="review-sticky-record messy">
+              <span>Messy input</span>
+              <strong id="review-sticky-messy-address"></strong>
+              <small id="review-sticky-messy-postcode"></small>
+            </div>
+            <div class="review-sticky-record canonical">
+              <span>Model suggestion</span>
+              <strong id="review-sticky-canonical-address"></strong>
+              <small id="review-sticky-canonical-postcode"></small>
+            </div>
+          </aside>
+          <div id="review-cards" class="review-cards">
             <article class="review-card messy-card">
               <div class="review-card-header messy-card-header">
                 <h2>Messy input record</h2>
@@ -298,22 +336,23 @@
               <h2>Model suggestion</h2>
               <div id="review-canonical-fields">
                 <dl>
-                  <dt>Canonical ID</dt>
+                  <dt>Unique ID</dt>
                   <dd id="review-canonical-label"></dd>
-                  <dt id="review-canonical-id-term" hidden>
-                    Canonical record ID
-                  </dt>
-                  <dd id="review-canonical-id" hidden></dd>
                   <dt>Canonical address</dt>
                   <dd id="review-canonical-address"></dd>
                   <dt>Postcode</dt>
                   <dd id="review-canonical-postcode"></dd>
                 </dl>
+                <div
+                  id="review-canonical-additional-fields"
+                  class="review-canonical-additional-fields"
+                  hidden
+                ></div>
               </div>
               <p id="review-no-canonical" hidden>No accepted canonical match</p>
             </article>
           </div>
-          <section class="review-summary">
+          <section id="review-summary" class="review-summary">
             <h2>Match summary</h2>
             <dl>
               <div>
@@ -338,20 +377,6 @@
               </div>
             </dl>
           </section>
-          <section
-            id="review-canonical-search-selection"
-            class="canonical-search-selection"
-            hidden
-          >
-            <div>
-              <span>Canonical search selection</span
-              ><strong id="review-search-selection-id"></strong>
-              <p id="review-search-selection-address"></p>
-            </div>
-            <button id="review-clear-search-selection" type="button">
-              Clear
-            </button>
-          </section>
           <section id="review-candidates" class="review-candidates" hidden>
             <h2 id="review-candidates-heading">
               Candidates considered by reranker
@@ -361,8 +386,8 @@
               candidate set, but the match should still be checked against the
               input record.
             </p>
-            <p id="review-no-candidates" class="review-warning" hidden>
-              No retained candidate data is available for this Splink record.
+            <p id="review-no-candidates" class="review-info" hidden>
+              No candidates were retained for reranking.
             </p>
             <div class="candidate-table-shell">
               <table>
@@ -389,8 +414,8 @@
             <div>
               <h2>Canonical data is not available</h2>
               <p>
-                No canonical path was provided. Relaunch the app with a
-                canonical address path to search canonical records.
+                No canonical address data was supplied. Relaunch the local app
+                with a canonical Parquet path to search canonical records.
               </p>
             </div>
           </div>
@@ -460,11 +485,11 @@
               <div id="canonical-results-table-shell" hidden>
                 <table>
                   <thead>
-                    <tr>
-                      <th>Canonical ID</th>
+                    <tr id="canonical-results-header-row">
+                      <th>Unique ID</th>
                       <th>Cleaned address</th>
                       <th>Postcode</th>
-                      <th>Action</th>
+                      <th id="canonical-action-heading">Action</th>
                     </tr>
                   </thead>
                   <tbody id="canonical-results-body"></tbody>
@@ -481,25 +506,40 @@
             </section>
           </section>
           <footer class="review-actions">
-            <span id="review-current-label" class="review-current-label">
-              <span class="review-current-label-icon" aria-hidden="true"
-                >&#127991;</span
-              ><span>
-                <span class="review-current-label-heading">Current label</span
-                ><strong id="review-current-label-value"></strong> </span
-            ></span>
-            <div>
+            <div
+              id="review-current-decision"
+              class="current-decision current-decision-neutral"
+              role="status"
+              aria-live="polite"
+            >
+              <span
+                id="review-current-decision-icon"
+                class="current-decision-icon"
+                aria-hidden="true"
+              ></span>
+              <div class="current-decision-content">
+                <span class="current-decision-eyebrow">Current decision</span>
+                <strong id="review-current-decision-title"></strong>
+                <span class="current-decision-label">
+                  <span class="current-decision-label-heading">Label</span>
+                  <strong
+                    id="review-current-decision-id"
+                    class="current-decision-id"
+                  ></strong>
+                </span>
+                <div class="current-decision-meta">
+                  <span id="review-current-decision-address"></span>
+                  <span id="review-current-decision-persistence"></span>
+                </div>
+              </div>
+            </div>
+            <div class="review-footer-divider" aria-hidden="true"></div>
+            <div class="review-footer-actions">
               <button id="review-undo" class="review-button" type="button">
                 Undo
               </button>
               <button id="review-accept" class="review-button accept">
                 Accept model match</button
-              ><button
-                id="review-search-canonical"
-                class="review-button"
-                type="button"
-              >
-                Go to canonical search</button
               ><button id="review-no-match" class="review-button">
                 No match</button
               ><button id="review-uncertain" class="review-button">
@@ -533,17 +573,10 @@
     <div id="toast" hidden></div>
     <div id="session-overlay" hidden>
       <div>
-        <h2>Session closed</h2>
-        <p>
-          The local UKAM labelling session closed after ten minutes of
-          inactivity.
-        </p>
-        <p>
-          Your saved labels remain in the bundle. Relaunch the application to
-          continue.
-        </p>
+        <h2>Review unavailable</h2>
+        <p>DuckDB-WASM could not complete the browser review query.</p>
       </div>
     </div>
-    <script src="/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

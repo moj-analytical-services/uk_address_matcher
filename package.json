@@ -1,0 +1,14 @@
+{
+  "name": "uk-address-matcher-labelling-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.29.0",
+    "vite": "7.1.4"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UKAM Labelling Tool</title>
+    <link
+      rel="icon"
+      type="image/png"
+      href="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/main/docs/site/assets/images/icon.png"
+    />
+    <script type="module" crossorigin src="./assets/index-BHU3y4nE.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-C0JwPjTg.css">
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <img
+          src="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/main/docs/site/assets/images/icon.png"
+          alt=""
+        /><strong>UKAM</strong><span>Labelling Tool</span>
+      </div>
+      <div>
+        <span id="bundle-name">Loading bundle...</span
+        ><span id="session-countdown">Waiting for local files</span
+        ><span id="save-status">Autosaved</span
+        ><button id="download-updates" type="button">Download updates</button>
+      </div>
+    </header>
+    <nav>
+      <button class="tab active" data-view="overview">Overview</button
+      ><button class="tab" data-view="review">Review</button>
+    </nav>
+    <section id="dataset-loader" class="dataset-loader" hidden>
+      <div class="dataset-loader-card">
+        <p class="eyebrow">Browser-native review</p>
+        <h1>Load a labelling bundle</h1>
+        <p>
+          Choose the folder containing your labelling bundle. The selected
+          files stay in this browser session.
+        </p>
+        <label>
+          Labelling bundle folder
+          <input id="bundle-directory" type="file" webkitdirectory multiple />
+        </label>
+        <label>
+          Canonical Parquet files (optional)
+          <input id="canonical-data-files" type="file" accept=".parquet" multiple />
+        </label>
+        <button id="load-dataset" type="button">Load data</button>
+        <p id="dataset-loader-status" role="status"></p>
+      </div>
+    </section>
+    <main id="labelling-app" hidden>
+      <section id="overview-view" class="view active">
+        <div id="layout">
+          <aside id="filters">
+            <div class="filter-heading">
+              <h2>Filters</h2>
+              <button id="reset-filters">Reset</button>
+            </div>
+            <button
+              id="collapse-filters"
+              class="sidebar-toggle"
+              title="Collapse filters"
+              aria-label="Collapse filters"
+            >
+              &lsaquo;
+            </button>
+            <fieldset class="filter-card">
+              <legend>Match stage</legend>
+              <div id="stage-options" class="stage-options"></div>
+            </fieldset>
+            <fieldset class="filter-card search-card">
+              <legend>Search records</legend>
+              <label class="search-field"
+                ><span>Unique ID</span><input
+                  id="record-unique-id"
+                  type="search"
+                  maxlength="100"
+                  placeholder="Contains..."
+                  autocomplete="off"
+              /></label>
+              <label class="search-field"
+                ><span>Address or postcode</span><input
+                  id="record-address-query"
+                  type="search"
+                  maxlength="100"
+                  placeholder="Contains..."
+                  autocomplete="off"
+              /></label>
+              <p>Matches raw and cleaned addresses or postcode.</p>
+            </fieldset>
+            <fieldset class="filter-card range-card">
+              <legend>Splink reranked score</legend>
+              <div class="range-scale">
+                <div class="range-track" aria-hidden="true"></div>
+                <input
+                  id="score-range-min"
+                  type="range"
+                  min="-10"
+                  max="30"
+                  step="0.1"
+                  value="-10"
+                /><input
+                  id="score-range-max"
+                  type="range"
+                  min="-10"
+                  max="30"
+                  step="0.1"
+                  value="30"
+                />
+              </div>
+              <div class="range-labels">
+                <span>-10.0</span><span>30.0</span>
+              </div>
+              <div class="range-inputs">
+                <label
+                  >Min<input
+                    id="score-min"
+                    type="number"
+                    min="-10"
+                    max="30"
+                    step="0.1"
+                    placeholder="Optional" /></label
+                ><label
+                  >Max<input
+                    id="score-max"
+                    type="number"
+                    min="-10"
+                    max="30"
+                    step="0.1"
+                    placeholder="Optional"
+                /></label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-card range-card">
+              <legend>Distinguishability</legend>
+              <div class="range-scale">
+                <div class="range-track" aria-hidden="true"></div>
+                <input
+                  id="dist-range-min"
+                  type="range"
+                  min="0"
+                  max="20"
+                  step="0.1"
+                  value="0"
+                /><input
+                  id="dist-range-max"
+                  type="range"
+                  min="0"
+                  max="20"
+                  step="0.1"
+                  value="20"
+                />
+              </div>
+              <div class="range-labels"><span>0.0</span><span>20.0</span></div>
+              <div class="range-inputs">
+                <label
+                  >Min<input
+                    id="dist-min"
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    placeholder="Optional" /></label
+                ><label
+                  >Max<input
+                    id="dist-max"
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    placeholder="Optional"
+                /></label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-card">
+              <legend>Labels</legend>
+              <label class="toggle"
+                >Show labelled records
+                <input id="show-labelled" type="checkbox" checked
+              /></label>
+              <label
+                class="toggle"
+                title="Show records where the current label differs from the model suggestion"
+                >Model mismatches only
+                <input
+                  id="mismatches-only"
+                  type="checkbox"
+                  aria-label="Show model mismatches only"
+              /></label>
+            </fieldset>
+            <div class="label-progress">
+              <span>Labels created</span
+              ><strong id="label-progress">0 / 0</strong>
+            </div>
+          </aside>
+          <section class="records-panel">
+            <div class="toolbar">
+              <button
+                id="expand-filters"
+                class="sidebar-reopen"
+                hidden
+                title="Expand filters"
+                aria-label="Expand filters"
+              >
+                &rsaquo;</button
+              ><strong id="record-range">Loading records...</strong
+              ><label
+                >Rows
+                <select id="page-size">
+                  <option>10</option>
+                  <option selected>20</option>
+                  <option>50</option>
+                  <option>100</option>
+                </select></label
+              >
+            </div>
+            <div id="pagination-top" class="pagination"></div>
+            <div class="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Unique ID</th>
+                    <th>Messy address</th>
+                    <th>Model suggestion</th>
+                    <th>Current label</th>
+                    <th>Match stage</th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="reranked_score"
+                        title="Final score after reranking candidates"
+                      >
+                        Reranked score <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="splink_score"
+                        title="Raw Splink match weight before reranking"
+                      >
+                        Splink score <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="distinguishability"
+                        title="Difference between this match and the next-best candidate"
+                      >
+                        Dist. <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
+                    <th>Label</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="records-body">
+                  <tr>
+                    <td colspan="10">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="footer">
+              <span id="record-range-bottom"></span>
+              <div id="pagination-bottom" class="pagination"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section id="review-view" class="view review-view">
+        <div id="review-empty" class="review-empty">
+          <h2>Select a record to review</h2>
+          <p>Open a record from Overview to inspect its match in detail.</p>
+          <button id="review-overview" class="review-button">
+            Go to Overview
+          </button>
+        </div>
+        <div id="review-content" hidden>
+          <div class="review-navigation">
+            <button id="review-previous" class="review-button">
+              &larr; Previous</button
+            ><strong id="review-position">Record 1 of 1</strong
+            ><button id="review-next" class="review-button">Next &rarr;</button>
+          </div>
+          <aside
+            id="review-sticky-context"
+            class="review-sticky-context"
+            aria-label="Current record summary"
+          >
+            <div class="review-sticky-record messy">
+              <span>Messy input</span>
+              <strong id="review-sticky-messy-address"></strong>
+              <small id="review-sticky-messy-postcode"></small>
+            </div>
+            <div class="review-sticky-record canonical">
+              <span>Model suggestion</span>
+              <strong id="review-sticky-canonical-address"></strong>
+              <small id="review-sticky-canonical-postcode"></small>
+            </div>
+          </aside>
+          <div id="review-cards" class="review-cards">
+            <article class="review-card messy-card">
+              <div class="review-card-header messy-card-header">
+                <h2>Messy input record</h2>
+                <a
+                  id="review-open-map"
+                  class="map-link"
+                  href="#"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the exact messy address in Google Maps"
+                  aria-label="Open the exact messy address in Google Maps"
+                  ><span class="map-link-icon" aria-hidden="true">&#128205;</span
+                  >Open in Maps</a
+                >
+              </div>
+              <dl>
+                <dt>Unique ID</dt>
+                <dd id="review-messy-id"></dd>
+                <dt>Raw address</dt>
+                <dd id="review-messy-address"></dd>
+                <dt>Cleaned address</dt>
+                <dd id="review-messy-cleaned"></dd>
+                <dt>Postcode</dt>
+                <dd id="review-messy-postcode"></dd>
+              </dl>
+            </article>
+            <article
+              id="review-canonical-card"
+              class="review-card canonical-card"
+            >
+              <h2>Model suggestion</h2>
+              <div id="review-canonical-fields">
+                <dl>
+                  <dt>Unique ID</dt>
+                  <dd id="review-canonical-label"></dd>
+                  <dt>Canonical address</dt>
+                  <dd id="review-canonical-address"></dd>
+                  <dt>Postcode</dt>
+                  <dd id="review-canonical-postcode"></dd>
+                </dl>
+                <div
+                  id="review-canonical-additional-fields"
+                  class="review-canonical-additional-fields"
+                  hidden
+                ></div>
+              </div>
+              <p id="review-no-canonical" hidden>No accepted canonical match</p>
+            </article>
+          </div>
+          <section id="review-summary" class="review-summary">
+            <h2>Match summary</h2>
+            <dl>
+              <div>
+                <dt>Match stage</dt>
+                <dd id="review-stage"></dd>
+              </div>
+              <div>
+                <dt>Match reason</dt>
+                <dd id="review-reason"></dd>
+              </div>
+              <div>
+                <dt>Final reranked score</dt>
+                <dd id="review-score"></dd>
+              </div>
+              <div>
+                <dt>Distinguishability</dt>
+                <dd id="review-distinguishability"></dd>
+              </div>
+              <div>
+                <dt>Candidates retained</dt>
+                <dd id="review-count"></dd>
+              </div>
+            </dl>
+          </section>
+          <section id="review-candidates" class="review-candidates" hidden>
+            <h2 id="review-candidates-heading">
+              Candidates considered by reranker
+            </h2>
+            <p id="review-one-candidate" class="review-info" hidden>
+              Only one candidate was retained for reranking. This is a selective
+              candidate set, but the match should still be checked against the
+              input record.
+            </p>
+            <p id="review-no-candidates" class="review-info" hidden>
+              No candidates were retained for reranking.
+            </p>
+            <div class="candidate-table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Rank</th>
+                    <th>Canonical ID</th>
+                    <th>Address</th>
+                    <th>Postcode</th>
+                    <th>Splink MW</th>
+                    <th>Probability</th>
+                    <th>Rerank adjustment</th>
+                    <th>Final score</th>
+                    <th>Dist.</th>
+                    <th>Model</th>
+                  </tr>
+                </thead>
+                <tbody id="review-candidate-body"></tbody>
+              </table>
+            </div>
+          </section>
+          <div id="canonical-unavailable" class="canonical-unavailable" hidden>
+            <div>
+              <h2>Canonical data is not available</h2>
+              <p>
+                No canonical address data was supplied. Relaunch the local app
+                with a canonical Parquet path to search canonical records.
+              </p>
+            </div>
+          </div>
+          <section id="canonical-content" class="review-canonical" hidden>
+            <div class="canonical-review-heading">
+              <h1>Canonical Viewer</h1>
+              <p>
+                Search the canonical dataset and select the correct record for
+                this review target.
+              </p>
+            </div>
+            <section class="canonical-search-panel">
+              <label
+                >Unique ID contains<input
+                  id="canonical-unique-id"
+                  type="text"
+                  maxlength="100"
+                  placeholder="For example, 12345"
+                  autocomplete="off" /></label
+              ><label
+                >Postcode<input
+                  id="canonical-postcode"
+                  type="text"
+                  maxlength="16"
+                  placeholder="For example, E5 8RY"
+                  autocomplete="off" /></label
+              ><label
+                >Cleaned address contains<input
+                  id="canonical-address-query"
+                  type="text"
+                  maxlength="100"
+                  placeholder="For example, 34 or STREET"
+                  autocomplete="off"
+              /></label>
+              <div>
+                <button id="canonical-use-review-postcode" type="button" hidden>
+                  Use postcode from record</button
+                ><button
+                  id="canonical-search"
+                  type="button"
+                  class="primary-button"
+                >
+                  Search</button
+                ><button id="canonical-clear" type="button">Clear</button>
+              </div>
+            </section>
+            <p class="canonical-help">
+              Enter a unique ID, postcode, address value, or any combination.
+              Searches are case-insensitive literal substring checks.
+            </p>
+            <section class="canonical-results">
+              <header>
+                <div>
+                  <h2>Results</h2>
+                  <p id="canonical-results-status">
+                    Enter a postcode or address value to begin searching.
+                  </p>
+                </div>
+                <strong id="canonical-page-number">Page 1</strong>
+              </header>
+              <div
+                id="canonical-results-message"
+                class="canonical-results-message"
+              >
+                Search results will appear here.
+              </div>
+              <div id="canonical-results-table-shell" hidden>
+                <table>
+                  <thead>
+                    <tr id="canonical-results-header-row">
+                      <th>Unique ID</th>
+                      <th>Cleaned address</th>
+                      <th>Postcode</th>
+                      <th id="canonical-action-heading">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="canonical-results-body"></tbody>
+                </table>
+              </div>
+              <footer id="canonical-pagination" hidden>
+                <button id="canonical-previous" type="button" disabled>
+                  &larr; Previous 100</button
+                ><span id="canonical-pagination-summary">Page 1</span
+                ><button id="canonical-next" type="button" disabled>
+                  Next 100 &rarr;
+                </button>
+              </footer>
+            </section>
+          </section>
+          <footer class="review-actions">
+            <div
+              id="review-current-decision"
+              class="current-decision current-decision-neutral"
+              role="status"
+              aria-live="polite"
+            >
+              <span
+                id="review-current-decision-icon"
+                class="current-decision-icon"
+                aria-hidden="true"
+              ></span>
+              <div class="current-decision-content">
+                <span class="current-decision-eyebrow">Current decision</span>
+                <strong id="review-current-decision-title"></strong>
+                <span class="current-decision-label">
+                  <span class="current-decision-label-heading">Label</span>
+                  <strong
+                    id="review-current-decision-id"
+                    class="current-decision-id"
+                  ></strong>
+                </span>
+                <div class="current-decision-meta">
+                  <span id="review-current-decision-address"></span>
+                  <span id="review-current-decision-persistence"></span>
+                </div>
+              </div>
+            </div>
+            <div class="review-footer-divider" aria-hidden="true"></div>
+            <div class="review-footer-actions">
+              <button id="review-undo" class="review-button" type="button">
+                Undo
+              </button>
+              <button id="review-accept" class="review-button accept">
+                Accept model match</button
+              ><button id="review-no-match" class="review-button">
+                No match</button
+              ><button id="review-uncertain" class="review-button">
+                Uncertain</button
+              ><button id="review-skip" class="review-button">Skip</button>
+            </div>
+          </footer>
+        </div>
+        <div id="review-complete" class="review-empty" hidden>
+          <h2>Review set complete</h2>
+          <p>You have reached the end of this review set.</p>
+          <button id="review-complete-previous" class="review-button">
+            Previous record</button
+          ><button id="review-complete-overview" class="review-button">
+            Return to Overview
+          </button>
+        </div>
+      </section>
+    </main>
+    <div class="scroll">
+      <button id="scroll-top" title="Go to top" aria-label="Go to top">
+        &uarr;</button
+      ><button
+        id="scroll-bottom"
+        title="Go to bottom"
+        aria-label="Go to bottom"
+      >
+        &darr;
+      </button>
+    </div>
+    <div id="toast" hidden></div>
+    <div id="session-overlay" hidden>
+      <div>
+        <h2>Review unavailable</h2>
+        <p>DuckDB-WASM could not complete the browser review query.</p>
+      </div>
+    </div>
+  </body>
+</html>

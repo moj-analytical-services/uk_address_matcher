@@ -27,14 +27,15 @@ from uk_address_matcher.labelling.validation import (
 if TYPE_CHECKING:
     from uk_address_matcher.post_linkage.match_result.result import MatchResult
 
-_CANONICAL_LABEL_COLUMN = "unique_id"
+_CANONICAL_LABEL_COLUMN = "ukam_address_id"
+_CANONICAL_DATA_FILE = "canonical_data.parquet"
 _MESSY_COLUMNS: tuple[str, ...] = ()
 _CANONICAL_COLUMNS: tuple[str, ...] = ()
 
 logger = logging.getLogger("uk_address_matcher")
 
 
-def export_labelling_bundle(
+def _export_labelling_bundle_beta(
     match_result: MatchResult,
     output_directory: str | Path = DEFAULT_LABELLING_BUNDLE_DIRECTORY,
     *,
@@ -82,6 +83,24 @@ def export_labelling_bundle(
     try:
         parquet_path = temporary_path / "review_data.parquet"
         _write_parquet(match_result, review_relation, parquet_path)
+        canonical_relation = match_result._canonical_relation
+        if canonical_relation is None:
+            raise ValueError("The retained canonical relation is unavailable for export.")
+        _write_parquet(
+            match_result,
+            match_result.con.sql(
+                f"""
+                SELECT
+                    CAST(ukam_address_id AS VARCHAR) AS ukam_address_id,
+                    CAST(unique_id AS VARCHAR) AS unique_id,
+                    original_address_concat::VARCHAR AS original_address_concat,
+                    clean_full_address::VARCHAR AS clean_full_address,
+                    postcode::VARCHAR AS postcode
+                FROM ({canonical_relation.sql_query()})
+                """
+            ),
+            temporary_path / _CANONICAL_DATA_FILE,
+        )
         parquet_validation = validate_written_parquet(
             parquet_path,
             expected_row_count=int(expected_row_count),
@@ -94,6 +113,7 @@ def export_labelling_bundle(
             parquet_validation=parquet_validation,
             top_n_candidates=top_n_candidates,
             canonical_label_column=_CANONICAL_LABEL_COLUMN,
+            canonical_data_file=_CANONICAL_DATA_FILE,
             messy_columns=_MESSY_COLUMNS,
             canonical_columns=_CANONICAL_COLUMNS,
         )

@@ -1,1049 +1,544 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
-import secrets
-import threading
-import time
-import uuid
+import mimetypes
+import re
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import duckdb
 
-from uk_address_matcher.labelling.canonical import (
-    CANONICAL_PAGE_SIZE,
-    CanonicalSource,
-    find_canonical_record,
-    load_canonical_source,
-    search_canonical_data,
-)
+from .updates import _normalise_event, apply_labelling_updates
 
-DEFAULT_PAGE_SIZE = 20
-ALLOWED_PAGE_SIZES = {10, 20, 50, 100}
-ALLOWED_MATCH_STAGES = {"exact", "peeled", "splink", "unique_trigram", "unmatched"}
-RECORD_SORT_COLUMNS = {
-    "unique_id": "unique_id",
-    "reranked_score": "match_weight",
-    "splink_score": "splink_match_weight",
-    "distinguishability": "distinguishability",
-}
-ALLOWED_DECISIONS = {
-    "accept_model",
-    "select_candidate",
-    "select_canonical",
-    "use_existing",
-    "no_match",
-    "uncertain",
-    "clear",
-}
-REQUIRED_REVIEW_COLUMNS = {
-    "bundle_id",
-    "uk_address_matcher_version",
-    "created_at_utc",
-    "unique_id",
-    "messy_address",
-    "messy_cleaned_address",
-    "messy_postcode",
-    "ukam_label",
-    "has_existing_label",
-    "resolved_canonical_id",
-    "resolved_label_id",
-    "resolved_canonical_address",
-    "resolved_canonical_postcode",
-    "match_reason",
-    "match_stage",
-    "is_matched",
-    "match_weight",
-    "distinguishability",
-    "candidate_count",
-    "top_candidates",
-}
 SUPPORTED_DATA_SUFFIXES = {".csv", ".parquet"}
+CANONICAL_PAGE_SIZE = 100
+LABELLED_REVIEW_DATA_FILE = "labelled_review_data.parquet"
+USER_LABEL_COLUMN = "ukam_user_label"
+_FULL_POSTCODE_PATTERN = re.compile(r"^(?:GIR 0AA|[A-Z][A-HJ-Y]?\d[A-Z\d]? \d[A-Z]{2})$")
 
 
-@dataclass(frozen=True)
-class Bundle:
-    root: Path
-    manifest: dict[str, Any]
-    data_file: Path
-    state_file: Path
-    review_columns: frozenset[str]
-
-
-@dataclass(frozen=True)
-class InputDataset:
-    data_file: Path
-    unique_id_column: str
-    label_column: str
-    has_label_column: bool
-
-
-@dataclass(frozen=True)
-class RecordFilters:
-    unique_id_query: str
-    address_query: str
-    stages: tuple[str, ...]
-    score_min: float | None
-    score_max: float | None
-    distinguishability_min: float | None
-    distinguishability_max: float | None
-    show_labelled: bool
-    mismatches_only: bool
-    sort_by: str
-    sort_order: str
-
-
-class SessionState:
-    def __init__(self, idle_timeout_seconds: float) -> None:
-        self.token = secrets.token_urlsafe(32)
-        self.idle_timeout_seconds = idle_timeout_seconds
-        self._last_activity = time.monotonic()
-        self._lock = threading.Lock()
-
-    def touch(self) -> None:
-        with self._lock:
-            self._last_activity = time.monotonic()
-
-    def remaining_seconds(self) -> float:
-        with self._lock:
-            elapsed = time.monotonic() - self._last_activity
-        return max(0.0, self.idle_timeout_seconds - elapsed)
-
-    def is_expired(self) -> bool:
-        return self.remaining_seconds() <= 0
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, Path):
-        return str(value)
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
-
-
-def _load_bundle(bundle_path: str | Path) -> Bundle:
-    root = Path(bundle_path).expanduser().resolve()
-    if not root.exists():
-        raise FileNotFoundError(f"Labelling bundle does not exist: {root}")
-    if not root.is_dir():
-        raise NotADirectoryError(f"Labelling bundle must be a directory: {root}")
-    manifest_path = root / "manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Bundle manifest not found: {manifest_path}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    data_file = (root / manifest.get("data_file", "review_data.parquet")).resolve()
-    if not data_file.exists():
-        raise FileNotFoundError(f"Review data file not found: {data_file}")
-    if data_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-        supported = ", ".join(sorted(SUPPORTED_DATA_SUFFIXES))
-        raise ValueError(
-            f"Review data must be a CSV or Parquet file ({supported}): {data_file}"
-        )
-    connection = duckdb.connect()
+def _write_body(output: Any, body: bytes) -> None:
     try:
-        cursor = connection.execute(
-            f"SELECT * FROM {_data_source_sql(data_file)} LIMIT 0",
-            [str(data_file)],
-        )
-        review_columns = frozenset(column[0] for column in cursor.description)
-        missing = REQUIRED_REVIEW_COLUMNS - review_columns
-    finally:
-        connection.close()
-    if missing:
-        raise ValueError(
-            "The labelling bundle is missing required columns: "
-            + ", ".join(sorted(missing))
-        )
-    return Bundle(
-        root,
-        manifest,
-        data_file,
-        root / "review_state.duckdb",
-        review_columns,
-    )
-
-
-def _data_source_sql(data_file: Path) -> str:
-    if data_file.suffix.lower() == ".parquet":
-        return "read_parquet(?)"
-    if data_file.suffix.lower() == ".csv":
-        return "read_csv_auto(?)"
-    raise ValueError(f"Unsupported review data format: {data_file}")
+        output.write(body)
+    except OSError as error:
+        if error.errno not in {errno.ECONNRESET, errno.EINVAL, errno.EPIPE}:
+            raise
 
 
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def _load_input_dataset(
-    bundle: Bundle,
-    input_dataset_path: str | Path,
-    *,
-    label_column: str = "ukam_label",
-) -> InputDataset:
-    data_file = Path(input_dataset_path).expanduser().resolve()
-    if not data_file.exists():
-        raise FileNotFoundError(f"Input dataset not found: {data_file}")
-    if not data_file.is_file():
-        raise ValueError(f"Input dataset must be a file: {data_file}")
-    if data_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-        supported = ", ".join(sorted(SUPPORTED_DATA_SUFFIXES))
-        raise ValueError(
-            f"Input dataset must be a CSV or Parquet file ({supported}): {data_file}"
-        )
-    connection = duckdb.connect()
-    try:
-        cursor = connection.execute(
-            f"SELECT * FROM {_data_source_sql(data_file)} LIMIT 0",
-            [str(data_file)],
-        )
-        columns = {column[0] for column in cursor.description}
-    finally:
-        connection.close()
-    unique_id_column = _infer_input_unique_id_column(bundle, data_file, columns)
-    if label_column not in columns:
-        label_column = "ukam_label"
-    return InputDataset(
-        data_file,
-        unique_id_column,
-        label_column,
-        label_column in columns,
+def _is_prepared_canonical(canonical_paths: tuple[Path, ...]) -> bool:
+    return bool(canonical_paths) and all(
+        path.name == "ukam_canonical_addresses.parquet"
+        or path.parent.name == "ukam_canonical_addresses_chunks"
+        for path in canonical_paths
     )
 
 
-def _infer_input_unique_id_column(
-    bundle: Bundle,
-    data_file: Path,
-    columns: set[str],
-) -> str:
-    source_sql = _data_source_sql(data_file)
-    bundle_sql = _data_source_sql(bundle.data_file)
-    connection = duckdb.connect()
-    try:
-        bundle_count = connection.execute(
-            f"SELECT COUNT(*) FROM {bundle_sql}", [str(bundle.data_file)]
-        ).fetchone()[0]
-        matches = []
-        for column in columns:
-            quoted_column = _quote_identifier(column)
-            row_count, distinct_count = connection.execute(
-                f"""
-                WITH bundle_ids AS (
-                    SELECT CAST(unique_id AS VARCHAR) AS unique_id FROM {bundle_sql}
-                ), source_ids AS (
-                    SELECT CAST({quoted_column} AS VARCHAR) AS unique_id FROM {source_sql}
-                )
-                SELECT COUNT(*), COUNT(DISTINCT unique_id)
-                FROM source_ids
-                WHERE unique_id IN (SELECT unique_id FROM bundle_ids)
-                """,
-                [str(bundle.data_file), str(data_file)],
-            ).fetchone()
-            if row_count == bundle_count and distinct_count == bundle_count:
-                matches.append(column)
-    finally:
-        connection.close()
-    if len(matches) == 1:
-        return matches[0]
-    if not matches:
-        raise ValueError(
-            "Input dataset has no column containing every unique_id in the "
-            "labelling bundle"
-        )
-    raise ValueError(
-        "Input dataset has multiple columns containing every unique_id in the "
-        "labelling bundle: " + ", ".join(sorted(matches))
-    )
-
-
-def _ensure_state_database(bundle: Bundle) -> None:
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS label_events (
-                event_id VARCHAR NOT NULL, unique_id VARCHAR NOT NULL,
-                decision VARCHAR NOT NULL, ukam_label VARCHAR,
-                selected_candidate_rank BIGINT, created_at_utc TIMESTAMPTZ NOT NULL
-            )
-        """)
-    finally:
-        connection.close()
-
-
-def _base_review_cte(bundle: Bundle) -> str:
-    messy_cleaned_address = (
-        "r.messy_cleaned_address"
-        if "messy_cleaned_address" in bundle.review_columns
-        else "r.messy_address"
-    )
-    resolved_canonical_id = (
-        "CAST(r.resolved_canonical_id AS VARCHAR)"
-        if "resolved_canonical_id" in bundle.review_columns
-        else "NULL::VARCHAR"
-    )
-    return f"""
-        WITH latest_labels AS (
-            SELECT event_id, unique_id, decision, ukam_label, selected_candidate_rank
-            FROM (
-                SELECT *, ROW_NUMBER() OVER (
-                    PARTITION BY unique_id ORDER BY created_at_utc DESC, event_id DESC
-                ) AS event_rank FROM label_events
-            ) WHERE event_rank = 1
-        ), base AS (
-            SELECT CAST(r.unique_id AS VARCHAR) AS unique_id, r.messy_address,
-                {messy_cleaned_address} AS messy_cleaned_address,
-                r.messy_postcode, CAST(r.ukam_label AS VARCHAR) AS imported_label,
-                COALESCE(r.has_existing_label, FALSE) AS has_existing_label,
-                {resolved_canonical_id} AS resolved_canonical_id,
-                CAST(r.resolved_label_id AS VARCHAR) AS resolved_label_id,
-                r.resolved_canonical_address, r.resolved_canonical_postcode,
-                r.match_reason, r.match_stage, r.is_matched, r.match_weight,
-                r.distinguishability,
-                TRY_CAST(json_extract_string(
-                    CAST(r.top_candidates AS JSON), '$[0].splink_match_weight'
-                ) AS DOUBLE) AS splink_match_weight,
-                r.candidate_count, r.top_candidates,
-                l.decision AS saved_decision,
-                l.selected_candidate_rank,
-                CASE WHEN l.decision = 'clear' THEN FALSE
-                     WHEN l.decision IS NOT NULL THEN TRUE
-                     ELSE COALESCE(r.has_existing_label, FALSE)
-                 END AS is_labelled,
-                 CASE WHEN l.decision = 'clear' THEN NULL
-                     WHEN l.decision IS NOT NULL THEN l.decision
-                     WHEN COALESCE(r.has_existing_label, FALSE) THEN 'imported'
-                 END AS current_decision,
-                CASE WHEN l.decision IN ('clear', 'no_match', 'uncertain') THEN NULL
-                     WHEN l.ukam_label IS NOT NULL THEN l.ukam_label
-                     WHEN COALESCE(r.has_existing_label, FALSE)
-                         THEN CAST(r.ukam_label AS VARCHAR)
-                END AS current_label
-            FROM {_data_source_sql(bundle.data_file)} AS r LEFT JOIN latest_labels AS l
-                ON CAST(r.unique_id AS VARCHAR) = l.unique_id
-        )
-    """
-
-
-def _stage_counts(bundle: Bundle) -> dict[str, int]:
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        rows = connection.execute(
-            f"SELECT match_stage, COUNT(*) FROM {_data_source_sql(bundle.data_file)} "
-            "GROUP BY match_stage",
-            [str(bundle.data_file)],
-        ).fetchall()
-    finally:
-        connection.close()
-    return {
-        str(stage): int(count) for stage, count in rows if stage in ALLOWED_MATCH_STAGES
-    }
-
-
-def _bootstrap_payload(
-    bundle: Bundle,
-    session: SessionState,
-    canonical_source: CanonicalSource | None = None,
+def _canonical_search_payload(
+    canonical_paths: tuple[Path, ...],
+    query: dict[str, list[str]],
 ) -> dict[str, Any]:
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        row = connection.execute(
-            f"""{_base_review_cte(bundle)}
-            SELECT COUNT(*), COUNT(*) FILTER (WHERE is_labelled),
-                MIN(match_weight), MAX(match_weight), MIN(distinguishability),
-                MAX(distinguishability)
-            FROM base""",
-            [str(bundle.data_file)],
-        ).fetchone()
-    finally:
-        connection.close()
-    return {
-        "bundle_name": bundle.root.name,
-        "bundle_id": bundle.manifest.get("bundle_id"),
-        "idle_timeout_seconds": int(session.idle_timeout_seconds),
-        "total_records": int(row[0]),
-        "labelled_records": int(row[1]),
-        "stage_counts": _stage_counts(bundle),
-        "score_bounds": {"minimum": row[2], "maximum": row[3]},
-        "distinguishability_bounds": {"minimum": row[4], "maximum": row[5]},
-        "canonical_search": {
-            "available": canonical_source is not None,
-            "source_name": (
-                None if canonical_source is None else canonical_source.display_name
-            ),
-            "page_size": CANONICAL_PAGE_SIZE,
-            "warning": (
-                "No canonical path provided. If you wish to view canonical data in "
-                "this app, relaunch the application with canonical_data_path."
-                if canonical_source is None
-                else None
-            ),
-        },
-    }
-
-
-def _optional_float(query: dict[str, list[str]], name: str) -> float | None:
-    value = query.get(name, [""])[0]
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError as error:
-        raise ValueError(f"Query parameter {name!r} must be numeric") from error
-
-
-def _optional_text(query: dict[str, list[str]], name: str) -> str:
-    value = query.get(name, [""])[0].strip()
-    if len(value) > 100:
+    prepared = _is_prepared_canonical(canonical_paths)
+    if not canonical_paths:
+        raise ValueError("Canonical search is not available")
+    unique_id_query = query.get("unique_id_query", [""])[0].strip()
+    postcode = "".join(query.get("postcode", [""])[0].upper().split())
+    address = " ".join(query.get("address_query", [""])[0].split())
+    if any(len(value) > 100 for value in (unique_id_query, address)):
         raise ValueError(
-            f"Query parameter {name!r} must contain no more than 100 characters"
+            "Canonical search values must contain no more than 100 characters"
         )
-    return value
-
-
-def _parse_record_filters(query: dict[str, list[str]]) -> RecordFilters:
-    stages = tuple(query.get("stage", []))
-    if set(stages) - ALLOWED_MATCH_STAGES:
-        raise ValueError("Unsupported match stage")
-    sort_by = query.get("sort_by", ["unique_id"])[0]
-    if sort_by not in RECORD_SORT_COLUMNS:
-        raise ValueError("Unsupported record sort")
-    sort_order = query.get("sort_order", ["asc"])[0].lower()
-    if sort_order not in {"asc", "desc"}:
-        raise ValueError("Record sort order must be asc or desc")
-    return RecordFilters(
-        unique_id_query=_optional_text(query, "unique_id_query"),
-        address_query=_optional_text(query, "address_query"),
-        stages=stages,
-        score_min=_optional_float(query, "score_min"),
-        score_max=_optional_float(query, "score_max"),
-        distinguishability_min=_optional_float(query, "distinguishability_min"),
-        distinguishability_max=_optional_float(query, "distinguishability_max"),
-        show_labelled=query.get("show_labelled", ["true"])[0].lower()
-        in {"1", "true", "yes", "on"},
-        mismatches_only=query.get("mismatches_only", ["false"])[0].lower()
-        in {"1", "true", "yes", "on"},
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
-
-
-def _record_filter_sql(filters: RecordFilters) -> tuple[str, list[Any]]:
-    conditions: list[str] = []
-    parameters: list[Any] = []
-    if filters.unique_id_query:
-        conditions.append("contains(upper(unique_id), upper(?))")
-        parameters.append(filters.unique_id_query)
-    if filters.address_query:
-        conditions.append(
-            "(contains(upper(COALESCE(CAST(messy_address AS VARCHAR), '')), upper(?)) "
-            "OR contains(upper(COALESCE(CAST(messy_cleaned_address AS VARCHAR), '')), "
-            "upper(?)) "
-            "OR contains(upper(COALESCE(CAST(messy_postcode AS VARCHAR), '')), upper(?)))"
+    if not unique_id_query and not postcode and not address:
+        raise ValueError(
+            "Enter a unique ID, postcode, or address value before searching."
         )
-        parameters.extend([filters.address_query] * 3)
-    if filters.stages:
-        conditions.append(
-            "match_stage IN (" + ", ".join("?" for _ in filters.stages) + ")"
-        )
-        parameters.extend(filters.stages)
-    for column, value, operator in (
-        ("match_weight", filters.score_min, ">="),
-        ("match_weight", filters.score_max, "<="),
-        ("distinguishability", filters.distinguishability_min, ">="),
-        ("distinguishability", filters.distinguishability_max, "<="),
-    ):
-        if value is not None:
-            conditions.append(f"(match_stage != 'splink' OR {column} {operator} ?)")
-            parameters.append(value)
-    if not filters.show_labelled and not filters.mismatches_only:
-        conditions.append("is_labelled = FALSE")
-    if filters.mismatches_only:
-        conditions.append(
-            "match_stage <> 'unmatched' AND has_existing_label AND is_matched AND "
-            "imported_label IS NOT NULL AND resolved_label_id IS NOT NULL AND "
-            "resolved_label_id IS DISTINCT FROM imported_label"
-        )
-    return ("WHERE " + " AND ".join(conditions) if conditions else "", parameters)
-
-
-def _record_order_sql(filters: RecordFilters) -> str:
-    column = RECORD_SORT_COLUMNS[filters.sort_by]
-    direction = filters.sort_order.upper()
-    return f"{column} {direction} NULLS LAST, unique_id ASC"
-
-
-def _records_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, Any]:
     try:
         page = max(1, int(query.get("page", ["1"])[0]))
-        page_size = int(query.get("page_size", [str(DEFAULT_PAGE_SIZE)])[0])
     except ValueError as error:
-        raise ValueError("page and page_size must be integers") from error
-    if page_size not in ALLOWED_PAGE_SIZES:
-        raise ValueError(f"page_size must be one of {sorted(ALLOWED_PAGE_SIZES)}")
-    filters = _parse_record_filters(query)
-    where_clause, parameters = _record_filter_sql(filters)
-    connection = duckdb.connect(str(bundle.state_file))
+        raise ValueError("Canonical page must be an integer") from error
+    connection = duckdb.connect(":memory:")
     try:
-        total = connection.execute(
-            f"{_base_review_cte(bundle)} SELECT COUNT(*) FROM base {where_clause}",
-            [str(bundle.data_file), *parameters],
-        ).fetchone()[0]
-        maximum_page = max(1, (int(total) + page_size - 1) // page_size)
-        page = min(page, maximum_page)
+        source = "read_parquet(?)"
+        source_parameters = [[str(path) for path in canonical_paths]]
+        columns = {
+            row[0].lower(): row[0]
+            for row in connection.execute(
+                f"DESCRIBE SELECT * FROM {source}",
+                source_parameters,
+            ).fetchall()
+        }
+        required = {"unique_id", "postcode"}
+        cleaned = next(
+            (
+                columns[name]
+                for name in ("clean_full_address", "cleaned_full_address")
+                if name in columns
+            ),
+            None,
+        )
+        if required - columns.keys() or cleaned is None:
+            raise ValueError(
+                "Canonical data is missing required unique_id, postcode, or cleaned address columns"
+            )
+        unique_id = columns["unique_id"]
+        postcode_column = columns["postcode"]
+        display = next(
+            (
+                columns[name]
+                for name in ("original_address_concat", "address_concat")
+                if name in columns
+            ),
+            cleaned,
+        )
+        additional = [
+            columns[name]
+            for name in ("classificationcode", "floorlevel")
+            if name in columns
+        ]
+        conditions = [f"{_quote_identifier(unique_id)} IS NOT NULL"]
+        parameters: list[Any] = []
+        if unique_id_query:
+            conditions.append(
+                f"contains(upper(CAST({_quote_identifier(unique_id)} AS VARCHAR)), upper(?))"
+            )
+            parameters.append(unique_id_query)
+        if postcode:
+            postcode_identifier = _quote_identifier(postcode_column)
+            formatted_postcode = (
+                postcode if len(postcode) <= 3 else f"{postcode[:-3]} {postcode[-3:]}"
+            )
+            if prepared and _FULL_POSTCODE_PATTERN.fullmatch(formatted_postcode):
+                conditions.append(f"{postcode_identifier} = ?")
+                parameters.append(formatted_postcode)
+            elif prepared:
+                conditions.append(f"contains(replace({postcode_identifier}, ' ', ''), ?)")
+                parameters.append(postcode)
+            else:
+                conditions.append(
+                    f"contains(upper(replace(CAST({postcode_identifier} AS VARCHAR), ' ', '')), ?)"
+                )
+                parameters.append(postcode)
+        for token in address.split():
+            if prepared:
+                conditions.append(f"contains({_quote_identifier(cleaned)}, ?)")
+                parameters.append(token.upper())
+            else:
+                conditions.append(
+                    f"contains(upper(CAST({_quote_identifier(cleaned)} AS VARCHAR)), upper(?))"
+                )
+                parameters.append(token)
+        additional_sql = "".join(
+            f", CAST({_quote_identifier(column)} AS VARCHAR) AS {_quote_identifier(column)}"
+            for column in additional
+        )
         cursor = connection.execute(
-            f"""{_base_review_cte(bundle)}
-            SELECT unique_id, messy_address, messy_cleaned_address, messy_postcode,
-                imported_label,
-                has_existing_label, resolved_label_id,
-                resolved_canonical_address, resolved_canonical_postcode,
-                match_reason, match_stage, is_matched, match_weight, distinguishability,
-                splink_match_weight, candidate_count, top_candidates, current_decision,
-                current_label, selected_candidate_rank, is_labelled
-            FROM base {where_clause} ORDER BY {_record_order_sql(filters)}
-            LIMIT ? OFFSET ?""",
-            [str(bundle.data_file), *parameters, page_size, (page - 1) * page_size],
+            f"""
+            SELECT CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_id,
+                CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_unique_id,
+                CAST({_quote_identifier(display)} AS VARCHAR) AS canonical_address,
+                CAST({_quote_identifier(cleaned)} AS VARCHAR) AS cleaned_address,
+                CAST({_quote_identifier(postcode_column)} AS VARCHAR) AS canonical_postcode
+                {additional_sql}
+            FROM {source}
+            WHERE {" AND ".join(conditions)}
+            ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id
+            LIMIT ? OFFSET ?
+            """,
+            [
+                *source_parameters,
+                *parameters,
+                CANONICAL_PAGE_SIZE + 1,
+                (page - 1) * CANONICAL_PAGE_SIZE,
+            ],
         )
         names = [column[0] for column in cursor.description]
         rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
-        for row in rows:
-            row["top_candidates"] = _normalise_candidates(row["top_candidates"])
     finally:
         connection.close()
     return {
         "page": page,
-        "page_size": page_size,
-        "maximum_page": maximum_page,
-        "total_filtered": int(total),
-        "rows": rows,
+        "page_size": CANONICAL_PAGE_SIZE,
+        "has_previous": page > 1,
+        "has_next": len(rows) > CANONICAL_PAGE_SIZE,
+        "unique_id_query": unique_id_query,
+        "postcode": postcode,
+        "address_query": address,
+        "additional_canonical_columns": additional,
+        "rows": rows[:CANONICAL_PAGE_SIZE],
     }
 
 
-def _review_record_payload(bundle: Bundle, query: dict[str, list[str]]) -> dict[str, Any]:
-    unique_id = query.get("unique_id", [""])[0]
-    if not unique_id:
-        raise ValueError("unique_id is required")
-    filters = _parse_record_filters(query)
-    where_clause, parameters = _record_filter_sql(filters)
-    cleaned_address = (
-        "messy_cleaned_address"
-        if "messy_cleaned_address" in bundle.review_columns
-        else "NULL::VARCHAR"
-    )
-    connection = duckdb.connect(str(bundle.state_file))
+@dataclass(frozen=True)
+class LocalLabellingFiles:
+    bundle_root: Path | None
+    manifest_path: Path | None
+    review_path: Path | None
+    bundle_canonical_path: Path | None
+    canonical_paths: tuple[Path, ...]
+
+
+def _data_file_from_manifest(bundle_root: Path) -> tuple[Path, dict[str, Any]]:
+    manifest_path = bundle_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Bundle manifest not found: {manifest_path}")
     try:
-        cursor = connection.execute(
-            f"""{_base_review_cte(bundle)}, filtered AS (
-                SELECT *, ROW_NUMBER() OVER (
-                        ORDER BY {_record_order_sql(filters)}
-                    ) AS review_position,
-                    COUNT(*) OVER () AS review_total,
-                    LAG(unique_id) OVER (
-                        ORDER BY {_record_order_sql(filters)}
-                    ) AS previous_unique_id,
-                    LEAD(unique_id) OVER (
-                        ORDER BY {_record_order_sql(filters)}
-                    ) AS next_unique_id
-                FROM base {where_clause}
-            )
-            SELECT unique_id, messy_address, {cleaned_address} AS messy_cleaned_address,
-                messy_postcode, imported_label, current_decision, current_label,
-                is_labelled, resolved_canonical_id, resolved_label_id,
-                resolved_canonical_address, resolved_canonical_postcode, match_reason,
-                match_stage, is_matched, match_weight, distinguishability,
-                candidate_count, top_candidates AS candidates, review_position,
-                review_total, previous_unique_id, next_unique_id
-            FROM filtered WHERE unique_id = ? LIMIT 1""",
-            [str(bundle.data_file), *parameters, str(unique_id)],
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError(
-                "The requested record does not exist in the current filtered review set"
-            )
-        result = dict(zip([column[0] for column in cursor.description], row, strict=True))
-    finally:
-        connection.close()
-    candidates = _normalise_candidates(result.pop("candidates"))
-    navigation = {
-        "position": result.pop("review_position"),
-        "total": result.pop("review_total"),
-        "previous_unique_id": result.pop("previous_unique_id"),
-        "next_unique_id": result.pop("next_unique_id"),
-    }
-    result["candidates"] = candidates
-    return {"record": result, "navigation": navigation}
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Bundle manifest is not valid JSON: {manifest_path}") from error
+    if not isinstance(manifest, dict) or not manifest.get("bundle_id"):
+        raise ValueError("Bundle manifest must contain a bundle_id")
+    data_file = (bundle_root / manifest.get("data_file", "review_data.parquet")).resolve()
+    if not data_file.is_relative_to(bundle_root) or not data_file.is_file():
+        raise FileNotFoundError(f"Review data file not found: {data_file}")
+    if data_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
+        raise ValueError(f"Review data must be CSV or Parquet: {data_file}")
+    return data_file, manifest
 
 
-def _record_for_validation(bundle: Bundle, unique_id: str) -> dict[str, Any]:
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        cursor = connection.execute(
-            f"""SELECT CAST(resolved_label_id AS VARCHAR) AS resolved_label_id,
-            CAST(ukam_label AS VARCHAR) AS imported_label,
-            top_candidates FROM {_data_source_sql(bundle.data_file)}
-            WHERE CAST(unique_id AS VARCHAR) = ? LIMIT 1""",
-            [str(bundle.data_file), unique_id],
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError(f"Unknown messy unique_id: {unique_id}")
-        return dict(zip([column[0] for column in cursor.description], row, strict=True))
-    finally:
-        connection.close()
-
-
-def _normalise_candidates(candidates: Any) -> list[dict[str, Any]]:
-    if isinstance(candidates, str):
-        try:
-            candidates = json.loads(candidates)
-        except json.JSONDecodeError:
-            return []
-    if not isinstance(candidates, list):
-        return []
-    return [candidate for candidate in candidates if isinstance(candidate, dict)]
-
-
-def _validate_label_payload(
-    bundle: Bundle,
-    payload: dict[str, Any],
-    canonical_source: CanonicalSource | None = None,
-) -> tuple[str, str, str | None, int | None]:
-    unique_id = str(payload.get("unique_id", "")).strip()
-    decision = str(payload.get("decision", "")).strip()
-    label = None if payload.get("ukam_label") is None else str(payload["ukam_label"])
-    rank = (
-        None
-        if payload.get("selected_candidate_rank") is None
-        else int(payload["selected_candidate_rank"])
-    )
-    if not unique_id:
-        raise ValueError("unique_id is required")
-    if decision not in ALLOWED_DECISIONS:
-        raise ValueError(f"Unsupported decision: {decision}")
-    record = _record_for_validation(bundle, unique_id)
-    candidates = _normalise_candidates(record["top_candidates"])
-    candidate_ranks = {
-        str(item["label_id"]): item.get("rank")
-        for item in candidates
-        if item.get("label_id") is not None
-    }
-    if decision == "accept_model" and (
-        record["resolved_label_id"] is None or label != record["resolved_label_id"]
-    ):
-        raise ValueError("The submitted label does not match the model-selected label")
-    if decision == "select_candidate":
-        if label not in candidate_ranks:
-            raise ValueError("The submitted label is not one of the exported candidates")
-        rank = candidate_ranks[label] if rank is None else rank
-    if decision == "select_canonical":
-        if canonical_source is None:
-            raise ValueError(
-                "A canonical-data path is required to select a canonical-search result"
-            )
-        if label is None:
-            raise ValueError("A canonical label is required")
-        if find_canonical_record(canonical_source, label) is None:
-            raise ValueError(
-                "The selected canonical ID does not exist in the configured "
-                "canonical data"
-            )
-        rank = None
-    if decision == "use_existing" and (
-        record["imported_label"] is None or label != record["imported_label"]
-    ):
-        raise ValueError("The submitted label does not match the imported label")
-    if decision in {"no_match", "uncertain", "clear"}:
-        label, rank = None, None
-    return unique_id, decision, label, rank
-
-
-def _replace_input_label(
-    input_dataset: InputDataset,
-    *,
-    unique_id: str,
-    label: str | None,
-) -> None:
-    source_sql = _data_source_sql(input_dataset.data_file)
-    unique_id_column = _quote_identifier(input_dataset.unique_id_column)
-    label_column = _quote_identifier(input_dataset.label_column)
-    temporary_file = input_dataset.data_file.with_name(
-        f".{input_dataset.data_file.stem}-{uuid.uuid4().hex}"
-        f"{input_dataset.data_file.suffix}"
-    )
-    temporary_sql = str(temporary_file).replace("'", "''")
-    connection = duckdb.connect()
-    try:
-        matching_rows = connection.execute(
-            f"SELECT COUNT(*) FROM {source_sql} "
-            f"WHERE CAST({unique_id_column} AS VARCHAR) = ?",
-            [str(input_dataset.data_file), unique_id],
-        ).fetchone()[0]
-        if matching_rows != 1:
-            raise ValueError(
-                "Input dataset must contain exactly one row for "
-                f"unique_id {unique_id!r}; found {matching_rows}"
-            )
-        output_format = input_dataset.data_file.suffix.removeprefix(".").upper()
-        header_option = ", HEADER" if output_format == "CSV" else ""
-        if input_dataset.has_label_column:
-            output_query = f"""
-                SELECT * REPLACE (
-                    CASE
-                        WHEN CAST({unique_id_column} AS VARCHAR) = ? THEN ?
-                        ELSE {label_column}
-                    END AS {label_column}
-                )
-                FROM {source_sql}
-            """
+def _canonical_files(path: str | Path | None) -> tuple[Path, ...]:
+    if path is None:
+        return ()
+    canonical_path = Path(path).expanduser().resolve()
+    if canonical_path.is_file():
+        paths = (canonical_path,)
+    elif canonical_path.is_dir():
+        chunk_dir = canonical_path / "ukam_canonical_addresses_chunks"
+        if chunk_dir.is_dir():
+            paths = tuple(sorted(chunk_dir.glob("*.parquet")))
         else:
-            output_query = f"""
-                SELECT *, CAST(
-                    CASE WHEN CAST({unique_id_column} AS VARCHAR) = ? THEN ? END
-                    AS VARCHAR
-                ) AS {label_column}
-                FROM {source_sql}
-            """
-        connection.execute(
-            f"COPY ({output_query}) TO '{temporary_sql}' "
-            f"(FORMAT {output_format}{header_option})",
-            [unique_id, label, str(input_dataset.data_file)],
-        )
-    finally:
-        connection.close()
-    try:
-        temporary_file.replace(input_dataset.data_file)
-    finally:
-        temporary_file.unlink(missing_ok=True)
+            single_path = canonical_path / "ukam_canonical_addresses.parquet"
+            paths = (
+                (single_path,)
+                if single_path.is_file()
+                else tuple(sorted(canonical_path.glob("*.parquet")))
+            )
+    else:
+        raise FileNotFoundError(f"Canonical address data not found: {canonical_path}")
+    if not paths:
+        raise ValueError(f"No canonical Parquet files found in: {canonical_path}")
+    if any(path.suffix.lower() != ".parquet" for path in paths):
+        raise ValueError("Canonical address data must be supplied as Parquet files")
+    return paths
 
 
-def _save_label(
-    bundle: Bundle,
-    payload: dict[str, Any],
-    input_dataset: InputDataset | None = None,
-    canonical_source: CanonicalSource | None = None,
-) -> dict[str, Any]:
-    unique_id, decision, label, rank = _validate_label_payload(
-        bundle, payload, canonical_source
+def _local_files(
+    labelling_bundle_path: str | Path | None,
+    canonical_address_path: str | Path | None,
+) -> LocalLabellingFiles:
+    bundle_root = None
+    manifest_path = None
+    review_path = None
+    bundle_canonical_path = None
+    if labelling_bundle_path is not None:
+        bundle_root = Path(labelling_bundle_path).expanduser().resolve()
+        if not bundle_root.is_dir():
+            raise NotADirectoryError(
+                f"Labelling bundle must be a directory: {bundle_root}"
+            )
+        review_path, manifest = _data_file_from_manifest(bundle_root)
+        manifest_path = bundle_root / "manifest.json"
+        canonical_data_file = manifest.get("canonical_data_file")
+        if canonical_data_file:
+            bundle_canonical_path = (bundle_root / str(canonical_data_file)).resolve()
+            if (
+                not bundle_canonical_path.is_relative_to(bundle_root)
+                or not bundle_canonical_path.is_file()
+            ):
+                raise FileNotFoundError(
+                    f"Bundle canonical data file not found: {bundle_canonical_path}"
+                )
+    return LocalLabellingFiles(
+        bundle_root,
+        manifest_path,
+        review_path,
+        bundle_canonical_path,
+        _canonical_files(canonical_address_path),
     )
-    if input_dataset is not None:
-        _replace_input_label(
-            input_dataset,
-            unique_id=unique_id,
-            label=label,
-        )
-    event_id, created_at = str(uuid.uuid4()), datetime.now(timezone.utc)
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        connection.execute(
-            "INSERT INTO label_events VALUES (?, ?, ?, ?, ?, ?)",
-            [event_id, unique_id, decision, label, rank, created_at],
-        )
-    finally:
-        connection.close()
+
+
+def _static_root() -> Path:
+    package_root = Path(str(files("uk_address_matcher.labelling.app")))
+    static_root = package_root / "static"
+    if (static_root / "index.html").is_file():
+        return static_root
+    raise FileNotFoundError(
+        "The labelling app assets are not built. Run `npm ci && npm run build` first."
+    )
+
+
+def _updates_payload(bundle_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "event_id": event_id,
-        "unique_id": unique_id,
-        "decision": decision,
-        "ukam_label": label,
-        "selected_candidate_rank": rank,
-        "created_at_utc": created_at,
+        "schema_version": 1,
+        "bundle_id": bundle_id,
+        "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+        "events": events,
     }
 
 
-def _undo_last_label(
-    bundle: Bundle,
-    input_dataset: InputDataset | None = None,
-) -> dict[str, Any]:
-    connection = duckdb.connect(str(bundle.state_file))
-    try:
-        event = connection.execute(
-            """
-            SELECT event_id, unique_id
-            FROM label_events
-            ORDER BY created_at_utc DESC, event_id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        if event is None:
-            raise ValueError("There are no label actions to undo")
-        event_id, unique_id = str(event[0]), str(event[1])
-        connection.execute("DELETE FROM label_events WHERE event_id = ?", [event_id])
-        cursor = connection.execute(
-            f"""{_base_review_cte(bundle)}
-            SELECT current_label FROM base WHERE unique_id = ?""",
-            [str(bundle.data_file), unique_id],
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError(f"Unknown messy unique_id: {unique_id}")
-        restored_label = row[0]
-    finally:
-        connection.close()
-    if input_dataset is not None:
-        _replace_input_label(
-            input_dataset,
-            unique_id=unique_id,
-            label=restored_label,
-        )
-    return {
-        "undone_event_id": event_id,
-        "unique_id": unique_id,
-        "ukam_label": restored_label,
-    }
+def _read_events(fileset: LocalLabellingFiles) -> list[dict[str, Any]]:
+    if fileset.bundle_root is None:
+        return []
+    updates_path = fileset.bundle_root / "labelling_updates.json"
+    if not updates_path.is_file():
+        return []
+    payload = json.loads(updates_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+        raise ValueError(f"Invalid labelling updates file: {updates_path}")
+    return [event for event in payload["events"] if isinstance(event, dict)]
 
 
-def _handler_factory(
-    bundle: Bundle,
-    input_dataset: InputDataset,
-    session: SessionState,
-    canonical_source: CanonicalSource | None = None,
-) -> type[BaseHTTPRequestHandler]:
-    static_root = files("uk_address_matcher.labelling.app")
+def _write_events(fileset: LocalLabellingFiles, events: list[dict[str, Any]]) -> None:
+    if fileset.bundle_root is None:
+        return
+    manifest = json.loads((fileset.bundle_root / "manifest.json").read_text())
+    updates_path = fileset.bundle_root / "labelling_updates.json"
+    temporary_path = updates_path.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(_updates_payload(manifest["bundle_id"], events), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(updates_path)
+
+
+def _materialise_labelled_review(fileset: LocalLabellingFiles) -> None:
+    if fileset.bundle_root is None or fileset.review_path is None:
+        return
+    apply_labelling_updates(
+        fileset.bundle_root,
+        fileset.bundle_root / "labelling_updates.json",
+        fileset.review_path,
+        input_dataset_label_column=USER_LABEL_COLUMN,
+        output_path=fileset.bundle_root / LABELLED_REVIEW_DATA_FILE,
+        include_label_details=True,
+    )
+
+
+def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
+    local_files: dict[str, Path] = {}
+    event_lock = Lock()
+    if fileset.manifest_path is not None:
+        local_files["manifest.json"] = fileset.manifest_path
+        local_files["review_data" + fileset.review_path.suffix] = fileset.review_path
+        if fileset.bundle_canonical_path is not None:
+            local_files["canonical_data.parquet"] = fileset.bundle_canonical_path
+        for index, path in enumerate(fileset.canonical_paths):
+            local_files[f"canonical/{index}{path.suffix}"] = path
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args: Any) -> None:
             return
 
-        def _send(
-            self,
-            status: HTTPStatus,
-            payload: Any = None,
-            content_type: str = "application/json; charset=utf-8",
-        ) -> None:
-            body = (
-                b""
-                if payload is None
-                else payload
-                if isinstance(payload, bytes)
-                else json.dumps(payload, default=_json_default).encode("utf-8")
-            )
+        def _send(self, status: HTTPStatus, payload: Any) -> None:
+            body = json.dumps(payload, default=str).encode("utf-8")
             self.send_response(status)
-            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            if body:
-                self.wfile.write(body)
+            _write_body(self.wfile, body)
 
-        def _authorised(self) -> bool:
-            return secrets.compare_digest(
-                self.headers.get("X-UKAM-Session-Token", ""), session.token
+        def _send_file(self, path: Path, content_type: str | None = None) -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header(
+                "Content-Type",
+                content_type
+                or mimetypes.guess_type(path.name)[0]
+                or "application/octet-stream",
             )
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as source:
+                while chunk := source.read(64 * 1024):
+                    _write_body(self.wfile, chunk)
 
-        def _serve_static(self, name: str) -> None:
-            types = {
-                ".html": "text/html; charset=utf-8",
-                ".css": "text/css; charset=utf-8",
-                ".js": "text/javascript; charset=utf-8",
-                ".png": "image/png",
+        def _config(self) -> dict[str, Any]:
+            if fileset.manifest_path is None:
+                return {"bundle": None}
+            return {
+                "bundle": {
+                    "manifest_url": "/api/local-file/manifest.json",
+                    "review_url": "/api/local-file/review_data"
+                    + fileset.review_path.suffix,
+                    "manifest_name": fileset.manifest_path.name,
+                    "review_name": fileset.review_path.name,
+                },
+                "canonical_urls": (
+                    [
+                        {
+                            "url": "/api/local-file/canonical_data.parquet",
+                            "name": fileset.bundle_canonical_path.name,
+                        }
+                    ]
+                    if fileset.bundle_canonical_path is not None
+                    else [
+                        {
+                            "url": f"/api/local-file/canonical/{index}{path.suffix}",
+                            "name": path.name,
+                        }
+                        for index, path in enumerate(fileset.canonical_paths)
+                    ]
+                ),
+                "canonical_search_url": (
+                    "/api/canonical-search"
+                    if fileset.canonical_paths and fileset.bundle_canonical_path is None
+                    else None
+                ),
+                "events_url": "/api/events",
+                "labelled_review_path": str(
+                    fileset.bundle_root / LABELLED_REVIEW_DATA_FILE
+                ),
             }
-            try:
-                self._send(
-                    HTTPStatus.OK,
-                    static_root.joinpath(name).read_bytes(),
-                    types.get(Path(name).suffix, "application/octet-stream"),
-                )
-            except FileNotFoundError:
-                self._send(HTTPStatus.NOT_FOUND, {"error": "Static asset not found"})
+
+        def _save_event(self, event: dict[str, Any]) -> None:
+            if fileset.manifest_path is None:
+                raise ValueError("A labelling bundle is required to save events")
+            manifest = json.loads(fileset.manifest_path.read_text(encoding="utf-8"))
+            event = _normalise_event(event, str(manifest.get("bundle_id", "")))
+            with event_lock:
+                previous_events = _read_events(fileset)
+                events = [
+                    item
+                    for item in previous_events
+                    if item.get("event_id") != event["event_id"]
+                ]
+                events.append(event)
+                try:
+                    _write_events(fileset, events)
+                    _materialise_labelled_review(fileset)
+                except Exception:
+                    _write_events(fileset, previous_events)
+                    raise
 
         def do_GET(self) -> None:
-            parsed, path = urlparse(self.path), unquote(urlparse(self.path).path)
-            query = parse_qs(parsed.query, keep_blank_values=True)
-            if path == "/":
-                if not secrets.compare_digest(query.get("token", [""])[0], session.token):
-                    self._send(
-                        HTTPStatus.FORBIDDEN,
-                        {"error": "Invalid or missing session token"},
-                    )
-                    return
-                session.touch()
-                self._serve_static("index.html")
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/local-config":
+                self._send(HTTPStatus.OK, self._config())
                 return
-            if path in {"/app.css", "/app.js", "/icon.png"}:
-                self._serve_static(path[1:])
+            if parsed.path == "/api/events":
+                with event_lock:
+                    self._send(HTTPStatus.OK, {"events": _read_events(fileset)})
                 return
-            if not self._authorised():
-                self._send(
-                    HTTPStatus.FORBIDDEN, {"error": "Invalid or missing session token"}
-                )
-                return
-            try:
-                if path == "/api/bootstrap":
-                    session.touch()
+            if parsed.path == "/api/canonical-search":
+                try:
                     self._send(
                         HTTPStatus.OK,
-                        _bootstrap_payload(bundle, session, canonical_source),
+                        _canonical_search_payload(
+                            fileset.canonical_paths,
+                            parse_qs(parsed.query, keep_blank_values=True),
+                        ),
                     )
-                    return
-                if path == "/api/records":
-                    session.touch()
-                    self._send(HTTPStatus.OK, _records_payload(bundle, query))
-                    return
-                if path == "/api/review-record":
-                    session.touch()
-                    self._send(HTTPStatus.OK, _review_record_payload(bundle, query))
-                    return
-                if path == "/api/canonical-search":
-                    session.touch()
-                    if canonical_source is None:
-                        self._send(
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "Canonical search is unavailable because no "
-                                "canonical_data_path was supplied."
-                            },
-                        )
-                        return
-                    try:
-                        page = int(query.get("page", ["1"])[0])
-                    except ValueError as error:
-                        raise ValueError("Canonical page must be an integer.") from error
-                    result = search_canonical_data(
-                        canonical_source,
-                        unique_id_query=query.get("unique_id_query", [None])[0],
-                        postcode=query.get("postcode", [None])[0],
-                        address_query=query.get("address_query", [None])[0],
-                        page=page,
-                    )
-                    self._send(
-                        HTTPStatus.OK,
-                        {
-                            "page": result.page,
-                            "page_size": result.page_size,
-                            "has_previous": result.has_previous,
-                            "has_next": result.has_next,
-                            "unique_id_query": result.unique_id_query,
-                            "postcode": result.postcode,
-                            "address_query": result.address_query,
-                            "rows": result.rows,
-                        },
-                    )
-                    return
-                self._send(HTTPStatus.NOT_FOUND, {"error": "API route not found"})
-            except ValueError as error:
-                self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            except Exception as error:
-                self._send(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"error": f"Unexpected server error: {error}"},
-                )
+                except ValueError as error:
+                    self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            if parsed.path.startswith("/api/local-file/"):
+                key = unquote(parsed.path.removeprefix("/api/local-file/"))
+                path = local_files.get(key)
+                if path is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_file(path)
+                return
+            relative = unquote(parsed.path.removeprefix("/")) or "index.html"
+            path = (static_root / relative).resolve()
+            if not path.is_relative_to(static_root) or not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self._send_file(path)
 
         def do_POST(self) -> None:
-            path = unquote(urlparse(self.path).path)
-            if not self._authorised():
-                self._send(
-                    HTTPStatus.FORBIDDEN, {"error": "Invalid or missing session token"}
-                )
+            if urlparse(self.path).path != "/api/events":
+                self.send_error(HTTPStatus.NOT_FOUND)
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if length > 100_000:
-                    raise ValueError("Request body is too large")
-                payload = json.loads(self.rfile.read(length) or b"{}")
-                if path == "/api/activity":
-                    session.touch()
-                    self._send(HTTPStatus.NO_CONTENT)
-                    return
-                if path == "/api/labels":
-                    session.touch()
-                    self._send(
-                        HTTPStatus.CREATED,
-                        _save_label(bundle, payload, input_dataset, canonical_source),
-                    )
-                    return
-                if path == "/api/undo":
-                    session.touch()
-                    self._send(HTTPStatus.OK, _undo_last_label(bundle, input_dataset))
-                    return
-                self._send(HTTPStatus.NOT_FOUND, {"error": "API route not found"})
-            except (ValueError, json.JSONDecodeError) as error:
-                self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                event = json.loads(self.rfile.read(length))
+                if not isinstance(event, dict):
+                    raise ValueError("Invalid labelling event")
+                self._save_event(event)
             except Exception as error:
-                self._send(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"error": f"Unexpected server error: {error}"},
-                )
+                self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            self._send(HTTPStatus.OK, {"saved": True})
+
+        def do_DELETE(self) -> None:
+            if urlparse(self.path).path != "/api/events":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            event_id = parse_qs(urlparse(self.path).query).get("event_id", [""])[0]
+            if not event_id:
+                self._send(HTTPStatus.BAD_REQUEST, {"error": "event_id is required"})
+                return
+            with event_lock:
+                events = _read_events(fileset)
+                remaining = [
+                    event for event in events if event.get("event_id") != event_id
+                ]
+                try:
+                    _write_events(fileset, remaining)
+                    _materialise_labelled_review(fileset)
+                except Exception:
+                    _write_events(fileset, events)
+                    raise
+            self._send(HTTPStatus.OK, {"deleted": event_id})
 
     return Handler
 
 
-def launch_labelling_app(
-    labelling_bundle_path: str | Path = Path("ukam_labelling_bundle"),
+def _launch_labelling_app_beta(
+    labelling_bundle_path: str | Path | None = None,
     *,
-    input_dataset_path: str | Path,
-    input_dataset_label_column: str = "ukam_label",
     canonical_address_path: str | Path | None = None,
     port: int = 0,
     open_browser: bool = True,
 ) -> None:
-    if not isinstance(port, int):
-        raise TypeError("port must be an integer")
     if not 0 <= port <= 65535:
         raise ValueError("port must be between 0 and 65535")
-    bundle = _load_bundle(labelling_bundle_path)
-    input_dataset = _load_input_dataset(
-        bundle,
-        input_dataset_path,
-        label_column=input_dataset_label_column,
+    fileset = _local_files(
+        labelling_bundle_path,
+        canonical_address_path,
     )
-    _ensure_state_database(bundle)
-    canonical_source = load_canonical_source(canonical_address_path)
-    session = SessionState(600)
     server = ThreadingHTTPServer(
-        ("127.0.0.1", port),
-        _handler_factory(bundle, input_dataset, session, canonical_source),
+        ("127.0.0.1", port), _handler_factory(fileset, _static_root())
     )
-    url = f"http://127.0.0.1:{server.server_address[1]}/?token={session.token}"
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"UKAM labelling tool: {url}", flush=True)  # noqa: T201
-    print(  # noqa: T201
-        "This session will remain live until 10 minutes after your last interaction.",
-        flush=True,
-    )
-    stop = threading.Event()
-
-    def watchdog() -> None:
-        while not stop.wait(0.1):
-            if session.is_expired():
-                server.shutdown()
-                return
-
-    thread = threading.Thread(target=watchdog, daemon=True)
-    thread.start()
+    if labelling_bundle_path is None:
+        print("Select a labelling bundle from the browser page.", flush=True)  # noqa: T201
     if open_browser:
         webbrowser.open(url)
     try:
         server.serve_forever(poll_interval=0.1)
     finally:
-        stop.set()
         server.server_close()
-        thread.join(timeout=2)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Launch the local UKAM labelling tool")
-    parser.add_argument("--labelling-bundle", default="ukam_labelling_bundle")
-    parser.add_argument("--input-dataset", required=True)
-    parser.add_argument("--input-label-column", default="ukam_label")
-    parser.add_argument("--canonical-address-path", default=None)
+    parser.add_argument("--labelling-bundle", type=Path)
+    parser.add_argument("--canonical-address-path", type=Path)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     arguments = parser.parse_args()
-    launch_labelling_app(
+    _launch_labelling_app_beta(
         arguments.labelling_bundle,
-        input_dataset_path=arguments.input_dataset,
-        input_dataset_label_column=arguments.input_label_column,
         canonical_address_path=arguments.canonical_address_path,
         port=arguments.port,
         open_browser=not arguments.no_browser,
     )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

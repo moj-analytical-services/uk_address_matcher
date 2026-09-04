@@ -15,10 +15,14 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/robinL/uk_address_matcher"
 
+[project.scripts]
+ukam-apply-labelling-updates = "uk_address_matcher.labelling.updates:main"
+
 [dependency-groups]
 dev = [
     "pyarrow>=19.0.1",
     "pytest>=8.3.4",
+    "pytest-playwright>=0.7.2",
     "pyyaml>=6.0.2",
     "ipykernel>=6.29.4",
     "boto3>=1.40.0"
@@ -52,6 +56,7 @@ build-backend = "setuptools.build_meta"
     "labelling/app/*.html",
     "labelling/app/*.js",
     "labelling/app/*.png",
+    "labelling/app/static/**",
 ]
 
 [tool.setuptools.packages.find]
