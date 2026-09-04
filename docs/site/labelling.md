@@ -1,54 +1,101 @@
 # Labelling
 
-## Exporting a labelling bundle artefact
+!!! warning "Experimental feature"
+    The exporter and labelling app use private beta APIs and may change.
 
-In order to begin labelling the results of a matching run, you first need to export a labelling bundle. This is a small folder containing a durable review dataset and a manifest describing the bundle. The bundle can be used to review the results of a matching run without needing to rerun the matching pipeline.
+The labelling tool lets a reviewer check address matches without rerunning the
+matching pipeline. Review data and canonical lookup data stay on the local
+machine.
 
-In order to export a labelling bundle, you need to have a `MatchResult` object from a matching run. The `MatchResult` object contains the results of the matching process, including the matched and unmatched records, as well as any existing labels.
+It is powered by [DuckDB-WASM](https://duckdb.org/docs/current/clients/wasm/overview) in the browser and (when deployed locally) a local Python server that supplies files, persists events, and searches an external canonical path when supplied.
 
+## Preview
 
-```python
-... rest of the matching pipeline ...
+<video controls preload="metadata" width="100%" playsinline>
+    <source src="../assets/videos/labelling_tool_beta_preview.mov" type="video/quicktime">
+    Your browser does not support the video tag.
+</video>
 
-result = matcher.match()
-bundle_path = result.export_labelling_bundle()
+## Running locally
 
-print(f"Labelling bundle written to: {bundle_path}")
+The local labeller writes directly to a labelling bundle folder. Run a matching
+job end to end and start here with the resulting `MatchResult` object.
+
+1. Export a self-contained bundle.
+
+    ```python
+    bundle_path = result._export_labelling_bundle_beta(overwrite=True)
+    ```
+
+2. Launch the app with the exported bundle and canonical data.
+
+    ```python
+    _launch_labelling_app_beta(
+        labelling_bundle_path=bundle_path,
+        canonical_address_path=CANONICAL_PATH,
+    )
+    ```
+
+3. Open the printed localhost URL and review the records.
+
+The app runs review queries in DuckDB-WASM. The local server supplies files,
+persists events, and searches an external canonical path when supplied.
+
+## Review workflow
+
+There are two main panels in the labelling app:
+- Use **Overview** to filter and open records in a tabulated view. This gives you a high-level view of the review data and lets label directly or drill down into a selected record for review.
+- In **Review**, accept the model match, choose a candidate, mark no match or
+  uncertain, or search canonical data and select a record.
+
+## Bundle artefacts
+
+Export creates `ukam_labelling_bundle/` by default:
+
+| Artefact | Purpose |
+| --- | --- |
+| `manifest.json` | Bundle ID, schema, and file names. |
+| `review_data.parquet` | Immutable review input: messy records, model outputs, and candidates. |
+| `canonical_data.parquet` | Canonical lookup copy used by the browser app. |
+| `labelling_updates.json` | Latest reviewer events, updated after each local save or undo. |
+| `labelled_review_data.parquet` | Reviewer-labelled output, regenerated after each local save or undo. |
+
+`ukam_label` is the original model/imported label. `ukam_user_label` is the
+reviewer decision written to `labelled_review_data.parquet`; neither
+`review_data.parquet` nor the original messy dataset is changed.
+
+## Hosted browser app
+
+Open the [hosted labelling tool](https://moj-analytical-services.github.io/uk_address_matcher/labelling-tool/), select the bundle folder, then optionally
+select additional canonical Parquet files. The browser uses DuckDB-WASM and
+does not upload the selected data. Events are stored in browser IndexedDB for
+the session; choose **Download updates** to save `labelling_updates.json`.
+
+Apply downloaded updates to a separate labelled review output:
+
+```bash
+uv run ukam-apply-labelling-updates \
+    ./ukam_labelling_bundle \
+    ./bundle-id-labelling-updates.json \
+    ./ukam_labelling_bundle/review_data.parquet \
+    --input-label-column ukam_user_label \
+    --output ./ukam_labelling_bundle/labelled_review_data.parquet
 ```
 
-This creates a stable folder in the current working directory:
+The command validates the bundle ID, referenced records, and latest decisions
+before atomically writing the output.
 
-```text
-ukam_labelling_bundle/
-├── manifest.json
-└── review_data.parquet
-```
+## Canonical data
 
-- **`review_data.parquet`**: is the durable review dataset. It contains every input
-record, including matched and unmatched records, alongside the final assignment
-and available candidate matches. It can be opened later without rerunning the
-matching pipeline.
-- **`manifest.json`**: describes the bundle. It records the bundle version, creation
-time, row counts and the Parquet schema so that a later labelling application
-can check that it understands the data.
+For local launch, `canonical_address_path` accepts prepared canonical Parquet:
+`ukam_canonical_addresses.parquet` or a directory containing
+`ukam_canonical_addresses_chunks/`. Raw CSV is not supported. Canonical search
+matches unique ID, postcode, or cleaned-address text and returns up to 100
+records per page.
 
-The export does not change the original messy dataset. Existing `ukam_label`
-values are retained in the review data where present.
+??? note "Hackney end-to-end example"
 
-### Customising the export
-
-You can specify the output directory, control the number of candidate matches included and allow an existing bundle to be replaced:
-
-```python
-bundle_path = result.export_labelling_bundle(
-    output_directory="./address_review",
-    top_n=10,
-    overwrite=True,
-)
-```
-
-> [!WARNING]
-> Use `overwrite=True` with care, as it allows an existing bundle in the output directory to be replaced. See the API reference for parameter types, defaults and further details.
-
----
+  [`benchmarking/hackney_labelling_examples.py`](https://github.com/moj-analytical-services/uk_address_matcher/blob/main/benchmarking/hackney_labelling_examples.py)
+  shows the Hackney dataset setup, residential-address filter, matching run,
+  bundle export, and app launch together.
 
