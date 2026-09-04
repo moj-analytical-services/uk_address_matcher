@@ -170,11 +170,11 @@ class SplinkStage(MatchingStage):
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
-        df_predict_ddb = df_predict.as_duckdbpyrelation()
+        raw_prediction_ddb = df_predict.as_duckdbpyrelation()
 
         prediction_output = project_splink_predictions(
             con,
-            df_predict_ddb,
+            raw_prediction_ddb,
             retain_intermediate_calculation_columns=(
                 self.retain_intermediate_calculation_columns
             ),
@@ -190,10 +190,15 @@ class SplinkStage(MatchingStage):
         )
         self.predictions_table = table_name
         df_predict_ddb = con.table(table_name)
+        df_predict_for_improvement = (
+            raw_prediction_ddb
+            if numeric_range_reranker is not None
+            else df_predict_ddb
+        )
 
         # Step 3: Improve predictions using distinguishing tokens
         df_improved = improve_predictions_using_distinguishing_tokens(
-            df_predict=df_predict_ddb,
+            df_predict=df_predict_for_improvement,
             con=con,
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
