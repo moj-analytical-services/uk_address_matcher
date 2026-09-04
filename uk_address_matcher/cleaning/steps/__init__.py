@@ -24,10 +24,6 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
 )
-from uk_address_matcher.cleaning.steps.numeric_ranges import (
-    _add_numeric_range_lower_endpoint_tf,
-    _derive_numeric_range,
-)
 from uk_address_matcher.cleaning.steps.term_frequencies import (
     _add_numeric_term_frequencies_using_registered_df,
     _add_term_frequencies_to_address_tokens,
@@ -75,9 +71,6 @@ __all__ = [
     "_normalise_abbreviations_and_units",
     "_join_excluding_with_next_token",
     "_preserve_original_address_concat",
-    # numeric_ranges
-    "_add_numeric_range_lower_endpoint_tf",
-    "_derive_numeric_range",
     # tokenisation
     "_split_numeric_tokens_to_cols",
     "_tokenise_address_without_numbers",
