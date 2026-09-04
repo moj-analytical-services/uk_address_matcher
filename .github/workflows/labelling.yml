@@ -1,27 +1,34 @@
-name: Test build package
+name: Test labelling app
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
+  pull_request:
     paths:
-      - "uk_address_matcher/**"
-      - "pyproject.toml"
-      - "uv.lock"
+      - "uk_address_matcher/labelling/**"
+      - "tests/labelling/**"
       - "package.json"
       - "package-lock.json"
       - "vite.config.js"
-      - ".github/workflows/**"
-
-permissions:
-  contents: read
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/labelling.yml"
+  push:
+    branches: [main]
+    paths:
+      - "uk_address_matcher/labelling/**"
+      - "tests/labelling/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/labelling.yml"
 
 concurrency:
-  group: test-build-package-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  test-labelling:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,6 +41,9 @@ jobs:
 
       - name: Build labelling app assets
         run: npm ci && npm run build
+
+      - name: Check labelling app assets are current
+        run: git diff --exit-code -- uk_address_matcher/labelling/app/static
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -50,15 +60,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Build sdist + wheel
-        run: uv run --with build python -m build
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
 
-      - name: Check package metadata
-        run: uv run --with twine python -m twine check dist/*
-
-      - name: Smoke test wheel assets and CLI
-        run: |
-          uv venv .venv-wheeltest -p 3.10 --clear
-          uv pip install --python .venv-wheeltest/bin/python dist/*.whl
-          .venv-wheeltest/bin/python -c "from uk_address_matcher.labelling.server import _static_root; assert (_static_root() / 'index.html').is_file()"
-          .venv-wheeltest/bin/ukam-apply-labelling-updates --help
+      - name: Run labelling tests
+        run: RUN_LABELLING_BROWSER_TESTS=1 uv run pytest tests/labelling -q
