@@ -59,6 +59,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
 
     assert bundle_path == (tmp_path / "ukam_labelling_bundle").resolve()
     assert (bundle_path / "review_data.parquet").is_file()
+    assert (bundle_path / "canonical_data.parquet").is_file()
     assert (bundle_path / "manifest.json").is_file()
 
     manifest = json.loads((bundle_path / "manifest.json").read_text())
@@ -67,6 +68,8 @@ def test_exports_default_bundle_with_deterministic_candidates(
     assert manifest["row_count"] == 2
     assert manifest["matched_row_count"] == 1
     assert manifest["unmatched_row_count"] == 1
+    assert manifest["canonical_label_column"] == "ukam_address_id"
+    assert manifest["canonical_data_file"] == "canonical_data.parquet"
     assert (
         f"Labelling bundle written to '{bundle_path}' (bundle_id={manifest['bundle_id']})"
     ) in caplog.messages
@@ -87,6 +90,13 @@ def test_exports_default_bundle_with_deterministic_candidates(
             """,
             [str(bundle_path / "review_data.parquet")],
         ).fetchall()
+        canonical_rows = fresh_con.execute(
+            """
+            SELECT ukam_address_id, unique_id, clean_full_address, postcode
+            FROM read_parquet(?)
+            """,
+            [str(bundle_path / "canonical_data.parquet")],
+        ).fetchall()
 
     assert rows[0][0] == "messy-matched"
     assert rows[0][1] == "1 Fictional Street"
@@ -100,6 +110,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
     assert rows[1][4] == "unmatched"
     assert rows[1][5] == 0
     assert rows[1][6] == []
+    assert canonical_rows == [("1", "canonical-1", "1 FICTIONAL STREET", "AB1 2CD")]
 
     custom_bundle_path = _export_labelling_bundle_beta(
         result,
@@ -179,12 +190,19 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
         con,
         [
             {
-                "unique_id": "canonical-1",
+                "unique_id": "canonical-duplicate",
                 "uprn": "uprn-1",
                 "classification": "residential",
                 "address_concat": "1 Fictional Street",
                 "postcode": "AB1 2CD",
-            }
+            },
+            {
+                "unique_id": "canonical-duplicate",
+                "uprn": "uprn-2",
+                "classification": "residential",
+                "address_concat": "2 Fictional Street",
+                "postcode": "AB1 2CE",
+            },
         ],
     )
     messy = _relation(
@@ -192,7 +210,7 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
         [
             {
                 "unique_id": "messy-1",
-                "ukam_label": "existing-label",
+                "ukam_label": "canonical-duplicate",
                 "local_authority": "Fictionshire",
                 "address_concat": "1 Fictional Street",
                 "postcode": "AB1 2CD",
@@ -210,7 +228,8 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
     with duckdb.connect() as fresh_con:
         row = fresh_con.execute(
             """
-            SELECT ukam_label, has_existing_label, resolved_label_id, top_candidates
+            SELECT ukam_label, has_existing_label, resolved_label_id,
+                ukam_label_clean_full_address, ukam_label_postcode, top_candidates
             FROM read_parquet(?)
             """,
             [str(bundle_path / "review_data.parquet")],
@@ -223,8 +242,14 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
             ).fetchall()
         }
 
-    assert row[:3] == ("existing-label", True, "canonical-1")
-    assert row[3][0]["label_id"] == "canonical-1"
+    assert row[:3] == (
+        "canonical-duplicate",
+        True,
+        1,
+    )
+    assert row[3:5] == ("1 FICTIONAL STREET", "AB1 2CD")
+    assert row[5][0]["canonical_id"] == "canonical-duplicate"
+    assert row[5][0]["label_id"] == row[2]
     assert "local_authority" not in columns
     assert "bundle_schema_version" not in columns
     assert "rerank_changed_winner" not in columns
