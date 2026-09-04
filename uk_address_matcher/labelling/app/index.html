@@ -49,6 +49,26 @@
               <legend>Match stage</legend>
               <div id="stage-options" class="stage-options"></div>
             </fieldset>
+            <fieldset class="filter-card search-card">
+              <legend>Search records</legend>
+              <label class="search-field"
+                ><span>Unique ID</span><input
+                  id="record-unique-id"
+                  type="search"
+                  maxlength="100"
+                  placeholder="Contains..."
+                  autocomplete="off"
+              /></label>
+              <label class="search-field"
+                ><span>Address or postcode</span><input
+                  id="record-address-query"
+                  type="search"
+                  maxlength="100"
+                  placeholder="Contains..."
+                  autocomplete="off"
+              /></label>
+              <p>Matches raw and cleaned addresses or postcode.</p>
+            </fieldset>
             <fieldset class="filter-card range-card">
               <legend>Splink reranked score</legend>
               <div class="range-scale">
@@ -139,6 +159,15 @@
                 >Show labelled records
                 <input id="show-labelled" type="checkbox" checked
               /></label>
+              <label
+                class="toggle"
+                title="Show records where an existing label differs from the model suggestion"
+                >Model mismatches only
+                <input
+                  id="mismatches-only"
+                  type="checkbox"
+                  aria-label="Show model mismatches only"
+              /></label>
             </fieldset>
             <div class="label-progress">
               <span>Labels created</span
@@ -175,15 +204,40 @@
                     <th>Messy address</th>
                     <th>Model suggestion</th>
                     <th>Match stage</th>
-                    <th>Reranked score</th>
-                    <th>Dist.</th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="reranked_score"
+                        title="Final score after reranking candidates"
+                      >
+                        Reranked score <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="splink_score"
+                        title="Raw Splink match weight before reranking"
+                      >
+                        Splink score <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        class="sort-button"
+                        data-sort="distinguishability"
+                        title="Difference between this match and the next-best candidate"
+                      >
+                        Dist. <span class="sort-arrow">&#8597;</span>
+                      </button>
+                    </th>
                     <th>Label</th>
                     <th>Action</th>
                   </tr>
                 </thead>
                 <tbody id="records-body">
                   <tr>
-                    <td colspan="8">Loading...</td>
+                    <td colspan="9">Loading...</td>
                   </tr>
                 </tbody>
               </table>
@@ -212,7 +266,20 @@
           </div>
           <div class="review-cards">
             <article class="review-card messy-card">
-              <h2>Messy input record</h2>
+              <div class="review-card-header messy-card-header">
+                <h2>Messy input record</h2>
+                <a
+                  id="review-open-map"
+                  class="map-link"
+                  href="#"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the exact messy address in Google Maps"
+                  aria-label="Open the exact messy address in Google Maps"
+                  ><span class="map-link-icon" aria-hidden="true">&#128205;</span
+                  >Open in Maps</a
+                >
+              </div>
               <dl>
                 <dt>Unique ID</dt>
                 <dd id="review-messy-id"></dd>
@@ -337,6 +404,13 @@
             </div>
             <section class="canonical-search-panel">
               <label
+                >Unique ID contains<input
+                  id="canonical-unique-id"
+                  type="text"
+                  maxlength="100"
+                  placeholder="For example, 12345"
+                  autocomplete="off" /></label
+              ><label
                 >Postcode<input
                   id="canonical-postcode"
                   type="text"
@@ -364,8 +438,8 @@
               </div>
             </section>
             <p class="canonical-help">
-              Enter a postcode, an address value, or both. Address searching is
-              a case-insensitive literal substring check.
+              Enter a unique ID, postcode, address value, or any combination.
+              Searches are case-insensitive literal substring checks.
             </p>
             <section class="canonical-results">
               <header>
@@ -388,7 +462,6 @@
                   <thead>
                     <tr>
                       <th>Canonical ID</th>
-                      <th>Address</th>
                       <th>Cleaned address</th>
                       <th>Postcode</th>
                       <th>Action</th>
@@ -408,7 +481,13 @@
             </section>
           </section>
           <footer class="review-actions">
-            <span id="review-current-label"></span>
+            <span id="review-current-label" class="review-current-label">
+              <span class="review-current-label-icon" aria-hidden="true"
+                >&#127991;</span
+              ><span>
+                <span class="review-current-label-heading">Current label</span
+                ><strong id="review-current-label-value"></strong> </span
+            ></span>
             <div>
               <button id="review-undo" class="review-button" type="button">
                 Undo
