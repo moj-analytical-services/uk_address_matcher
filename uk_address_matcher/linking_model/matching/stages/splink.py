@@ -272,8 +272,6 @@ class SplinkStage(MatchingStage):
         df_predict_for_improvement = (
             raw_prediction_ddb if numeric_range_reranker is not None else df_predict_ddb
         )
-
-        # Step 3: Improve predictions using distinguishing tokens
         phase_started = perf_counter()
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_for_improvement,
