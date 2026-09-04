@@ -30,21 +30,17 @@
       <button class="tab active" data-view="overview">Overview</button
       ><button class="tab" data-view="review">Review</button>
     </nav>
-    <section id="dataset-loader" class="dataset-loader">
+    <section id="dataset-loader" class="dataset-loader" hidden>
       <div class="dataset-loader-card">
         <p class="eyebrow">Browser-native review</p>
         <h1>Load a labelling bundle</h1>
         <p>
-          Choose the bundle manifest and review data from your computer. The
-          selected files stay in this browser session.
+          Choose the folder containing your labelling bundle. The selected
+          files stay in this browser session.
         </p>
         <label>
-          Bundle manifest
-          <input id="bundle-manifest-file" type="file" accept=".json,application/json" />
-        </label>
-        <label>
-          Review data
-          <input id="review-data-file" type="file" accept=".parquet,.csv" />
+          Labelling bundle folder
+          <input id="bundle-directory" type="file" webkitdirectory multiple />
         </label>
         <label>
           Canonical Parquet files (optional)
@@ -186,7 +182,7 @@
               /></label>
               <label
                 class="toggle"
-                title="Show records where an existing label differs from the model suggestion"
+                title="Show records where the current label differs from the model suggestion"
                 >Model mismatches only
                 <input
                   id="mismatches-only"
@@ -228,6 +224,7 @@
                     <th>Unique ID</th>
                     <th>Messy address</th>
                     <th>Model suggestion</th>
+                    <th>Current label</th>
                     <th>Match stage</th>
                     <th>
                       <button
@@ -262,7 +259,7 @@
                 </thead>
                 <tbody id="records-body">
                   <tr>
-                    <td colspan="9">Loading...</td>
+                    <td colspan="10">Loading...</td>
                   </tr>
                 </tbody>
               </table>
@@ -339,12 +336,8 @@
               <h2>Model suggestion</h2>
               <div id="review-canonical-fields">
                 <dl>
-                  <dt>Canonical ID</dt>
+                  <dt>Unique ID</dt>
                   <dd id="review-canonical-label"></dd>
-                  <dt id="review-canonical-id-term" hidden>
-                    Canonical record ID
-                  </dt>
-                  <dd id="review-canonical-id" hidden></dd>
                   <dt>Canonical address</dt>
                   <dd id="review-canonical-address"></dd>
                   <dt>Postcode</dt>
@@ -493,7 +486,7 @@
                 <table>
                   <thead>
                     <tr id="canonical-results-header-row">
-                      <th>Canonical ID</th>
+                      <th>Unique ID</th>
                       <th>Cleaned address</th>
                       <th>Postcode</th>
                       <th id="canonical-action-heading">Action</th>
@@ -513,19 +506,35 @@
             </section>
           </section>
           <footer class="review-actions">
-            <span id="review-current-label" class="review-current-label">
-              <span class="review-current-label-icon" aria-hidden="true"
-                >&#127991;</span
-              ><span>
-                <span class="review-current-label-heading">Current label</span
-                ><strong id="review-current-label-value"></strong
-                ><span
-                  id="review-current-label-details"
-                  class="review-current-label-details"
-                ></span>
-              </span
-            ></span>
-            <div>
+            <div
+              id="review-current-decision"
+              class="current-decision current-decision-neutral"
+              role="status"
+              aria-live="polite"
+            >
+              <span
+                id="review-current-decision-icon"
+                class="current-decision-icon"
+                aria-hidden="true"
+              ></span>
+              <div class="current-decision-content">
+                <span class="current-decision-eyebrow">Current decision</span>
+                <strong id="review-current-decision-title"></strong>
+                <span class="current-decision-label">
+                  <span class="current-decision-label-heading">Label</span>
+                  <strong
+                    id="review-current-decision-id"
+                    class="current-decision-id"
+                  ></strong>
+                </span>
+                <div class="current-decision-meta">
+                  <span id="review-current-decision-address"></span>
+                  <span id="review-current-decision-persistence"></span>
+                </div>
+              </div>
+            </div>
+            <div class="review-footer-divider" aria-hidden="true"></div>
+            <div class="review-footer-actions">
               <button id="review-undo" class="review-button" type="button">
                 Undo
               </button>

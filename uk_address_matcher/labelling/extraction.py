@@ -132,7 +132,9 @@ def build_final_review_relation(
             base.messy_cleaned_address,
             base.messy_postcode,
             base.ukam_label,
-            base.has_existing_label
+            base.has_existing_label,
+            base.ukam_label_clean_full_address,
+            base.ukam_label_postcode
             {messy_projection},
             base.resolved_canonical_id,
             base.resolved_label_id,
@@ -180,14 +182,28 @@ def _build_base_rows_sql(
         f",\n                messy.{quote_identifier(column)}" for column in messy_columns
     )
     ukam_label = (
-        f"CAST(messy.ukam_label AS {canonical_label_type})"
+        "CAST(messy.ukam_label AS VARCHAR)"
         if "ukam_label" in messy_relation.columns
-        else f"NULL::{canonical_label_type}"
+        else "NULL::VARCHAR"
     )
     has_existing_label = (
         "messy.ukam_label IS NOT NULL"
         if "ukam_label" in messy_relation.columns
         else "FALSE"
+    )
+    existing_label_address = (
+        "CASE WHEN CAST(messy.ukam_label AS VARCHAR) "
+        "= CAST(result.resolved_canonical_id AS VARCHAR) "
+        "THEN canonical.clean_full_address::VARCHAR END"
+        if "ukam_label" in messy_relation.columns
+        else "NULL::VARCHAR"
+    )
+    existing_label_postcode = (
+        "CASE WHEN CAST(messy.ukam_label AS VARCHAR) "
+        "= CAST(result.resolved_canonical_id AS VARCHAR) "
+        "THEN canonical.postcode::VARCHAR END"
+        if "ukam_label" in messy_relation.columns
+        else "NULL::VARCHAR"
     )
 
     return f"""
@@ -198,7 +214,9 @@ def _build_base_rows_sql(
             messy.clean_full_address::VARCHAR AS messy_cleaned_address,
             messy.postcode::VARCHAR AS messy_postcode,
             {ukam_label} AS ukam_label,
-            {has_existing_label} AS has_existing_label
+            {has_existing_label} AS has_existing_label,
+            {existing_label_address} AS ukam_label_clean_full_address,
+            {existing_label_postcode} AS ukam_label_postcode
             {messy_extra},
             CASE WHEN result.resolved_canonical_id IS NOT NULL
                 THEN result.resolved_canonical_id END AS resolved_canonical_id,

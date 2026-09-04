@@ -92,49 +92,60 @@ def _load_updates(updates_path: str | Path, bundle_id: str) -> list[dict[str, An
     result: list[dict[str, Any]] = []
     event_ids: set[str] = set()
     for event in events:
-        if not isinstance(event, dict):
-            raise ValueError("Each update event must be an object")
-        event_id = str(event.get("event_id", "")).strip()
-        unique_id = str(event.get("unique_id", "")).strip()
-        decision = str(event.get("decision", "")).strip()
-        if not event_id or not unique_id:
-            raise ValueError("Each update event requires event_id and unique_id")
+        normalised_event = _normalise_event(event, bundle_id)
+        event_id = normalised_event["event_id"]
         if event_id in event_ids:
             raise ValueError(f"Duplicate update event_id: {event_id}")
-        if decision not in ALLOWED_DECISIONS:
-            raise ValueError(f"Unsupported decision: {decision}")
-        created_at = str(event.get("created_at_utc", "")).strip()
-        try:
-            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise ValueError(
-                "Each update event requires a valid created_at_utc"
-            ) from error
-        label = event.get("ukam_label")
-        if label is not None:
-            label = str(label)
-        rank = event.get("selected_candidate_rank")
-        if rank is not None:
-            try:
-                rank = int(rank)
-            except (TypeError, ValueError) as error:
-                raise ValueError("selected_candidate_rank must be an integer") from error
-        if decision in {"no_match", "uncertain", "clear"} and (
-            label is not None or rank is not None
-        ):
-            raise ValueError(f"{decision} events cannot contain a label or rank")
         event_ids.add(event_id)
-        result.append(
-            {
-                "event_id": event_id,
-                "unique_id": unique_id,
-                "decision": decision,
-                "ukam_label": label,
-                "selected_candidate_rank": rank,
-                "created_at_utc": created_at,
-            }
-        )
+        result.append(normalised_event)
     return result
+
+
+def _normalise_event(event: Any, bundle_id: str) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise ValueError("Each update event must be an object")
+    event_bundle_id = str(event.get("bundle_id", "")).strip()
+    if event_bundle_id != bundle_id:
+        raise ValueError("Each update event bundle_id must match the labelling bundle")
+    event_id = str(event.get("event_id", "")).strip()
+    unique_id = str(event.get("unique_id", "")).strip()
+    decision = str(event.get("decision", "")).strip()
+    if not event_id or not unique_id:
+        raise ValueError("Each update event requires event_id and unique_id")
+    if decision not in ALLOWED_DECISIONS:
+        raise ValueError(f"Unsupported decision: {decision}")
+    created_at = str(event.get("created_at_utc", "")).strip()
+    try:
+        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Each update event requires a valid created_at_utc") from error
+    label = event.get("ukam_label")
+    if label is not None:
+        label = str(label)
+    clean_full_address = event.get("clean_full_address")
+    if clean_full_address is not None:
+        clean_full_address = str(clean_full_address)
+    postcode = event.get("postcode")
+    if postcode is not None:
+        postcode = str(postcode)
+    rank = event.get("selected_candidate_rank")
+    if rank is not None and (isinstance(rank, bool) or not isinstance(rank, int)):
+        raise ValueError("selected_candidate_rank must be an integer")
+    if decision in {"no_match", "uncertain", "clear"} and any(
+        value is not None for value in (label, clean_full_address, postcode, rank)
+    ):
+        raise ValueError(f"{decision} events cannot contain label details or rank")
+    return {
+        "event_id": event_id,
+        "bundle_id": event_bundle_id,
+        "unique_id": unique_id,
+        "decision": decision,
+        "ukam_label": label,
+        "clean_full_address": clean_full_address,
+        "postcode": postcode,
+        "selected_candidate_rank": rank,
+        "created_at_utc": created_at,
+    }
 
 
 def _review_rows(data_file: Path, unique_ids: set[str]) -> dict[str, dict[str, Any]]:
@@ -142,7 +153,8 @@ def _review_rows(data_file: Path, unique_ids: set[str]) -> dict[str, dict[str, A
     try:
         cursor = connection.execute(
             f"SELECT CAST(unique_id AS VARCHAR), CAST(resolved_label_id AS VARCHAR), "
-            f"CAST(ukam_label AS VARCHAR), top_candidates FROM "
+            f"CAST(ukam_label AS VARCHAR), CAST(resolved_canonical_address AS VARCHAR), "
+            f"CAST(resolved_canonical_postcode AS VARCHAR), top_candidates FROM "
             f"{_data_source_sql(data_file)}",
             [str(data_file)],
         )
@@ -150,7 +162,9 @@ def _review_rows(data_file: Path, unique_ids: set[str]) -> dict[str, dict[str, A
             str(row[0]): {
                 "resolved_label_id": row[1],
                 "imported_label": row[2],
-                "top_candidates": row[3],
+                "resolved_canonical_address": row[3],
+                "resolved_canonical_postcode": row[4],
+                "top_candidates": row[5],
             }
             for row in cursor.fetchall()
         }
@@ -177,7 +191,7 @@ def _normalise_candidates(value: Any) -> list[dict[str, Any]]:
 
 def _validated_labels(
     events: list[dict[str, Any]], rows: dict[str, dict[str, Any]]
-) -> dict[str, str | None]:
+) -> dict[str, dict[str, str | None]]:
     latest: dict[str, dict[str, Any]] = {}
     for event in events:
         current = latest.get(event["unique_id"])
@@ -186,7 +200,7 @@ def _validated_labels(
             current["event_id"],
         ):
             latest[event["unique_id"]] = event
-    labels: dict[str, str | None] = {}
+    labels: dict[str, dict[str, str | None]] = {}
     for unique_id, event in latest.items():
         row = rows[unique_id]
         decision = event["decision"]
@@ -215,9 +229,36 @@ def _validated_labels(
             raise ValueError("The submitted label does not match the imported label")
         if decision == "select_canonical" and not label:
             raise ValueError("A canonical label is required")
-        labels[unique_id] = (
-            None if decision in {"no_match", "uncertain", "clear"} else label
+        if decision in {"no_match", "uncertain", "clear"}:
+            labels[unique_id] = {
+                "ukam_label": None,
+                "clean_full_address": None,
+                "postcode": None,
+            }
+            continue
+        candidate = next(
+            (
+                candidate
+                for candidate in candidates
+                if str(candidate.get("label_id")) == label
+            ),
+            {},
         )
+        labels[unique_id] = {
+            "ukam_label": label,
+            "clean_full_address": event["clean_full_address"]
+            or (
+                row["resolved_canonical_address"]
+                if label == row["resolved_label_id"]
+                else candidate.get("canonical_address")
+            ),
+            "postcode": event["postcode"]
+            or (
+                row["resolved_canonical_postcode"]
+                if label == row["resolved_label_id"]
+                else candidate.get("canonical_postcode")
+            ),
+        }
     return labels
 
 
@@ -269,6 +310,7 @@ def apply_labelling_updates(
     *,
     input_dataset_label_column: str = "ukam_label",
     output_path: str | Path | None = None,
+    include_label_details: bool = False,
 ) -> tuple[Path, int]:
     bundle_file, bundle_id = _load_bundle(labelling_bundle_path)
     events = _load_updates(updates_json_path, bundle_id)
@@ -288,7 +330,10 @@ def apply_labelling_updates(
         connection.close()
     unique_id_column = _infer_unique_id_column(bundle_file, input_file, input_columns)
     rows = _review_rows(bundle_file, {event["unique_id"] for event in events})
-    labels = _validated_labels(events, rows)
+    label_details = _validated_labels(events, rows)
+    labels = {
+        unique_id: details["ukam_label"] for unique_id, details in label_details.items()
+    }
     target = Path(output_path).expanduser().resolve() if output_path else input_file
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_file = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
@@ -303,14 +348,59 @@ def apply_labelling_updates(
         parameters.extend([unique_id, label])
     connection = duckdb.connect()
     try:
-        if not labels:
-            output_query = f"SELECT * FROM {source_sql}"
-        elif input_dataset_label_column in input_columns:
-            label_expression = f"CASE {clauses} ELSE {quoted_label} END"
-            output_query = (
-                f"SELECT * REPLACE ({label_expression} AS {quoted_label}) "
-                f"FROM {source_sql}"
+        if include_label_details:
+            details_columns = {
+                "ukam_user_label_clean_full_address": "clean_full_address",
+                "ukam_user_label_postcode": "postcode",
+            }
+            existing_label = (
+                quoted_label if input_dataset_label_column in input_columns else "NULL"
             )
+            label_expression = (
+                f"CASE {clauses} ELSE {existing_label} END" if labels else existing_label
+            )
+            label_output = f"CAST({label_expression} AS VARCHAR) AS {quoted_label}"
+            replacements = (
+                [label_output] if input_dataset_label_column in input_columns else []
+            )
+            additions: list[str] = []
+            if input_dataset_label_column not in input_columns:
+                additions.append(label_output)
+            for column, detail_key in details_columns.items():
+                quoted_column = _quote_identifier(column)
+                detail_clauses = " ".join(
+                    f"WHEN CAST({quoted_id} AS VARCHAR) = ? THEN ?" for _ in labels
+                )
+                existing_detail = quoted_column if column in input_columns else "NULL"
+                detail_expression = (
+                    f"CASE {detail_clauses} ELSE {existing_detail} END"
+                    if labels
+                    else existing_detail
+                )
+                expression = f"CAST({detail_expression} AS VARCHAR) AS {quoted_column}"
+                if column in input_columns:
+                    replacements.append(expression)
+                else:
+                    additions.append(expression)
+                for unique_id, details in label_details.items():
+                    parameters.extend([unique_id, details[detail_key]])
+            projection = "*"
+            if replacements:
+                projection += f" REPLACE ({', '.join(replacements)})"
+            if additions:
+                projection += f", {', '.join(additions)}"
+            output_query = f"SELECT {projection} FROM {source_sql}"
+        elif input_dataset_label_column in input_columns:
+            if not labels:
+                output_query = f"SELECT * FROM {source_sql}"
+            else:
+                label_expression = f"CASE {clauses} ELSE {quoted_label} END"
+                output_query = (
+                    f"SELECT * REPLACE ({label_expression} AS {quoted_label}) "
+                    f"FROM {source_sql}"
+                )
+        elif not labels:
+            output_query = f"SELECT *, NULL::VARCHAR AS {quoted_label} FROM {source_sql}"
         else:
             label_expression = f"CASE {clauses} ELSE NULL END"
             output_query = (

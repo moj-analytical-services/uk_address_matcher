@@ -3,6 +3,7 @@ import duckdbWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdbWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 
 const PAGE_SIZE = 100;
+const REVIEW_RECORD_CACHE_SIZE = 2;
 const PREPARED_CANONICAL_FILE_NAMES = (file) => {
   const name = String(file.name || "").toLowerCase();
   return (
@@ -195,57 +196,84 @@ export class BrowserLabellingStore {
     this.canonicalFiles = canonicalFiles;
     this.remoteEventsUrl = options.remoteEventsUrl || null;
     this.nativeCanonicalSearchUrl = options.nativeCanonicalSearchUrl || null;
+    this.labelledReviewPath = options.labelledReviewPath || null;
     this.eventsStore = new EventStore();
     this.events = [];
     this.db = null;
     this.connection = null;
+    this.worker = null;
     this.reviewSource = null;
     this.canonicalSource = null;
     this.canonical = null;
     this.canonicalLoading = null;
     this.canonicalColumns = [];
+    this.reviewColumns = [];
     this.reviewNavigationCache = new Map();
+    this.reviewRecordCache = new Map();
+    this.reviewRecordLoads = new Map();
   }
 
   async initialise() {
     const extension = fileExtension(this.reviewFile);
     if (![".csv", ".parquet"].includes(extension))
       throw new Error("Review data must be a CSV or Parquet file.");
-    const worker = new Worker(duckdbWorker);
-    this.db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await this.db.instantiate(duckdbWasm);
-    this.connection = await this.db.connect();
-    const reviewName = `review_data${extension}`;
-    await this.db.registerFileBuffer(
-      reviewName,
-      new Uint8Array(await this.reviewFile.arrayBuffer()),
-    );
-    this.reviewSource = sourceSql(reviewName, extension);
-    const reviewColumns = await this.columns(this.reviewSource);
-    const missing = [...REQUIRED_REVIEW_COLUMNS].filter(
-      (column) => !reviewColumns.includes(column),
-    );
-    if (missing.length)
-      throw new Error(`The labelling bundle is missing required columns: ${missing.join(", ")}`);
-    const invalidBundleRows = await this.queryRows(
-      `SELECT COUNT(*) AS count FROM ${this.reviewSource} WHERE CAST(bundle_id AS VARCHAR) <> ${sqlString(this.manifest.bundle_id)}`,
-    );
-    if (Number(invalidBundleRows[0]?.count || 0))
-      throw new Error("The selected review data does not belong to this bundle manifest.");
-    this.events = await this.eventsStore.load(this.manifest.bundle_id);
-    if (this.remoteEventsUrl) {
-      const response = await fetch(this.remoteEventsUrl);
-      if (!response.ok) throw new Error("The local labelling event store could not be loaded.");
-      const payload = await response.json();
-      const remoteEvents = Array.isArray(payload.events) ? payload.events : [];
-      const eventsById = new Map(
-        [...this.events, ...remoteEvents].map((event) => [event.event_id, event]),
+    this.worker = new Worker(duckdbWorker);
+    this.db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), this.worker);
+    try {
+      await this.db.instantiate(duckdbWasm);
+      this.connection = await this.db.connect();
+      const reviewName = `review_data${extension}`;
+      await this.db.registerFileBuffer(
+        reviewName,
+        new Uint8Array(await this.reviewFile.arrayBuffer()),
       );
-      this.events = [...eventsById.values()];
-      for (const event of this.events) await this.eventsStore.put(event);
+      this.reviewSource = sourceSql(reviewName, extension);
+      const reviewColumns = await this.columns(this.reviewSource);
+      this.reviewColumns = reviewColumns;
+      const missing = [...REQUIRED_REVIEW_COLUMNS].filter(
+        (column) => !reviewColumns.includes(column),
+      );
+      if (missing.length)
+        throw new Error(`The labelling bundle is missing required columns: ${missing.join(", ")}`);
+      const invalidBundleRows = await this.queryRows(
+        `SELECT COUNT(*) AS count FROM ${this.reviewSource} WHERE CAST(bundle_id AS VARCHAR) <> ${sqlString(this.manifest.bundle_id)}`,
+      );
+      if (Number(invalidBundleRows[0]?.count || 0))
+        throw new Error("The selected review data does not belong to this bundle manifest.");
+      this.events = await this.eventsStore.load(this.manifest.bundle_id);
+      if (this.remoteEventsUrl) {
+        const response = await fetch(this.remoteEventsUrl);
+        if (!response.ok) throw new Error("The local labelling event store could not be loaded.");
+        const payload = await response.json();
+        const remoteEvents = Array.isArray(payload.events) ? payload.events : [];
+        const eventsById = new Map(
+          [...this.events, ...remoteEvents].map((event) => [event.event_id, event]),
+        );
+        this.events = [...eventsById.values()];
+        for (const event of this.events) await this.eventsStore.put(event);
+      }
+      await this.syncEvents();
+      return this;
+    } catch (error) {
+      await this.close();
+      throw error;
     }
-    await this.syncEvents();
-    return this;
+  }
+
+  async close() {
+    const connection = this.connection;
+    const worker = this.worker;
+    this.connection = null;
+    this.db = null;
+    this.worker = null;
+    this.reviewSource = null;
+    this.canonicalSource = null;
+    this.canonicalLoading = null;
+    try {
+      if (connection) await connection.close();
+    } finally {
+      if (worker) worker.terminate();
+    }
   }
 
   async columns(source) {
@@ -260,15 +288,35 @@ export class BrowserLabellingStore {
   async syncEvents() {
     await this.queryRows("DROP TABLE IF EXISTS label_events");
     await this.queryRows(
-      "CREATE TEMP TABLE label_events (event_id VARCHAR, bundle_id VARCHAR, unique_id VARCHAR, decision VARCHAR, ukam_label VARCHAR, selected_candidate_rank BIGINT, created_at_utc TIMESTAMPTZ)",
+      "CREATE TEMP TABLE label_events (event_id VARCHAR, bundle_id VARCHAR, unique_id VARCHAR, decision VARCHAR, ukam_label VARCHAR, clean_full_address VARCHAR, postcode VARCHAR, selected_candidate_rank BIGINT, created_at_utc TIMESTAMPTZ)",
     );
     for (const event of this.events) {
       const rank = event.selected_candidate_rank == null ? "NULL" : String(event.selected_candidate_rank);
       const label = event.ukam_label == null ? "NULL" : sqlString(event.ukam_label);
+      const cleanAddress = event.clean_full_address == null ? "NULL" : sqlString(event.clean_full_address);
+      const postcode = event.postcode == null ? "NULL" : sqlString(event.postcode);
       await this.queryRows(
-        `INSERT INTO label_events VALUES (${sqlString(event.event_id)}, ${sqlString(event.bundle_id)}, ${sqlString(event.unique_id)}, ${sqlString(event.decision)}, ${label}, ${rank}, CAST(${sqlString(event.created_at_utc)} AS TIMESTAMPTZ))`,
+        `INSERT INTO label_events VALUES (${sqlString(event.event_id)}, ${sqlString(event.bundle_id)}, ${sqlString(event.unique_id)}, ${sqlString(event.decision)}, ${label}, ${cleanAddress}, ${postcode}, ${rank}, CAST(${sqlString(event.created_at_utc)} AS TIMESTAMPTZ))`,
       );
     }
+  }
+
+  async insertEvent(event) {
+    const rank = event.selected_candidate_rank == null
+      ? "NULL"
+      : String(event.selected_candidate_rank);
+    const label = event.ukam_label == null ? "NULL" : sqlString(event.ukam_label);
+    const cleanAddress = event.clean_full_address == null ? "NULL" : sqlString(event.clean_full_address);
+    const postcode = event.postcode == null ? "NULL" : sqlString(event.postcode);
+    await this.queryRows(
+      `INSERT INTO label_events VALUES (${sqlString(event.event_id)}, ${sqlString(event.bundle_id)}, ${sqlString(event.unique_id)}, ${sqlString(event.decision)}, ${label}, ${cleanAddress}, ${postcode}, ${rank}, CAST(${sqlString(event.created_at_utc)} AS TIMESTAMPTZ))`,
+    );
+  }
+
+  async deleteEvent(eventId) {
+    await this.queryRows(
+      `DELETE FROM label_events WHERE event_id = ${sqlString(eventId)}`,
+    );
   }
 
   async loadCanonicalData() {
@@ -310,7 +358,11 @@ export class BrowserLabellingStore {
     );
     if (!cleaned)
       throw new Error("Canonical data must contain clean_full_address or cleaned_full_address.");
+    const labelId = lower.get(this.manifest.canonical_label_column) || lower.get("unique_id");
+    if (!labelId)
+      throw new Error(`Canonical data is missing ${this.manifest.canonical_label_column}.`);
     this.canonical = {
+      labelId,
       uniqueId: lower.get("unique_id"),
       postcode: lower.get("postcode"),
       cleanedAddress: lower.get(cleaned),
@@ -344,9 +396,20 @@ export class BrowserLabellingStore {
   }
 
   baseReviewCte() {
+    const existingLabelAddress = this.reviewColumns.includes(
+      "ukam_label_clean_full_address",
+    )
+      ? "r.ukam_label_clean_full_address"
+      : "NULL::VARCHAR";
+    const existingLabelPostcode = this.reviewColumns.includes(
+      "ukam_label_postcode",
+    )
+      ? "r.ukam_label_postcode"
+      : "NULL::VARCHAR";
     return `
       WITH latest_labels AS (
-        SELECT event_id, unique_id, decision, ukam_label, selected_candidate_rank
+        SELECT event_id, unique_id, decision, ukam_label, clean_full_address, postcode,
+          selected_candidate_rank
         FROM (
           SELECT *, ROW_NUMBER() OVER (
             PARTITION BY unique_id ORDER BY created_at_utc DESC, event_id DESC
@@ -357,6 +420,8 @@ export class BrowserLabellingStore {
           r.messy_cleaned_address, r.messy_postcode,
           CAST(r.ukam_label AS VARCHAR) AS imported_label,
           COALESCE(r.has_existing_label, FALSE) AS has_existing_label,
+           ${existingLabelAddress} AS imported_label_clean_full_address,
+           ${existingLabelPostcode} AS imported_label_postcode,
           CAST(r.resolved_canonical_id AS VARCHAR) AS resolved_canonical_id,
           CAST(r.resolved_label_id AS VARCHAR) AS resolved_label_id,
           r.resolved_canonical_address, r.resolved_canonical_postcode,
@@ -373,7 +438,15 @@ export class BrowserLabellingStore {
                WHEN COALESCE(r.has_existing_label, FALSE) THEN 'imported' END AS current_decision,
           CASE WHEN l.decision IN ('clear', 'no_match', 'uncertain') THEN NULL
                WHEN l.ukam_label IS NOT NULL THEN l.ukam_label
-               WHEN COALESCE(r.has_existing_label, FALSE) THEN CAST(r.ukam_label AS VARCHAR) END AS current_label
+             WHEN COALESCE(r.has_existing_label, FALSE) THEN CAST(r.ukam_label AS VARCHAR) END AS current_label,
+           CASE WHEN l.decision IN ('clear', 'no_match', 'uncertain') THEN NULL
+              WHEN l.ukam_label IS NOT NULL THEN l.clean_full_address
+              WHEN COALESCE(r.has_existing_label, FALSE) THEN ${existingLabelAddress}
+              END AS current_label_clean_full_address,
+           CASE WHEN l.decision IN ('clear', 'no_match', 'uncertain') THEN NULL
+              WHEN l.ukam_label IS NOT NULL THEN l.postcode
+              WHEN COALESCE(r.has_existing_label, FALSE) THEN ${existingLabelPostcode}
+              END AS current_label_postcode
         FROM ${this.reviewSource} AS r LEFT JOIN latest_labels AS l
           ON CAST(r.unique_id AS VARCHAR) = l.unique_id
       )`;
@@ -412,7 +485,7 @@ export class BrowserLabellingStore {
     const mismatchesOnly = parseBoolean(parameters.get("mismatches_only"), false);
     if (!showLabelled && !mismatchesOnly) add("is_labelled = FALSE");
     if (mismatchesOnly)
-      add("match_stage <> 'unmatched' AND has_existing_label AND is_matched AND imported_label IS NOT NULL AND resolved_label_id IS NOT NULL AND resolved_label_id IS DISTINCT FROM imported_label");
+      add("current_label IS NOT NULL AND resolved_canonical_id IS NOT NULL AND current_label IS DISTINCT FROM resolved_canonical_id");
     return conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   }
 
@@ -460,7 +533,7 @@ export class BrowserLabellingStore {
     const total = Number(totalRows[0].count);
     const maximumPage = Math.max(1, Math.ceil(total / pageSize));
     const page = Math.min(Math.max(1, Number(parameters.get("page") || 1)), maximumPage);
-    const rows = await this.queryRows(`${this.baseReviewCte()} SELECT unique_id, messy_address, messy_cleaned_address, messy_postcode, imported_label, has_existing_label, resolved_label_id, resolved_canonical_address, resolved_canonical_postcode, match_reason, match_stage, is_matched, match_weight, distinguishability, splink_match_weight, candidate_count, CAST(top_candidates AS JSON) AS top_candidates, current_decision, current_label, selected_candidate_rank, is_labelled FROM base ${where} ORDER BY ${this.orderSql(parameters)} LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`);
+    const rows = await this.queryRows(`${this.baseReviewCte()} SELECT unique_id, messy_address, messy_cleaned_address, messy_postcode, imported_label, has_existing_label, resolved_canonical_id, resolved_label_id, resolved_canonical_address, resolved_canonical_postcode, match_reason, match_stage, is_matched, match_weight, distinguishability, splink_match_weight, candidate_count, CAST(top_candidates AS JSON) AS top_candidates, current_decision, current_label, current_label_clean_full_address, current_label_postcode, selected_candidate_rank, is_labelled FROM base ${where} ORDER BY ${this.orderSql(parameters)} LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`);
     rows.forEach((row) => (row.top_candidates = normaliseCandidates(row.top_candidates)));
     return { page, page_size: pageSize, maximum_page: maximumPage, total_filtered: total, rows };
   }
@@ -480,7 +553,7 @@ export class BrowserLabellingStore {
       );
     }
     if (!this.canonicalSource) return null;
-    const [row] = await this.queryRows(`SELECT CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) AS canonical_id, CAST(${sqlIdentifier(this.canonical.displayAddress)} AS VARCHAR) AS canonical_address, CAST(${sqlIdentifier(this.canonical.cleanedAddress)} AS VARCHAR) AS cleaned_address, CAST(${sqlIdentifier(this.canonical.postcode)} AS VARCHAR) AS canonical_postcode ${this.canonical.additional.map((column) => `, CAST(${sqlIdentifier(column)} AS VARCHAR) AS ${sqlIdentifier(column)}`).join("")} FROM ${this.canonicalSource} WHERE CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) = ${sqlString(label)} LIMIT 1`);
+    const [row] = await this.queryRows(`SELECT CAST(${sqlIdentifier(this.canonical.labelId)} AS VARCHAR) AS canonical_id, CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) AS canonical_unique_id, CAST(${sqlIdentifier(this.canonical.displayAddress)} AS VARCHAR) AS canonical_address, CAST(${sqlIdentifier(this.canonical.cleanedAddress)} AS VARCHAR) AS cleaned_address, CAST(${sqlIdentifier(this.canonical.postcode)} AS VARCHAR) AS canonical_postcode ${this.canonical.additional.map((column) => `, CAST(${sqlIdentifier(column)} AS VARCHAR) AS ${sqlIdentifier(column)}`).join("")} FROM ${this.canonicalSource} WHERE CAST(${sqlIdentifier(this.canonical.labelId)} AS VARCHAR) = ${sqlString(label)} LIMIT 1`);
     return row || null;
   }
 
@@ -489,10 +562,31 @@ export class BrowserLabellingStore {
     return Object.fromEntries(this.canonical.additional.filter((column) => record[column] != null && record[column] !== "").map((column) => [column, record[column]]));
   }
 
-  async reviewRecord(parameters) {
-    const uniqueId = parameters.get("unique_id")?.trim();
-    if (!uniqueId) throw new Error("unique_id is required");
-    const [row] = await this.queryRows(`${this.baseReviewCte()} SELECT unique_id, messy_address, messy_cleaned_address, messy_postcode, imported_label, current_decision, current_label, is_labelled, resolved_canonical_id, resolved_label_id, resolved_canonical_address, resolved_canonical_postcode, match_reason, match_stage, is_matched, match_weight, distinguishability, candidate_count, CAST(top_candidates AS JSON) AS candidates FROM base WHERE unique_id = ${sqlString(uniqueId)} LIMIT 1`);
+  async cachedReviewRecord(uniqueId) {
+    const cached = this.reviewRecordCache.get(uniqueId);
+    if (cached) {
+      this.reviewRecordCache.delete(uniqueId);
+      this.reviewRecordCache.set(uniqueId, cached);
+      return cached;
+    }
+    let loading = this.reviewRecordLoads.get(uniqueId);
+    if (!loading) {
+      loading = this.loadReviewRecord(uniqueId);
+      this.reviewRecordLoads.set(uniqueId, loading);
+    }
+    try {
+      const record = await loading;
+      this.reviewRecordCache.set(uniqueId, record);
+      while (this.reviewRecordCache.size > REVIEW_RECORD_CACHE_SIZE)
+        this.reviewRecordCache.delete(this.reviewRecordCache.keys().next().value);
+      return record;
+    } finally {
+      this.reviewRecordLoads.delete(uniqueId);
+    }
+  }
+
+  async loadReviewRecord(uniqueId) {
+    const [row] = await this.queryRows(`${this.baseReviewCte()} SELECT unique_id, messy_address, messy_cleaned_address, messy_postcode, imported_label, current_decision, current_label, current_label_clean_full_address, current_label_postcode, is_labelled, resolved_canonical_id, resolved_label_id, resolved_canonical_address, resolved_canonical_postcode, match_reason, match_stage, is_matched, match_weight, distinguishability, candidate_count, CAST(top_candidates AS JSON) AS candidates FROM base WHERE unique_id = ${sqlString(uniqueId)} LIMIT 1`);
     if (!row) throw new Error("The requested record does not exist");
     const candidates = normaliseCandidates(row.candidates);
     const currentDetails = idEquals(row.current_label, row.resolved_label_id)
@@ -501,11 +595,18 @@ export class BrowserLabellingStore {
           canonical_postcode: row.resolved_canonical_postcode,
         }
       : candidates.find((candidate) => idEquals(candidate.label_id, row.current_label));
-    row.current_label_address = currentDetails?.canonical_address || null;
-    row.current_label_postcode = currentDetails?.canonical_postcode || null;
+    row.current_label_address = row.current_label_clean_full_address || currentDetails?.canonical_address || null;
+    row.current_label_postcode = row.current_label_postcode || currentDetails?.canonical_postcode || null;
     row.current_label_additional_columns = {};
     row.resolved_canonical_additional_columns = {};
     row.candidates = candidates;
+    return row;
+  }
+
+  async reviewRecord(parameters) {
+    const uniqueId = parameters.get("unique_id")?.trim();
+    if (!uniqueId) throw new Error("unique_id is required");
+    const row = await this.cachedReviewRecord(uniqueId);
     return {
       record: row,
       navigation: {
@@ -548,7 +649,7 @@ export class BrowserLabellingStore {
   }
 
   async recordForValidation(uniqueId) {
-    const [row] = await this.queryRows(`SELECT CAST(resolved_label_id AS VARCHAR) AS resolved_label_id, CAST(ukam_label AS VARCHAR) AS imported_label, CAST(top_candidates AS JSON) AS top_candidates FROM ${this.reviewSource} WHERE CAST(unique_id AS VARCHAR) = ${sqlString(uniqueId)} LIMIT 1`);
+    const [row] = await this.queryRows(`SELECT CAST(resolved_label_id AS VARCHAR) AS resolved_label_id, CAST(resolved_canonical_address AS VARCHAR) AS resolved_canonical_address, CAST(resolved_canonical_postcode AS VARCHAR) AS resolved_canonical_postcode, CAST(ukam_label AS VARCHAR) AS imported_label, CAST(top_candidates AS JSON) AS top_candidates FROM ${this.reviewSource} WHERE CAST(unique_id AS VARCHAR) = ${sqlString(uniqueId)} LIMIT 1`);
     if (!row) throw new Error(`Unknown messy unique_id: ${uniqueId}`);
     return row;
   }
@@ -569,10 +670,12 @@ export class BrowserLabellingStore {
       if (rank == null) rank = candidateRanks.get(label);
       if (rank !== candidateRanks.get(label)) throw new Error("The submitted candidate rank does not match the candidate");
     }
+    let selectedCanonical = null;
     if (decision === "select_canonical") {
       if (!this.canonicalSource && !this.nativeCanonicalSearchUrl)
         throw new Error("Canonical data is required to select a canonical-search result");
-      if (!label || !(await this.canonicalRecord(label))) throw new Error("The selected canonical ID does not exist in the configured canonical data");
+      selectedCanonical = label ? await this.canonicalRecord(label) : null;
+      if (!selectedCanonical) throw new Error("The selected canonical ID does not exist in the configured canonical data");
       rank = null;
     }
     if (decision === "use_existing" && (!row.imported_label || label !== row.imported_label)) throw new Error("The submitted label does not match the imported label");
@@ -581,12 +684,20 @@ export class BrowserLabellingStore {
       rank = null;
     }
     if (rank != null && !Number.isInteger(rank)) throw new Error("selected_candidate_rank must be an integer");
+    const selectedCandidate = label === row.resolved_label_id
+      ? {
+          canonical_address: row.resolved_canonical_address,
+          canonical_postcode: row.resolved_canonical_postcode,
+        }
+      : candidates.find((candidate) => String(candidate.label_id) === label);
     const event = {
       event_id: crypto.randomUUID(),
       bundle_id: this.manifest.bundle_id,
       unique_id: uniqueId,
       decision,
       ukam_label: label,
+      clean_full_address: selectedCanonical?.cleaned_address || selectedCandidate?.canonical_address || null,
+      postcode: selectedCanonical?.canonical_postcode || selectedCandidate?.canonical_postcode || null,
       selected_candidate_rank: rank,
       created_at_utc: new Date().toISOString(),
     };
@@ -601,12 +712,13 @@ export class BrowserLabellingStore {
         });
         if (!response.ok) throw new Error("The local labelling event could not be saved.");
       }
-      await this.syncEvents();
+      await this.insertEvent(event);
       this.reviewNavigationCache.clear();
+      this.reviewRecordCache.delete(uniqueId);
     } catch (error) {
       this.events = this.events.filter((item) => item.event_id !== event.event_id);
       await this.eventsStore.delete(event.event_id);
-      await this.syncEvents();
+      await this.deleteEvent(event.event_id);
       this.reviewNavigationCache.clear();
       throw error;
     }
@@ -625,11 +737,13 @@ export class BrowserLabellingStore {
         });
         if (!response.ok) throw new Error("The local labelling event could not be removed.");
       }
-      await this.syncEvents();
+      await this.deleteEvent(event.event_id);
+      this.reviewNavigationCache.clear();
+      this.reviewRecordCache.delete(event.unique_id);
     } catch (error) {
       this.events.push(event);
       await this.eventsStore.put(event);
-      await this.syncEvents();
+      await this.insertEvent(event);
       throw error;
     }
     const [row] = await this.queryRows(`${this.baseReviewCte()} SELECT current_label FROM base WHERE unique_id = ${sqlString(event.unique_id)}`);
@@ -663,7 +777,7 @@ export class BrowserLabellingStore {
     let address = parameters.get("address_query")?.trim() || "";
     if (uniqueId.length > 100 || address.length > 100) throw new Error("Search values must contain no more than 100 characters");
     if (!uniqueId && !postcode && !address) throw new Error("Enter a unique ID, postcode, or address value before searching.");
-    const conditions = [`${sqlIdentifier(this.canonical.uniqueId)} IS NOT NULL`];
+    const conditions = [`${sqlIdentifier(this.canonical.labelId)} IS NOT NULL`];
     if (uniqueId) conditions.push(`contains(upper(CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR)), upper(${sqlString(uniqueId)}))`);
     if (postcode) {
       const compact = postcode.replaceAll(" ", "");
@@ -692,7 +806,7 @@ export class BrowserLabellingStore {
       );
     });
     const page = Math.max(1, Number(parameters.get("page") || 1));
-    const rows = await this.queryRows(`SELECT CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) AS canonical_id, CAST(${sqlIdentifier(this.canonical.displayAddress)} AS VARCHAR) AS canonical_address, CAST(${sqlIdentifier(this.canonical.cleanedAddress)} AS VARCHAR) AS cleaned_address, CAST(${sqlIdentifier(this.canonical.postcode)} AS VARCHAR) AS canonical_postcode ${this.canonical.additional.map((column) => `, CAST(${sqlIdentifier(column)} AS VARCHAR) AS ${sqlIdentifier(column)}`).join("")} FROM ${this.canonicalSource} WHERE ${conditions.join(" AND ")} ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id LIMIT ${PAGE_SIZE + 1} OFFSET ${(page - 1) * PAGE_SIZE}`);
+    const rows = await this.queryRows(`SELECT CAST(${sqlIdentifier(this.canonical.labelId)} AS VARCHAR) AS canonical_id, CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) AS canonical_unique_id, CAST(${sqlIdentifier(this.canonical.displayAddress)} AS VARCHAR) AS canonical_address, CAST(${sqlIdentifier(this.canonical.cleanedAddress)} AS VARCHAR) AS cleaned_address, CAST(${sqlIdentifier(this.canonical.postcode)} AS VARCHAR) AS canonical_postcode ${this.canonical.additional.map((column) => `, CAST(${sqlIdentifier(column)} AS VARCHAR) AS ${sqlIdentifier(column)}`).join("")} FROM ${this.canonicalSource} WHERE ${conditions.join(" AND ")} ORDER BY canonical_postcode, cleaned_address, canonical_address, canonical_id LIMIT ${PAGE_SIZE + 1} OFFSET ${(page - 1) * PAGE_SIZE}`);
     return { page, page_size: PAGE_SIZE, has_previous: page > 1, has_next: rows.length > PAGE_SIZE, unique_id_query: uniqueId, postcode, address_query: address, additional_canonical_columns: this.canonical.additional, rows: rows.slice(0, PAGE_SIZE) };
   }
 
