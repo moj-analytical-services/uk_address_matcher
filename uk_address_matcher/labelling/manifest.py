@@ -15,6 +15,7 @@ def build_manifest(
     parquet_validation: dict[str, object],
     top_n_candidates: int,
     canonical_label_column: str,
+    canonical_data_file: str | None = None,
     messy_columns: tuple[str, ...],
     canonical_columns: tuple[str, ...],
 ) -> dict[str, object]:
@@ -31,6 +32,7 @@ def build_manifest(
         "rows_with_existing_labels": parquet_validation["rows_with_existing_labels"],
         "top_n_candidates": top_n_candidates,
         "canonical_label_column": canonical_label_column,
+        "canonical_data_file": canonical_data_file,
         "messy_columns": list(messy_columns),
         "canonical_columns": list(canonical_columns),
         "match_reasons": _match_reasons(match_result),
