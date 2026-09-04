@@ -22,6 +22,7 @@ ukam-apply-labelling-updates = "uk_address_matcher.labelling.updates:main"
 dev = [
     "pyarrow>=19.0.1",
     "pytest>=8.3.4",
+    "pytest-playwright>=0.7.2",
     "pyyaml>=6.0.2",
     "ipykernel>=6.29.4",
     "boto3>=1.40.0"
