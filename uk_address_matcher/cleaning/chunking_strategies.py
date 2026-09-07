@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -22,6 +23,7 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     InvertedIndexLookupStrategy,
     PhysicalIndexStrategy,
     _build_inverted_index_from_keys,
+    _build_inverted_index_from_scalar_keys,
     _derive_keys_for_strategy,
     _lookup_keys_in_inverted_index,
 )
@@ -46,6 +48,8 @@ from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
 if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+logger = logging.getLogger("uk_address_matcher")
 
 
 def _materialise_relation(
@@ -242,11 +246,13 @@ def clean_data_pre_term_frequencies(
 
     chunked_table = f"__ukam_chunked_addresses_{uid}"
     cleaned_table = f"__ukam_cleaned_{uid}"
+    logger.debug("Assigning deterministic UKAM address IDs")
     _materialise_relation_with_ukam_address_id(
         con,
         con.table(chunked_table),
         cleaned_table,
     )
+    logger.debug("Deterministic UKAM address IDs assigned")
     _drop_table_and_registered_aliases(con, chunked_table)
     return con.table(cleaned_table)
 
@@ -387,11 +393,29 @@ def derive_term_frequencies_table(
         progress_mode=progress_mode,
     )
 
-    # Compute token frequencies from clean_full_address tokens
+    result = _derive_term_frequencies_from_precleaned(cleaned_table, con)
+
+    # Clean up intermediate table
+    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
+    _drop_table_and_registered_aliases(con, input_name)
+
+    return result
+
+
+def _derive_term_frequencies_from_precleaned(
+    cleaned_address_table: DuckDBPyRelation | str,
+    con: DuckDBPyConnection,
+) -> DuckDBPyRelation:
+    """Aggregate corpus token frequencies from canonical pre-clean output."""
+    source_sql = (
+        cleaned_address_table
+        if isinstance(cleaned_address_table, str)
+        else f"({cleaned_address_table.sql_query()})"
+    )
     tf_sql = f"""
     WITH unnested AS (
         SELECT unnest(string_split(clean_full_address, ' ')) AS token
-        FROM {cleaned_table}
+        FROM {source_sql}
     )
     SELECT
         token,
@@ -401,15 +425,9 @@ def derive_term_frequencies_table(
     ORDER BY COUNT(*) DESC
     """
 
-    # Materialise the result (consistent with parquet loading pattern)
     result_table = "__ukam_derived_term_frequencies"
     con.sql(f"DROP TABLE IF EXISTS {result_table}")
     con.sql(tf_sql).create(result_table)
-
-    # Clean up intermediate table
-    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
-    _drop_table_and_registered_aliases(con, input_name)
-
     return con.table(result_table)
 
 
@@ -527,6 +545,7 @@ def derive_inverted_index(
         else:
             # Chunked path for this strategy
             stage_started_at = time.perf_counter()
+            strategy_keys_table = f"__ukam_index_keys_{uid}_{strategy.name}"
             progress = _ProgressBar(
                 label=stage_label,
                 total=total_rows,
@@ -540,24 +559,52 @@ def derive_inverted_index(
                 progress_mode=progress_mode,
             )
             try:
+                logger.debug("%s: staging keys once", stage_label)
+                key_pipeline = create_sql_pipeline(
+                    con,
+                    input_rel=cleaned_address_table,
+                    stage_specs=[_derive_keys_for_strategy(strategy)],
+                    pipeline_name=f"Stage inverted index keys ({strategy.name})",
+                    pipeline_description=(
+                        f"Derive {strategy.name} keys once before bucket aggregation"
+                    ),
+                )
+                strategy_keys = key_pipeline.run(debug_options if first_insert else None)
+                scalar_keys = con.sql(f"""
+                    WITH scalar_keys AS (
+                        SELECT unique_id, unnest(__index_keys) AS key
+                        FROM ({strategy_keys.sql_query()})
+                    )
+                    SELECT
+                        unique_id,
+                        key,
+                        abs(hash(key)) % {num_of_chunks} AS key_bucket
+                    FROM scalar_keys
+                    ORDER BY key_bucket
+                """)
+                _materialise_relation(
+                    con,
+                    scalar_keys,
+                    strategy_keys_table,
+                )
+                logger.debug("%s: keys staged", stage_label)
+
                 for chunk_index in range(num_of_chunks):
                     chunk_started_at = time.perf_counter()
+                    chunk_keys = con.sql(f"""
+                        SELECT unique_id, key
+                        FROM {strategy_keys_table}
+                        WHERE key_bucket = {chunk_index}
+                    """)
 
                     pipeline = create_sql_pipeline(
                         con,
-                        input_rel=cleaned_address_table,
-                        stage_specs=[
-                            _derive_keys_for_strategy(
-                                strategy,
-                                num_of_chunks=num_of_chunks,
-                                chunk_index=chunk_index,
-                            ),
-                            _build_inverted_index_from_keys(strategy),
-                        ],
+                        input_rel=chunk_keys,
+                        stage_specs=[_build_inverted_index_from_scalar_keys(strategy)],
                         pipeline_name=f"Build inverted index ({strategy.name})",
                         pipeline_description=(
-                            f"Derive {strategy.name} keys and aggregate into inverted "
-                            f"index (chunk {chunk_index + 1}/{num_of_chunks})"
+                            f"Aggregate staged {strategy.name} keys into inverted index "
+                            f"(chunk {chunk_index + 1}/{num_of_chunks})"
                         ),
                     )
                     chunk_result = pipeline.run(debug_options if first_insert else None)
@@ -589,6 +636,7 @@ def derive_inverted_index(
                     )
             finally:
                 progress.close()
+                _drop_table_and_registered_aliases(con, strategy_keys_table)
 
             log_stage_complete(
                 stage_label,
@@ -616,6 +664,7 @@ def prepare_data_for_matching(
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
+    _precleaned_addresses: bool = False,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
@@ -681,17 +730,20 @@ def prepare_data_for_matching(
     uid = _uid()
     distinguishing_table_name = None
 
-    # Clean data in chunks (without term frequencies)
-    cleaned_address_table = clean_data_pre_term_frequencies(
-        address_table,
-        con,
-        num_of_chunks=num_of_chunks,
-        debug_options=debug_options,
-        show_progress=progress_mode,
-    )
+    if _precleaned_addresses:
+        cleaned_address_table = address_table
+    else:
+        cleaned_address_table = clean_data_pre_term_frequencies(
+            address_table,
+            con,
+            num_of_chunks=num_of_chunks,
+            debug_options=debug_options,
+            show_progress=progress_mode,
+        )
     cleaned_table_name = cleaned_address_table.alias
 
     if derive_distinguishing_wrt_adjacent_records:
+        logger.debug("Deriving adjacent-record distinguishing tokens")
         distinguishing_pipeline = create_sql_pipeline(
             con,
             input_rel=cleaned_address_table,
@@ -712,6 +764,7 @@ def prepare_data_for_matching(
             distinguishing_tokens,
             distinguishing_table_name,
         )
+        logger.debug("Adjacent-record distinguishing tokens derived")
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
@@ -780,20 +833,18 @@ def prepare_data_for_matching(
     try:
         for chunk_index in range(total_chunks):
             chunk_started_at = time.perf_counter()
+            first_id = chunk_index * chunk_size + 1
+            last_id = min((chunk_index + 1) * chunk_size, total_rows)
             chunk_query = con.sql(f"""
             SELECT cleaned.*{distinguishing_select_sql}
                 FROM {cleaned_table_name} AS cleaned
                 {distinguishing_join_sql}
-                WHERE
-                    (abs(hash(cleaned.original_address_concat)) % {total_chunks})
-                    = {chunk_index}
+                WHERE cleaned.__ukam_row_id BETWEEN {first_id} AND {last_id}
             """)
-            chunk_table = f"__ukam_post_tf_chunk_input_{uid}_{chunk_index}"
-            chunk = _materialise_relation(con, chunk_query, chunk_table)
 
             # Process chunk: apply term frequencies + inverted index blocking in one pass
             processed_chunk = _clean_data_using_precomputed_rel_tok_freq(
-                chunk,
+                chunk_query,
                 con=con,
                 pre_cleaned_addresses=True,
                 additional_stages=inverted_index_stages,
@@ -805,14 +856,6 @@ def prepare_data_for_matching(
                 processed_chunk.create(processed_table)
             else:
                 processed_chunk.insert_into(processed_table)
-
-            # Delete processed rows from the intermediate cleaned table to free memory
-            con.execute(f"""
-                DELETE FROM {cleaned_table_name}
-                WHERE
-                    (abs(hash(original_address_concat)) % {total_chunks})
-                    = {chunk_index}
-            """)
 
             processed_records = min((chunk_index + 1) * chunk_size, total_rows)
             progress.update(
@@ -829,8 +872,6 @@ def prepare_data_for_matching(
                 total_chunks=total_chunks,
                 chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
             )
-
-            _drop_table_and_registered_aliases(con, chunk_table)
     finally:
         progress.close()
 
@@ -841,16 +882,7 @@ def prepare_data_for_matching(
         progress_mode=progress_mode,
     )
 
-    # Verify the intermediate table is now empty (all chunks processed)
-    remaining_rows = con.sql(f"SELECT COUNT(*) FROM {cleaned_table_name}").fetchone()[0]
-    if remaining_rows != 0:
-        raise ValueError(
-            "Expected intermediate table "
-            f"{cleaned_table_name} to be empty after processing, "
-            f"but found {remaining_rows} rows remaining."
-        )
-
-    # Drop the now-empty intermediate table
+    logger.debug("Finalizing prepared address table")
     con.execute(f"DROP TABLE IF EXISTS {cleaned_table_name}")
     if distinguishing_table_name is not None:
         con.execute(f"DROP TABLE IF EXISTS {distinguishing_table_name}")
@@ -859,15 +891,8 @@ def prepare_data_for_matching(
     if inv_idx_table_name == "__ukam_inverted_index":
         _drop_table_and_registered_aliases(con, inv_idx_table_name)
 
-    prepared_table = f"__ukam_prepared_{uid}"
-    _drop_table_and_registered_aliases(con, prepared_table)
-    con.execute(f"""
-        CREATE TABLE {prepared_table} AS
-        SELECT * EXCLUDE (__ukam_row_id)
-        FROM {processed_table}
-    """)
-    _drop_table_and_registered_aliases(con, processed_table)
-    con.execute(f"ALTER TABLE {prepared_table} RENAME TO {processed_table}")
+    con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
+    logger.debug("Prepared address table finalized")
 
     return con.table(processed_table)
 

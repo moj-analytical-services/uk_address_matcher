@@ -312,6 +312,39 @@ def _build_inverted_index_from_keys(strategy: PhysicalIndexStrategy):
     return _stage
 
 
+def _build_inverted_index_from_scalar_keys(strategy: PhysicalIndexStrategy):
+    """Apply a physical strategy's posting cap to pre-unnested canonical keys."""
+    maximum_posting_size = strategy.maximum_posting_size
+
+    @pipeline_stage(
+        name=f"build_inverted_index_{strategy.name}",
+        description=(
+            f"Aggregate staged {strategy.name} keys into inverted index "
+            f"(max {maximum_posting_size} unique_ids per key)"
+        ),
+        tags="inverted_index",
+    )
+    def _stage():
+        return f"""
+        WITH grouped AS (
+            SELECT
+                key,
+                list(DISTINCT unique_id ORDER BY unique_id) AS unique_ids,
+                COUNT(DISTINCT unique_id) AS count_unique_ids
+            FROM {{input}}
+            GROUP BY key
+        )
+        SELECT
+            key,
+            unique_ids,
+            '{strategy.name}' AS index_strategy
+        FROM grouped
+        WHERE count_unique_ids BETWEEN 1 AND {maximum_posting_size}
+        """
+
+    return _stage
+
+
 def _lookup_keys_in_inverted_index(
     strategies: Sequence[InvertedIndexLookupStrategy] | None = None,
 ):

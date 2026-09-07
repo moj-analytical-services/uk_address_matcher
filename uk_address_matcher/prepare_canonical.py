@@ -59,7 +59,7 @@ _MANAGED_FILES = [
 
 # Parquet write tuning for the prepared artefacts.
 PARQUET_COMPRESSION = "ZSTD"
-PARQUET_COMPRESSION_LEVEL = 15
+PARQUET_COMPRESSION_LEVEL = 6
 INVERTED_INDEX_COMPRESSION_LEVEL = 22
 PARQUET_VERSION = "V2"
 PARQUET_ROW_GROUP_SIZE = 122_880
@@ -492,8 +492,9 @@ def prepare_canonical_folder(
             and `overwrite` is `False`.
     """
     from uk_address_matcher.cleaning.chunking_strategies import (
+        _derive_term_frequencies_from_precleaned,
+        clean_data_pre_term_frequencies,
         derive_inverted_index,
-        derive_term_frequencies_table,
         prepare_data_for_matching,
     )
 
@@ -539,17 +540,19 @@ def prepare_canonical_folder(
             _clear_stale_artefacts(output_folder_path)
 
     # Derive artefacts / cleaned canonical data for export
-    logger.debug("Deriving term frequencies from canonical data")
-    tf_table = derive_term_frequencies_table(
+    logger.debug("Cleaning canonical addresses before term-frequency derivation")
+    precleaned = clean_data_pre_term_frequencies(
         data,
         con=con,
         num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
     )
+    logger.debug("Deriving term frequencies from pre-cleaned canonical data")
+    tf_table = _derive_term_frequencies_from_precleaned(precleaned, con)
 
-    logger.debug("Cleaning canonical addresses")
+    logger.debug("Applying term frequencies to canonical addresses")
     df_clean = prepare_data_for_matching(
-        data,
+        precleaned,
         con=con,
         num_of_chunks=num_of_chunks,
         term_frequency_lookup=tf_table,
@@ -557,9 +560,9 @@ def prepare_canonical_folder(
             derive_distinguishing_wrt_adjacent_records
         ),
         dataset_role="canonical",
+        _precleaned_addresses=True,
         show_progress=progress_mode,
     )
-
     logger.debug("Building inverted index")
     inverted_index = derive_inverted_index(
         df_clean,
@@ -604,7 +607,7 @@ def prepare_canonical_folder(
             con,
             canonical_output_relation,
             addr_path,
-            sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
+            sort_columns=("ukam_address_id",),
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -644,10 +647,10 @@ def prepare_canonical_folder(
                 con,
                 chunk_query,
                 chunk_path,
-                sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
+                sort_columns=("ukam_address_id",),
                 drop_columns=canonical_drop_columns,
             )
-            chunk_count = chunk_query.count("*").fetchone()[0]
+            chunk_count = last_id - first_id + 1
             canonical_paths.append(chunk_path)
             logger.debug(
                 "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
