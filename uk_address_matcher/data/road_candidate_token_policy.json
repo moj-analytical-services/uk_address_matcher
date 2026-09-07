@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "purpose": "Candidate-ranking guardrails for production road extraction. These tokens do not generate candidates or phrase statistics.",
+  "residence_or_non_road_any_token": [
+    "HOUSE",
+    "COURT",
+    "INDUSTRIAL"
+  ],
+  "road_syntax_terminal_tokens": [
+    "ROAD",
+    "STREET",
+    "LANE",
+    "AVENUE",
+    "DRIVE",
+    "CLOSE",
+    "PLACE",
+    "TERRACE",
+    "CRESCENT",
+    "WAY",
+    "GARDENS",
+    "SQUARE",
+    "MEWS",
+    "GROVE",
+    "VALE",
+    "VIEW",
+    "PARK",
+    "HILL",
+    "ROW",
+    "CROFT",
+    "LOAN"
+  ],
+  "policy": {
+    "residence_or_non_road_action": "exclude_from_guarded_ranking",
+    "road_syntax_action": "diagnostic_only"
+  },
+  "notes": [
+    "COURT is guarded because it is a recurrent building failure mode.",
+    "Road syntax tokens are not a road dictionary and do not generate candidates. They identify familiar UK road endings for terminal-first candidate selection and diagnostics."
+  ]
+}

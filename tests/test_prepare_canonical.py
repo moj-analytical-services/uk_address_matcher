@@ -99,7 +99,37 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_canonical_addresses.parquet").exists()
     assert (prepared_folder / "ukam_term_frequencies.parquet").exists()
     assert (prepared_folder / "ukam_inverted_index.parquet").exists()
+    assert (prepared_folder / "roadlike_places.parquet").exists()
     assert (prepared_folder / "ukam_manifest.json").exists()
+
+
+def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con):
+    prepared = load_prepared_canonical_data(prepared_folder, con)
+
+    assert {
+        "road_1_norm",
+    }.issubset(prepared.addresses.columns)
+    assert prepared.roadlike_places is not None
+    assert prepared.roadlike_places.count("*").fetchone()[0] > 0
+
+
+def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
+    output_folder = tmp_path / "without_road_keys"
+
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=output_folder,
+        con=con,
+        derive_road_blocking_keys=False,
+    )
+    prepared = load_prepared_canonical_data(output_folder, con)
+
+    assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
+    assert not (output_folder / "roadlike_places.parquet").exists()
+    assert prepared.roadlike_places is None
+    assert {
+        "road_1_norm",
+    }.isdisjoint(prepared.addresses.columns)
 
 
 def test_progress_bar_disabled_writes_nothing():
@@ -677,6 +707,10 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
+    roadlike_places = _fake_relation(
+        columns=["candidate_phrase", "terminal_token"],
+        row_count=2,
+    )
 
     monkeypatch.setattr(
         chunking_strategies,
@@ -692,6 +726,16 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         chunking_strategies,
         "prepare_data_for_matching",
         lambda *args, **kwargs: clean_relation,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_add_canonical_road_blocking_keys",
+        lambda addresses, con, **kwargs: addresses,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "derive_roadlike_places",
+        lambda data, con, **kwargs: roadlike_places,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -739,6 +783,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     assert _written("s3://bucket/output/prepared/ukam_term_frequencies.parquet")
     assert _written("s3://bucket/output/prepared/ukam_inverted_index.parquet")
     assert _written("s3://bucket/output/prepared/ukam_canonical_addresses.parquet")
+    assert _written("s3://bucket/output/prepared/roadlike_places.parquet")
     assert any(
         "ukam_manifest.json" in call.args[0]
         for call in con.execute.call_args_list
@@ -772,6 +817,10 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
         row_count=3,
     )
+    roadlike_places = _fake_relation(
+        columns=["candidate_phrase", "terminal_token"],
+        row_count=2,
+    )
 
     chunk_queries = []
     for row_count in (2, 1):
@@ -796,6 +845,16 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         chunking_strategies,
         "prepare_data_for_matching",
         lambda *args, **kwargs: clean_relation,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "_add_canonical_road_blocking_keys",
+        lambda addresses, con, **kwargs: addresses,
+    )
+    monkeypatch.setattr(
+        chunking_strategies,
+        "derive_roadlike_places",
+        lambda data, con, **kwargs: roadlike_places,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -968,6 +1027,7 @@ def test_manifest_contains_expected_fields(prepared_folder):
     assert "created_with_duckdb_version" in manifest
     assert manifest["row_counts"]["canonical_addresses"] == 3
     assert manifest["row_counts"]["canonical_output_chunks"] == 1
+    assert manifest["row_counts"]["roadlike_places"] > 0
     assert manifest["preparation_options"] == {"add_debug_features": False}
 
     # Per-file metadata
@@ -978,6 +1038,10 @@ def test_manifest_contains_expected_fields(prepared_folder):
     assert "columns" in addr_meta
     assert isinstance(addr_meta["columns"], list)
     assert len(addr_meta["columns"]) > 0
+    road_meta = manifest["files"]["roadlike_places.parquet"]
+    assert "sha256" in road_meta
+    assert "columns" in road_meta
+    assert len(road_meta["columns"]) > 0
 
 
 def test_manifest_version_mismatch_warns(con, prepared_folder):

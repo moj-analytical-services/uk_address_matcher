@@ -29,14 +29,6 @@
       "sql_dialect": "duckdb"
     },
     {
-      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 2) = split_part(r.postcode, ' ', 2)",
-      "sql_dialect": "duckdb"
-    },
-    {
-      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode",
-      "sql_dialect": "duckdb"
-    },
-    {
       "blocking_rule": "list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and l.postcode = r.postcode",
       "sql_dialect": "duckdb"
     },
@@ -62,6 +54,10 @@
       "arrays_to_explode": [
         "exploding_unique_ids"
       ]
+    },
+    {
+      "blocking_rule": "l.road_1_norm = r.road_1_norm and l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1)",
+      "sql_dialect": "duckdb"
     }
   ],
   "comparisons": [
@@ -168,6 +164,33 @@
         }
       ],
       "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "inferred_road",
+      "comparison_levels": [
+        {
+          "sql_condition": "road_1_norm_l IS NULL OR road_1_norm_r IS NULL",
+          "label_for_charts": "Inferred road unavailable",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "road_1_norm_l = road_1_norm_r",
+          "label_for_charts": "Exact inferred road agreement",
+          "m_probability": 4,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No exact inferred road agreement",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Positive-only inferred road agreement"
     },
     {
       "output_column_name": "flat_identity",
