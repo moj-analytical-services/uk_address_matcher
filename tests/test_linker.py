@@ -9,7 +9,7 @@ from uk_address_matcher import AddressMatcher
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
 from uk_address_matcher.linking_model.matching.stages.splink import (
-    SELECTIVE_ROAD_BLOCKING_RULES,
+    _prepare_inferred_road_scoring_features,
 )
 from uk_address_matcher.linking_model.splink_model import (
     _align_distinguishing_token_columns,
@@ -241,6 +241,74 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     )
 
 
+def test_packaged_inferred_road_comparison_is_positive_only():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "inferred_road"
+    )
+    levels = comparison["comparison_levels"]
+
+    assert [level["label_for_charts"] for level in levels] == [
+        "Inferred road unavailable",
+        "Exact inferred road agreement",
+        "No exact inferred road agreement",
+    ]
+    assert math.log2(levels[1]["m_probability"] / levels[1]["u_probability"]) == 2
+    assert levels[2]["m_probability"] == levels[2]["u_probability"] == 1
+
+
+def test_legacy_canonical_gets_neutral_inferred_road_columns(duck_con):
+    messy = duck_con.sql("SELECT 1 AS unique_id, '12 HIGH STREET' AS address_concat")
+    canonical = duck_con.sql("SELECT 2 AS unique_id, '12 HIGH STREET' AS address_concat")
+
+    aligned_messy, aligned_canonical = _prepare_inferred_road_scoring_features(
+        duck_con,
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project("road_1_norm").fetchone() == (None,)
+    assert aligned_canonical.project("road_1_norm").fetchone() == (None,)
+    assert str(aligned_messy.types[-1]) == "VARCHAR"
+    assert str(aligned_canonical.types[-1]) == "VARCHAR"
+
+
+def test_inferred_road_artifact_loads_canonical_road_key(duck_con, tmp_path):
+    road_keys_path = tmp_path / "road_keys.parquet"
+    duck_con.execute(
+        "COPY (SELECT 20 AS ukam_address_id, 'HIGH STREET' AS road_1_norm, "
+        "'E8' AS unused_outward_postcode) "
+        f"TO '{road_keys_path}' (FORMAT PARQUET)"
+    )
+    messy = duck_con.sql("SELECT 1 AS unique_id, 'HIGH STREET'::VARCHAR AS road_1_norm")
+    canonical = duck_con.sql("SELECT 2 AS unique_id, 20 AS ukam_address_id")
+
+    _, aligned_canonical = _prepare_inferred_road_scoring_features(
+        duck_con,
+        messy,
+        canonical,
+        canonical_road_keys_path=str(road_keys_path),
+    )
+
+    assert aligned_canonical.project("road_1_norm").fetchone() == ("HIGH STREET",)
+    assert "outward_postcode" not in aligned_canonical.columns
+
+
+def test_packaged_numberless_comparison_omits_reordered_token_level():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_without_numbers"
+    )
+    assert all(
+        level["label_for_charts"] != "Exact alphabetic token set, reordered"
+        for level in comparison["comparison_levels"]
+    )
+
+
 @pytest.mark.parametrize(
     ("messy_address", "messy_postcode", "expected"),
     [
@@ -307,7 +375,7 @@ def test_sanitise_null_comparison_level_removes_probabilities():
     assert sanitised["comparisons"][0]["comparison_levels"][0] == {"is_null_level": True}
 
 
-def test_linker_adds_scalar_road_blocking_rules_without_road_scoring(duck_con):
+def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_con):
     canonical = duck_con.sql("""
         SELECT * FROM (VALUES
             ('c1', '12 HIGH STREET', 'AB1 2CD')
@@ -334,8 +402,7 @@ def test_linker_adds_scalar_road_blocking_rules_without_road_scoring(duck_con):
         include_full_postcode_block=True,
         include_outside_postcode_block=False,
         additional_blocking_rules=[
-            "l.road_1_norm = r.road_1_norm "
-            "AND l.numeric_token_1 = r.numeric_token_1"
+            "l.road_1_norm = r.road_1_norm AND l.numeric_token_1 = r.numeric_token_1"
         ],
     )
 
@@ -344,27 +411,30 @@ def test_linker_adds_scalar_road_blocking_rules_without_road_scoring(duck_con):
     )
     comparison_columns = {
         comparison["output_column_name"]
-        for comparison in _get_model_settings_dict()["comparisons"]
+        for comparison in linker._settings_obj.as_dict()["comparisons"]
     }
 
     assert "l.road_1_norm = r.road_1_norm" in rule_text
-    assert "inferred_road" not in comparison_columns
+    assert "inferred_road" in comparison_columns
     assert "inferred_road_top_2" not in comparison_columns
 
 
-def test_selective_road_blocking_profile_uses_only_screened_scalar_keys():
-    assert len(SELECTIVE_ROAD_BLOCKING_RULES) == 6
-    assert all(
+def test_packaged_model_contains_the_promoted_road_blocking_rule():
+    settings = _get_model_settings_dict()
+    packaged_rules = [
+        rule["blocking_rule"]
+        for rule in settings["blocking_rules_to_generate_predictions"]
+    ]
+
+    assert len(packaged_rules) == 10
+    assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
+    assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
+        packaged_rules
+    )
+    assert any(
         "l.road_1_norm = r.road_1_norm" in rule
-        for rule in SELECTIVE_ROAD_BLOCKING_RULES
-    )
-    assert any(
-        "r.road_frequency_lte_1000" in rule
-        for rule in SELECTIVE_ROAD_BLOCKING_RULES
-    )
-    assert any(
-        "r.road_n1_block_size_lte_32" in rule
-        for rule in SELECTIVE_ROAD_BLOCKING_RULES
+        and "list_extract(l.unusual_tokens_arr, 1)" in rule
+        for rule in packaged_rules
     )
 
 

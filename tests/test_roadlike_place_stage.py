@@ -1,4 +1,3 @@
-from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     _add_canonical_road_blocking_keys,
     clean_data_pre_term_frequencies,
@@ -6,9 +5,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     ROAD_FEATURE_COLUMNS,
-    ROAD_TOP_2_FEATURE_COLUMNS,
     add_top_1_road_features,
-    add_top_2_road_features,
     derive_rightmost_numeric_position_sql,
     derive_top_1_road_keys,
     roadlike_place_candidate_sql,
@@ -16,6 +13,10 @@ from uk_address_matcher.cleaning.steps.roadlike_places import (
     roadlike_place_prepared_candidate_sql,
     roadlike_place_prepared_input_sql,
 )
+
+
+def _catalogue_from_source(duck_con, source):
+    return derive_roadlike_places(source, duck_con, show_progress="off")
 
 
 def test_roadlike_place_stage_extracts_terminal_first_candidates_and_catalogue(duck_con):
@@ -122,7 +123,9 @@ def test_derive_roadlike_places_batches_by_district_and_writes_parquet(
     )
 
 
-def test_add_top_1_road_features_uses_packaged_scorecard(duck_con):
+def test_add_top_1_road_features_uses_supplied_catalogue_and_packaged_scorecard(
+    duck_con,
+):
     source = duck_con.sql("""
         SELECT * FROM (VALUES
             ('1', '12 HIGH STREET', 'AB1 2CD', ['12'], ['HIGH']),
@@ -132,7 +135,11 @@ def test_add_top_1_road_features_uses_packaged_scorecard(duck_con):
         )
     """)
 
-    features = add_top_1_road_features(duck_con, source).order("unique_id")
+    features = add_top_1_road_features(
+        duck_con,
+        source,
+        roadlike_places=_catalogue_from_source(duck_con, source),
+    ).order("unique_id")
 
     assert features.columns[-5:] == list(ROAD_FEATURE_COLUMNS)
     rows = features.fetchall()
@@ -153,10 +160,30 @@ def test_top_1_road_keys_can_require_catalogue_support(duck_con):
             ['12'] AS numeric_tokens
     """)
 
-    unrestricted = derive_top_1_road_keys(duck_con, source)
+    catalogue = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('HIGH STREET', 'STREET', 1, 1, 1, 1, 1, 1, 1)
+        ) AS rows(
+            candidate_phrase,
+            terminal_token,
+            phrase_support,
+            phrase_addresses,
+            distinct_numbers,
+            distinct_postcodes,
+            distinct_districts,
+            terminal_support,
+            terminal_distinct_phrases
+        )
+    """)
+    unrestricted = derive_top_1_road_keys(
+        duck_con,
+        source,
+        roadlike_places=catalogue,
+    )
     supported = derive_top_1_road_keys(
         duck_con,
         source,
+        roadlike_places=catalogue,
         require_catalogue_support=True,
     )
 
@@ -172,7 +199,11 @@ def test_top_1_road_keys_reuse_equivalent_post_number_tails(duck_con):
         ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
     """)
 
-    keys = derive_top_1_road_keys(duck_con, source).order("unique_id")
+    keys = derive_top_1_road_keys(
+        duck_con,
+        source,
+        roadlike_places=_catalogue_from_source(duck_con, source),
+    ).order("unique_id")
 
     assert keys.fetchall() == [("1", "HIGH STREET"), ("2", "HIGH STREET")]
 
@@ -203,6 +234,7 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con):
             source,
             duck_con,
             num_of_chunks=2,
+            roadlike_places=_catalogue_from_source(duck_con, source),
         )
         .order("ukam_address_id")
         .fetchall()
@@ -215,107 +247,19 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con):
     ).fetchone() == (True,)
 
 
-def test_canonical_road_key_cardinalities_match_blocking_thresholds(
-    duck_con, monkeypatch
-):
+def test_road_features_without_catalogue_are_neutral(duck_con):
     source = duck_con.sql("""
-        WITH grouped AS (
-            SELECT 'A ROAD' AS road_name, range AS row_id FROM range(1001)
-            UNION ALL
-            SELECT 'B ROAD', range + 2000 FROM range(33)
-            UNION ALL
-            SELECT 'C ROAD', range + 3000 FROM range(32)
-            UNION ALL
-            SELECT NULL, 4000
-        )
         SELECT
-            CAST(row_id AS VARCHAR) AS unique_id,
-            row_id AS ukam_address_id,
-            road_name AS clean_full_address,
+            '1' AS unique_id,
+            '12 HIGH STREET' AS clean_full_address,
             'AB1 2CD' AS postcode,
-            ['1'] AS numeric_tokens,
-            []::VARCHAR[] AS unusual_tokens_arr,
-            '1' AS numeric_token_1
-        FROM grouped
+            ['12'] AS numeric_tokens,
+            ['HIGH'] AS unusual_tokens_arr
     """)
 
-    def fake_road_keys(
-        con,
-        address_table,
-        *,
-        output_table=None,
-        require_catalogue_support=False,
-    ):
-        keys = address_table.select(
-            "CAST(unique_id AS VARCHAR) AS unique_id, clean_full_address AS road_1_norm"
-        )
-        if output_table is None:
-            return keys
-        con.execute(f"""
-            CREATE TEMPORARY TABLE {output_table} AS
-            SELECT * FROM ({keys.sql_query()})
-        """)
-        return con.table(output_table)
+    features = add_top_1_road_features(duck_con, source)
 
-    monkeypatch.setattr(
-        chunking_strategies,
-        "derive_top_1_road_keys",
-        fake_road_keys,
-    )
-    monkeypatch.setattr(chunking_strategies, "ROAD_SCORING_CHUNK_ROWS", 300)
-
-    result = _add_canonical_road_blocking_keys(
-        source,
-        duck_con,
-        num_of_chunks=4,
-    )
-    for (table_name,) in duck_con.execute("SHOW TABLES").fetchall():
-        if table_name.startswith("__ukam_canonical_road_keys_"):
-            duck_con.execute(f'DROP TABLE "{table_name}"')
-    rows = {
-        road: (road_frequency, road_n1_frequency)
-        for road, road_frequency, road_n1_frequency in result.aggregate(
-            "clean_full_address, min(road_frequency_lte_1000), "
-            "min(road_n1_block_size_lte_32)",
-            "clean_full_address",
-        ).fetchall()
-    }
-
-    assert rows == {
-        "A ROAD": (False, False),
-        "B ROAD": (True, False),
-        "C ROAD": (True, True),
-        None: (True, True),
-    }
-
-
-def test_add_top_2_road_features_uses_packaged_scorecard(duck_con):
-    source = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('1', '12 HIGH STREET', 'AB1 2CD', ['12'], ['HIGH']),
-            ('2', 'CARAVAN 7 RIVERSIDE ROAD', 'AB1 3CD', ['7'], [])
-        ) AS rows(
-            unique_id, clean_full_address, postcode, numeric_tokens, unusual_tokens_arr
-        )
-    """)
-
-    features = add_top_2_road_features(duck_con, source).order("unique_id")
-
-    assert features.columns[-1:] == list(ROAD_TOP_2_FEATURE_COLUMNS)
-    rows = features.fetchall()
-    assert rows[0][-1] == ["HIGH STREET"]
-    assert rows[1][-1] is None
-
-
-def test_add_top_2_road_features_preserves_nested_phrases(duck_con):
-    source = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('1', '2 BELPER COURT CLAPTON PARK ESTATE LONDON', 'E5 9AA', ['2'], [])
-        ) AS rows(
-            unique_id, clean_full_address, postcode, numeric_tokens, unusual_tokens_arr
-        )
-    """)
-
-    roads = add_top_2_road_features(duck_con, source).fetchone()[-1]
-
-    assert roads == ["CLAPTON PARK", "COURT CLAPTON PARK"]
+    assert features.select(
+        "road_1_norm, road_1_confidence, road_1_token_count, "
+        "road_1_margin, road_1_distinctive_tokens"
+    ).fetchone() == (None, None, None, None, None)
