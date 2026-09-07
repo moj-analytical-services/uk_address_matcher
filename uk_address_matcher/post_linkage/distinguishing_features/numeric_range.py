@@ -61,12 +61,13 @@ def ensure_numeric_range_struct(
     )
 
 
-def _validate_legacy_numeric_factors(relation: duckdb.DuckDBPyRelation) -> None:
-    missing_factors = [
-        column
-        for column in _LEGACY_NUMERIC_FACTOR_COLUMNS
-        if column not in relation.columns
-    ]
+def _validate_legacy_numeric_factors(
+    relation: duckdb.DuckDBPyRelation,
+) -> None:
+    missing_factors = []
+    for column in _LEGACY_NUMERIC_FACTOR_COLUMNS:
+        if column not in relation.columns:
+            missing_factors.append(column)
     if missing_factors:
         raise ValueError(
             "Numeric-range reranking requires Splink numeric factors: "
