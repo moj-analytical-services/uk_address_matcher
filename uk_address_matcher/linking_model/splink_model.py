@@ -12,6 +12,8 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
 _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
+
+
 def _get_model_settings_dict():
     with (
         pkg_resources.files("uk_address_matcher.data")
@@ -113,6 +115,23 @@ def _align_numeric_range_columns(
     )
 
 
+def _align_road_key_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add the nullable road key required by the packaged blocking rule."""
+    column_name = "road_1_norm"
+    if column_name not in df_addresses_to_match.columns:
+        df_addresses_to_match = df_addresses_to_match.select(
+            f"*, NULL::VARCHAR AS {column_name}"
+        )
+    if column_name not in df_addresses_to_search_within.columns:
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            f"*, NULL::VARCHAR AS {column_name}"
+        )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
 def _get_linker(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -179,6 +198,7 @@ def _get_linker(
             "Canonical relation is empty - Splink requires at least one search record."
         )
 
+    # TODO(ThomasHepworth): these can all be removed in a 2.0 release
     (
         df_addresses_to_match,
         df_addresses_to_search_within,
@@ -193,6 +213,10 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_road_key_columns(df_addresses_to_match, df_addresses_to_search_within)
 
     if settings is None:
         settings_as_dict = _get_model_settings_dict()
@@ -303,15 +327,6 @@ def _get_linker(
 
     settings = SettingsCreator.from_path_or_dict(settings_as_dict)
 
-    db_api = DuckDBAPI(connection=con)
-
-    df_addresses_to_match_fix = df_addresses_to_match
-
-    # See https://github.com/moj-analytical-services/uk_address_matcher/issues/253
-    # con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
-    # df_addresses_to_search_within_fix = con.table("df_addresses_to_search_within_fix")
-    df_addresses_to_search_within_fix = df_addresses_to_search_within
-
     # Drop stale Splink views/tables from any prior linker on this connection.
     messy_name, canonical_name = (
         "m_",
@@ -322,9 +337,11 @@ def _get_linker(
         con.execute(f"DROP VIEW IF EXISTS {tbl}")
         con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
+    db_api = DuckDBAPI(connection=con)
+
     with _suppress_known_splink_warnings():
         linker = Linker(
-            [df_addresses_to_match_fix, df_addresses_to_search_within_fix],
+            [df_addresses_to_match, df_addresses_to_search_within],
             settings=settings,
             db_api=db_api,
             input_table_aliases=[messy_name, canonical_name],
@@ -352,8 +369,8 @@ def _get_linker(
         if column != "original_address_concat"
     ]
     select_expr = ", ".join(cols_to_select)
-    messy_subquery = df_addresses_to_match_fix.sql_query()
-    canonical_subquery = df_addresses_to_search_within_fix.sql_query()
+    messy_subquery = df_addresses_to_match.sql_query()
+    canonical_subquery = df_addresses_to_search_within.sql_query()
 
     sql = f"""
     select {select_expr}, 'm_' as source_dataset

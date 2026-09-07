@@ -7,12 +7,14 @@ from typing import TYPE_CHECKING, Optional, Union
 from uk_address_matcher.cleaning.chunking_strategies import (
     _add_canonical_road_blocking_keys,
     derive_inverted_index,
+    derive_roadlike_places,
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
 )
+from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
 )
@@ -179,6 +181,7 @@ class AddressMatcher:
 
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
+        self._roadlike_places: duckdb.DuckDBPyRelation | None = None
         self._tf_table: duckdb.DuckDBPyRelation | None = None
         self._inverted_index_table_name: str | None = None
         self._messy_clean: duckdb.DuckDBPyRelation | None = None
@@ -217,6 +220,8 @@ class AddressMatcher:
     def _resolve_canonical_data(self) -> None:
         """Loads or cleans canonical data depending on the input type."""
 
+        self._roadlike_places = None
+
         if isinstance(self._raw_canonical, (str, Path)):
             logger.debug("Loading prepared canonical data from '%s'", self._raw_canonical)
             prepared = load_prepared_canonical_data(
@@ -225,8 +230,19 @@ class AddressMatcher:
                 canonical_address_filter=self.canonical_address_filter,
             )
             self._canonical_clean = prepared.addresses
+            self._roadlike_places = prepared.roadlike_places
             self._tf_table = prepared.term_frequencies
             self._register_inverted_index(prepared.inverted_index)
+            if (
+                self._roadlike_places is not None
+                and "road_1_norm" not in self._canonical_clean.columns
+            ):
+                self._canonical_clean = _add_canonical_road_blocking_keys(
+                    self._canonical_clean,
+                    self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
+                    roadlike_places=self._roadlike_places,
+                )
 
         else:
             canonical_for_preparation = normalise_and_validate_raw_canonical(
@@ -256,14 +272,17 @@ class AddressMatcher:
                 debug_options=self.debug_options,
                 show_progress=self.show_progress,
             )
-            if any(
-                isinstance(stage, SplinkStage) and stage.road_blocking_rules
-                for stage in self.stages
-            ):
+            if any(isinstance(stage, SplinkStage) for stage in self.stages):
+                self._roadlike_places = derive_roadlike_places(
+                    self._canonical_clean,
+                    self.con,
+                    show_progress=self.show_progress,
+                )
                 self._canonical_clean = _add_canonical_road_blocking_keys(
                     self._canonical_clean,
                     self.con,
                     num_of_chunks=self.cleaning_num_chunks,
+                    roadlike_places=self._roadlike_places,
                 )
             logger.debug("Building inverted index from canonical data")
             inverted_index = derive_inverted_index(
@@ -273,6 +292,10 @@ class AddressMatcher:
                 show_progress=self.show_progress,
             )
             self._register_inverted_index(inverted_index)
+
+        for stage in self.stages:
+            if isinstance(stage, SplinkStage):
+                stage.roadlike_places = self._roadlike_places
 
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
@@ -294,6 +317,15 @@ class AddressMatcher:
             debug_options=self.debug_options,
             show_progress=self.show_progress,
         )
+        if self._roadlike_places is not None:
+            logger.debug("Deriving messy road blocking keys from canonical catalogue")
+            self._messy_clean = add_road_blocking_features(
+                self.con,
+                self._messy_clean,
+                roadlike_places=self._roadlike_places,
+            )
+        else:
+            logger.debug("No road catalogue available; skipping road parsing")
 
     def _coerce_addresses_to_match(
         self,
