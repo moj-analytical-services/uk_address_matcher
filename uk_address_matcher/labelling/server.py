@@ -91,7 +91,8 @@ def _canonical_search_payload(
         )
         if required - columns.keys() or cleaned is None:
             raise ValueError(
-                "Canonical data is missing required unique_id, postcode, or cleaned address columns"
+                "Canonical data is missing required unique_id, postcode, or "
+                "cleaned address columns"
             )
         unique_id = columns["unique_id"]
         postcode_column = columns["postcode"]
@@ -112,7 +113,8 @@ def _canonical_search_payload(
         parameters: list[Any] = []
         if unique_id_query:
             conditions.append(
-                f"contains(upper(CAST({_quote_identifier(unique_id)} AS VARCHAR)), upper(?))"
+                f"contains(upper(CAST({_quote_identifier(unique_id)} AS VARCHAR)), "
+                "upper(?))"
             )
             parameters.append(unique_id_query)
         if postcode:
@@ -128,7 +130,8 @@ def _canonical_search_payload(
                 parameters.append(postcode)
             else:
                 conditions.append(
-                    f"contains(upper(replace(CAST({postcode_identifier} AS VARCHAR), ' ', '')), ?)"
+                    f"contains(upper(replace(CAST({postcode_identifier} AS VARCHAR), "
+                    "' ', '')), ?)"
                 )
                 parameters.append(postcode)
         for token in address.split():
@@ -137,11 +140,13 @@ def _canonical_search_payload(
                 parameters.append(token.upper())
             else:
                 conditions.append(
-                    f"contains(upper(CAST({_quote_identifier(cleaned)} AS VARCHAR)), upper(?))"
+                    f"contains(upper(CAST({_quote_identifier(cleaned)} AS VARCHAR)), "
+                    "upper(?))"
                 )
                 parameters.append(token)
         additional_sql = "".join(
-            f", CAST({_quote_identifier(column)} AS VARCHAR) AS {_quote_identifier(column)}"
+            f", CAST({_quote_identifier(column)} AS VARCHAR) AS "
+            f"{_quote_identifier(column)}"
             for column in additional
         )
         cursor = connection.execute(
@@ -150,7 +155,8 @@ def _canonical_search_payload(
                 CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_unique_id,
                 CAST({_quote_identifier(display)} AS VARCHAR) AS canonical_address,
                 CAST({_quote_identifier(cleaned)} AS VARCHAR) AS cleaned_address,
-                CAST({_quote_identifier(postcode_column)} AS VARCHAR) AS canonical_postcode
+                CAST({_quote_identifier(postcode_column)} AS VARCHAR)
+                    AS canonical_postcode
                 {additional_sql}
             FROM {source}
             WHERE {" AND ".join(conditions)}

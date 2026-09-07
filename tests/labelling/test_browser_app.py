@@ -342,9 +342,9 @@ def test_hosted_app_labels_with_selected_canonical_and_downloads_updates(
         updates = tmp_path / download.suggested_filename
         download.save_as(updates)
         payload = json.loads(updates.read_text(encoding="utf-8"))
-        assert [(event["unique_id"], event["decision"]) for event in payload["events"]] == [
-            ("messy-1", "no_match")
-        ]
+        assert [
+            (event["unique_id"], event["decision"]) for event in payload["events"]
+        ] == [("messy-1", "no_match")]
         assert all(request.endswith("/api/local-config") for request in api_requests)
     finally:
         server.shutdown()
