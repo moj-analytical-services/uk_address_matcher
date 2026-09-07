@@ -95,6 +95,7 @@ Here is a list of some of our known users and their use cases:
 
 	- The [Greater London Authority](https://www.london.gov.uk/)'s High Streets Data Service uses the `uk_address_matcher` to precisely geolocate London's businesses and assign each of them a commercial UPRN, in order to fully map the city's retail provision and commercial property use.
     - [Homes England](https://www.gov.uk/government/organisations/homes-england) has tested the Splink-based address matcher to link the Land Registry Price Paid dataset with the Ordnance Survey National Geographic Database (NGD). In a Databricks environment, it links around 30 million records in under five hours with high accuracy, helping to identify and monitor new builds that contribute to the 1.5 million homes mandate.
+    - The Welsh Government's [DataMapWales](https://datamap.gov.wales/) team is using the `uk_address_matcher` to build a central, self-service address matching service in FME Flow. It matches free-text addresses, including Welsh language and bilingual addresses, against Ordnance Survey NGD, attaches UPRNs, and provides confidence ratings and review flags. By providing a simple user interface for the technical matching process, the service will make address matching capabilities accessible to teams without specialist coding or data engineering expertise.
 
 ## Licence
 
