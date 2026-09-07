@@ -216,7 +216,8 @@ def _build_base_rows_sql(
                 WHEN result.resolved_canonical_id IS NULL THEN 'unmatched'
                 WHEN CAST(result.match_reason AS VARCHAR) LIKE 'exact%' THEN 'exact'
                 WHEN CAST(result.match_reason AS VARCHAR) LIKE 'peeled%' THEN 'peeled'
-                WHEN CAST(result.match_reason AS VARCHAR) = 'unique_trigram: unique trigram match'
+                WHEN CAST(result.match_reason AS VARCHAR) =
+                    'unique_trigram: unique trigram match'
                     THEN 'unique_trigram'
                 WHEN CAST(result.match_reason AS VARCHAR) = 'splink: probabilistic match'
                     THEN 'splink'
@@ -412,7 +413,8 @@ def _candidate_source_fields_sql(
     canonical_label_column: str,
 ) -> str:
     return "".join(
-        f"canonical.{quote_identifier(column)} AS {quote_identifier(column)},\n                "
+        f"canonical.{quote_identifier(column)} AS {quote_identifier(column)},\n"
+        "                "
         for column in canonical_columns
         if column
         not in {
@@ -426,7 +428,8 @@ def _candidate_source_fields_sql(
 
 def _deterministic_candidate_fields_sql(canonical_columns: tuple[str, ...]) -> str:
     return "".join(
-        f"canonical.{quote_identifier(column)} AS {quote_identifier(column)},\n            "
+        f"canonical.{quote_identifier(column)} AS {quote_identifier(column)},\n"
+        "            "
         for column in canonical_columns
     )
 
