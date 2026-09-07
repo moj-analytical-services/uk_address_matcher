@@ -808,17 +808,13 @@ def _materialized_road_scores(
     con.register(input_name, address_table)
     con.register(catalogue_view, roadlike_places)
     try:
-        con.execute(
-            f"CREATE TEMPORARY TABLE {prepared_table} AS "
-            f"{
-                roadlike_place_prepared_input_sql(
-                    input_name,
-                    use_precomputed_numeric_position=(
-                        'rightmost_numeric_position' in address_table.columns
-                    ),
-                )
-            }"
+        prepared_input_sql = roadlike_place_prepared_input_sql(
+            input_name,
+            use_precomputed_numeric_position=(
+                "rightmost_numeric_position" in address_table.columns
+            ),
         )
+        con.execute(f"CREATE TEMPORARY TABLE {prepared_table} AS {prepared_input_sql}")
         with ExitStack() as resources:
             model_path = resources.enter_context(
                 as_file(
@@ -873,18 +869,15 @@ def _materialized_road_scores(
                         ON signatures.address_id = CAST(prepared.unique_id AS VARCHAR)
                     WHERE NOT signatures.allow_truncated_windows
                 )"""
+            candidate_sql = roadlike_place_prepared_candidate_sql(
+                candidate_source,
+                catalogue_width_relation=(
+                    catalogue_view if require_catalogue_support else None
+                ),
+            )
             _score_road_candidates(
                 con,
-                candidate_relation=(
-                    f"({
-                        roadlike_place_prepared_candidate_sql(
-                            candidate_source,
-                            catalogue_width_relation=(
-                                catalogue_view if require_catalogue_support else None
-                            ),
-                        )
-                    })"
-                ),
+                candidate_relation=f"({candidate_sql})",
                 output_table=scores_table,
                 catalogue_view=catalogue_view,
                 scorecard=scorecard,
