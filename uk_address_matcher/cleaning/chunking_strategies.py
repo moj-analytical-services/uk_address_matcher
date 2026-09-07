@@ -145,9 +145,16 @@ def _add_canonical_road_blocking_keys(
     con: DuckDBPyConnection,
     *,
     num_of_chunks: int = 1,
+    roadlike_places: DuckDBPyRelation | None = None,
     require_catalogue_support: bool = True,
 ) -> DuckDBPyRelation:
-    """Add compact, global road-key cardinalities used by selective blockers."""
+    """Add one derived road key per canonical address identifier."""
+    if "road_1_norm" in canonical_addresses.columns:
+        return canonical_addresses
+    if roadlike_places is None:
+        # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+        return canonical_addresses.select("*, NULL::VARCHAR AS road_1_norm")
+
     preference_order = []
     if "filename" in canonical_addresses.columns:
         preference_order.append("""
@@ -218,6 +225,7 @@ def _add_canonical_road_blocking_keys(
                 con,
                 chunk,
                 output_table=chunk_keys_table,
+                roadlike_places=roadlike_places,
                 require_catalogue_support=require_catalogue_support,
             )
             if chunk_index == 0:
@@ -244,36 +252,11 @@ def _add_canonical_road_blocking_keys(
         f'canonical."{column}"' for column in canonical_addresses.columns
     )
     enriched = con.sql(f"""
-        WITH road_n1_frequency AS (
-            SELECT
-                road_features.road_1_norm,
-                canonical.numeric_token_1,
-                count(*) AS address_count,
-                sum(count(*)) OVER (
-                    PARTITION BY road_features.road_1_norm
-                ) AS road_address_count
-            FROM ({canonical_addresses.sql_query()}) AS canonical
-            JOIN {road_keys_table} AS road_features USING (unique_id)
-            WHERE road_features.road_1_norm IS NOT NULL
-            GROUP BY road_features.road_1_norm, canonical.numeric_token_1
-        ), road_frequency AS (
-            SELECT
-                road_1_norm,
-                max(road_address_count) AS address_count
-            FROM road_n1_frequency
-            GROUP BY road_1_norm
-        )
         SELECT
             {source_columns},
-            road_features.road_1_norm,
-            coalesce(road_frequency.address_count, 0) <= 1000
-                AS road_frequency_lte_1000,
-            coalesce(road_n1_frequency.address_count, 0) <= 32
-                AS road_n1_block_size_lte_32
+            road_features.road_1_norm
         FROM ({canonical_addresses.sql_query()}) AS canonical
         LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
-        LEFT JOIN road_frequency USING (road_1_norm)
-        LEFT JOIN road_n1_frequency USING (road_1_norm, numeric_token_1)
     """)
     return _materialise_relation(con, enriched, enriched_table)
 
@@ -281,7 +264,7 @@ def _add_canonical_road_blocking_keys(
 def derive_roadlike_places(
     canonical_address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
-    output_path: Path | str,
+    output_path: Path | str | None = None,
     *,
     postcode_districts_per_batch: int | None = None,
     debug_options: Optional[DebugOptions] = None,
@@ -316,8 +299,9 @@ def derive_roadlike_places(
             "Supplied address table has no records. Please provide a non-empty table."
         )
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     stage_label = "Building roadlike-place catalogue"
     started_at = time.perf_counter()
     log_stage_start(
@@ -410,11 +394,12 @@ def derive_roadlike_places(
         f"CREATE TABLE {catalogue_table} AS "
         f"{roadlike_place_catalog_sql(candidates_table)}"
     )
-    escaped_output_path = str(output_path).replace("'", "''")
-    con.execute(
-        f"COPY {catalogue_table} TO '{escaped_output_path}' "
-        "(FORMAT PARQUET, COMPRESSION ZSTD)"
-    )
+    if output_path is not None:
+        escaped_output_path = str(output_path).replace("'", "''")
+        con.execute(
+            f"COPY {catalogue_table} TO '{escaped_output_path}' "
+            "(FORMAT PARQUET, COMPRESSION ZSTD)"
+        )
     _drop_table_and_registered_aliases(con, candidates_table)
     log_stage_complete(
         stage_label,

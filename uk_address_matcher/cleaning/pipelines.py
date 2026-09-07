@@ -10,8 +10,6 @@ from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
     _derive_numeric_range,
-    _derive_prepared_roadlike_place_candidates,
-    _derive_roadlike_place_candidates,
     _extract_postcode_from_address,
     _first_unusual_token,
     _generalised_token_aliases,
@@ -112,17 +110,6 @@ QUEUE_PRE_TF = [
 
 QUEUE_ROADLIKE_PLACE_PREPARATION = [
     _prepare_roadlike_place_input,
-]
-
-
-QUEUE_ROADLIKE_PLACE_ARTIFACT = [
-    *QUEUE_ROADLIKE_PLACE_PREPARATION,
-    _derive_prepared_roadlike_place_candidates,
-]
-
-
-QUEUE_ROADLIKE_PLACE_FROM_CLEANED_INPUT = [
-    _derive_roadlike_place_candidates,
 ]
 
 

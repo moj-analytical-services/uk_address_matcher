@@ -29,9 +29,6 @@ from uk_address_matcher.cleaning.steps.numeric_ranges import (
     _derive_numeric_range,
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import (
-    _derive_prepared_roadlike_place_candidates,
-    _derive_rightmost_numeric_position,
-    _derive_roadlike_place_candidates,
     _prepare_roadlike_place_input,
 )
 from uk_address_matcher.cleaning.steps.term_frequencies import (
@@ -85,9 +82,6 @@ __all__ = [
     "_add_numeric_range_lower_endpoint_tf",
     "_derive_numeric_range",
     # roadlike_places
-    "_derive_rightmost_numeric_position",
-    "_derive_roadlike_place_candidates",
-    "_derive_prepared_roadlike_place_candidates",
     "_prepare_roadlike_place_input",
     # tokenisation
     "_split_numeric_tokens_to_cols",

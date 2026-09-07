@@ -1,12 +1,10 @@
-"""Extract deployable roadlike-place candidates from cleaned canonical addresses."""
-
 from __future__ import annotations
 
-import importlib.resources as pkg_resources
 import json
 import re
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from importlib.resources import as_file, files
 
 import duckdb
 
@@ -33,8 +31,13 @@ ROAD_FEATURE_COLUMNS = (
     "road_1_margin",
     "road_1_distinctive_tokens",
 )
-ROAD_TOP_2_FEATURE_COLUMNS = ("road_top_2_norms",)
-ROAD_BLOCKING_COLUMNS = ("road_1_norm", "outward_postcode")
+_ROAD_FEATURE_TYPES = {
+    "road_1_norm": "VARCHAR",
+    "road_1_confidence": "DOUBLE",
+    "road_1_token_count": "BIGINT",
+    "road_1_margin": "DOUBLE",
+    "road_1_distinctive_tokens": "VARCHAR[]",
+}
 
 _ROAD_SCORECARD_BASE_FEATURES = {
     "start_tail_fraction",
@@ -54,46 +57,30 @@ _ROAD_SCORECARD_BASE_FEATURES = {
     "terminal_right_context_diversity",
 }
 _ROAD_SCORECARD_THRESHOLD_PATTERN = re.compile(r"(.+)_ge_([0-9_]+)$")
-_ROAD_SCORECARD_INTERACTIONS = {
-    "road_terminal_x_tail_length_ge_4_5": (
-        "road_syntax_terminal * CASE WHEN tail_length >= 4.5 THEN 1.0 ELSE 0.0 END"
-    ),
-    "road_terminal_x_start_tail_fraction_ge_0_5119": (
-        "road_syntax_terminal * CASE WHEN start_tail_fraction >= 0.5119 "
-        "THEN 1.0 ELSE 0.0 END"
-    ),
-    "road_terminal_x_end_tail_fraction_ge_0_6754": (
-        "road_syntax_terminal * CASE WHEN end_tail_fraction >= 0.6754 "
-        "THEN 1.0 ELSE 0.0 END"
-    ),
-    "tail_length_ge_4_5_x_end_tail_fraction_ge_0_6754": (
-        "(tail_length >= 4.5)::DOUBLE * (end_tail_fraction >= 0.6754)::DOUBLE"
-    ),
-    "tail_length_ge_3_5_x_start_tail_fraction_ge_0_5119": (
-        "(tail_length >= 3.5)::DOUBLE * (start_tail_fraction >= 0.5119)::DOUBLE"
-    ),
-    "residence_x_start_tail_fraction_ge_0_5119": (
-        "contains_residence_token * (start_tail_fraction >= 0.5119)::DOUBLE"
-    ),
-    "road_terminal_x_terminal_right_context_diversity_ge_1707": (
-        "road_syntax_terminal * (terminal_right_context_diversity >= 1707.0)::DOUBLE"
-    ),
-    "tail_length_ge_4_5_x_terminal_right_context_diversity_ge_1707": (
-        "(tail_length >= 4.5)::DOUBLE "
-        "* (terminal_right_context_diversity >= 1707.0)::DOUBLE"
-    ),
-    "end_tail_fraction_ge_0_6754_x_terminal_right_context_diversity_ge_1707": (
-        "(end_tail_fraction >= 0.6754)::DOUBLE "
-        "* (terminal_right_context_diversity >= 1707.0)::DOUBLE"
-    ),
-    "terminal_right_context_diversity_ge_1707_x_log_terminal_support_ge_13_3338": (
-        "(terminal_right_context_diversity >= 1707.0)::DOUBLE "
-        "* (log_terminal_support >= 13.3338)::DOUBLE"
-    ),
-    "road_terminal_x_width_tail_fraction_ge_0_3875": (
-        "road_syntax_terminal * (width_tail_fraction >= 0.3875)::DOUBLE"
-    ),
+_ROAD_SCORECARD_FEATURE_ALIASES = {
+    "road_terminal": "road_syntax_terminal",
+    "residence": "contains_residence_token",
 }
+
+
+def _add_neutral_road_features(
+    con: duckdb.DuckDBPyConnection,
+    address_table: duckdb.DuckDBPyRelation,
+    feature_columns: tuple[str, ...],
+) -> duckdb.DuckDBPyRelation:
+    """Keep legacy callers usable when no prepared road catalogue is available."""
+    missing_columns = [
+        column for column in feature_columns if column not in address_table.columns
+    ]
+    if not missing_columns:
+        return address_table
+    null_features = ", ".join(
+        f"NULL::{_ROAD_FEATURE_TYPES[column]} AS {column}" for column in missing_columns
+    )
+    return con.sql(f"""
+        SELECT input.*{", " if null_features else ""}{null_features}
+        FROM ({address_table.sql_query()}) AS input
+    """)
 
 
 def _road_candidate_feature_sql(
@@ -161,8 +148,24 @@ def _road_scorecard_feature_sql(scorecard: dict[str, object]) -> str:
             expression = (
                 "ln(1.0 + candidate_features.terminal_right_context_diversity::DOUBLE)"
             )
-        elif feature in _ROAD_SCORECARD_INTERACTIONS:
-            expression = _ROAD_SCORECARD_INTERACTIONS[feature]
+        elif "_x_" in feature:
+            interaction_expressions = []
+            for term in feature.split("_x_"):
+                if term in _ROAD_SCORECARD_FEATURE_ALIASES:
+                    interaction_expressions.append(
+                        "candidate_features."
+                        f"{_ROAD_SCORECARD_FEATURE_ALIASES[term]}::DOUBLE"
+                    )
+                    continue
+                match = _ROAD_SCORECARD_THRESHOLD_PATTERN.fullmatch(term)
+                if match is None:
+                    raise ValueError(f"Unsupported road scorecard feature: {feature}")
+                base_feature, raw_threshold = match.groups()
+                interaction_expressions.append(
+                    f"(candidate_features.{base_feature}::DOUBLE >= "
+                    f"{raw_threshold.replace('_', '.')})::DOUBLE"
+                )
+            expression = " * ".join(interaction_expressions)
         elif feature in rules_by_name:
             expression = (
                 "CASE WHEN "
@@ -788,6 +791,7 @@ def _materialized_road_scores(
     address_table: duckdb.DuckDBPyRelation,
     *,
     uid: str,
+    roadlike_places: duckdb.DuckDBPyRelation,
     require_catalogue_support: bool = False,
     deduplicate_tails: bool = False,
 ) -> Iterator[tuple[str, str, str | None, str | None]]:
@@ -802,6 +806,7 @@ def _materialized_road_scores(
     tails_table = f"__ukam_road_feature_tails_{uid}"
     signatures_table = f"__ukam_road_feature_signatures_{uid}"
     con.register(input_name, address_table)
+    con.register(catalogue_view, roadlike_places)
     try:
         con.execute(
             f"CREATE TEMPORARY TABLE {prepared_table} AS "
@@ -815,24 +820,12 @@ def _materialized_road_scores(
             }"
         )
         with ExitStack() as resources:
-            catalogue_path = resources.enter_context(
-                pkg_resources.as_file(
-                    pkg_resources.files("uk_address_matcher.data").joinpath(
-                        "roadlike_places.parquet"
-                    )
-                )
-            )
             model_path = resources.enter_context(
-                pkg_resources.as_file(
-                    pkg_resources.files("uk_address_matcher.data").joinpath(
+                as_file(
+                    files("uk_address_matcher.data").joinpath(
                         "road_assignment_scorecard_v1.json"
                     )
                 )
-            )
-            escaped_catalogue_path = str(catalogue_path).replace("'", "''")
-            con.execute(
-                f"CREATE TEMPORARY VIEW {catalogue_view} AS "
-                f"SELECT * FROM read_parquet('{escaped_catalogue_path}')"
             )
             scorecard = json.loads(model_path.read_text(encoding="utf-8"))
             candidate_source = prepared_table
@@ -917,18 +910,17 @@ def derive_top_1_road_keys(
     address_table: duckdb.DuckDBPyRelation,
     *,
     output_table: str | None = None,
+    roadlike_places: duckdb.DuckDBPyRelation | None = None,
     require_catalogue_support: bool = False,
 ) -> duckdb.DuckDBPyRelation:
     """Derive one compact road key per unique address identifier."""
-    required_columns = {"unique_id", "clean_full_address", "postcode", "numeric_tokens"}
-    missing_columns = sorted(required_columns.difference(address_table.columns))
-    if missing_columns:
-        raise ValueError(
-            "Road key derivation requires cleaned address columns; "
-            f"missing columns: {missing_columns}"
-        )
     if "road_1_norm" in address_table.columns:
         return address_table.select(
+            "CAST(unique_id AS VARCHAR) AS unique_id, road_1_norm"
+        )
+    if roadlike_places is None:
+        # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+        return _add_neutral_road_features(con, address_table, ("road_1_norm",)).select(
             "CAST(unique_id AS VARCHAR) AS unique_id, road_1_norm"
         )
 
@@ -940,6 +932,7 @@ def derive_top_1_road_keys(
         con,
         address_table,
         uid=uid,
+        roadlike_places=roadlike_places,
         require_catalogue_support=require_catalogue_support,
         deduplicate_tails=True,
     ) as (_, scores_table, tails_table, signatures_table):
@@ -970,22 +963,19 @@ def derive_top_1_road_keys(
 def add_top_1_road_features(
     con: duckdb.DuckDBPyConnection,
     address_table: duckdb.DuckDBPyRelation,
+    roadlike_places: duckdb.DuckDBPyRelation | None = None,
 ) -> duckdb.DuckDBPyRelation:
     """Attach static-scorecard top-1 road features to cleaned address rows.
 
     This is intentionally an experiment-only adapter until the road comparison
-    completes validation. It reuses the packaged catalogue and scorecard without
-    changing candidate generation or matcher blocking.
+    completes validation. It uses the supplied catalogue and packaged scorecard
+    without changing candidate generation or matcher blocking.
     """
-    required_columns = {"unique_id", "clean_full_address", "postcode", "numeric_tokens"}
-    missing_columns = sorted(required_columns.difference(address_table.columns))
-    if missing_columns:
-        raise ValueError(
-            "Road feature derivation requires cleaned address columns; "
-            f"missing columns: {missing_columns}"
-        )
     if set(ROAD_FEATURE_COLUMNS).issubset(address_table.columns):
         return address_table
+    if roadlike_places is None:
+        # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+        return _add_neutral_road_features(con, address_table, ROAD_FEATURE_COLUMNS)
 
     from uk_address_matcher.sql_pipeline.helpers import _uid
 
@@ -999,12 +989,12 @@ def add_top_1_road_features(
         if "unusual_tokens_arr" in address_table.columns
         else "[]::VARCHAR[]"
     )
-    with _materialized_road_scores(con, address_table, uid=uid) as (
-        input_name,
-        scores_table,
-        _,
-        _,
-    ):
+    with _materialized_road_scores(
+        con,
+        address_table,
+        uid=uid,
+        roadlike_places=roadlike_places,
+    ) as (input_name, scores_table, _, _):
         con.execute(
             f"""
             CREATE TEMPORARY TABLE {features_table} AS
@@ -1050,98 +1040,22 @@ def add_top_1_road_features(
 def add_road_blocking_features(
     con: duckdb.DuckDBPyConnection,
     address_table: duckdb.DuckDBPyRelation,
+    roadlike_places: duckdb.DuckDBPyRelation | None = None,
 ) -> duckdb.DuckDBPyRelation:
-    """Attach scalar road and outward-postcode keys before blocking."""
+    """Attach the scalar road key used by the packaged blocker."""
     if "road_1_norm" in address_table.columns:
-        features = address_table
-    else:
-        road_keys = derive_top_1_road_keys(con, address_table)
-        features = con.sql(f"""
-            SELECT input.*, road_keys.road_1_norm
-            FROM ({address_table.sql_query()}) AS input
-            LEFT JOIN ({road_keys.sql_query()}) AS road_keys
-                ON CAST(input.unique_id AS VARCHAR) = road_keys.unique_id
-        """)
-    if "outward_postcode" in features.columns:
-        return features
-    return features.select("*, split_part(postcode, ' ', 1) AS outward_postcode")
-
-
-def add_top_2_road_features(
-    con: duckdb.DuckDBPyConnection,
-    address_table: duckdb.DuckDBPyRelation,
-) -> duckdb.DuckDBPyRelation:
-    """Attach the two highest-scoring supported road phrases as an array."""
-    required_columns = {"unique_id", "clean_full_address", "postcode", "numeric_tokens"}
-    missing_columns = sorted(required_columns.difference(address_table.columns))
-    if missing_columns:
-        raise ValueError(
-            "Road feature derivation requires cleaned address columns; "
-            f"missing columns: {missing_columns}"
-        )
-    if set(ROAD_TOP_2_FEATURE_COLUMNS).issubset(address_table.columns):
         return address_table
-
-    from uk_address_matcher.sql_pipeline.helpers import _uid
-
-    uid = _uid()
-    features_table = f"__ukam_road_top_2_features_{uid}"
-    with _materialized_road_scores(
+    road_keys = derive_top_1_road_keys(
         con,
         address_table,
-        uid=uid,
-    ) as (input_name, scores_table, _, _):
-        con.execute(
-            f"""
-            CREATE TEMPORARY TABLE {features_table} AS
-            WITH ranked AS (
-                SELECT
-                    *,
-                    row_number() OVER (
-                        PARTITION BY address_id
-                        ORDER BY ranker_logit DESC, candidate_phrase,
-                            candidate_start_position
-                    ) AS candidate_rank
-                FROM {scores_table}
-            ), deduplicated_phrases AS (
-                SELECT *
-                FROM ranked
-                QUALIFY row_number() OVER (
-                    PARTITION BY address_id, candidate_phrase
-                    ORDER BY candidate_rank
-                ) = 1
-            ), distinct_ranked AS (
-                SELECT
-                    *,
-                    row_number() OVER (
-                        PARTITION BY address_id ORDER BY candidate_rank
-                    ) AS distinct_candidate_rank
-                FROM deduplicated_phrases
-            ), top_two AS (
-                SELECT
-                    address_id,
-                    list(candidate_phrase ORDER BY distinct_candidate_rank)
-                        AS road_top_2_norms
-                FROM distinct_ranked
-                WHERE distinct_candidate_rank <= 2
-                GROUP BY address_id
-            )
-            SELECT input.*, top_two.road_top_2_norms
-            FROM {input_name} AS input
-            LEFT JOIN top_two
-                ON CAST(input.unique_id AS VARCHAR) = top_two.address_id
-            """
-        )
-    return con.table(features_table)
-
-
-@pipeline_stage(
-    name="derive_rightmost_numeric_position",
-    description="Store the suffix-peeled rightmost numeric-token position",
-    tags=["token_extraction", "roadlike_places"],
-)
-def _derive_rightmost_numeric_position() -> str:
-    return derive_rightmost_numeric_position_sql("{input}")
+        roadlike_places=roadlike_places,
+    )
+    return con.sql(f"""
+        SELECT input.*, road_keys.road_1_norm
+        FROM ({address_table.sql_query()}) AS input
+        LEFT JOIN ({road_keys.sql_query()}) AS road_keys
+            ON CAST(input.unique_id AS VARCHAR) = road_keys.unique_id
+    """)
 
 
 @pipeline_stage(
@@ -1155,36 +1069,9 @@ def _prepare_roadlike_place_input() -> str:
     return roadlike_place_prepared_input_sql("{input}")
 
 
-@pipeline_stage(
-    name="derive_prepared_roadlike_place_candidates",
-    description=(
-        "Extract terminal-first roadlike candidates from prepared canonical rows"
-    ),
-    tags=["roadlike_places", "canonical_artifact"],
-)
-def _derive_prepared_roadlike_place_candidates() -> str:
-    return roadlike_place_prepared_candidate_sql("{input}")
-
-
-@pipeline_stage(
-    name="derive_roadlike_place_candidates",
-    description=(
-        "Extract terminal-first roadlike phrase candidates after the rightmost number"
-    ),
-    tags=["roadlike_places", "canonical_artifact"],
-)
-def _derive_roadlike_place_candidates() -> str:
-    return roadlike_place_candidate_sql("{input}")
-
-
 __all__ = [
     "ROAD_FEATURE_COLUMNS",
-    "ROAD_TOP_2_FEATURE_COLUMNS",
     "add_top_1_road_features",
-    "add_top_2_road_features",
-    "_derive_rightmost_numeric_position",
-    "_derive_roadlike_place_candidates",
-    "_derive_prepared_roadlike_place_candidates",
     "_prepare_roadlike_place_input",
     "derive_rightmost_numeric_position_sql",
     "roadlike_place_candidate_sql",
