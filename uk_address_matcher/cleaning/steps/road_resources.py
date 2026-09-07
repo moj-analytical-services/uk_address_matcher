@@ -58,6 +58,4 @@ def suffix_peel_regex_sql_literal() -> str:
         key=lambda value: (-len(value.split()), -len(value), value),
     )
     escaped = "|".join(re.escape(token).replace(r"\ ", " ") for token in tokens)
-    return rf"(?:^|\s+)(?:{escaped})(?:\s+(?:{escaped}))*\s*$".replace(
-        "'", "''"
-    )
+    return rf"(?:^|\s+)(?:{escaped})(?:\s+(?:{escaped}))*\s*$".replace("'", "''")
