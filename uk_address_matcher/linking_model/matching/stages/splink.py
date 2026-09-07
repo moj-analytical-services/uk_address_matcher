@@ -271,7 +271,6 @@ class SplinkStage(MatchingStage):
 
         # Step 3: Improve predictions using distinguishing tokens
         phase_started = perf_counter()
-        reranker_phase_timings: dict[str, float] = {}
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_ddb,
             con=con,
@@ -289,7 +288,6 @@ class SplinkStage(MatchingStage):
             ]
             or None,
             numeric_range_reranker=numeric_range_reranker,
-            phase_timings=reranker_phase_timings,
         )
         df_improved = relation_markers.improve_predictions_using_relation_markers(
             df_predict=df_improved,
@@ -306,12 +304,6 @@ class SplinkStage(MatchingStage):
         self.improved_predictions_table = improved_table_name
         df_improved = con.table(improved_table_name)
         self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
-        self.phase_timings.update(
-            {
-                f"reranker_{name}": seconds
-                for name, seconds in reranker_phase_timings.items()
-            }
-        )
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
