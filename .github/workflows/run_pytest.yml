@@ -44,7 +44,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --dev --group model-training
 
       - name: Install project in editable mode
         run: uv pip install -e .
