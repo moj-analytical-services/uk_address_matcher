@@ -12,7 +12,7 @@ It is powered by [DuckDB-WASM](https://duckdb.org/docs/current/clients/wasm/over
 ## Preview
 
 <video controls preload="metadata" width="100%" playsinline>
-    <source src="../assets/videos/labelling_tool_beta_preview.mov" type="video/quicktime">
+    <source src="../assets/videos/labelling_tool_beta_preview.mp4" type="video/quicktime">
     Your browser does not support the video tag.
 </video>
 
