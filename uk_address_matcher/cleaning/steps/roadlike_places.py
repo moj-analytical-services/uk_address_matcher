@@ -281,11 +281,7 @@ def roadlike_place_prepared_input_sql(
 ) -> str:
     """Prepare cleaned canonical rows for fast roadlike candidate extraction."""
     suffix_pattern = suffix_peel_regex_sql_literal()
-    source_projection = (
-        "* EXCLUDE (rightmost_numeric_position)"
-        if use_precomputed_numeric_position
-        else "*"
-    )
+    source_projection = "unique_id, clean_full_address, postcode, numeric_tokens"
     precomputed_projection = (
         ", rightmost_numeric_position" if use_precomputed_numeric_position else ""
     )
@@ -353,6 +349,13 @@ def roadlike_place_prepared_candidate_sql(
     road_terminal_pattern = sql_text(
         token_pattern(tuple(token_policy()["road_syntax_terminal_tokens"]))
     )
+    candidate_union = """
+        SELECT *
+        FROM terminal_candidates
+        UNION ALL
+        SELECT *
+        FROM fallback_candidates
+    """
     width_support_cte = ""
     terminal_width_join = ""
     fallback_width_join = ""
@@ -469,6 +472,11 @@ def roadlike_place_prepared_candidate_sql(
                 rightmost_numeric_value,
                 numeric_anchor,
                 address_tokens,
+                list_slice(
+                    address_tokens,
+                    numeric_anchor + 1,
+                    array_length(address_tokens)
+                ) AS road_tail_tokens,
                 true AS allow_truncated_windows
             FROM source_rows
             WHERE NOT has_facility_clause
@@ -480,6 +488,11 @@ def roadlike_place_prepared_candidate_sql(
                 list_extract(address_tokens, numeric_anchor) AS rightmost_numeric_value,
                 numeric_anchor,
                 address_tokens,
+                list_slice(
+                    address_tokens,
+                    numeric_anchor + 1,
+                    array_length(address_tokens)
+                ) AS road_tail_tokens,
                 false AS allow_truncated_windows
             FROM facility_anchors
             WHERE numeric_anchor IS NOT NULL
@@ -504,16 +517,16 @@ def roadlike_place_prepared_candidate_sql(
                 ) AS candidate_phrase,
                 list_extract(address_tokens, ends.end_position) AS terminal_token
                         FROM candidate_sources
-                        CROSS JOIN range(
-                                numeric_anchor + 2, array_length(address_tokens) + 1
-                        ) AS ends(end_position)
+            CROSS JOIN unnest(list_filter(
+                range(numeric_anchor + 2, array_length(address_tokens) + 1),
+                position -> regexp_matches(
+                    list_extract(address_tokens, position),
+                    {road_terminal_pattern}
+                )
+            )) AS ends(end_position)
             CROSS JOIN (VALUES (2), (3)) AS widths(width)
             {terminal_width_join}
             WHERE ends.end_position - widths.width + 1 > numeric_anchor
-                            AND regexp_matches(
-                                        list_extract(address_tokens, ends.end_position),
-                                        {road_terminal_pattern}
-                            )
         ), terminal_candidates AS (
             SELECT
                 *
@@ -558,22 +571,7 @@ def roadlike_place_prepared_candidate_sql(
                                                 <= array_length(address_tokens)
                             )
         {fallback_filter_ctes}
-        SELECT
-            address_id,
-            full_postcode,
-            postcode_district,
-            rightmost_numeric_value,
-            numeric_anchor,
-            tail_length,
-            candidate_start_position,
-            candidate_width,
-            candidate_end_position,
-            candidate_phrase,
-            terminal_token
-        FROM terminal_candidates
-        UNION ALL
-        SELECT *
-        FROM fallback_candidates
+        {candidate_union}
     """
 
 
@@ -916,7 +914,6 @@ def derive_top_1_road_keys(
         return _add_neutral_road_features(con, address_table, ("road_1_norm",)).select(
             "CAST(unique_id AS VARCHAR) AS unique_id, road_1_norm"
         )
-
     from uk_address_matcher.sql_pipeline.helpers import _uid
 
     uid = _uid()
@@ -936,13 +933,17 @@ def derive_top_1_road_keys(
             WITH winners AS (
                 SELECT
                     address_id,
-                    candidate_phrase AS road_1_norm
+                    min_by(
+                        candidate_phrase,
+                        struct_pack(
+                            score_is_null := ranker_logit IS NULL,
+                            score := coalesce(-ranker_logit, 0.0),
+                            phrase := candidate_phrase,
+                            start_position := candidate_start_position
+                        )
+                    ) AS road_1_norm
                 FROM {scores_table}
-                QUALIFY row_number() OVER (
-                    PARTITION BY address_id
-                    ORDER BY ranker_logit DESC, candidate_phrase,
-                        candidate_start_position
-                ) = 1
+                GROUP BY address_id
             )
             SELECT tails.unique_id, winners.road_1_norm
             FROM {tails_table} AS tails
@@ -1034,6 +1035,8 @@ def add_road_blocking_features(
     con: duckdb.DuckDBPyConnection,
     address_table: duckdb.DuckDBPyRelation,
     roadlike_places: duckdb.DuckDBPyRelation | None = None,
+    *,
+    require_catalogue_support: bool = False,
 ) -> duckdb.DuckDBPyRelation:
     """Attach the scalar road key used by the packaged blocker."""
     if "road_1_norm" in address_table.columns:
@@ -1042,6 +1045,7 @@ def add_road_blocking_features(
         con,
         address_table,
         roadlike_places=roadlike_places,
+        require_catalogue_support=require_catalogue_support,
     )
     return con.sql(f"""
         SELECT input.*, road_keys.road_1_norm

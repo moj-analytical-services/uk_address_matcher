@@ -11,18 +11,18 @@ Note that runtimes depend on whether the canonical data covers a local council r
 | 1. Create data package and API key | 5 minutes | 5 minutes |
 | 2. Install Python, uv, and `uk_address_matcher` | 5 minutes | 5 minutes |
 | 3. Download and process OS data into a flat file | 5 seconds[^1] | 4 minutes[^2] |
-| 4. Pre-process indexes and features | Not necessary | 8 min 58 sec[^3] |
-| 5. Match 100,000 records | 18 seconds | 26 seconds |
+| 4. Pre-process indexes and features | Not necessary | 12 min 53 sec[^3] |
+| 5. Match 100,000 records | 18 seconds | 30 seconds |
 
 [^1]: Plus ~15 seconds to download the data.
 [^2]: Plus ~18 minutes to download the data.
 [^3]: See [Canonical preparation runtime](#canonical-preparation-runtime) for
-    the benchmark configuration, stage breakdown, and comparison with the
-    previous implementation.
+    the latest benchmark configuration, e2e timing breakdown, and comparison
+    with previous implementations.
 
 These timings are measured on a MacBook Pro M4 Max.
 
-Steps 1–3 are one-off; subsequent matching runs only require step 5 (or steps 4–5 for the full UK dataset).
+Steps 1-3 are one-off; subsequent matching runs only require step 5 (or steps 4-5 for the full UK dataset).
 
 ## Benchmarking
 
@@ -37,7 +37,8 @@ In this section, we set out `uk_address_matcher`'s accuracy against these labell
 
 The Hackney Council dataset is available [here](https://www.datadaptive.com/addr/.)
 
-The following script takes 26 seconds to run against 114,544 labelled records.
+The latest run took 29.7 seconds in total against 114,166 labelled records
+(28.4 seconds for matching).
 
 <details>
   <summary>Expand to see Hackney benchmarking script</summary>
@@ -117,9 +118,9 @@ Note that we:
 
 It achieves:
 
-- 99.7% precision with recall of 80%
-- 99.6% precision with recall of 86%
-- 99.0% precision with recall of 98%
+- 99.9% precision with recall of 80.6%
+- 99.9% precision with recall of 85.9%
+- 99.6% precision with recall of 97.9%
 
 The full precision-recall curve is shown below:
 
@@ -209,11 +210,15 @@ chart = result.accuracy_analysis(
 
 The region of recall between 0% and 25% is now populated because there are no longer any exact matches (which requires a match on postcode); all matches are now Splink matches.
 
+The latest postcode-suppressed run took 19.9 seconds in total (19.2 seconds for
+matching).
+
 ### Mid Sussex District Council business rates data
 
 This dataset is available [here](https://www.midsussex.gov.uk/housing-council-tax/council-tax-benefits-and-business-rates/business-rates/open-data-business-rates/)
 
-The following script takes ~8 seconds to run against 3,756 labelled records.
+The latest run took 5.8 seconds in total against 3,756 labelled records
+(5.6 seconds for matching).
 
 Note that, unlike the Hackney example, here we do **not** use the prepared canonical folder.  Instead we hand `AddressMatcher` a `DuckDBPyRelation` containing only the canonical addresses we care about — commercial properties in Mid Sussex (`E07000228`).
 
@@ -366,9 +371,9 @@ Note that we:
 
 It achieves:
 
-- 94.1% precision with recall of 85%
-- 95.4% precision with recall of 79%
-- 97.5% precision with recall of 61%
+- 94.4% precision with recall of 85.2%
+- 95.6% precision with recall of 78.6%
+- 97.5% precision with recall of 60.8%
 
 The full precision-recall curve is shown below:
 
@@ -380,52 +385,48 @@ The full precision-recall curve is shown below:
 
 ## Canonical preparation runtime
 
-??? info "How the 8 min 58 sec timing was measured"
-    The current refactored `prepare_canonical_folder()` path completed in
-    **537.531 seconds (8 min 57.5 sec)** for 71,438,939 national-scale NGD
-    canonical rows. This is the complete one-time preparation job, not just
-    address text normalization.
+??? info "How the latest 13 min 43 sec timing was measured"
+    The latest rerun on 8 September 2026 completed the current production
+    `prepare_canonical_folder()` path in **823.349 seconds (13 min 43.3 sec)** for
+    71,438,939 national-scale NGD canonical rows. The complete performance script,
+    including the three labelled-data benchmarks, took **882.267 seconds
+    (14 min 42.3 sec)**.
 
-    The run used a MacBook Pro M4 Max, DuckDB 1.5.0, 14 DuckDB threads, a 16 GB
-    DuckDB memory limit, 10 work chunks, and eight canonical output shards. Road
-    features were enabled. Peak process memory was 17.38 GiB and DuckDB spilled
-    approximately 97 GB of temporary data to disk.
+    The run used a MacBook Pro M4 Max, DuckDB 1.5.0, 14 DuckDB threads, a requested
+    16 GB DuckDB memory limit (14.9 GiB effective), 10 work chunks, and eight
+    canonical output shards. Road features were enabled. The fresh manifest records
+    481,747 roadlike-place rows and 1,931,943,019 bytes across 11 persisted
+    artefacts.
 
-    | Stage | Time | Share |
-    | --- | ---: | ---: |
-    | Shared foundational cleaning | 61.672s | 11.47% |
-    | Deterministic ID assignment | 111.690s | 20.78% |
-    | Term-frequency aggregation | 2.442s | 0.45% |
-    | Adjacent distinguishing | 71.897s | 13.38% |
-    | Post-TF feature processing | 80.876s | 15.05% |
-    | In-place finalization | 0.268s | 0.05% |
-    | Bigram and trigram indexes | 65.606s | 12.21% |
-    | Road enrichment | 64.715s | 12.04% |
-    | TF/index serialization and canonical exports | 76.720s | 14.27% |
-    | Manifest finalization | 1.277s | 0.24% |
+    The preparation stages measured in that same production run were:
 
-    The measured stages account for 537.163 seconds; setup and transitions
-    account for the remaining 0.368 seconds. Foundational cleaning itself takes
-    61.672 seconds. IDs, adjacent-record features, term-frequency features, and
-    all canonical columns are finalized after 328.845 seconds (5 min 28.8 sec).
-    Index construction, road enrichment, Parquet serialization, and manifest
-    generation bring the complete prepared folder to 537.531 seconds.
+    | Stage | Seconds | Share of preparation wall time | Cumulative seconds |
+    | --- | ---: | ---: | ---: |
+    | Preparation setup and input coercion | 0.041s | 0.0% | 0.041s |
+    | Foundational cleaning and deterministic ID assignment | 202.078s | 24.5% | 202.119s |
+    | Roadlike-place catalogue creation | 168.816s | 20.5% | 370.934s |
+    | Term-frequency aggregation | 2.487s | 0.3% | 373.421s |
+    | Adjacent distinguishing and term-frequency application | 180.420s | 21.9% | 553.841s |
+    | Inverted-index derivation | 84.149s | 10.2% | 637.990s |
+    | Road blocking enrichment | 78.425s | 9.5% | 716.416s |
+    | Canonical output planning | 0.001s | 0.0% | 716.417s |
+    | Term-frequency serialisation | 0.039s | 0.0% | 716.456s |
+    | Inverted-index serialisation | 38.926s | 4.7% | 755.382s |
+    | Roadlike-place serialisation | 0.094s | 0.0% | 755.476s |
+    | Canonical shard serialisation | 66.515s | 8.1% | 821.991s |
+    | Manifest metadata and finalisation | 1.342s | 0.2% | 823.333s |
 
-    The benchmark includes all work performed by `prepare_canonical_folder()`:
-    canonical cleaning, deterministic IDs, term frequencies, adjacent-record
-    features, physical indexes, road features, Parquet output, and manifest
-    generation. It excludes downloading NGD and transforming the source product
-    into the input flat file; those are covered separately by step 3 above.
+    **Foundational cleaning and deterministic ID assignment dominated the run** at
+    202.078 seconds, or 24.5% of preparation wall time. Adjacent distinguishing and
+    term-frequency application took 180.420 seconds (21.9%), followed by
+    roadlike-place catalogue creation at 168.816 seconds (20.5%).
 
-    Before the refactor, the matched road-enabled path took 1,918.331 seconds
-    (31 min 58.3 sec). The current path is 72.0% faster. It produced 1,928,966,850
-    bytes of prepared output, 2.20% more than the old road-enabled baseline.
-
-    The full comparison found no term-frequency or inverted-index differences
-    and no physical-order violations across the eight canonical shards. There
-    were 401 canonical rows whose only difference was the now-deterministic
-    ordering of equal-frequency entries in the unusual-token arrays; all other
-    persisted values were unchanged.
+    The same run recorded a peak process RSS of **15.62 GiB**, peak DuckDB current
+    memory of **10.82 GiB**, and peak current DuckDB temporary-file usage of
+    **119.84 GiB** across 26 temporary files. The live temporary directory reached
+    **119.84 GiB**. DuckDB's current temporary-storage metric was 0 at the sampled
+    boundaries; the temporary-file byte counters are the relevant spill measure for
+    this run.
 
     These figures are indicative rather than a hardware-independent guarantee.
     Available memory, temporary-disk speed, source schema, enabled features, and
