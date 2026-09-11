@@ -6,7 +6,6 @@ import duckdb
 import pyarrow as pa
 
 from benchmarking.config.datasets import get_dataset_definition, load_dataset
-from benchmarking.config.sources import resolve_data_source
 from benchmarking.settings import CANONICAL_PATH
 from uk_address_matcher import AddressMatcher, ExactMatchStage, SplinkStage
 from uk_address_matcher.labelling import _launch_labelling_app_beta
@@ -14,10 +13,6 @@ from uk_address_matcher.labelling import _launch_labelling_app_beta
 HACKNEY_GSS_CODE = "E09000012"
 CLASSIFICATION_CODE_PREFIX = "R"
 HACKNEY_DATASET = get_dataset_definition("hackney")
-HACKNEY_INPUT_PATH = resolve_data_source(
-    HACKNEY_DATASET["data_path_env"],
-    HACKNEY_DATASET["file_name"],
-)
 
 
 start_time = time.time()
@@ -58,8 +53,6 @@ con.sql(f"""
 """).show(max_width=10000, max_rows=1)
 
 _launch_labelling_app_beta(
-    labelling_bundle_path="ukam_labelling_bundle",
-    input_dataset_path=HACKNEY_INPUT_PATH,
-    input_dataset_label_column="UPRN",
+    labelling_bundle_path=bundle_path,
     canonical_address_path=CANONICAL_PATH,
 )
