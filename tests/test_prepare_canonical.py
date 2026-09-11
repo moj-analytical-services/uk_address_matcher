@@ -117,19 +117,21 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
 def test_canonical_chunk_files_are_cleaned_on_success_and_failure(
     canonical_data, con, tmp_path, monkeypatch, fail_after_chunks
 ):
-    canonical_data = canonical_data.select("*, 'z'::ENUM('z', 'a') AS metadata_category")
+    canonical_data = canonical_data.select(
+        "unique_id::ENUM('C3', 'C2', 'C1') AS unique_id, "
+        "'1 high street london' AS address_concat, 'SW1A 1AA' AS postcode"
+    )
     spill = tmp_path / "spill with ' quote"
     con.execute("SET temp_directory = ?", [str(spill)])
     original = chunking_strategies.derive_inverted_index
 
     def inspect_chunks(*args, **kwargs):
         assert list(spill.glob("ukam-prepared-*/*.parquet"))
-        assert str(dict(zip(args[0].columns, args[0].types))["metadata_category"]) == (
-            "ENUM('z', 'a')"
-        )
         if fail_after_chunks:
             raise RuntimeError("injected failure after chunks are written")
-        return original(*args, **kwargs)
+        index = original(*args, **kwargs)
+        assert (["C3", "C2", "C1"],) in index.select("unique_ids").fetchall()
+        return index
 
     monkeypatch.setattr(chunking_strategies, "derive_inverted_index", inspect_chunks)
     if fail_after_chunks:
