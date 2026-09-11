@@ -626,10 +626,6 @@ def prepare_canonical_folder(
             logger.debug("Canonical road blocking keys derived")
         else:
             roadlike_places = None
-            # Preserve the final Parquet nullability metadata without road enrichment.
-            export_table = f"__ukam_canonical_export_{uuid4().hex}"
-            df_clean.create(export_table)
-            df_clean = con.table(export_table)
 
         canonical_output_relation = df_clean
         addr_count = df_clean.count("*").fetchone()[0]
