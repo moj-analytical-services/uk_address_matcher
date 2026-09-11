@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
-from duckdb import DuckDBPyConnection, DuckDBPyRelation
+from duckdb import ColumnExpression, DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
@@ -1164,6 +1164,15 @@ def _prepare_data_for_matching(
             )
 
             if parquet_directory is not None:
+                if chunk_index == 0:
+                    # Restore types that Parquet widens, such as ENUM and TIMESTAMP_S.
+                    chunk_columns = [
+                        ColumnExpression(name).cast(dtype).alias(name)
+                        for name, dtype in zip(
+                            processed_chunk.columns, processed_chunk.types
+                        )
+                        if name != "__ukam_row_id"
+                    ]
                 chunk_path = str(parquet_directory / f"{chunk_index:05d}.parquet")
                 escaped_path = chunk_path.replace("'", "''")
                 con.execute(f"""
@@ -1214,7 +1223,7 @@ def _prepare_data_for_matching(
         con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
     else:
         con.read_parquet(str(parquet_directory / "*.parquet")).select(
-            "* EXCLUDE (__ukam_row_id)"
+            *chunk_columns
         ).create_view(processed_table)
     logger.debug("Prepared address table finalized")
 

@@ -117,12 +117,18 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
 def test_canonical_chunk_files_are_cleaned_on_success_and_failure(
     canonical_data, con, tmp_path, monkeypatch, fail_after_chunks
 ):
+    canonical_data = canonical_data.select(
+        "*, 'z'::ENUM('z', 'a') AS metadata_category"
+    )
     spill = tmp_path / "spill with ' quote"
     con.execute("SET temp_directory = ?", [str(spill)])
     original = chunking_strategies.derive_inverted_index
 
     def inspect_chunks(*args, **kwargs):
         assert list(spill.glob("ukam-prepared-*/*.parquet"))
+        assert str(dict(zip(args[0].columns, args[0].types))["metadata_category"]) == (
+            "ENUM('z', 'a')"
+        )
         if fail_after_chunks:
             raise RuntimeError("injected failure after chunks are written")
         return original(*args, **kwargs)
@@ -151,6 +157,10 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
 
     assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
     assert not (output_folder / "roadlike_places.parquet").exists()
+    schema = pyarrow_parquet.read_schema(
+        output_folder / "ukam_canonical_addresses.parquet"
+    )
+    assert not schema.field("ukam_address_id").nullable
     assert prepared.roadlike_places is None
     assert {
         "road_1_norm",
