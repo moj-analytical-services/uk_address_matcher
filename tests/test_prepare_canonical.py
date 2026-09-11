@@ -117,9 +117,7 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
 def test_canonical_chunk_files_are_cleaned_on_success_and_failure(
     canonical_data, con, tmp_path, monkeypatch, fail_after_chunks
 ):
-    canonical_data = canonical_data.select(
-        "*, 'z'::ENUM('z', 'a') AS metadata_category"
-    )
+    canonical_data = canonical_data.select("*, 'z'::ENUM('z', 'a') AS metadata_category")
     spill = tmp_path / "spill with ' quote"
     con.execute("SET temp_directory = ?", [str(spill)])
     original = chunking_strategies.derive_inverted_index
