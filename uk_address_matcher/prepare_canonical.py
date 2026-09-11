@@ -523,10 +523,10 @@ def prepare_canonical_folder(
     from uk_address_matcher.cleaning.chunking_strategies import (
         _add_canonical_road_blocking_keys,
         _derive_term_frequencies_from_precleaned,
+        _prepare_data_for_matching,
         clean_data_pre_term_frequencies,
         derive_inverted_index,
         derive_roadlike_places,
-        _prepare_data_for_matching,
     )
 
     output_is_remote = is_remote_folder_reference(output_folder)
@@ -584,8 +584,10 @@ def prepare_canonical_folder(
     temp_root = con.execute("SELECT current_setting('temp_directory')").fetchone()[0]
     if temp_root:
         Path(temp_root).mkdir(parents=True, exist_ok=True)
-    # Keep chunks until all dependent files have been written, including on error.
-    with TemporaryDirectory(prefix="ukam-prepared-", dir=temp_root or None) as chunk_directory:
+    # Keep chunks until export finishes; remove them on success or failure.
+    with TemporaryDirectory(
+        prefix="ukam-prepared-", dir=temp_root or None
+    ) as chunk_directory:
         logger.debug("Applying term frequencies to canonical addresses")
         df_clean = _prepare_data_for_matching(
             precleaned,
@@ -682,7 +684,9 @@ def prepare_canonical_folder(
             if not output_is_remote:
                 Path(chunk_dir).mkdir(parents=True, exist_ok=True)
 
-            output_chunk_size = (addr_count + output_chunk_count - 1) // output_chunk_count
+            output_chunk_size = (
+                addr_count + output_chunk_count - 1
+            ) // output_chunk_count
             canonical_paths = []
             for chunk_index in range(output_chunk_count):
                 started_at = time.perf_counter()
@@ -702,7 +706,8 @@ def prepare_canonical_folder(
                         _chunk_file_name(chunk_index, output_chunk_count),
                     )
                     if output_is_remote
-                    else Path(chunk_dir) / _chunk_file_name(chunk_index, output_chunk_count)
+                    else Path(chunk_dir)
+                    / _chunk_file_name(chunk_index, output_chunk_count)
                 )
                 _write_parquet_artefact(
                     con,
