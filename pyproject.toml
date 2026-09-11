@@ -16,7 +16,7 @@ dependencies = [
 Repository = "https://github.com/robinL/uk_address_matcher"
 
 [project.scripts]
-ukam-apply-labelling-updates = "uk_address_matcher.labelling.updates:main"
+ukam-labelling = "uk_address_matcher.labelling.generator:main"
 
 [dependency-groups]
 dev = [
