@@ -97,6 +97,9 @@ reranking is mandatory.
 ## Latest Persisted Benchmark
 
 #### Reranked Hackney results vs baseline
+The latest `run_benchmarking.py` pass used the valid-range-only canonical
+variant, the Hackney dataset, threshold `8.0`, and baseline run
+`d141fb4f525014b2`. The fresh run is `cb5320a263c7a10f`.
 
 | Metric | Baseline | Always-on reranker | Change |
 | --- | ---: | ---: | ---: |
@@ -109,7 +112,6 @@ reranking is mandatory.
 | Total runtime | 31.58s | 32.53s | +0.95s |
 
 ### Records Rescued
-
 On the frozen Hackney cohort, the reranker rescued 23 additional correct
 matches, reduced false positives by 4, and reduced unmatched rows by 19 at
 the selected threshold. Across the pooled cohort repetitions, it rescued 27 to
@@ -124,6 +126,13 @@ This may look like a small gain, but there were only a potential 143 labelled ro
 represent a 16% to 29% recovery of that small population, which is a meaningful improvement in the context of a high-precision, high-recall matching system.
 
 Of those recoverable records, many are unmatchable having flat and unit numbers that we cannot discover in our canonical data.
+
+The valid-range-only canonical reduced runtime by approximately 1.69s versus
+the previous shortlist-only pass and by 1.13s versus the earlier wide-schema
+always-on pass. It preserved all 112,899 correct matches while removing one
+false positive relative to the wide-schema run. The persisted manifest records
+the repository `HEAD` commit; these measurements were run against the current
+working tree as well.
 
 ## JSON Range Blocking Trial
 
@@ -254,7 +263,6 @@ projection. The latest persisted comparison is the current reference for this
 working tree; broader rollout still benefits from pooled runs on an identical
 frozen messy cohort and canonical dataset, with postcode-status stratification
 and candidate-count parity.
-
 ## Promotion Candidate: Bounded Key-First Reranking
 
 The promoted implementation keeps one unified Splink score, but changes the
