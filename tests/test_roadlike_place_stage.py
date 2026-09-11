@@ -44,6 +44,29 @@ def test_roadlike_place_stage_extracts_terminal_first_candidates_and_catalogue(d
     ]
 
 
+def test_roadlike_fallback_exclusion_with_duplicate_and_null_ids(duck_con):
+    duck_con.execute("""
+        CREATE TABLE roadlike_source AS SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('1', '12 ACORN LODGE', 'ZZ1 2CD', ['12']),
+            ('2', '12 ACORN LODGE', 'ZZ1 2CD', ['12']),
+            (NULL, '12 ACORN LODGE', 'ZZ1 2CD', ['12'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+
+    candidates = duck_con.sql(roadlike_place_candidate_sql("roadlike_source"))
+
+    assert candidates.project("address_id, candidate_phrase").order(
+        "address_id NULLS LAST, candidate_phrase"
+    ).fetchall() == [
+        ("1", "HIGH STREET"),
+        ("1", "HIGH STREET"),
+        ("2", "ACORN LODGE"),
+        (None, "ACORN LODGE"),
+    ]
+
+
 def test_prepared_roadlike_candidates_match_generic_candidates(duck_con):
     source = duck_con.sql("""
         SELECT * FROM (VALUES
