@@ -9,7 +9,7 @@ from benchmarking.config.datasets import get_dataset_definition, load_dataset
 from benchmarking.config.sources import resolve_data_source
 from benchmarking.settings import CANONICAL_PATH
 from uk_address_matcher import AddressMatcher, ExactMatchStage, SplinkStage
-from uk_address_matcher.labelling import launch_labelling_app
+from uk_address_matcher.labelling import _launch_labelling_app_beta
 
 HACKNEY_GSS_CODE = "E09000012"
 CLASSIFICATION_CODE_PREFIX = "R"
@@ -41,7 +41,7 @@ matcher = AddressMatcher(
 )
 
 result = matcher.match()
-bundle_path = result.export_labelling_bundle(overwrite=True)
+bundle_path = result._export_labelling_bundle_beta(overwrite=True)
 accuracy_table = result.accuracy_analysis(
     output_type="table",
     add_metrics=["f1"],
@@ -57,7 +57,7 @@ con.sql(f"""
     read_parquet('{bundle_path}/review_data.parquet')
 """).show(max_width=10000, max_rows=1)
 
-launch_labelling_app(
+_launch_labelling_app_beta(
     labelling_bundle_path="ukam_labelling_bundle",
     input_dataset_path=HACKNEY_INPUT_PATH,
     input_dataset_label_column="UPRN",

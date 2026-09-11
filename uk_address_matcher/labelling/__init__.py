@@ -1,4 +1,9 @@
-from .bundle import export_labelling_bundle
-from .server import launch_labelling_app
+from .bundle import _export_labelling_bundle_beta
+from .server import _launch_labelling_app_beta
+from .updates import apply_labelling_updates
 
-__all__ = ["export_labelling_bundle", "launch_labelling_app"]
+__all__ = [
+    "_export_labelling_bundle_beta",
+    "_launch_labelling_app_beta",
+    "apply_labelling_updates",
+]

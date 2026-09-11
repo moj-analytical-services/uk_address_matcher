@@ -101,7 +101,7 @@ class MatchResult:
             """
         )
 
-    def export_labelling_bundle(
+    def _export_labelling_bundle_beta(
         self,
         output_directory: str | Path = "ukam_labelling_bundle",
         *,
@@ -109,9 +109,9 @@ class MatchResult:
         overwrite: bool = False,
     ) -> Path:
         """Export a durable bundle for the UKAM labelling workflow."""
-        from uk_address_matcher.labelling import export_labelling_bundle
+        from uk_address_matcher.labelling import _export_labelling_bundle_beta
 
-        return export_labelling_bundle(
+        return _export_labelling_bundle_beta(
             match_result=self,
             output_directory=output_directory,
             top_n_candidates=top_n_candidates,

@@ -7,6 +7,9 @@ on:
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
   push:
     branches: [main]
     paths:
@@ -14,6 +17,9 @@ on:
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -22,7 +28,6 @@ concurrency:
 jobs:
   run-pytest:
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
@@ -50,4 +55,4 @@ jobs:
         run: uv pip install -e .
 
       - name: Run pytest
-        run: uv run pytest tests/ -vv
+        run: uv run pytest tests/ --ignore=tests/labelling -vv

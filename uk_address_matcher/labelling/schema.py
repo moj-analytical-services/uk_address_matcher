@@ -14,6 +14,8 @@ REQUIRED_TOP_LEVEL_COLUMNS = (
     "messy_postcode",
     "ukam_label",
     "has_existing_label",
+    "ukam_label_clean_full_address",
+    "ukam_label_postcode",
     "resolved_canonical_id",
     "resolved_label_id",
     "resolved_canonical_address",
