@@ -58,7 +58,8 @@ con.sql(f"""
 """).show(max_width=10000, max_rows=1)
 
 launch_labelling_app(
-    labelling_bundle_path=bundle_path,
+    labelling_bundle_path="ukam_labelling_bundle",
     input_dataset_path=HACKNEY_INPUT_PATH,
     input_dataset_label_column="UPRN",
+    canonical_address_path=CANONICAL_PATH,
 )
