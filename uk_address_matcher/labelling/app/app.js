@@ -1,4 +1,4 @@
-import { loadBrowserStore } from "./browser.js";
+import { loadBrowserStore, validateUploadedFolders } from "./browser.js";
 
 "use strict";
 let browserStore = null;
@@ -20,7 +20,6 @@ const el = {
   top: $("pagination-top"),
   bottom: $("pagination-bottom"),
   save: $("save-status"),
-  overlay: $("session-overlay"),
 };
 async function api(url, options = {}) {
   if (!browserStore) throw Error("Load a labelling bundle first.");
@@ -299,7 +298,7 @@ async function save(row, value) {
     state.bootstrap = await api("/api/bootstrap");
     $("label-progress").textContent =
       `${state.bootstrap.labelled_records} / ${state.bootstrap.total_records}`;
-    el.save.textContent = "Autosaved";
+    el.save.textContent = "Saved in session";
     toast("Label saved");
     load();
   } catch (error) {
@@ -507,7 +506,7 @@ async function load() {
     el.range.textContent = value;
     el.rangeBottom.textContent = value;
   } catch (error) {
-    expired(error);
+    handleError(error);
   }
 }
 function view(name) {
@@ -528,9 +527,9 @@ function toast(message) {
   node.hidden = false;
   setTimeout(() => (node.hidden = true), 2600);
 }
-function expired(error) {
+function handleError(error) {
   console.error(error);
-  el.overlay.hidden = false;
+  toast(error.message);
 }
 async function initialise() {
   document.querySelectorAll(".tab").forEach(
@@ -620,7 +619,13 @@ async function initialise() {
       top: document.documentElement.scrollHeight,
       behavior: "smooth",
     });
-  $("download-updates").onclick = () => browserStore.downloadUpdates();
+  $("download-labels").onclick = async () => {
+    try {
+      await browserStore.downloadLabels();
+    } catch (error) {
+      toast(error.message);
+    }
+  };
   view(location.hash.startsWith("#review") ? "review" : "overview");
   try {
     state.bootstrap = await api("/api/bootstrap");
@@ -628,81 +633,28 @@ async function initialise() {
     $("label-progress").textContent =
       `${state.bootstrap.labelled_records} / ${state.bootstrap.total_records}`;
     buildStageFilters(state.bootstrap.stage_counts);
-    const savedToBundle = browserStore.remoteEventsUrl;
-    $("session-countdown").textContent = savedToBundle
-      ? "Saved to bundle/labelled_review_data.parquet"
-      : "Saved in browser";
-    $("session-countdown").title = savedToBundle
-      ? `Events: ${browserStore.labelledReviewPath?.replace(/labelled_review_data\.parquet$/, "labelling_updates.json")}\nLabelled review: ${browserStore.labelledReviewPath}`
-      : "Download updates to keep a portable copy outside this browser.";
     await load();
   } catch (error) {
-    expired(error);
+    handleError(error);
   }
 }
-async function loadDataset(manifest, review, canonical, options = {}) {
-  const status = $("dataset-loader-status"),
-    button = $("load-dataset");
-  button.disabled = true;
+async function loadDataset(manifest, reviews, canonical, options = {}) {
+  const status = $("dataset-loader-status");
   status.textContent = "Starting DuckDB-WASM. Browser memory is limited; large files may fail to load.";
   const previousStore = browserStore;
   browserStore = null;
   if (previousStore) await previousStore.close();
   try {
-    browserStore = await loadBrowserStore(manifest, review, canonical, options);
+    browserStore = await loadBrowserStore(manifest, reviews, canonical, options);
     $("dataset-loader").hidden = true;
     $("labelling-app").hidden = false;
-    if (!browserStore.remoteEventsUrl)
-      $("session-countdown").textContent = "Saved in browser";
     await initialise();
   } catch (error) {
     browserStore = null;
     $("dataset-loader").hidden = false;
     $("labelling-app").hidden = true;
     status.textContent = error.message;
-  } finally {
-    button.disabled = false;
   }
-}
-async function loadSelectedDataset() {
-  const bundleFiles = [...$("bundle-directory").files];
-  const manifest = bundleFiles.find((file) => file.name === "manifest.json");
-  if (!manifest) {
-    $("dataset-loader-status").textContent =
-      "Select the folder containing manifest.json and the review data file.";
-    return;
-  }
-  let manifestPayload;
-  try {
-    manifestPayload = JSON.parse(await manifest.text());
-  } catch {
-    $("dataset-loader-status").textContent = "Bundle manifest is not valid JSON.";
-    return;
-  }
-  const reviewName = String(manifestPayload.data_file || "review_data.parquet");
-  const review = bundleFiles.find((file) => file.name === reviewName);
-  if (!review) {
-    $("dataset-loader-status").textContent =
-      `The selected bundle folder is missing ${reviewName}.`;
-    return;
-  }
-  const canonicalName = manifestPayload.canonical_data_file;
-  const bundleCanonical = canonicalName
-    ? bundleFiles.find((file) => file.name === canonicalName)
-    : null;
-  if (canonicalName && !bundleCanonical) {
-    $("dataset-loader-status").textContent =
-      `The selected bundle folder is missing ${canonicalName}.`;
-    return;
-  }
-  await loadDataset(
-    manifest,
-    review,
-    [
-      ...(bundleCanonical ? [bundleCanonical] : []),
-      ...$("canonical-data-files").files,
-    ],
-  );
 }
 async function fileFromUrl(url, name) {
   const response = await fetch(url);
@@ -710,48 +662,33 @@ async function fileFromUrl(url, name) {
   const blob = await response.blob();
   return new File([blob], name, { type: blob.type });
 }
-function lazyFileFromUrl(url, name) {
-  return {
-    name,
-    url: new URL(url, location.href).href,
-    async arrayBuffer() {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Could not load local file ${name}.`);
-      return response.arrayBuffer();
-    },
-  };
-}
-async function loadConfiguredDataset() {
+async function loadLocalDataset() {
+  if (!window.location.protocol.startsWith("http")) return;
   try {
     const response = await fetch("/api/local-config");
-    if (!response.ok || !response.headers.get("content-type")?.includes("json")) {
-      $("dataset-loader").hidden = false;
-      return;
-    }
+    if (!response.ok) return;
     const config = await response.json();
-    if (!config.bundle) {
-      $("dataset-loader").hidden = false;
-      return;
-    }
-    $("dataset-loader").hidden = true;
-    $("labelling-app").hidden = false;
+    if (!config.bundle) return;
     const manifest = await fileFromUrl(
       config.bundle.manifest_url,
       config.bundle.manifest_name,
     );
-    const review = await fileFromUrl(
-      config.bundle.review_url,
-      config.bundle.review_name,
+    const reviewUrls = config.bundle.review_urls || [
+      { url: config.bundle.review_url, name: config.bundle.review_name },
+    ];
+    const reviews = await Promise.all(
+      reviewUrls.map((item) => fileFromUrl(item.url, item.name)),
     );
-    const canonical = await Promise.all(
-      (config.canonical_urls || []).map((item) =>
-        lazyFileFromUrl(item.url, item.name),
-      ),
-    );
-    await loadDataset(manifest, review, canonical, {
-      remoteEventsUrl: config.events_url,
-      nativeCanonicalSearchUrl: config.canonical_search_url,
-      labelledReviewPath: config.labelled_review_path,
+    const canonical = config.canonical_search_url
+      ? []
+      : await Promise.all(
+          (config.canonical_urls || []).map((item) =>
+            fileFromUrl(item.url, item.name),
+          ),
+        );
+    await loadDataset(manifest, reviews, canonical, {
+      eventsUrl: config.events_url,
+      canonicalSearchUrl: config.canonical_search_url,
     });
   } catch (error) {
     $("dataset-loader").hidden = false;
@@ -759,7 +696,22 @@ async function loadConfiguredDataset() {
     $("dataset-loader-status").textContent = error.message;
   }
 }
-$("load-dataset").onclick = loadSelectedDataset;
+$("load-dataset").onclick = async () => {
+  const status = $("dataset-loader-status");
+  status.textContent = "Checking both selected folders...";
+  try {
+    const dataset = await validateUploadedFolders(
+      $("bundle-directory").files,
+      $("canonical-directory").files,
+    );
+    await loadDataset(dataset.manifestFile, dataset.reviewFiles, dataset.canonicalFiles);
+  } catch (error) {
+    $("dataset-loader").hidden = false;
+    $("labelling-app").hidden = true;
+    status.textContent = error.message;
+  }
+};
+loadLocalDataset();
 state.review = {
   record: null,
   navigation: null,
@@ -768,7 +720,6 @@ state.review = {
   pendingDecision: null,
   saveFailed: false,
 };
-loadConfiguredDataset();
 const reviewElements = {
   empty: $("review-empty"),
   content: $("review-content"),
@@ -1163,7 +1114,7 @@ function queueReviewSave(payload, displayLabel = null) {
   pendingReviewSaves = save;
   return save.then(
     () => {
-      el.save.textContent = "Autosaved";
+      el.save.textContent = "Saved in session";
     },
     (error) => {
       el.save.textContent = "Save failed";

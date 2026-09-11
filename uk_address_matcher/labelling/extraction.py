@@ -22,19 +22,28 @@ def build_final_review_relation(
     canonical_columns: tuple[str, ...],
     canonical_id_type: str,
     canonical_label_type: str,
+    total_records_to_export: int | None = None,
 ) -> DuckDBPyRelation:
-    """Build the complete bundle relation using the active matching connection."""
+    """Build the bundle relation using the active matching connection."""
     con = match_result.con
     messy_relation = match_result._messy_relation
     canonical_relation = match_result._canonical_relation
     if messy_relation is None or canonical_relation is None:
         raise ValueError("The retained matching relations are unavailable for export.")
 
+    selected_messy_relation_sql = messy_relation.sql_query()
+    if total_records_to_export is not None:
+        selected_messy_relation_sql = f"""
+            SELECT *
+            FROM ({selected_messy_relation_sql}) AS source_messy
+            QUALIFY ROW_NUMBER() OVER (ORDER BY unique_id) <= {total_records_to_export}
+        """
     base_sql = _build_base_rows_sql(
         match_result=match_result,
         canonical_label_column=canonical_label_column,
         messy_columns=messy_columns,
         canonical_label_type=canonical_label_type,
+        messy_relation_sql=selected_messy_relation_sql,
     )
     candidate_sql = _build_candidate_rows_sql(
         match_result=match_result,
@@ -160,11 +169,13 @@ def _build_base_rows_sql(
     canonical_label_column: str,
     messy_columns: tuple[str, ...],
     canonical_label_type: str,
+    messy_relation_sql: str | None = None,
 ) -> str:
     messy_relation = match_result._messy_relation
     canonical_relation = match_result._canonical_relation
     if messy_relation is None or canonical_relation is None:
         raise ValueError("The retained matching relations are unavailable for export.")
+    messy_source_sql = messy_relation_sql or messy_relation.sql_query()
 
     final_relation = match_result._relation
     match_weight = (
@@ -246,7 +257,7 @@ def _build_base_rows_sql(
                 THEN {match_weight} END AS match_weight,
             CASE WHEN CAST(result.match_reason AS VARCHAR) = 'splink: probabilistic match'
                 THEN {distinguishability} END AS distinguishability
-        FROM ({messy_relation.sql_query()}) AS messy
+        FROM ({messy_source_sql}) AS messy
         INNER JOIN ({final_relation.sql_query()}) AS result
             ON result.ukam_address_id = messy.ukam_address_id
         LEFT JOIN ({canonical_relation.sql_query()}) AS canonical

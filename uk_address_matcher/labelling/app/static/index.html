@@ -9,8 +9,8 @@
       type="image/png"
       href="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/main/docs/site/assets/images/icon.png"
     />
-    <script type="module" crossorigin src="./assets/index-BHU3y4nE.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-C0JwPjTg.css">
+    <script type="module" crossorigin src="./assets/index-CWkVGy_4.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DAoRqYs2.css">
   </head>
   <body>
     <header>
@@ -22,30 +22,29 @@
       </div>
       <div>
         <span id="bundle-name">Loading bundle...</span
-        ><span id="session-countdown">Waiting for local files</span
-        ><span id="save-status">Autosaved</span
-        ><button id="download-updates" type="button">Download updates</button>
+        ><span id="save-status">Session only</span
+        ><button id="download-labels" type="button">Download labels</button>
       </div>
     </header>
     <nav>
       <button class="tab active" data-view="overview">Overview</button
       ><button class="tab" data-view="review">Review</button>
     </nav>
-    <section id="dataset-loader" class="dataset-loader" hidden>
+    <section id="dataset-loader" class="dataset-loader">
       <div class="dataset-loader-card">
-        <p class="eyebrow">Browser-native review</p>
-        <h1>Load a labelling bundle</h1>
+        <p class="eyebrow">Browser review</p>
+        <h1>Load review data</h1>
         <p>
-          Choose the folder containing your labelling bundle. The selected
-          files stay in this browser session.
+          Select a labelling bundle folder. Prepared canonical data is optional.
+          Files stay in this browser session.
         </p>
         <label>
           Labelling bundle folder
           <input id="bundle-directory" type="file" webkitdirectory multiple />
         </label>
         <label>
-          Canonical Parquet files (optional)
-          <input id="canonical-data-files" type="file" accept=".parquet" multiple />
+          Prepared canonical data folder (optional)
+          <input id="canonical-directory" type="file" webkitdirectory multiple />
         </label>
         <button id="load-dataset" type="button">Load data</button>
         <p id="dataset-loader-status" role="status"></p>
@@ -572,11 +571,5 @@
       </button>
     </div>
     <div id="toast" hidden></div>
-    <div id="session-overlay" hidden>
-      <div>
-        <h2>Review unavailable</h2>
-        <p>DuckDB-WASM could not complete the browser review query.</p>
-      </div>
-    </div>
   </body>
 </html>

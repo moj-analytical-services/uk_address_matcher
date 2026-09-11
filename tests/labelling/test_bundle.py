@@ -112,6 +112,38 @@ def test_exports_default_bundle_with_deterministic_candidates(
     assert rows[1][6] == []
     assert canonical_rows == [("1", "canonical-1", "1 FICTIONAL STREET", "AB1 2CD")]
 
+    chunked_bundle_path = result._export_labelling_bundle_beta(
+        tmp_path / "chunked_bundle",
+        total_records_to_export=2,
+        review_data_chunk_count=2,
+    )
+    chunked_paths = sorted(chunked_bundle_path.glob("review_data_chunk_*.parquet"))
+    assert [path.name for path in chunked_paths] == [
+        "review_data_chunk_001.parquet",
+        "review_data_chunk_002.parquet",
+    ]
+    chunked_manifest = json.loads((chunked_bundle_path / "manifest.json").read_text())
+    assert "data_file" not in chunked_manifest
+    assert chunked_manifest["data_files"] == [path.name for path in chunked_paths]
+    assert chunked_manifest["row_count"] == 2
+    with duckdb.connect() as chunked_con:
+        assert [
+            chunked_con.execute(
+                "SELECT COUNT(*) FROM read_parquet(?)", [str(path)]
+            ).fetchone()[0]
+            for path in chunked_paths
+        ] == [1, 1]
+
+    limited_bundle_path = result._export_labelling_bundle_beta(
+        tmp_path / "limited_bundle",
+        total_records_to_export=1,
+    )
+    with duckdb.connect() as limited_con:
+        assert limited_con.execute(
+            "SELECT unique_id FROM read_parquet(?)",
+            [str(limited_bundle_path / "review_data.parquet")],
+        ).fetchall() == [("messy-matched",)]
+
     custom_bundle_path = _export_labelling_bundle_beta(
         result,
         tmp_path / "custom_bundle",

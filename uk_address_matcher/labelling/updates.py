@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,14 +28,39 @@ REQUIRED_REVIEW_COLUMNS = {
     "resolved_label_id",
     "top_candidates",
 }
+DataFiles = tuple[Path, ...]
 
 
-def _data_source_sql(data_file: Path) -> str:
-    if data_file.suffix.lower() == ".parquet":
+def _normalise_data_files(
+    data_files: str | Path | Sequence[str | Path],
+) -> DataFiles:
+    if isinstance(data_files, (str, Path)):
+        paths = (Path(data_files),)
+    else:
+        paths = tuple(Path(path) for path in data_files)
+    if not paths:
+        raise ValueError("At least one data file is required")
+    resolved = tuple(path.expanduser().resolve() for path in paths)
+    suffixes = {path.suffix.lower() for path in resolved}
+    if len(suffixes) != 1 or not suffixes <= SUPPORTED_DATA_SUFFIXES:
+        raise ValueError("Data files must all be CSV or Parquet files")
+    return resolved
+
+
+def _data_source_sql(data_files: DataFiles) -> str:
+    if data_files[0].suffix.lower() == ".parquet":
         return "read_parquet(?)"
-    if data_file.suffix.lower() == ".csv":
+    if data_files[0].suffix.lower() == ".csv":
         return "read_csv_auto(?)"
-    raise ValueError(f"Unsupported data format: {data_file}")
+    raise ValueError(f"Unsupported data format: {data_files[0]}")
+
+
+def _data_source_parameter(data_files: DataFiles) -> str | list[str]:
+    return (
+        str(data_files[0])
+        if len(data_files) == 1
+        else [str(data_file) for data_file in data_files]
+    )
 
 
 def _quote_identifier(identifier: str) -> str:
@@ -45,7 +71,7 @@ def _quote_sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _load_bundle(bundle_path: str | Path) -> tuple[Path, str]:
+def _load_bundle(bundle_path: str | Path) -> tuple[DataFiles, str]:
     root = Path(bundle_path).expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Labelling bundle does not exist: {root}")
@@ -56,14 +82,27 @@ def _load_bundle(bundle_path: str | Path) -> tuple[Path, str]:
     bundle_id = str(manifest.get("bundle_id", "")).strip()
     if not bundle_id:
         raise ValueError("Bundle manifest is missing bundle_id")
-    data_file = (root / manifest.get("data_file", "review_data.parquet")).resolve()
-    if not data_file.is_file() or data_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-        raise ValueError("Bundle review data must be a CSV or Parquet file")
+    data_files = manifest.get("data_files")
+    if data_files is None:
+        data_files = [manifest.get("data_file", "review_data.parquet")]
+    if (
+        not isinstance(data_files, list)
+        or not data_files
+        or any(not isinstance(data_file, str) for data_file in data_files)
+    ):
+        raise ValueError("Bundle manifest must list review data files")
+    resolved_data_files = tuple((root / data_file).resolve() for data_file in data_files)
+    if any(
+        not data_file.is_relative_to(root) or not data_file.is_file()
+        for data_file in resolved_data_files
+    ):
+        raise ValueError("Bundle review data file was not found")
+    resolved_data_files = _normalise_data_files(resolved_data_files)
     connection = duckdb.connect()
     try:
         cursor = connection.execute(
-            f"SELECT * FROM {_data_source_sql(data_file)} LIMIT 0",
-            [str(data_file)],
+            f"SELECT * FROM {_data_source_sql(resolved_data_files)} LIMIT 0",
+            [_data_source_parameter(resolved_data_files)],
         )
         columns = {description[0] for description in cursor.description}
     finally:
@@ -74,7 +113,7 @@ def _load_bundle(bundle_path: str | Path) -> tuple[Path, str]:
             "The labelling bundle is missing required columns: "
             + ", ".join(sorted(missing))
         )
-    return data_file, bundle_id
+    return resolved_data_files, bundle_id
 
 
 def _load_updates(updates_path: str | Path, bundle_id: str) -> list[dict[str, Any]]:
@@ -148,15 +187,17 @@ def _normalise_event(event: Any, bundle_id: str) -> dict[str, Any]:
     }
 
 
-def _review_rows(data_file: Path, unique_ids: set[str]) -> dict[str, dict[str, Any]]:
+def _review_rows(
+    data_files: DataFiles, unique_ids: set[str]
+) -> dict[str, dict[str, Any]]:
     connection = duckdb.connect()
     try:
         cursor = connection.execute(
             f"SELECT CAST(unique_id AS VARCHAR), CAST(resolved_label_id AS VARCHAR), "
             f"CAST(ukam_label AS VARCHAR), CAST(resolved_canonical_address AS VARCHAR), "
             f"CAST(resolved_canonical_postcode AS VARCHAR), top_candidates FROM "
-            f"{_data_source_sql(data_file)}",
-            [str(data_file)],
+            f"{_data_source_sql(data_files)}",
+            [_data_source_parameter(data_files)],
         )
         rows = {
             str(row[0]): {
@@ -263,14 +304,16 @@ def _validated_labels(
 
 
 def _infer_unique_id_column(
-    bundle_file: Path, input_file: Path, columns: set[str]
+    bundle_files: DataFiles, input_files: DataFiles, columns: set[str]
 ) -> str:
-    source_sql = _data_source_sql(input_file)
-    bundle_sql = _data_source_sql(bundle_file)
+    source_sql = _data_source_sql(input_files)
+    bundle_sql = _data_source_sql(bundle_files)
+    bundle_parameter = _data_source_parameter(bundle_files)
+    source_parameter = _data_source_parameter(input_files)
     connection = duckdb.connect()
     try:
         bundle_count = connection.execute(
-            f"SELECT COUNT(*) FROM {bundle_sql}", [str(bundle_file)]
+            f"SELECT COUNT(*) FROM {bundle_sql}", [bundle_parameter]
         ).fetchone()[0]
         matches: list[str] = []
         for column in columns:
@@ -286,7 +329,7 @@ def _infer_unique_id_column(
                 FROM source_ids
                 WHERE unique_id IN (SELECT unique_id FROM bundle_ids)
                 """,
-                [str(bundle_file), str(input_file)],
+                [bundle_parameter, source_parameter],
             ).fetchone()
             if row_count == bundle_count and distinct_count == bundle_count:
                 matches.append(column)
@@ -306,40 +349,41 @@ def _infer_unique_id_column(
 def apply_labelling_updates(
     labelling_bundle_path: str | Path,
     updates_json_path: str | Path,
-    input_dataset_path: str | Path,
+    input_dataset_path: str | Path | Sequence[str | Path],
     *,
     input_dataset_label_column: str = "ukam_label",
     output_path: str | Path | None = None,
     include_label_details: bool = False,
 ) -> tuple[Path, int]:
-    bundle_file, bundle_id = _load_bundle(labelling_bundle_path)
+    bundle_files, bundle_id = _load_bundle(labelling_bundle_path)
     events = _load_updates(updates_json_path, bundle_id)
-    input_file = Path(input_dataset_path).expanduser().resolve()
-    if (
-        not input_file.is_file()
-        or input_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES
-    ):
-        raise ValueError("Input dataset must be a CSV or Parquet file")
+    input_files = _normalise_data_files(input_dataset_path)
+    if any(not input_file.is_file() for input_file in input_files):
+        raise ValueError("Input dataset files must exist and be CSV or Parquet files")
+    if output_path is None and len(input_files) != 1:
+        raise ValueError("An output path is required when input has multiple files")
     connection = duckdb.connect()
     try:
         cursor = connection.execute(
-            f"SELECT * FROM {_data_source_sql(input_file)} LIMIT 0", [str(input_file)]
+            f"SELECT * FROM {_data_source_sql(input_files)} LIMIT 0",
+            [_data_source_parameter(input_files)],
         )
         input_columns = {description[0] for description in cursor.description}
     finally:
         connection.close()
-    unique_id_column = _infer_unique_id_column(bundle_file, input_file, input_columns)
-    rows = _review_rows(bundle_file, {event["unique_id"] for event in events})
+    unique_id_column = _infer_unique_id_column(bundle_files, input_files, input_columns)
+    rows = _review_rows(bundle_files, {event["unique_id"] for event in events})
     label_details = _validated_labels(events, rows)
     labels = {
         unique_id: details["ukam_label"] for unique_id, details in label_details.items()
     }
-    target = Path(output_path).expanduser().resolve() if output_path else input_file
+    target = Path(output_path).expanduser().resolve() if output_path else input_files[0]
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_file = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     if target.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
         raise ValueError("Output dataset must be a CSV or Parquet file")
-    source_sql = _data_source_sql(input_file)
+    source_sql = _data_source_sql(input_files)
+    source_parameter = _data_source_parameter(input_files)
     quoted_id = _quote_identifier(unique_id_column)
     quoted_label = _quote_identifier(input_dataset_label_column)
     clauses = " ".join(f"WHEN CAST({quoted_id} AS VARCHAR) = ? THEN ?" for _ in labels)
@@ -412,7 +456,7 @@ def apply_labelling_updates(
         connection.execute(
             f"COPY ({output_query}) TO {_quote_sql_string(str(temporary_file))} "
             f"(FORMAT {output_format}{header})",
-            [*parameters, str(input_file)],
+            [*parameters, source_parameter],
         )
     finally:
         connection.close()

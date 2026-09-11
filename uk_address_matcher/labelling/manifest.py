@@ -18,19 +18,23 @@ def build_manifest(
     canonical_data_file: str | None = None,
     messy_columns: tuple[str, ...],
     canonical_columns: tuple[str, ...],
+    data_files: tuple[str, ...],
+    total_records_to_export: int | None,
+    review_data_chunk_count: int,
 ) -> dict[str, object]:
     """Build JSON-safe authoritative metadata for a written bundle."""
-    return {
+    manifest: dict[str, object] = {
         "bundle_id": bundle_id,
         "created_at_utc": created_at_utc,
         "uk_address_matcher_version": uk_address_matcher_version,
-        "data_file": "review_data.parquet",
         "row_count": parquet_validation["row_count"],
         "matched_row_count": parquet_validation["matched_row_count"],
         "unmatched_row_count": parquet_validation["unmatched_row_count"],
         "rows_with_candidates": parquet_validation["rows_with_candidates"],
         "rows_with_existing_labels": parquet_validation["rows_with_existing_labels"],
         "top_n_candidates": top_n_candidates,
+        "total_records_to_export": total_records_to_export,
+        "review_data_chunk_count": review_data_chunk_count,
         "canonical_label_column": canonical_label_column,
         "canonical_data_file": canonical_data_file,
         "messy_columns": list(messy_columns),
@@ -39,6 +43,11 @@ def build_manifest(
         "splink": _splink_configuration(match_result),
         "parquet_schema": parquet_validation["schema"],
     }
+    if len(data_files) == 1:
+        manifest["data_file"] = data_files[0]
+    else:
+        manifest["data_files"] = list(data_files)
+    return manifest
 
 
 def _match_reasons(match_result: MatchResult) -> list[str]:

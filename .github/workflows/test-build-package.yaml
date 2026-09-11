@@ -61,4 +61,3 @@ jobs:
           uv venv .venv-wheeltest -p 3.10 --clear
           uv pip install --python .venv-wheeltest/bin/python dist/*.whl
           .venv-wheeltest/bin/python -c "from uk_address_matcher.labelling.server import _static_root; assert (_static_root() / 'index.html').is_file()"
-          .venv-wheeltest/bin/ukam-apply-labelling-updates --help
