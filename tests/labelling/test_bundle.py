@@ -122,9 +122,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
         "review_data_chunk_001.parquet",
         "review_data_chunk_002.parquet",
     ]
-    chunked_manifest = json.loads(
-        (chunked_bundle_path / "manifest.json").read_text()
-    )
+    chunked_manifest = json.loads((chunked_bundle_path / "manifest.json").read_text())
     assert "data_file" not in chunked_manifest
     assert chunked_manifest["data_files"] == [path.name for path in chunked_paths]
     assert chunked_manifest["row_count"] == 2
