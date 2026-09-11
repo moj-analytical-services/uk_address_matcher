@@ -21,18 +21,17 @@ def create_test_bundle(root: Path, existing_label: str | None = None) -> Path:
             """COPY (SELECT 'bundle-1' bundle_id, '1.2.3' uk_address_matcher_version,
             CURRENT_TIMESTAMP created_at_utc, 'messy-1' unique_id,
             '1 TEST ROAD' messy_address, '1 TEST ROAD' messy_cleaned_address,
-            'E1 1AA' messy_postcode,
-            __IMPORTED_LABEL__ ukam_label,
-            __HAS_EXISTING_LABEL__ has_existing_label,
+                'E1 1AA' messy_postcode, __IMPORTED_LABEL__ ukam_label,
+                __HAS_EXISTING_LABEL__ has_existing_label,
             'canonical-1' resolved_canonical_id, 'label-1' resolved_label_id,
             '1 TEST ROAD LONDON' resolved_canonical_address,
             'E1 1AA' resolved_canonical_postcode, 'splink' match_reason,
             'splink' match_stage, TRUE is_matched, 12.5 match_weight,
             2.1 distinguishability, 2 candidate_count,
-                [{'rank': 1::BIGINT, 'label_id': 'label-1'::VARCHAR,
-                  'canonical_id': 'canonical-1'::VARCHAR},
-                 {'rank': 2::BIGINT, 'label_id': 'label-2'::VARCHAR,
-                  'canonical_id': 'canonical-2'::VARCHAR}] top_candidates
+                        [{'rank': 1::BIGINT, 'label_id': 'label-1'::VARCHAR,
+                            'canonical_id': 'canonical-1'::VARCHAR},
+                         {'rank': 2::BIGINT, 'label_id': 'label-2'::VARCHAR,
+                            'canonical_id': 'canonical-2'::VARCHAR}] top_candidates
             UNION ALL
             SELECT 'bundle-1', '1.2.3', CURRENT_TIMESTAMP, 'messy-2',
             '2 TEST ROAD', '2 TEST ROAD', 'E1 1AB', NULL::VARCHAR, FALSE,
@@ -170,6 +169,64 @@ def test_apply_updates_can_create_a_label_column_and_output_parquet(
             "SELECT record_id, review_label FROM read_parquet(?) ORDER BY record_id",
             [str(output_file)],
         ).fetchall() == [("messy-1", "label-1"), ("messy-2", None)]
+    finally:
+        connection.close()
+
+
+def test_apply_updates_reads_chunked_review_bundle(tmp_path: Path) -> None:
+    bundle = create_test_bundle(tmp_path / "bundle")
+    source = bundle / "review_data.parquet"
+    connection = duckdb.connect()
+    try:
+        for unique_id, filename in (
+            ("messy-1", "review_data_chunk_001.parquet"),
+            ("messy-2", "review_data_chunk_002.parquet"),
+        ):
+            output = (bundle / filename).as_posix().replace("'", "''")
+            query = (
+                f"COPY (SELECT * FROM read_parquet(?) WHERE unique_id = '{unique_id}') "
+                f"TO '{output}' (FORMAT PARQUET)"
+            )
+            connection.execute(
+                query,
+                [str(source)],
+            )
+    finally:
+        connection.close()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("data_file")
+    manifest["data_files"] = [
+        "review_data_chunk_001.parquet",
+        "review_data_chunk_002.parquet",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source.unlink()
+
+    updates = tmp_path / "updates.json"
+    write_updates(
+        updates,
+        [event("event-1", "messy-2", "no_match", None, "2026-08-19T12:00:00Z")],
+    )
+    input_file = tmp_path / "input.csv"
+    input_file.write_text("unique_id\nmessy-1\nmessy-2\n", encoding="utf-8")
+    output_file = tmp_path / "output.parquet"
+
+    output, count = apply_labelling_updates(
+        bundle,
+        updates,
+        input_file,
+        output_path=output_file,
+    )
+
+    assert output == output_file.resolve()
+    assert count == 1
+    connection = duckdb.connect()
+    try:
+        assert connection.execute(
+            "SELECT unique_id, ukam_label FROM read_parquet(?) ORDER BY unique_id",
+            [str(output_file)],
+        ).fetchall() == [("messy-1", None), ("messy-2", None)]
     finally:
         connection.close()
 

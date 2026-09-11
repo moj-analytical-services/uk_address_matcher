@@ -339,6 +339,65 @@ def test_local_launcher_persists_events_without_applying_input_dataset(
         thread.join()
 
 
+def test_local_launcher_serves_chunked_review_bundle(tmp_path: Path) -> None:
+    bundle = create_test_bundle(tmp_path / "bundle")
+    source = bundle / "review_data.parquet"
+    connection = duckdb.connect()
+    try:
+        for unique_id, filename in (
+            ("messy-1", "review_data_chunk_001.parquet"),
+            ("messy-2", "review_data_chunk_002.parquet"),
+        ):
+            output = (bundle / filename).as_posix().replace("'", "''")
+            query = (
+                f"COPY (SELECT * FROM read_parquet(?) WHERE unique_id = '{unique_id}') "
+                f"TO '{output}' (FORMAT PARQUET)"
+            )
+            connection.execute(
+                query,
+                [str(source)],
+            )
+    finally:
+        connection.close()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("data_file")
+    manifest["data_files"] = [
+        "review_data_chunk_001.parquet",
+        "review_data_chunk_002.parquet",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source.unlink()
+
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    from http.server import ThreadingHTTPServer
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), _handler_factory(_local_files(bundle, None), static)
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, config = request(server, "GET", "/api/local-config")
+        assert status == 200
+        assert config["bundle"]["review_urls"] == [
+            {
+                "url": "/api/local-file/review/0.parquet",
+                "name": "review_data_chunk_001.parquet",
+            },
+            {
+                "url": "/api/local-file/review/1.parquet",
+                "name": "review_data_chunk_002.parquet",
+            },
+        ]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_local_launcher_without_bundle_keeps_file_picker_available(
     tmp_path: Path,
 ) -> None:
