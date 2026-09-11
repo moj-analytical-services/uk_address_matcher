@@ -17,6 +17,7 @@
     options:
       members:
         - matches
+        - export_labelling_bundle
         - match_metrics
         - accuracy_analysis
         - accuracy_data
