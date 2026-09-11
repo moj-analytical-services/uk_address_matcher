@@ -391,9 +391,7 @@ def test_overlay_chart_preserves_curve_data_and_false_positive_reductions() -> N
         1.0,
     ]
     assert [record["comparison_fp"] for record in diff_records] == [9.0, 4.0]
-    bottom_tooltips = chart_definition["vconcat"][1]["layer"][1]["encoding"][
-        "tooltip"
-    ]
+    bottom_tooltips = chart_definition["vconcat"][1]["layer"][1]["encoding"]["tooltip"]
     assert [tooltip["field"] for tooltip in bottom_tooltips] == [
         "comparison_label",
         "baseline_recall",
