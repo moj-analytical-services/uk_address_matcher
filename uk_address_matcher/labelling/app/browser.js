@@ -62,9 +62,128 @@ function fileExtension(file) {
   return match ? match[0] : "";
 }
 
-function sourceSql(name, extension) {
-  if (extension === ".parquet") return `read_parquet(${sqlString(name)})`;
-  if (extension === ".csv") return `read_csv_auto(${sqlString(name)})`;
+function uploadPath(file) {
+  return String(file.webkitRelativePath || file.name || "").replaceAll("\\", "/");
+}
+
+function relativeUploadPath(file, root) {
+  const path = uploadPath(file);
+  return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+}
+
+function safeManifestPath(path) {
+  return typeof path === "string" && path.length > 0 &&
+    !path.startsWith("/") && !path.split("/").includes("..") &&
+    !path.split("/").includes("");
+}
+
+function uploadedFileMap(files, manifestName) {
+  const manifestFile = files.find((file) => uploadPath(file).endsWith(`/${manifestName}`) || uploadPath(file) === manifestName);
+  if (!manifestFile) throw new Error(`Selected folder must contain a root ${manifestName}.`);
+  const path = uploadPath(manifestFile);
+  const root = path.includes("/") ? path.split("/")[0] : "";
+  if (root && path !== `${root}/${manifestName}`)
+    throw new Error(`${manifestName} must be at the selected folder root.`);
+  const byPath = new Map(files.map((file) => [relativeUploadPath(file, root), file]));
+  return { manifestFile, byPath };
+}
+
+async function readManifest(files, manifestName, description) {
+  const { manifestFile, byPath } = uploadedFileMap(files, manifestName);
+  let manifest;
+  try {
+    manifest = JSON.parse(await manifestFile.text());
+  } catch {
+    throw new Error(`${description} manifest is not valid JSON.`);
+  }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
+    throw new Error(`${description} manifest must contain a JSON object.`);
+  return { manifestFile, manifest, byPath };
+}
+
+function bundleUpload(files) {
+  return readManifest(files, "manifest.json", "Labelling bundle").then(({ manifestFile, manifest, byPath }) => {
+    if (typeof manifest.bundle_id !== "string" || !manifest.bundle_id.trim())
+      throw new Error("Labelling bundle manifest is missing bundle_id.");
+    if (typeof manifest.uk_address_matcher_version !== "string" || !manifest.uk_address_matcher_version.trim())
+      throw new Error("Labelling bundle manifest is missing uk_address_matcher_version.");
+    const dataFiles = manifest.data_files ?? (manifest.data_file ? [manifest.data_file] : null);
+    if (!Array.isArray(dataFiles) || !dataFiles.length || dataFiles.some((path) => !safeManifestPath(path)))
+      throw new Error("Labelling bundle manifest must list review data files using safe relative paths.");
+    const reviewFiles = dataFiles.map((path) => {
+      const file = byPath.get(path);
+      if (!file) throw new Error(`Labelling bundle is missing ${path}.`);
+      if (![".csv", ".parquet"].includes(fileExtension(file)))
+        throw new Error("Labelling bundle review data must be CSV or Parquet files.");
+      return file;
+    });
+    const extensions = new Set(reviewFiles.map(fileExtension));
+    if (extensions.size !== 1)
+      throw new Error("All labelling bundle review data files must use the same format.");
+    return { manifestFile, manifest, reviewFiles };
+  });
+}
+
+function canonicalUpload(files) {
+  return readManifest(files, "ukam_manifest.json", "Prepared canonical data").then(({ manifest, byPath }) => {
+    if (typeof manifest.ukam_version !== "string" || !manifest.ukam_version.trim() ||
+      typeof manifest.created_at !== "string" ||
+      typeof manifest.created_with_duckdb_version !== "string")
+      throw new Error("Prepared canonical manifest is missing required provenance fields.");
+    if (!manifest.row_counts || typeof manifest.row_counts !== "object" ||
+      !Number.isInteger(manifest.row_counts.canonical_addresses) ||
+      !Number.isInteger(manifest.row_counts.canonical_output_chunks))
+      throw new Error("Prepared canonical manifest has invalid row_counts.");
+    if (!manifest.preparation_options || typeof manifest.preparation_options !== "object")
+      throw new Error("Prepared canonical manifest is missing preparation_options.");
+    if (!manifest.files || typeof manifest.files !== "object" || Array.isArray(manifest.files))
+      throw new Error("Prepared canonical manifest is missing file metadata.");
+    const manifestPaths = Object.entries(manifest.files).map(([path, metadata]) => {
+      if (!safeManifestPath(path) || !metadata || typeof metadata !== "object" ||
+        !Number.isInteger(metadata.size_bytes) && metadata.size_bytes !== null ||
+        !(typeof metadata.sha256 === "string" || metadata.sha256 === null) ||
+        !Array.isArray(metadata.columns))
+        throw new Error(`Prepared canonical manifest has invalid metadata for ${path}.`);
+      if (!byPath.has(path)) throw new Error(`Prepared canonical data is missing ${path}.`);
+      return path;
+    });
+    const addressPaths = manifestPaths.filter((path) =>
+      path === "ukam_canonical_addresses.parquet" ||
+      (path.startsWith("ukam_canonical_addresses_chunks/") && path.endsWith(".parquet"))
+    );
+    if (!["ukam_term_frequencies.parquet", "ukam_inverted_index.parquet"].every((path) => manifestPaths.includes(path)))
+      throw new Error("Prepared canonical manifest is missing required index files.");
+    if (addressPaths.length !== manifest.row_counts.canonical_output_chunks || !addressPaths.length)
+      throw new Error("Prepared canonical manifest does not describe the expected canonical address files.");
+    return {
+      manifestFile: files.find((file) => uploadPath(file).endsWith("/ukam_manifest.json") || uploadPath(file) === "ukam_manifest.json"),
+      manifest,
+      canonicalFiles: addressPaths.sort().map((path) => byPath.get(path)),
+    };
+  });
+}
+
+export async function validateUploadedFolders(bundleFiles, canonicalFiles) {
+  if (!bundleFiles?.length) throw new Error("Select a labelling bundle folder.");
+  const bundle = await bundleUpload([...bundleFiles]);
+  const canonical = canonicalFiles?.length
+    ? await canonicalUpload([...canonicalFiles])
+    : { canonicalFiles: [] };
+  return {
+    manifestFile: bundle.manifestFile,
+    manifest: bundle.manifest,
+    reviewFiles: bundle.reviewFiles,
+    canonicalFiles: canonical.canonicalFiles,
+  };
+}
+
+function sourceSql(names, extension) {
+  const files = Array.isArray(names) ? names : [names];
+  const source = files.length === 1
+    ? sqlString(files[0])
+    : `[${files.map(sqlString).join(", ")}]`;
+  if (extension === ".parquet") return `read_parquet(${source})`;
+  if (extension === ".csv") return `read_csv_auto(${source})`;
   throw new Error("Selected data must be a CSV or Parquet file.");
 }
 
@@ -107,48 +226,6 @@ function rowsFromResult(result) {
   });
 }
 
-function openEventsDatabase() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("ukam-labelling-events", 1);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore("events", { keyPath: "event_id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("IndexedDB could not be opened"));
-  });
-}
-
-function idbRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
-  });
-}
-
-class EventStore {
-  async load(bundleId) {
-    const database = await openEventsDatabase();
-    const transaction = database.transaction("events", "readonly");
-    const events = await idbRequest(transaction.objectStore("events").getAll());
-    database.close();
-    return events.filter((event) => event.bundle_id === bundleId);
-  }
-
-  async put(event) {
-    const database = await openEventsDatabase();
-    const transaction = database.transaction("events", "readwrite");
-    await idbRequest(transaction.objectStore("events").put(event));
-    database.close();
-  }
-
-  async delete(eventId) {
-    const database = await openEventsDatabase();
-    const transaction = database.transaction("events", "readwrite");
-    await idbRequest(transaction.objectStore("events").delete(eventId));
-    database.close();
-  }
-}
-
 function bool(value) {
   return value === true || value === 1 || value === "true";
 }
@@ -175,29 +252,13 @@ function idEquals(left, right) {
   return left != null && right != null && String(left) === String(right);
 }
 
-function latestEvents(events) {
-  const latest = new Map();
-  events.forEach((event) => {
-    const current = latest.get(event.unique_id);
-    if (
-      !current ||
-      `${event.created_at_utc}|${event.event_id}` >
-        `${current.created_at_utc}|${current.event_id}`
-    )
-      latest.set(event.unique_id, event);
-  });
-  return latest;
-}
-
 export class BrowserLabellingStore {
-  constructor(manifest, reviewFile, canonicalFiles, options = {}) {
+  constructor(manifest, reviewFiles, canonicalFiles, options = {}) {
     this.manifest = manifest;
-    this.reviewFile = reviewFile;
+    this.reviewFiles = Array.isArray(reviewFiles) ? reviewFiles : [reviewFiles];
     this.canonicalFiles = canonicalFiles;
-    this.remoteEventsUrl = options.remoteEventsUrl || null;
-    this.nativeCanonicalSearchUrl = options.nativeCanonicalSearchUrl || null;
-    this.labelledReviewPath = options.labelledReviewPath || null;
-    this.eventsStore = new EventStore();
+    this.eventsUrl = options.eventsUrl || null;
+    this.canonicalSearchUrl = options.canonicalSearchUrl || null;
     this.events = [];
     this.db = null;
     this.connection = null;
@@ -214,20 +275,27 @@ export class BrowserLabellingStore {
   }
 
   async initialise() {
-    const extension = fileExtension(this.reviewFile);
-    if (![".csv", ".parquet"].includes(extension))
+    if (!this.reviewFiles.length)
+      throw new Error("Select at least one bundle review data file.");
+    const extensions = new Set(this.reviewFiles.map(fileExtension));
+    if (extensions.size !== 1 || ![".csv", ".parquet"].includes([...extensions][0]))
       throw new Error("Review data must be a CSV or Parquet file.");
+    const extension = [...extensions][0];
     this.worker = new Worker(duckdbWorker);
     this.db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), this.worker);
     try {
       await this.db.instantiate(duckdbWasm);
       this.connection = await this.db.connect();
-      const reviewName = `review_data${extension}`;
-      await this.db.registerFileBuffer(
-        reviewName,
-        new Uint8Array(await this.reviewFile.arrayBuffer()),
-      );
-      this.reviewSource = sourceSql(reviewName, extension);
+      const reviewNames = [];
+      for (const [index, file] of this.reviewFiles.entries()) {
+        const reviewName = `review_data_${index}${extension}`;
+        reviewNames.push(reviewName);
+        await this.db.registerFileBuffer(
+          reviewName,
+          new Uint8Array(await file.arrayBuffer()),
+        );
+      }
+      this.reviewSource = sourceSql(reviewNames, extension);
       const reviewColumns = await this.columns(this.reviewSource);
       this.reviewColumns = reviewColumns;
       const missing = [...REQUIRED_REVIEW_COLUMNS].filter(
@@ -240,17 +308,13 @@ export class BrowserLabellingStore {
       );
       if (Number(invalidBundleRows[0]?.count || 0))
         throw new Error("The selected review data does not belong to this bundle manifest.");
-      this.events = await this.eventsStore.load(this.manifest.bundle_id);
-      if (this.remoteEventsUrl) {
-        const response = await fetch(this.remoteEventsUrl);
-        if (!response.ok) throw new Error("The local labelling event store could not be loaded.");
+      if (this.eventsUrl) {
+        const response = await fetch(this.eventsUrl);
+        if (!response.ok) throw new Error("Could not load saved labelling events.");
         const payload = await response.json();
-        const remoteEvents = Array.isArray(payload.events) ? payload.events : [];
-        const eventsById = new Map(
-          [...this.events, ...remoteEvents].map((event) => [event.event_id, event]),
-        );
-        this.events = [...eventsById.values()];
-        for (const event of this.events) await this.eventsStore.put(event);
+        if (!Array.isArray(payload.events))
+          throw new Error("Saved labelling events are not valid.");
+        this.events = payload.events;
       }
       await this.syncEvents();
       return this;
@@ -503,7 +567,6 @@ export class BrowserLabellingStore {
     return {
       bundle_name: this.manifest.bundle_id,
       bundle_id: this.manifest.bundle_id,
-      idle_timeout_seconds: 0,
       total_records: Number(summary[0].total_records),
       labelled_records: Number(summary[0].labelled_records),
       stage_counts: Object.fromEntries(
@@ -513,12 +576,12 @@ export class BrowserLabellingStore {
       distinguishability_bounds: { minimum: summary[0].minimum_distinguishability, maximum: summary[0].maximum_distinguishability },
       canonical_search: {
         available: Boolean(
-          this.nativeCanonicalSearchUrl || this.canonicalFiles.length || this.canonicalSource,
+          this.canonicalFiles.length || this.canonicalSource || this.canonicalSearchUrl,
         ),
         source_name: this.canonicalFiles[0]?.name || null,
         page_size: PAGE_SIZE,
         additional_canonical_columns: this.canonical?.additional || [],
-        warning: this.nativeCanonicalSearchUrl || this.canonicalFiles.length || this.canonicalSource
+        warning: this.canonicalFiles.length || this.canonicalSource || this.canonicalSearchUrl
           ? null
           : "Select canonical Parquet files when loading the bundle to enable canonical search.",
       },
@@ -540,17 +603,11 @@ export class BrowserLabellingStore {
 
   async canonicalRecord(label) {
     if (!label) return null;
-    if (this.nativeCanonicalSearchUrl) {
-      const url = new URL(this.nativeCanonicalSearchUrl, location.href);
-      url.searchParams.set("unique_id_query", label);
-      url.searchParams.set("page", "1");
-      const response = await fetch(url);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Canonical search failed");
-      return (
-        (payload.rows || []).find((row) => idEquals(row.canonical_id, label)) ||
-        null
+    if (this.canonicalSearchUrl) {
+      const result = await this.searchCanonical(
+        new URLSearchParams({ unique_id_query: label, page: "1" }),
       );
+      return result.rows.find((row) => String(row.canonical_id) === label) || null;
     }
     if (!this.canonicalSource) return null;
     const [row] = await this.queryRows(`SELECT CAST(${sqlIdentifier(this.canonical.labelId)} AS VARCHAR) AS canonical_id, CAST(${sqlIdentifier(this.canonical.uniqueId)} AS VARCHAR) AS canonical_unique_id, CAST(${sqlIdentifier(this.canonical.displayAddress)} AS VARCHAR) AS canonical_address, CAST(${sqlIdentifier(this.canonical.cleanedAddress)} AS VARCHAR) AS cleaned_address, CAST(${sqlIdentifier(this.canonical.postcode)} AS VARCHAR) AS canonical_postcode ${this.canonical.additional.map((column) => `, CAST(${sqlIdentifier(column)} AS VARCHAR) AS ${sqlIdentifier(column)}`).join("")} FROM ${this.canonicalSource} WHERE CAST(${sqlIdentifier(this.canonical.labelId)} AS VARCHAR) = ${sqlString(label)} LIMIT 1`);
@@ -672,7 +729,7 @@ export class BrowserLabellingStore {
     }
     let selectedCanonical = null;
     if (decision === "select_canonical") {
-      if (!this.canonicalSource && !this.nativeCanonicalSearchUrl)
+      if (!this.canonicalSource && !this.canonicalSearchUrl)
         throw new Error("Canonical data is required to select a canonical-search result");
       selectedCanonical = label ? await this.canonicalRecord(label) : null;
       if (!selectedCanonical) throw new Error("The selected canonical ID does not exist in the configured canonical data");
@@ -702,22 +759,13 @@ export class BrowserLabellingStore {
       created_at_utc: new Date().toISOString(),
     };
     this.events.push(event);
-    await this.eventsStore.put(event);
     try {
-      if (this.remoteEventsUrl) {
-        const response = await fetch(this.remoteEventsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-        });
-        if (!response.ok) throw new Error("The local labelling event could not be saved.");
-      }
       await this.insertEvent(event);
+      if (this.eventsUrl) await this.persistEvent(event);
       this.reviewNavigationCache.clear();
       this.reviewRecordCache.delete(uniqueId);
     } catch (error) {
       this.events = this.events.filter((item) => item.event_id !== event.event_id);
-      await this.eventsStore.delete(event.event_id);
       await this.deleteEvent(event.event_id);
       this.reviewNavigationCache.clear();
       throw error;
@@ -729,25 +777,34 @@ export class BrowserLabellingStore {
     if (!this.events.length) throw new Error("There are no label actions to undo");
     const event = [...this.events].sort((left, right) => `${right.created_at_utc}|${right.event_id}`.localeCompare(`${left.created_at_utc}|${left.event_id}`))[0];
     this.events = this.events.filter((item) => item.event_id !== event.event_id);
-    await this.eventsStore.delete(event.event_id);
     try {
-      if (this.remoteEventsUrl) {
-        const response = await fetch(`${this.remoteEventsUrl}?event_id=${encodeURIComponent(event.event_id)}`, {
-          method: "DELETE",
-        });
-        if (!response.ok) throw new Error("The local labelling event could not be removed.");
-      }
       await this.deleteEvent(event.event_id);
+      if (this.eventsUrl) {
+        const response = await fetch(
+          `${this.eventsUrl}?event_id=${encodeURIComponent(event.event_id)}`,
+          { method: "DELETE" },
+        );
+        if (!response.ok)
+          throw new Error("Could not persist the undone labelling event.");
+      }
       this.reviewNavigationCache.clear();
       this.reviewRecordCache.delete(event.unique_id);
     } catch (error) {
       this.events.push(event);
-      await this.eventsStore.put(event);
       await this.insertEvent(event);
       throw error;
     }
     const [row] = await this.queryRows(`${this.baseReviewCte()} SELECT current_label FROM base WHERE unique_id = ${sqlString(event.unique_id)}`);
     return { undone_event_id: event.event_id, unique_id: event.unique_id, ukam_label: row?.current_label || null };
+  }
+
+  async persistEvent(event) {
+    const response = await fetch(this.eventsUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    if (!response.ok) throw new Error("Could not save the labelling event.");
   }
 
   async request(url, options = {}) {
@@ -756,13 +813,7 @@ export class BrowserLabellingStore {
     if (parsed.pathname === "/api/records") return this.records(parsed.searchParams);
     if (parsed.pathname === "/api/review-record") return this.reviewRecord(parsed.searchParams);
     if (parsed.pathname === "/api/review-navigation") return this.reviewNavigation(parsed.searchParams);
-    if (parsed.pathname === "/api/canonical-search") {
-      if (!this.nativeCanonicalSearchUrl) return this.searchCanonical(parsed.searchParams);
-      const response = await fetch(`${this.nativeCanonicalSearchUrl}?${parsed.searchParams}`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Canonical search failed");
-      return payload;
-    }
+    if (parsed.pathname === "/api/canonical-search") return this.searchCanonical(parsed.searchParams);
     if (parsed.pathname === "/api/activity") return null;
     if (parsed.pathname === "/api/labels") return this.saveLabel(JSON.parse(options.body || "{}"));
     if (parsed.pathname === "/api/undo") return this.undo();
@@ -770,6 +821,14 @@ export class BrowserLabellingStore {
   }
 
   async searchCanonical(parameters) {
+    if (this.canonicalSearchUrl) {
+      const url = new URL(this.canonicalSearchUrl, location.href);
+      url.search = parameters.toString();
+      const response = await fetch(url);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Canonical search failed.");
+      return payload;
+    }
     await this.ensureCanonicalData();
     if (!this.canonicalSource) throw new Error("Canonical data is not available");
     const uniqueId = parameters.get("unique_id_query")?.trim() || "";
@@ -810,17 +869,24 @@ export class BrowserLabellingStore {
     return { page, page_size: PAGE_SIZE, has_previous: page > 1, has_next: rows.length > PAGE_SIZE, unique_id_query: uniqueId, postcode, address_query: address, additional_canonical_columns: this.canonical.additional, rows: rows.slice(0, PAGE_SIZE) };
   }
 
-  downloadUpdates() {
-    const payload = {
-      schema_version: 1,
-      bundle_id: this.manifest.bundle_id,
-      exported_at_utc: new Date().toISOString(),
-      events: this.events,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], { type: "application/json" });
+  async downloadLabels() {
+    const rows = await this.queryRows(
+      `${this.baseReviewCte()} SELECT unique_id, CAST(messy_address AS VARCHAR) AS address_name, CAST(current_label AS VARCHAR) AS ukam_label, current_label IS NOT NULL AS label_available FROM base ORDER BY unique_id`,
+    );
+    const csvValue = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const lines = [
+      ["unique_id", "address_name", "ukam_label", "label_available"],
+      ...rows.map((row) => [
+        row.unique_id,
+        row.address_name,
+        row.ukam_label,
+        row.label_available ? "TRUE" : "FALSE",
+      ]),
+    ].map((row) => row.map(csvValue).join(","));
+    const blob = new Blob([lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `${this.manifest.bundle_id}-labelling-updates.json`;
+    link.download = `${this.manifest.bundle_id}-labels.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -828,11 +894,13 @@ export class BrowserLabellingStore {
 
 export async function loadBrowserStore(
   manifestFile,
-  reviewFile,
+  reviewFiles,
   canonicalFiles,
   options = {},
 ) {
-  if (!manifestFile || !reviewFile) throw new Error("Select both a bundle manifest and review data file.");
+  const files = Array.isArray(reviewFiles) ? reviewFiles : [reviewFiles];
+  if (!manifestFile || !files[0])
+    throw new Error("Select a bundle manifest and at least one review data file.");
   let manifest;
   try {
     manifest = JSON.parse(await manifestFile.text());
@@ -842,7 +910,7 @@ export async function loadBrowserStore(
   if (!manifest || typeof manifest.bundle_id !== "string" || !manifest.bundle_id.trim()) throw new Error("Bundle manifest is missing bundle_id.");
   return new BrowserLabellingStore(
     manifest,
-    reviewFile,
+    files,
     canonicalFiles,
     options,
   ).initialise();

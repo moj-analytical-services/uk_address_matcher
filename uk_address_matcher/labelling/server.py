@@ -155,8 +155,8 @@ def _canonical_search_payload(
                 CAST({_quote_identifier(unique_id)} AS VARCHAR) AS canonical_unique_id,
                 CAST({_quote_identifier(display)} AS VARCHAR) AS canonical_address,
                 CAST({_quote_identifier(cleaned)} AS VARCHAR) AS cleaned_address,
-                CAST({_quote_identifier(postcode_column)} AS VARCHAR)
-                    AS canonical_postcode
+                CAST({_quote_identifier(postcode_column)} AS VARCHAR) AS
+                    canonical_postcode
                 {additional_sql}
             FROM {source}
             WHERE {" AND ".join(conditions)}
@@ -191,12 +191,14 @@ def _canonical_search_payload(
 class LocalLabellingFiles:
     bundle_root: Path | None
     manifest_path: Path | None
-    review_path: Path | None
+    review_paths: tuple[Path, ...]
     bundle_canonical_path: Path | None
     canonical_paths: tuple[Path, ...]
 
 
-def _data_file_from_manifest(bundle_root: Path) -> tuple[Path, dict[str, Any]]:
+def _data_files_from_manifest(
+    bundle_root: Path,
+) -> tuple[tuple[Path, ...], dict[str, Any]]:
     manifest_path = bundle_root / "manifest.json"
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Bundle manifest not found: {manifest_path}")
@@ -206,12 +208,22 @@ def _data_file_from_manifest(bundle_root: Path) -> tuple[Path, dict[str, Any]]:
         raise ValueError(f"Bundle manifest is not valid JSON: {manifest_path}") from error
     if not isinstance(manifest, dict) or not manifest.get("bundle_id"):
         raise ValueError("Bundle manifest must contain a bundle_id")
-    data_file = (bundle_root / manifest.get("data_file", "review_data.parquet")).resolve()
-    if not data_file.is_relative_to(bundle_root) or not data_file.is_file():
-        raise FileNotFoundError(f"Review data file not found: {data_file}")
-    if data_file.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-        raise ValueError(f"Review data must be CSV or Parquet: {data_file}")
-    return data_file, manifest
+    data_files = manifest.get("data_files")
+    if data_files is None:
+        data_files = [manifest.get("data_file", "review_data.parquet")]
+    if (
+        not isinstance(data_files, list)
+        or not data_files
+        or any(not isinstance(data_file, str) for data_file in data_files)
+    ):
+        raise ValueError("Bundle manifest must list review data files")
+    paths = tuple((bundle_root / data_file).resolve() for data_file in data_files)
+    if any(not path.is_relative_to(bundle_root) or not path.is_file() for path in paths):
+        raise FileNotFoundError("Review data file not found in bundle")
+    suffixes = {path.suffix.lower() for path in paths}
+    if len(suffixes) != 1 or not suffixes <= SUPPORTED_DATA_SUFFIXES:
+        raise ValueError("Review data files must all be CSV or Parquet")
+    return paths, manifest
 
 
 def _canonical_files(path: str | Path | None) -> tuple[Path, ...]:
@@ -246,7 +258,7 @@ def _local_files(
 ) -> LocalLabellingFiles:
     bundle_root = None
     manifest_path = None
-    review_path = None
+    review_paths = ()
     bundle_canonical_path = None
     if labelling_bundle_path is not None:
         bundle_root = Path(labelling_bundle_path).expanduser().resolve()
@@ -254,10 +266,10 @@ def _local_files(
             raise NotADirectoryError(
                 f"Labelling bundle must be a directory: {bundle_root}"
             )
-        review_path, manifest = _data_file_from_manifest(bundle_root)
+        review_paths, manifest = _data_files_from_manifest(bundle_root)
         manifest_path = bundle_root / "manifest.json"
         canonical_data_file = manifest.get("canonical_data_file")
-        if canonical_data_file:
+        if canonical_data_file and canonical_address_path is None:
             bundle_canonical_path = (bundle_root / str(canonical_data_file)).resolve()
             if (
                 not bundle_canonical_path.is_relative_to(bundle_root)
@@ -269,7 +281,7 @@ def _local_files(
     return LocalLabellingFiles(
         bundle_root,
         manifest_path,
-        review_path,
+        review_paths,
         bundle_canonical_path,
         _canonical_files(canonical_address_path),
     )
@@ -320,12 +332,12 @@ def _write_events(fileset: LocalLabellingFiles, events: list[dict[str, Any]]) ->
 
 
 def _materialise_labelled_review(fileset: LocalLabellingFiles) -> None:
-    if fileset.bundle_root is None or fileset.review_path is None:
+    if fileset.bundle_root is None or not fileset.review_paths:
         return
     apply_labelling_updates(
         fileset.bundle_root,
         fileset.bundle_root / "labelling_updates.json",
-        fileset.review_path,
+        fileset.review_paths,
         input_dataset_label_column=USER_LABEL_COLUMN,
         output_path=fileset.bundle_root / LABELLED_REVIEW_DATA_FILE,
         include_label_details=True,
@@ -337,7 +349,8 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
     event_lock = Lock()
     if fileset.manifest_path is not None:
         local_files["manifest.json"] = fileset.manifest_path
-        local_files["review_data" + fileset.review_path.suffix] = fileset.review_path
+        for index, path in enumerate(fileset.review_paths):
+            local_files[f"review/{index}{path.suffix}"] = path
         if fileset.bundle_canonical_path is not None:
             local_files["canonical_data.parquet"] = fileset.bundle_canonical_path
         for index, path in enumerate(fileset.canonical_paths):
@@ -372,13 +385,20 @@ def _handler_factory(fileset: LocalLabellingFiles, static_root: Path):
         def _config(self) -> dict[str, Any]:
             if fileset.manifest_path is None:
                 return {"bundle": None}
+            review_urls = [
+                {
+                    "url": f"/api/local-file/review/{index}{path.suffix}",
+                    "name": path.name,
+                }
+                for index, path in enumerate(fileset.review_paths)
+            ]
             return {
                 "bundle": {
                     "manifest_url": "/api/local-file/manifest.json",
-                    "review_url": "/api/local-file/review_data"
-                    + fileset.review_path.suffix,
+                    "review_urls": review_urls,
+                    "review_url": review_urls[0]["url"],
                     "manifest_name": fileset.manifest_path.name,
-                    "review_name": fileset.review_path.name,
+                    "review_name": fileset.review_paths[0].name,
                 },
                 "canonical_urls": (
                     [

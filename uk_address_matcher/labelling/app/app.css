@@ -46,7 +46,7 @@ header > div:last-child {
   display: flex;
   gap: 10px;
 }
-header #download-updates {
+header #download-labels {
   padding: 7px 10px;
   border: 1px solid #84adf5;
   border-radius: 5px;
@@ -360,20 +360,6 @@ th {
 }
 .blank {
   min-height: calc(100vh - 116px);
-}
-#session-overlay {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: #07152fbb;
-  color: #fff;
-}
-#session-overlay > div {
-  padding: 32px;
-  background: #fff;
-  color: #101828;
-  border-radius: 8px;
 }
 [hidden] {
   display: none !important;
@@ -770,7 +756,6 @@ header > div:last-child {
   align-items: center;
   font-size: 13px;
 }
-#session-countdown,
 #save-status {
   padding: 7px 10px;
   border-radius: 999px;
@@ -1196,21 +1181,6 @@ tbody tr:hover td {
   color: #fff;
   background: #101828;
   border-radius: 999px;
-}
-#session-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  background: #07152fbb;
-}
-#session-overlay > div {
-  max-width: 500px;
-  padding: 32px;
-  background: #fff;
-  border-radius: 8px;
-  text-align: center;
 }
 [hidden] {
   display: none !important;

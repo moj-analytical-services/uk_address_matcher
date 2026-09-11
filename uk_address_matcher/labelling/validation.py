@@ -22,6 +22,8 @@ def validate_export_arguments(
     *,
     output_directory: str | Path,
     top_n_candidates: int,
+    total_records_to_export: int | None,
+    review_data_chunk_count: int,
 ) -> Path:
     """Validate the public bundle export arguments."""
     if isinstance(output_directory, Path):
@@ -37,7 +39,44 @@ def validate_export_arguments(
         raise ValueError(
             f"top_n_candidates must be between 1 and {MAX_TOP_N_CANDIDATES}."
         )
+    if total_records_to_export is not None and (
+        isinstance(total_records_to_export, bool)
+        or not isinstance(total_records_to_export, int)
+    ):
+        raise TypeError("total_records_to_export must be an integer or None.")
+    if total_records_to_export is not None and total_records_to_export < 1:
+        raise ValueError("total_records_to_export must be at least 1.")
+    if isinstance(review_data_chunk_count, bool) or not isinstance(
+        review_data_chunk_count, int
+    ):
+        raise TypeError("review_data_chunk_count must be an integer.")
+    if review_data_chunk_count < 1:
+        raise ValueError("review_data_chunk_count must be at least 1.")
     return output_path.resolve()
+
+
+def validate_record_selection_arguments(
+    *,
+    total_records_to_export: int | None,
+    review_data_chunk_count: int,
+    available_record_count: int,
+) -> int:
+    """Validate export size and return the expected number of review rows."""
+    expected_row_count = (
+        available_record_count
+        if total_records_to_export is None
+        else total_records_to_export
+    )
+    if expected_row_count > available_record_count:
+        raise ValueError(
+            "total_records_to_export cannot exceed the number of retained messy "
+            f"records ({available_record_count})."
+        )
+    if review_data_chunk_count > max(expected_row_count, 1):
+        raise ValueError(
+            "review_data_chunk_count cannot exceed the number of records to export."
+        )
+    return expected_row_count
 
 
 def validate_source_relations(
@@ -157,8 +196,7 @@ def validate_output_directory(output_directory: Path, *, overwrite: bool) -> Non
     if not any(output_directory.iterdir()):
         return
     manifest_path = output_directory / "manifest.json"
-    data_path = output_directory / "review_data.parquet"
-    if not manifest_path.is_file() or not data_path.is_file():
+    if not manifest_path.is_file():
         raise FileExistsError(
             "Refusing to replace a populated directory that is not a recognised "
             f"labelling bundle: {output_directory}"
@@ -169,9 +207,15 @@ def validate_output_directory(output_directory: Path, *, overwrite: bool) -> Non
         raise FileExistsError(
             f"Refusing to replace an unreadable labelling bundle: {output_directory}"
         ) from error
+    data_files = manifest.get("data_files")
+    if data_files is None:
+        data_files = [manifest.get("data_file")]
     if (
         not manifest.get("uk_address_matcher_version")
-        or manifest.get("data_file") != "review_data.parquet"
+        or not isinstance(data_files, list)
+        or not data_files
+        or any(not isinstance(data_file, str) for data_file in data_files)
+        or any(not (output_directory / data_file).is_file() for data_file in data_files)
     ):
         raise FileExistsError(
             "Refusing to replace a directory whose manifest is not a recognised "
