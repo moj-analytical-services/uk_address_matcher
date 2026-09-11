@@ -523,10 +523,10 @@ def prepare_canonical_folder(
     from uk_address_matcher.cleaning.chunking_strategies import (
         _add_canonical_road_blocking_keys,
         _derive_term_frequencies_from_precleaned,
-        _prepare_data_for_matching,
         clean_data_pre_term_frequencies,
         derive_inverted_index,
         derive_roadlike_places,
+        prepare_data_for_matching,
     )
 
     output_is_remote = is_remote_folder_reference(output_folder)
@@ -589,7 +589,7 @@ def prepare_canonical_folder(
         prefix="ukam-prepared-", dir=temp_root or None
     ) as chunk_directory:
         logger.debug("Applying term frequencies to canonical addresses")
-        df_clean = _prepare_data_for_matching(
+        df_clean = prepare_data_for_matching(
             precleaned,
             con=con,
             num_of_chunks=num_of_chunks,
@@ -599,7 +599,7 @@ def prepare_canonical_folder(
             ),
             dataset_role="canonical",
             _precleaned_addresses=True,
-            parquet_directory=Path(chunk_directory),
+            _parquet_directory=Path(chunk_directory),
             show_progress=progress_mode,
         )
         logger.debug("Building inverted index")

@@ -946,6 +946,7 @@ def prepare_data_for_matching(
     _precleaned_addresses: bool = False,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
+    _parquet_directory: Path | None = None,
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -977,6 +978,8 @@ def prepare_data_for_matching(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
+        _parquet_directory: Internal chunk storage for canonical preparation.
+            The caller owns the directory and must keep it alive while reading.
 
     Returns:
         Cleaned address data with computed term frequencies, including numeric
@@ -1005,39 +1008,6 @@ def prepare_data_for_matching(
         # Using pre-baked term frequencies (default):
         df_prepared = prepare_data_for_matching(df_addresses, con)
     """
-    return _prepare_data_for_matching(
-        address_table,
-        con,
-        num_of_chunks=num_of_chunks,
-        term_frequency_lookup=term_frequency_lookup,
-        inverted_index=inverted_index,
-        _inverted_index_strategies=_inverted_index_strategies,
-        inverted_index_n=inverted_index_n,
-        derive_distinguishing_wrt_adjacent_records=derive_distinguishing_wrt_adjacent_records,
-        dataset_role=dataset_role,
-        _precleaned_addresses=_precleaned_addresses,
-        debug_options=debug_options,
-        show_progress=show_progress,
-    )
-
-
-def _prepare_data_for_matching(
-    address_table: DuckDBPyRelation,
-    con: DuckDBPyConnection,
-    num_of_chunks: int = 10,
-    term_frequency_lookup: Optional[DuckDBPyRelation] = None,
-    inverted_index: Optional[DuckDBPyRelation] = None,
-    _inverted_index_strategies: list[InvertedIndexLookupStrategy] | None = None,
-    inverted_index_n: Optional[int] = None,
-    derive_distinguishing_wrt_adjacent_records: bool = False,
-    *,
-    dataset_role: Literal["messy", "canonical"] | None = None,
-    _precleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
-    show_progress: ShowProgress = "auto",
-    parquet_directory: Path | None = None,
-) -> DuckDBPyRelation:
-    """Prepare chunks; the caller owns any supplied Parquet directory's lifetime."""
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     distinguishing_table_name = None
@@ -1163,7 +1133,7 @@ def _prepare_data_for_matching(
                 debug_options=debug_options if chunk_index == 0 else None,
             )
 
-            if parquet_directory is not None:
+            if _parquet_directory is not None:
                 if chunk_index == 0:
                     # Restore types that Parquet widens, such as ENUM and TIMESTAMP_S.
                     chunk_columns = [
@@ -1174,7 +1144,7 @@ def _prepare_data_for_matching(
                         if name != "__ukam_row_id"
                     ]
                 processed_chunk = processed_chunk.select("* EXCLUDE (__ukam_row_id)")
-                chunk_path = str(parquet_directory / f"{chunk_index:05d}.parquet")
+                chunk_path = str(_parquet_directory / f"{chunk_index:05d}.parquet")
                 escaped_path = chunk_path.replace("'", "''")
                 con.execute(f"""
                     COPY ({processed_chunk.sql_query()}) TO '{escaped_path}'
@@ -1220,15 +1190,15 @@ def _prepare_data_for_matching(
     if inv_idx_table_name == "__ukam_inverted_index":
         _drop_table_and_registered_aliases(con, inv_idx_table_name)
 
-    if parquet_directory is None:
+    if _parquet_directory is None:
         con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
     else:
-        con.read_parquet(str(parquet_directory / "*.parquet")).select(
+        con.read_parquet(str(_parquet_directory / "*.parquet")).select(
             *chunk_columns
         ).create_view(processed_table)
     logger.debug("Prepared address table finalized")
 
-    if parquet_directory is None:
+    if _parquet_directory is None:
         return con.table(processed_table)
     return con.sql(f"SELECT * FROM {processed_table}")
 

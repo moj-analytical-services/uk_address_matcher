@@ -765,7 +765,7 @@ def test_prepare_remote_csv_input_writes_remote_output(
     )
     monkeypatch.setattr(
         chunking_strategies,
-        "_prepare_data_for_matching",
+        "prepare_data_for_matching",
         lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
@@ -887,7 +887,7 @@ def test_prepare_remote_output_writes_chunked_paths(
     )
     monkeypatch.setattr(
         chunking_strategies,
-        "_prepare_data_for_matching",
+        "prepare_data_for_matching",
         lambda *args, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
