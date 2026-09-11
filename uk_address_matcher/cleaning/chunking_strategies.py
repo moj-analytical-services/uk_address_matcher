@@ -1173,6 +1173,7 @@ def _prepare_data_for_matching(
                         )
                         if name != "__ukam_row_id"
                     ]
+                processed_chunk = processed_chunk.select("* EXCLUDE (__ukam_row_id)")
                 chunk_path = str(parquet_directory / f"{chunk_index:05d}.parquet")
                 escaped_path = chunk_path.replace("'", "''")
                 con.execute(f"""
