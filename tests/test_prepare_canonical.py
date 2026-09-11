@@ -158,7 +158,12 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     schema = pyarrow_parquet.read_schema(
         output_folder / "ukam_canonical_addresses.parquet"
     )
-    assert not schema.field("ukam_address_id").nullable
+    # DuckDB versions differ in the nullability metadata written for table columns.
+    con.sql("SELECT 1::INTEGER AS ukam_address_id").create("expected_id")
+    expected_path = tmp_path / "expected_id.parquet"
+    con.table("expected_id").write_parquet(str(expected_path))
+    expected_schema = pyarrow_parquet.read_schema(expected_path)
+    assert schema.field("ukam_address_id") == expected_schema.field("ukam_address_id")
     assert prepared.roadlike_places is None
     assert {
         "road_1_norm",
