@@ -68,11 +68,6 @@ jobs:
             - name: Build site
               run: uv run mkdocs build --strict
 
-            - name: Add labelling app to site
-              run: |
-                  mkdir -p site/labelling-tool
-                  cp -R uk_address_matcher/labelling/app/static/. site/labelling-tool/
-
             - name: Upload Pages artifact
               uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
               with:

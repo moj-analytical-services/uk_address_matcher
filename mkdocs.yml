@@ -83,9 +83,9 @@ exclude_docs: |
 nav:
   - Overview: index.md
   - Getting started: get_started.md
-  - Labelling: labelling.md
   - Choosing a matching threshold: choosing_a_matching_threshold.md
   - Optimising accuracy: optimising_accuracy.md
+  - Labelling: labelling.md
   - Working with Ordnance Survey data: ordnance_survey.md
   - Performance and benchmarking: performance.md
   - API reference: api_reference.md
