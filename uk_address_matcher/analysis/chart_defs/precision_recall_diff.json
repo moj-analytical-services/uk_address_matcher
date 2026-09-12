@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.1.0.json",
-  "description": "Recall-aligned precision gap chart",
+  "description": "Recall-aligned false-positive reduction chart",
   "width": 620,
   "height": 180,
   "data": {
@@ -47,11 +47,11 @@
           }
         },
         "y": {
-          "field": "precision_gap_percentage_points",
+          "field": "false_positive_reduction_percent",
           "type": "quantitative",
-          "title": "Precision gap (percentage points)",
+          "title": "Reduction in false positives (%)",
           "axis": {
-            "format": "+.2f"
+            "format": "+.1f"
           }
         },
         "order": {
@@ -81,40 +81,34 @@
             "title": "Comparison"
           },
           {
-            "field": "baseline_precision",
-            "type": "quantitative",
-            "title": "Baseline precision",
-            "format": ".2%"
-          },
-          {
-            "field": "baseline_fp",
-            "type": "quantitative",
-            "title": "Baseline false positives",
-            "format": ".0f"
-          },
-          {
             "field": "baseline_recall",
             "type": "quantitative",
             "title": "Baseline recall",
             "format": ".2%"
           },
           {
-            "field": "comparison_precision",
+            "field": "baseline_fp",
             "type": "quantitative",
-            "title": "Interpolated comparison precision",
-            "format": ".2%"
+            "title": "False positives before",
+            "format": ".0f"
           },
           {
             "field": "comparison_fp",
             "type": "quantitative",
-            "title": "Interpolated comparison false positives",
-            "format": ".0f"
+            "title": "False positives after",
+            "format": ".1f"
           },
           {
-            "field": "precision_gap_percentage_points",
+            "field": "false_positive_reduction",
             "type": "quantitative",
-            "title": "Precision gap (percentage points)",
-            "format": "+.2f"
+            "title": "False positives reduced",
+            "format": "+.1f"
+          },
+          {
+            "field": "false_positive_reduction_percent",
+            "type": "quantitative",
+            "title": "False positive reduction (%)",
+            "format": "+.1f"
           }
         ]
       }

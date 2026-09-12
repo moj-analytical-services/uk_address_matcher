@@ -56,7 +56,7 @@
       "type": "quantitative",
       "title": "Precision",
       "axis": {
-        "format": ".1%"
+        "format": ".2%"
       },
       "scale": {
         "zero": false
