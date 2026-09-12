@@ -9,6 +9,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -580,208 +581,219 @@ def prepare_canonical_folder(
     logger.debug("Deriving term frequencies from pre-cleaned canonical data")
     tf_table = _derive_term_frequencies_from_precleaned(precleaned, con)
 
-    logger.debug("Applying term frequencies to canonical addresses")
-    df_clean = prepare_data_for_matching(
-        precleaned,
-        con=con,
-        num_of_chunks=num_of_chunks,
-        term_frequency_lookup=tf_table,
-        derive_distinguishing_wrt_adjacent_records=(
-            derive_distinguishing_wrt_adjacent_records
-        ),
-        dataset_role="canonical",
-        _precleaned_addresses=True,
-        show_progress=progress_mode,
-    )
-    logger.debug("Building inverted index")
-    inverted_index = derive_inverted_index(
-        df_clean,
-        con=con,
-        num_of_chunks=num_of_chunks,
-        show_progress=progress_mode,
-    )
-
-    if derive_road_blocking_keys:
-        logger.debug("Deriving canonical road blocking keys")
-        roadlike_places = derive_roadlike_places(
-            df_clean,
-            con,
+    temp_root = con.execute("SELECT current_setting('temp_directory')").fetchone()[0]
+    if temp_root:
+        Path(temp_root).mkdir(parents=True, exist_ok=True)
+    # Keep chunks until export finishes; remove them on success or failure.
+    with TemporaryDirectory(
+        prefix="ukam-prepared-", dir=temp_root or None
+    ) as chunk_directory:
+        logger.debug("Applying term frequencies to canonical addresses")
+        df_clean = prepare_data_for_matching(
+            precleaned,
+            con=con,
+            num_of_chunks=num_of_chunks,
+            term_frequency_lookup=tf_table,
+            derive_distinguishing_wrt_adjacent_records=(
+                derive_distinguishing_wrt_adjacent_records
+            ),
+            dataset_role="canonical",
+            _precleaned_addresses=True,
+            _parquet_directory=Path(chunk_directory),
             show_progress=progress_mode,
         )
-        df_clean = _add_canonical_road_blocking_keys(
+        logger.debug("Building inverted index")
+        inverted_index = derive_inverted_index(
             df_clean,
-            con,
+            con=con,
             num_of_chunks=num_of_chunks,
-            roadlike_places=roadlike_places,
+            show_progress=progress_mode,
         )
-        logger.debug("Canonical road blocking keys derived")
-    else:
-        roadlike_places = None
 
-    canonical_output_relation = df_clean
-    addr_count = df_clean.count("*").fetchone()[0]
+        if derive_road_blocking_keys:
+            logger.debug("Deriving canonical road blocking keys")
+            roadlike_places = derive_roadlike_places(
+                df_clean,
+                con,
+                show_progress=progress_mode,
+            )
+            df_clean = _add_canonical_road_blocking_keys(
+                df_clean,
+                con,
+                num_of_chunks=num_of_chunks,
+                roadlike_places=roadlike_places,
+            )
+            logger.debug("Canonical road blocking keys derived")
+        else:
+            roadlike_places = None
 
-    # Write parquet files
-    tf_path = (
-        join_remote_path(output_folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
-        if output_is_remote
-        else output_folder_path / PREPARED_TERM_FREQUENCIES_FILENAME
-    )
-    idx_path = (
-        join_remote_path(output_folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
-        if output_is_remote
-        else output_folder_path / PREPARED_INVERTED_INDEX_FILENAME
-    )
-    roadlike_places_path = (
-        join_remote_path(output_folder_uri, ROADLIKE_PLACES_FILENAME)
-        if output_is_remote
-        else output_folder_path / ROADLIKE_PLACES_FILENAME
-    )
+        canonical_output_relation = df_clean
+        addr_count = df_clean.count("*").fetchone()[0]
 
-    _write_parquet_artefact(con, tf_table, tf_path)
-    _write_parquet_artefact(
-        con,
-        inverted_index,
-        idx_path,
-        order_by=INVERTED_INDEX_ORDER_BY,
-        compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
-    )
-    if roadlike_places is not None:
-        _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
-
-    canonical_paths: list[str | Path]
-    chunk_output_location: str | Path | None = None
-    if output_chunk_count == 1:
-        addr_path = (
-            join_remote_path(output_folder_uri, PREPARED_ADDRESSES_FILENAME)
+        # Write parquet files
+        tf_path = (
+            join_remote_path(output_folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
             if output_is_remote
-            else output_folder_path / PREPARED_ADDRESSES_FILENAME
+            else output_folder_path / PREPARED_TERM_FREQUENCIES_FILENAME
         )
+        idx_path = (
+            join_remote_path(output_folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
+            if output_is_remote
+            else output_folder_path / PREPARED_INVERTED_INDEX_FILENAME
+        )
+        roadlike_places_path = (
+            join_remote_path(output_folder_uri, ROADLIKE_PLACES_FILENAME)
+            if output_is_remote
+            else output_folder_path / ROADLIKE_PLACES_FILENAME
+        )
+
+        _write_parquet_artefact(con, tf_table, tf_path)
         _write_parquet_artefact(
             con,
-            canonical_output_relation,
-            addr_path,
-            sort_columns=("ukam_address_id",),
-            drop_columns=canonical_drop_columns,
+            inverted_index,
+            idx_path,
+            order_by=INVERTED_INDEX_ORDER_BY,
+            compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
         )
-        canonical_paths = [addr_path]
-    else:
-        chunk_dir = (
-            join_remote_path(output_folder_uri, PREPARED_ADDRESSES_CHUNK_DIRNAME)
-            if output_is_remote
-            else output_folder_path / PREPARED_ADDRESSES_CHUNK_DIRNAME
-        )
-        chunk_output_location = chunk_dir
-        if not output_is_remote:
-            Path(chunk_dir).mkdir(parents=True, exist_ok=True)
+        if roadlike_places is not None:
+            _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
 
-        output_chunk_size = (addr_count + output_chunk_count - 1) // output_chunk_count
-        canonical_paths = []
-        for chunk_index in range(output_chunk_count):
-            started_at = time.perf_counter()
-            first_id = chunk_index * output_chunk_size + 1
-            last_id = min(
-                (chunk_index + 1) * output_chunk_size,
-                addr_count,
-            )
-            chunk_query = con.sql(f"""
-                SELECT *
-                FROM ({canonical_output_relation.sql_query()}) AS canonical
-                WHERE canonical.ukam_address_id BETWEEN {first_id} AND {last_id}
-            """)
-            chunk_path = (
-                join_remote_path(
-                    str(chunk_dir),
-                    _chunk_file_name(chunk_index, output_chunk_count),
-                )
+        canonical_paths: list[str | Path]
+        chunk_output_location: str | Path | None = None
+        if output_chunk_count == 1:
+            addr_path = (
+                join_remote_path(output_folder_uri, PREPARED_ADDRESSES_FILENAME)
                 if output_is_remote
-                else Path(chunk_dir) / _chunk_file_name(chunk_index, output_chunk_count)
+                else output_folder_path / PREPARED_ADDRESSES_FILENAME
             )
             _write_parquet_artefact(
                 con,
-                chunk_query,
-                chunk_path,
+                canonical_output_relation,
+                addr_path,
                 sort_columns=("ukam_address_id",),
                 drop_columns=canonical_drop_columns,
             )
-            chunk_count = last_id - first_id + 1
-            canonical_paths.append(chunk_path)
+            canonical_paths = [addr_path]
+        else:
+            chunk_dir = (
+                join_remote_path(output_folder_uri, PREPARED_ADDRESSES_CHUNK_DIRNAME)
+                if output_is_remote
+                else output_folder_path / PREPARED_ADDRESSES_CHUNK_DIRNAME
+            )
+            chunk_output_location = chunk_dir
+            if not output_is_remote:
+                Path(chunk_dir).mkdir(parents=True, exist_ok=True)
+
+            output_chunk_size = (
+                addr_count + output_chunk_count - 1
+            ) // output_chunk_count
+            canonical_paths = []
+            for chunk_index in range(output_chunk_count):
+                started_at = time.perf_counter()
+                first_id = chunk_index * output_chunk_size + 1
+                last_id = min(
+                    (chunk_index + 1) * output_chunk_size,
+                    addr_count,
+                )
+                chunk_query = con.sql(f"""
+                    SELECT *
+                    FROM ({canonical_output_relation.sql_query()}) AS canonical
+                    WHERE canonical.ukam_address_id BETWEEN {first_id} AND {last_id}
+                """)
+                chunk_path = (
+                    join_remote_path(
+                        str(chunk_dir),
+                        _chunk_file_name(chunk_index, output_chunk_count),
+                    )
+                    if output_is_remote
+                    else Path(chunk_dir)
+                    / _chunk_file_name(chunk_index, output_chunk_count)
+                )
+                _write_parquet_artefact(
+                    con,
+                    chunk_query,
+                    chunk_path,
+                    sort_columns=("ukam_address_id",),
+                    drop_columns=canonical_drop_columns,
+                )
+                chunk_count = last_id - first_id + 1
+                canonical_paths.append(chunk_path)
+                logger.debug(
+                    "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
+                    chunk_index + 1,
+                    output_chunk_count,
+                    chunk_path,
+                    chunk_count,
+                    _format_elapsed(time.perf_counter() - started_at),
+                )
+
+        # Compute row counts once (avoids repeated full scans)
+        tf_count = tf_table.count("*").fetchone()[0]
+        idx_count = inverted_index.count("*").fetchone()[0]
+
+        logger.debug(
+            "Wrote artefacts to '%s': %d addresses, %d term frequencies, %d index rows",
+            output_folder,
+            addr_count,
+            tf_count,
+            idx_count,
+        )
+
+        if output_chunk_count > 1:
             logger.debug(
-                "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
-                chunk_index + 1,
+                "Wrote %d canonical output chunks to '%s'",
                 output_chunk_count,
-                chunk_path,
-                chunk_count,
-                _format_elapsed(time.perf_counter() - started_at),
+                chunk_output_location,
             )
 
-    # Compute row counts once (avoids repeated full scans)
-    tf_count = tf_table.count("*").fetchone()[0]
-    idx_count = inverted_index.count("*").fetchone()[0]
+        artefact_columns: dict[str, list[str]] = {
+            PREPARED_TERM_FREQUENCIES_FILENAME: tf_table.columns,
+            PREPARED_INVERTED_INDEX_FILENAME: inverted_index.columns,
+        }
+        if roadlike_places is not None:
+            artefact_columns[ROADLIKE_PLACES_FILENAME] = roadlike_places.columns
+        for canonical_path in canonical_paths:
+            relative_name = (
+                relative_remote_path(output_folder_uri, str(canonical_path))
+                if output_is_remote
+                else str(Path(canonical_path).relative_to(output_folder_path))
+            )
+            artefact_columns[relative_name] = [
+                c for c in df_clean.columns if c not in canonical_drop_columns
+            ]
 
-    logger.debug(
-        "Wrote artefacts to '%s': %d addresses, %d term frequencies, %d index rows",
-        output_folder,
-        addr_count,
-        tf_count,
-        idx_count,
-    )
+        manifest_row_counts = {
+            "canonical_addresses": addr_count,
+            "term_frequencies": tf_count,
+            "inverted_index": idx_count,
+            "canonical_output_chunks": output_chunk_count,
+        }
+        artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
+        if roadlike_places is not None:
+            roadlike_count = roadlike_places.count("*").fetchone()[0]
+            manifest_row_counts["roadlike_places"] = roadlike_count
+            artefact_paths.append(roadlike_places_path)
 
-    if output_chunk_count > 1:
-        logger.debug(
-            "Wrote %d canonical output chunks to '%s'",
-            output_chunk_count,
-            chunk_output_location,
-        )
+        if output_is_remote:
+            _write_manifest_remote(
+                output_folder_uri,
+                con=con,
+                artefact_paths=[str(path) for path in artefact_paths],
+                artefact_columns=artefact_columns,
+                row_counts=manifest_row_counts,
+                preparation_options={"add_debug_features": add_debug_features},
+            )
+        else:
+            _write_manifest_local(
+                output_folder_path,
+                con=con,
+                artefact_paths=[Path(path) for path in artefact_paths],
+                artefact_columns=artefact_columns,
+                row_counts=manifest_row_counts,
+                preparation_options={"add_debug_features": add_debug_features},
+            )
 
-    artefact_columns: dict[str, list[str]] = {
-        PREPARED_TERM_FREQUENCIES_FILENAME: tf_table.columns,
-        PREPARED_INVERTED_INDEX_FILENAME: inverted_index.columns,
-    }
-    if roadlike_places is not None:
-        artefact_columns[ROADLIKE_PLACES_FILENAME] = roadlike_places.columns
-    for canonical_path in canonical_paths:
-        relative_name = (
-            relative_remote_path(output_folder_uri, str(canonical_path))
-            if output_is_remote
-            else str(Path(canonical_path).relative_to(output_folder_path))
-        )
-        artefact_columns[relative_name] = [
-            c for c in df_clean.columns if c not in canonical_drop_columns
-        ]
-
-    manifest_row_counts = {
-        "canonical_addresses": addr_count,
-        "term_frequencies": tf_count,
-        "inverted_index": idx_count,
-        "canonical_output_chunks": output_chunk_count,
-    }
-    artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
-    if roadlike_places is not None:
-        roadlike_count = roadlike_places.count("*").fetchone()[0]
-        manifest_row_counts["roadlike_places"] = roadlike_count
-        artefact_paths.append(roadlike_places_path)
-
-    if output_is_remote:
-        _write_manifest_remote(
-            output_folder_uri,
-            con=con,
-            artefact_paths=[str(path) for path in artefact_paths],
-            artefact_columns=artefact_columns,
-            row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
-        )
-    else:
-        _write_manifest_local(
-            output_folder_path,
-            con=con,
-            artefact_paths=[Path(path) for path in artefact_paths],
-            artefact_columns=artefact_columns,
-            row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
-        )
-
-    logger.info("Prepared canonical artefacts written to '%s'", output_folder)
+        logger.info("Prepared canonical artefacts written to '%s'", output_folder)
 
 
 def _write_manifest_local(

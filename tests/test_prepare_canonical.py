@@ -113,6 +113,37 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
     assert prepared.roadlike_places.count("*").fetchone()[0] > 0
 
 
+@pytest.mark.parametrize("fail_after_chunks", [False, True])
+def test_canonical_chunk_files_are_cleaned_on_success_and_failure(
+    canonical_data, con, tmp_path, monkeypatch, fail_after_chunks
+):
+    canonical_data = canonical_data.select(
+        "unique_id::ENUM('C3', 'C2', 'C1') AS unique_id, "
+        "'1 high street london' AS address_concat, 'SW1A 1AA' AS postcode"
+    )
+    spill = tmp_path / "spill with ' quote"
+    con.execute("SET temp_directory = ?", [str(spill)])
+    original = chunking_strategies.derive_inverted_index
+
+    def inspect_chunks(*args, **kwargs):
+        assert list(spill.glob("ukam-prepared-*/*.parquet"))
+        if fail_after_chunks:
+            raise RuntimeError("injected failure after chunks are written")
+        index = original(*args, **kwargs)
+        assert (["C3", "C2", "C1"],) in index.select("unique_ids").fetchall()
+        return index
+
+    monkeypatch.setattr(chunking_strategies, "derive_inverted_index", inspect_chunks)
+    if fail_after_chunks:
+        with pytest.raises(RuntimeError, match="injected failure"):
+            prepare_canonical_folder(canonical_data, tmp_path / "prepared", con=con)
+    else:
+        prepare_canonical_folder(canonical_data, tmp_path / "prepared", con=con)
+        prepared = load_prepared_canonical_data(tmp_path / "prepared", con)
+        assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
+    assert not list(spill.glob("ukam-prepared-*"))
+
+
 def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     output_folder = tmp_path / "without_road_keys"
 
@@ -690,10 +721,13 @@ def test_prepare_overwrite_true_succeeds(con, canonical_data):
 
 
 @pytest.mark.parametrize("add_debug_features", [False, True])
-def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_features):
+def test_prepare_remote_csv_input_writes_remote_output(
+    monkeypatch, add_debug_features, tmp_path
+):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
+    con.execute.return_value.fetchone.return_value = (str(tmp_path),)
     raw_relation = _fake_relation(
         columns=["unique_id", "address_concat", "postcode"],
         row_count=3,
@@ -800,10 +834,13 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
 
 
 @pytest.mark.parametrize("add_debug_features", [False, True])
-def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_features):
+def test_prepare_remote_output_writes_chunked_paths(
+    monkeypatch, add_debug_features, tmp_path
+):
     from uk_address_matcher.cleaning import chunking_strategies
 
     con = MagicMock()
+    con.execute.return_value.fetchone.return_value = (str(tmp_path),)
     raw_relation = _fake_relation(
         columns=["unique_id", "address_concat", "postcode"],
         row_count=3,

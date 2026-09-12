@@ -946,6 +946,7 @@ def prepare_data_for_matching(
     _precleaned_addresses: bool = False,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
+    _parquet_directory: Path | None = None,
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -977,6 +978,8 @@ def prepare_data_for_matching(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
+        _parquet_directory: Internal chunk storage for canonical preparation.
+            The caller owns the directory and must keep it alive while reading.
 
     Returns:
         Cleaned address data with computed term frequencies, including numeric
@@ -1130,7 +1133,17 @@ def prepare_data_for_matching(
                 debug_options=debug_options if chunk_index == 0 else None,
             )
 
-            if chunk_index == 0:
+            if _parquet_directory is not None:
+                if chunk_index == 0:
+                    unique_id_type = processed_chunk.select("unique_id").types[0]
+                processed_chunk = processed_chunk.select("* EXCLUDE (__ukam_row_id)")
+                chunk_path = str(_parquet_directory / f"{chunk_index:05d}.parquet")
+                escaped_path = chunk_path.replace("'", "''")
+                con.execute(f"""
+                    COPY ({processed_chunk.sql_query()}) TO '{escaped_path}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 1)
+                """)
+            elif chunk_index == 0:
                 con.execute(f"DROP TABLE IF EXISTS {processed_table}")
                 processed_chunk.create(processed_table)
             else:
@@ -1170,10 +1183,18 @@ def prepare_data_for_matching(
     if inv_idx_table_name == "__ukam_inverted_index":
         _drop_table_and_registered_aliases(con, inv_idx_table_name)
 
-    con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
+    if _parquet_directory is None:
+        con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
+    else:
+        # Preserve ID ordering in the index, including the declared order of ENUMs.
+        con.read_parquet(str(_parquet_directory / "*.parquet")).select(
+            f"* REPLACE (CAST(unique_id AS {unique_id_type}) AS unique_id)"
+        ).create_view(processed_table)
     logger.debug("Prepared address table finalized")
 
-    return con.table(processed_table)
+    if _parquet_directory is None:
+        return con.table(processed_table)
+    return con.sql(f"SELECT * FROM {processed_table}")
 
 
 __all__ = [
