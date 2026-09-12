@@ -12,7 +12,7 @@ It is powered by [DuckDB-WASM](https://duckdb.org/docs/current/clients/wasm/over
 ## Preview
 
 <video controls preload="metadata" width="100%" playsinline>
-    <source src="../assets/videos/labelling_tool_beta_preview.mp4" type="video/quicktime">
+    <source src="../assets/videos/labelling_tool_beta_preview.mp4" type="video/mp4">
     Your browser does not support the video tag.
 </video>
 
@@ -156,7 +156,7 @@ manifest and every referenced file are checked before loading. Canonical search
 matches unique ID, postcode, or cleaned-address text and returns up to 100
 records per page.
 
-??? note "Hackney end-to-end example"
+!!! info "Hackney end-to-end example"
 
   [`benchmarking/hackney_labelling_examples.py`](https://github.com/moj-analytical-services/uk_address_matcher/blob/main/benchmarking/hackney_labelling_examples.py)
   shows the Hackney dataset setup, residential-address filter, matching run,
