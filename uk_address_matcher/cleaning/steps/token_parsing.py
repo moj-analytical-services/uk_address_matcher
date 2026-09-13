@@ -643,6 +643,53 @@ def _parse_out_numbers():
 
 
 @pipeline_stage(
+    name="derive_missingness_aware_sub_premise_features",
+    description=(
+        "Derive role and identifier candidates without promoting unknown markers"
+    ),
+    tags=["token_extraction", "sub_premise_parsing"],
+)
+def _derive_missingness_aware_sub_premise_features():
+    marker_pattern = r"^\s*([A-Z]+)\s+(?:[A-Z]?\d{1,5}[A-Z]?|[A-Z])\b"
+    return f"""
+    SELECT
+        i.*,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{marker_pattern}', 1),
+            ''
+        ) AS sub_premise_marker_token,
+        CASE
+            WHEN i.has_flat_indicator
+                OR i.flat_number IS NOT NULL
+                OR i.flat_letter IS NOT NULL
+                OR i.flat_positional IS NOT NULL
+                THEN 'FLAT'
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN 'BUSINESS_UNIT'
+            ELSE NULL
+        END AS sub_premise_role,
+        CASE
+            WHEN i.has_flat_indicator
+                AND i.flat_number IS NOT NULL
+                AND i.flat_letter IS NOT NULL
+                THEN CONCAT(i.flat_number, i.flat_letter)
+            WHEN i.has_flat_indicator
+                THEN COALESCE(
+                    NULLIF(i.flat_number, ''),
+                    NULLIF(i.flat_letter, '')
+                )
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN NULLIF(i.business_unit_id, '')
+            WHEN i.numeric_tokens IS NOT NULL
+                AND len(i.numeric_tokens) >= 1
+                THEN list_extract(i.numeric_tokens, 1)
+            ELSE NULL
+        END AS sub_premise_identifier
+    FROM {{input}} AS i
+    """
+
+
+@pipeline_stage(
     name="clean_address_string_second_pass",
     description=(
         "Apply final cleaning to address without numbers: remove multiple spaces and trim"
