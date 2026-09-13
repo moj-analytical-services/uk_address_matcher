@@ -132,6 +132,29 @@ def _align_sub_premise_columns(
     return df_addresses_to_match, df_addresses_to_search_within
 
 
+def _align_commercial_feature_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add neutral arrays for commercial features absent from older data."""
+    columns = (
+        "distinguishing_adj_start_tokens",
+        "common_adj_start_tokens",
+        "distinguishing_lexical_tokens",
+        "distinguishing_structural_tokens",
+        "numeric_specific_markers",
+    )
+    for column in columns:
+        expression = f"[]::VARCHAR[] AS {column}"
+        if column not in df_addresses_to_match.columns:
+            df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
+        if column not in df_addresses_to_search_within.columns:
+            df_addresses_to_search_within = df_addresses_to_search_within.select(
+                f"*, {expression}"
+            )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
 def _align_numeric_range_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -228,6 +251,13 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_sub_premise_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_commercial_feature_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )

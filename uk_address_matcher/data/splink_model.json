@@ -4,7 +4,9 @@
   "retain_matching_columns": true,
   "retain_intermediate_calculation_columns": true,
   "additional_columns_to_retain": [
-    "common_end_tokens_hist"
+    "common_end_tokens_hist",
+    "distinguishing_lexical_tokens",
+    "numeric_specific_markers"
   ],
   "sql_dialect": "duckdb",
   "linker_uid": "e5bphl9c",
@@ -340,6 +342,14 @@
           "is_null_level": true
         },
         {
+          "sql_condition": "(numeric_token_1_l = numeric_token_1_r OR nullif(regexp_extract(numeric_token_1_l, '\\\\d+', 0), '') = nullif(regexp_extract(numeric_token_1_r, '\\\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] IS NOT NULL AND numeric_specific_markers_r[1] IS NOT NULL AND numeric_specific_markers_l[1] != numeric_specific_markers_r[1]",
+          "label_for_charts": "Numeric 1 agrees but role marker conflicts (cap 6)",
+          "m_probability": 64.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "\"numeric_token_1_l\" = \"numeric_token_1_r\"",
           "label_for_charts": "Exact match",
           "m_probability": 95.00950852025916,
@@ -395,6 +405,14 @@
           "fix_m_probability": false,
           "fix_u_probability": false,
           "is_null_level": true
+        },
+        {
+          "sql_condition": "numeric_token_2_l = numeric_token_2_r AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] IS NOT NULL AND numeric_specific_markers_r[2] IS NOT NULL AND numeric_specific_markers_l[2] != numeric_specific_markers_r[2]",
+          "label_for_charts": "Numeric 2 agrees but role marker conflicts (cap 6)",
+          "m_probability": 64.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
         },
         {
           "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_2_r\"",
@@ -842,6 +860,63 @@
         }
       ],
       "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "commercial_distinguishing_lexical_tokens",
+      "comparison_levels": [
+        {
+          "sql_condition": "distinguishing_lexical_tokens_l IS NULL OR len(distinguishing_lexical_tokens_l) = 0",
+          "label_for_charts": "No lexical distinguishing tokens",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_lexical_tokens_l)",
+          "label_for_charts": "All lexical distinguishing tokens present",
+          "m_probability": 2.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_has_any(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_lexical_tokens_l)",
+          "label_for_charts": "Some lexical distinguishing tokens present",
+          "m_probability": 1.4142135623730951,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No lexical distinguishing tokens present (-2)",
+          "m_probability": 1.0,
+          "u_probability": 4.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Commercial lexical distinguishing tokens"
+    },
+    {
+      "output_column_name": "commercial_same_role_numeric_contradiction",
+      "comparison_levels": [
+        {
+          "sql_condition": "((numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_r, '\\\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\\\d+', 0), '') != nullif(regexp_extract(numeric_token_1_r, '\\\\d+', 0), '') AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] = numeric_specific_markers_r[1] AND numeric_specific_markers_l[1] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT')) OR (numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL AND numeric_token_2_l != numeric_token_2_r AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] = numeric_specific_markers_r[2] AND numeric_specific_markers_l[2] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT')))",
+          "label_for_charts": "Confident same-role numeric contradiction (-6)",
+          "m_probability": 0.015625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No confident same-role numeric contradiction",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Commercial same-role structural/numeric contradiction"
     },
     {
       "output_column_name": "signature_evidence",
