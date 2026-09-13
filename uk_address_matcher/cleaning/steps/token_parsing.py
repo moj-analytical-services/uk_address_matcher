@@ -763,3 +763,109 @@ def _generalised_token_aliases():
     FROM {{input}}
     """
     return sql
+
+
+@pipeline_stage(
+    name="parse_out_commercial_premise",
+    description="Extract commercial premise types and identifiers from addresses",
+    tags=["token_extraction", "business_parsing"],
+)
+def _parse_out_commercial_premise():
+    commercial_premise_patterns = [
+        r"CAR\s+PARK\s+SPACE",
+        r"PARKING\s+SPACE",
+        r"CAR\s+PARK",
+        r"LOCK\s+UP",
+        "LOCKUP",
+        "SHOP",
+        "KIOSK",
+        "PLOT",
+        "STALL",
+        "GARAGE",
+        "YARD",
+        "BAY",
+    ]
+    premise_pattern = "|".join(commercial_premise_patterns)
+    identifier_pattern = r"[A-Za-z]?\d{1,4}[A-Za-z]?|[A-Za-z]"
+    return f"""
+    SELECT
+        source.* EXCLUDE (__commercial_premise_match),
+        NULLIF(
+            regexp_replace(
+                UPPER(source.__commercial_premise_match.commercial_premise_type),
+                '\\s+',
+                ' ',
+                'g'
+            ),
+            ''
+        ) AS commercial_premise_type,
+        NULLIF(
+            UPPER(source.__commercial_premise_match.commercial_premise_id),
+            ''
+        ) AS commercial_premise_id,
+        source.__commercial_premise_match.commercial_premise_type != ''
+            AS has_commercial_premise
+    FROM (
+        SELECT
+            input.*,
+            regexp_extract(
+                input.clean_full_address,
+                '\\b({premise_pattern})\\b(?:\\s+({identifier_pattern})\\b)?',
+                ['commercial_premise_type', 'commercial_premise_id']
+            ) AS __commercial_premise_match
+        FROM {{input}} AS input
+    ) AS source
+    """
+
+
+@pipeline_stage(
+    name="derive_distinguishing_token_components",
+    description="Split canonical distinguishing prefixes into lexical residuals",
+    tags=["token_analysis", "commercial_parsing"],
+)
+def _derive_distinguishing_token_components():
+    marker_values = (
+        "'ANNEXE', 'WORKSHOP', 'DEPOT', 'FARM', 'BUSINESS', 'CENTRE', 'CENTER', "
+        "'BUILDING', 'STUDIO', 'WAREHOUSE', 'OFFICE', 'UNIT', 'UNITS', 'SUITE', "
+        "'SUITES', 'ROOM', 'FLOOR', 'FLOORS', 'SHOP', 'KIOSK', 'PLOT', 'STALL', "
+        "'GARAGE', 'YARD', 'BAY', 'PARKING', 'CAR', 'PARK', 'SPACE', 'LOCK', "
+        "'LOCKUP', 'CONTAINER', 'FLAT'"
+    )
+    return f"""
+    WITH marked AS (
+        SELECT
+            input.*,
+            list_filter(
+                range(1, len(input.distinguishing_adj_start_tokens) + 1),
+                position -> list_extract(
+                    input.distinguishing_adj_start_tokens, position
+                ) IN ({marker_values})
+                OR (
+                    position > 1
+                    AND list_extract(
+                        input.distinguishing_adj_start_tokens, position - 1
+                    ) IN ({marker_values})
+                    AND regexp_matches(
+                        list_extract(
+                            input.distinguishing_adj_start_tokens, position
+                        ),
+                        '^[A-Z]?[0-9]{{1,4}}[A-Z]?$|^[A-Z]$'
+                    )
+                )
+            ) AS __structural_positions
+        FROM {{input}} AS input
+    )
+    SELECT
+        marked.* EXCLUDE (__structural_positions),
+        list_transform(
+            __structural_positions,
+            position -> list_extract(distinguishing_adj_start_tokens, position)
+        ) AS distinguishing_structural_tokens,
+        list_filter(
+            distinguishing_adj_start_tokens,
+            (token, position) -> NOT list_contains(
+                __structural_positions, position
+            )
+        ) AS distinguishing_lexical_tokens
+    FROM marked
+    """

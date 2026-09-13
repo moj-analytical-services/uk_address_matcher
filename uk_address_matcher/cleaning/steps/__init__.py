@@ -41,7 +41,9 @@ from uk_address_matcher.cleaning.steps.term_frequencies import (
 )
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _clean_address_string_second_pass,
+    _derive_distinguishing_token_components,
     _derive_missingness_aware_sub_premise_features,
+    _parse_out_commercial_premise,
     _generalised_token_aliases,
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
@@ -50,6 +52,7 @@ from uk_address_matcher.cleaning.steps.token_parsing import (
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
 from uk_address_matcher.cleaning.steps.tokenisation import (
+    _derive_numeric_context_roles,
     _split_numeric_tokens_to_cols,
     _tokenise_address_without_numbers,
 )
@@ -61,7 +64,9 @@ __all__ = [
     "_parse_out_business_unit",
     "_parse_out_numbers",
     "_clean_address_string_second_pass",
+    "_derive_distinguishing_token_components",
     "_derive_missingness_aware_sub_premise_features",
+    "_parse_out_commercial_premise",
     "_generalised_token_aliases",
     "_get_token_frequeny_table",
     "_separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records",
@@ -82,6 +87,7 @@ __all__ = [
     "_derive_numeric_range",
     # tokenisation
     "_split_numeric_tokens_to_cols",
+    "_derive_numeric_context_roles",
     "_tokenise_address_without_numbers",
     # term_frequencies
     "_add_numeric_term_frequencies_using_registered_df",

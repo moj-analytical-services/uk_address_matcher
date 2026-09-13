@@ -28,6 +28,7 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     _lookup_keys_in_inverted_index,
 )
 from uk_address_matcher.cleaning.steps.token_parsing import (
+    _derive_distinguishing_token_components,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
 )
 from uk_address_matcher.logging.chunking import (
@@ -50,6 +51,13 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+DISTINGUISHING_FEATURE_COLUMNS = (
+    "distinguishing_adj_start_tokens",
+    "common_adj_start_tokens",
+    "distinguishing_structural_tokens",
+    "distinguishing_lexical_tokens",
+)
 
 
 def _materialise_relation(
@@ -744,7 +752,7 @@ def prepare_data_for_matching(
 
     if derive_distinguishing_wrt_adjacent_records:
         logger.debug("Deriving adjacent-record distinguishing tokens")
-        distinguishing_pipeline = create_sql_pipeline(
+        adjacent_pipeline = create_sql_pipeline(
             con,
             input_rel=cleaned_address_table,
             stage_specs=[
@@ -757,7 +765,33 @@ def prepare_data_for_matching(
                 "Compare each canonical address with nearby suffix-similar records"
             ),
         )
+        adjacent_tokens = adjacent_pipeline.run(debug_options)
+        distinguishing_input = con.sql(f"""
+            SELECT
+                cleaned.*,
+                adjacent.distinguishing_adj_start_tokens,
+                adjacent.common_adj_start_tokens
+            FROM {cleaned_table_name} AS cleaned
+            INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
+                ON adjacent.__ukam_row_id = cleaned.__ukam_row_id
+        """)
+        distinguishing_pipeline = create_sql_pipeline(
+            con,
+            input_rel=distinguishing_input,
+            stage_specs=[_derive_distinguishing_token_components],
+            pipeline_name="Derive commercial distinguishing tokens",
+            pipeline_description="Split distinguishing prefixes into structural and lexical tokens",
+        )
         distinguishing_tokens = distinguishing_pipeline.run(debug_options)
+        distinguishing_columns = [
+            column
+            for column in distinguishing_tokens.columns
+            if column not in DISTINGUISHING_FEATURE_COLUMNS
+        ]
+        distinguishing_columns.extend(DISTINGUISHING_FEATURE_COLUMNS)
+        distinguishing_tokens = distinguishing_tokens.project(
+            ", ".join(distinguishing_columns)
+        )
         distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
         _materialise_relation(
             con,
@@ -805,9 +839,10 @@ def prepare_data_for_matching(
         distinguishing_select_sql = ""
         distinguishing_join_sql = ""
     else:
-        distinguishing_select_sql = """,
-                distinguishing.distinguishing_adj_start_tokens,
-                distinguishing.common_adj_start_tokens"""
+        distinguishing_select_sql = ",\n                " + ",\n                ".join(
+            f"distinguishing.{column}"
+            for column in DISTINGUISHING_FEATURE_COLUMNS
+        )
         distinguishing_join_sql = f"""
             LEFT JOIN {distinguishing_table_name} AS distinguishing
               ON cleaned.__ukam_row_id = distinguishing.__ukam_row_id
