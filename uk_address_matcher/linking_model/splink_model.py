@@ -23,6 +23,22 @@ def _get_model_settings_dict():
         return json.load(f)
 
 
+def _get_missing_marker_recovery_settings() -> SettingsCreator:
+    """Return an ablation that keeps only novel sub-premise recovery evidence."""
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "sub_premise_identifier"
+    )
+    comparison["comparison_levels"] = [
+        level
+        for level in comparison["comparison_levels"]
+        if level.get("label_for_charts") != "Exact known sub-premise identifier"
+    ]
+    return SettingsCreator.from_path_or_dict(settings)
+
+
 def _sanitise_null_comparison_levels(settings_as_dict: dict) -> dict:
     """Normalise null comparison levels for Splink compatibility.
 
@@ -92,6 +108,27 @@ def _align_distinguishing_token_columns(
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             f"*, {empty_tokens}"
         )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
+def _align_sub_premise_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add nullable sub-premise fields for older prepared canonical data."""
+    columns = (
+        "sub_premise_marker_token",
+        "sub_premise_role",
+        "sub_premise_identifier",
+    )
+    for column in columns:
+        expression = f"CAST(NULL AS VARCHAR) AS {column}"
+        if column not in df_addresses_to_match.columns:
+            df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
+        if column not in df_addresses_to_search_within.columns:
+            df_addresses_to_search_within = df_addresses_to_search_within.select(
+                f"*, {expression}"
+            )
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -184,6 +221,13 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_distinguishing_token_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_sub_premise_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )
