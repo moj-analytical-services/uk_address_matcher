@@ -193,7 +193,7 @@ def _parse_out_flat_position_and_letter():
       - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
       - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
-      - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
+    - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
     """
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
@@ -329,7 +329,7 @@ def _parse_out_flat_position_and_letter():
 
         -- 3) flat_number (priority explained inline)
         -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
-        -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
+        -- Ambiguous cases like "7 42 FICTIONAL ROAD" should NOT populate flat_number
         -- since "2" might be a building number, not a flat.
         -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
         -- we use NULLIF(..., '') to normalise non-matches.
