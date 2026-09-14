@@ -420,14 +420,6 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND sub_premise_role_l IS NOT NULL AND sub_premise_role_l = sub_premise_role_r",
-          "label_for_charts": "Exact known sub-premise identifier",
-          "m_probability": 16.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        },
-        {
           "sql_condition": "(sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NOT NULL) OR (sub_premise_identifier_l IS NOT NULL AND sub_premise_identifier_r IS NULL)",
           "label_for_charts": "One sub-premise identifier absent",
           "m_probability": 0.5,
