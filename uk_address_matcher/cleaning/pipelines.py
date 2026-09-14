@@ -67,7 +67,9 @@ def _ensure_postcode_column(rel: DuckDBPyRelation) -> DuckDBPyRelation:
             )
         else:
             # Already lowercase, just ensure VARCHAR type
-            return rel.select("* EXCLUDE (postcode), CAST(postcode AS VARCHAR) AS postcode")
+            return rel.select(
+                "* EXCLUDE (postcode), CAST(postcode AS VARCHAR) AS postcode"
+            )
     else:
         # No postcode column exists, add NULL
         return rel.select("*, CAST(NULL AS VARCHAR) AS postcode")
@@ -162,7 +164,9 @@ def _clean_data_pre_term_frequencies(
 
     if exclude_columns:
         exclude_sql = ", ".join(exclude_columns)
-        result = con.sql(f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned")
+        result = con.sql(
+            f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned"
+        )
 
     return result
 
@@ -216,7 +220,9 @@ def _clean_data_using_precomputed_rel_tok_freq(
 
     if exclude_columns:
         exclude_sql = ", ".join(exclude_columns)
-        result = con.sql(f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned")
+        result = con.sql(
+            f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned"
+        )
 
     return result
 
@@ -243,7 +249,9 @@ def get_numeric_term_frequencies_from_address_table(
             df_address_table,
             stage_queue,
             pipeline_name="Get numeric term frequencies",
-            pipeline_description=("Derive numeric tokens and compute frequency distribution"),
+            pipeline_description=(
+                "Derive numeric tokens and compute frequency distribution"
+            ),
         )
         numeric_tokens_rel = pipeline.run(debug_options)
         con.register(_NUMERIC_TOKENS_WORK_NAME, numeric_tokens_rel)
@@ -370,11 +378,15 @@ def _register_inverted_index_table(
     existing_alias = getattr(inverted_index, "alias", None)
     if isinstance(existing_alias, str) and _duckdb_table_exists(con, existing_alias):
         con.sql("DROP VIEW IF EXISTS __ukam_inverted_index")
-        con.execute(f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}")
+        con.execute(
+            f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
+        )
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
-        con.sql(f"SELECT * FROM ({inverted_index.sql_query()})").create("__ukam_inverted_index")
+        con.sql(f"SELECT * FROM ({inverted_index.sql_query()})").create(
+            "__ukam_inverted_index"
+        )
 
     _register_inverted_index_meta(con, inverted_index_n)
     return "__ukam_inverted_index"
@@ -392,7 +404,8 @@ def _register_inverted_index_meta(
     """
     if inverted_index_n is None:
         inverted_index_n = con.sql(
-            "SELECT COUNT(DISTINCT u) FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
+            "SELECT COUNT(DISTINCT u) "
+            "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
         ).fetchone()[0]
     n_value = max(int(inverted_index_n or 0), 1)
     con.execute("DROP TABLE IF EXISTS __ukam_index_meta")

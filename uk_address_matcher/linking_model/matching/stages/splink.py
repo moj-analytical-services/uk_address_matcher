@@ -182,7 +182,9 @@ class SplinkStage(MatchingStage):
         prediction_output = project_splink_predictions(
             con,
             df_predict_ddb,
-            retain_intermediate_calculation_columns=(self.retain_intermediate_calculation_columns),
+            retain_intermediate_calculation_columns=(
+                self.retain_intermediate_calculation_columns
+            ),
         )
 
         table_name = f"__ukam__splink__predictions__{_uid()}"

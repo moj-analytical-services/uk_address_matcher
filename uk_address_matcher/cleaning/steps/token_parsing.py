@@ -123,7 +123,9 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     FROM {suffix_lengths} AS suffix_lengths
     """
 
-    output_columns_sql = "input_address.*," if include_input_columns else "maximums.__ukam_row_id,"
+    output_columns_sql = (
+        "input_address.*," if include_input_columns else "maximums.__ukam_row_id,"
+    )
     output_source_sql = (
         "FROM {input} AS input_address\n"
         "LEFT JOIN {maximum_suffix_lengths} AS maximums\n"
@@ -182,7 +184,9 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
 @pipeline_stage(
     name="parse_out_flat_position_and_letter",
-    description=("Extract flat positions and letters from address strings into separate columns"),
+    description=(
+        "Extract flat positions and letters from address strings into separate columns"
+    ),
     tags=["token_extraction", "flat_parsing"],
 )
 def _parse_out_flat_position_and_letter():
@@ -244,12 +248,18 @@ def _parse_out_flat_position_and_letter():
     )
     # Core token patterns (RE2-compatible; avoid lookbehind)
     num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
-    leading_num_letter = r"^\s*(\d{1,4})([A-Za-z])\b"  # e.g., 11A ... (number=grp1, letter=grp2)
+    leading_num_letter = (
+        r"^\s*(\d{1,4})([A-Za-z])\b"  # e.g., 11A ... (number=grp1, letter=grp2)
+    )
     # Match all numbers (standalone digits, not part of ranges like 120-122)
     count_numbers = r"\b(\d{1,5})\b"
 
-    flat_num_after_flat = r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/])"  # FLAT 12 / FLAT 12A / FLAT 12/2
-    flat_letter_after_num_after_flat = r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+    flat_num_after_flat = (
+        r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/])"  # FLAT 12 / FLAT 12A / FLAT 12/2
+    )
+    flat_letter_after_num_after_flat = (
+        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+    )
     flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
@@ -513,7 +523,9 @@ def _parse_out_sub_premise_location():
 
 @pipeline_stage(
     name="parse_out_business_unit",
-    description=("Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses"),
+    description=(
+        "Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses"
+    ),
     tags=["token_extraction", "business_parsing"],
 )
 def _parse_out_business_unit():
@@ -549,7 +561,9 @@ def _parse_out_business_unit():
     keywords_pattern = "|".join(business_keywords)
 
     # Pattern for singular: UNIT A, UNIT 5, UNIT 5A, UNIT A5
-    singular_pattern = rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
+    singular_pattern = (
+        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
+    )
 
     sql = f"""
     SELECT
@@ -630,7 +644,9 @@ def _parse_out_numbers():
 
 @pipeline_stage(
     name="derive_missingness_aware_sub_premise_features",
-    description=("Derive role and identifier candidates without promoting unknown markers"),
+    description=(
+        "Derive role and identifier candidates without promoting unknown markers"
+    ),
     tags=["token_extraction", "sub_premise_parsing"],
 )
 def _derive_missingness_aware_sub_premise_features():
@@ -707,7 +723,9 @@ GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
 
 @pipeline_stage(
     name="generalised_token_aliases",
-    description=("Map specific tokens to more general categories for better matching heuristics"),
+    description=(
+        "Map specific tokens to more general categories for better matching heuristics"
+    ),
     tags="token_transformation",
 )
 def _generalised_token_aliases():

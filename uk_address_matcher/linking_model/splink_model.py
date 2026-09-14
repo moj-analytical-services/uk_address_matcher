@@ -16,7 +16,9 @@ _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
 
 def _get_model_settings_dict():
     with (
-        pkg_resources.files("uk_address_matcher.data").joinpath("splink_model.json").open("r") as f
+        pkg_resources.files("uk_address_matcher.data")
+        .joinpath("splink_model.json")
+        .open("r") as f
     ):
         return json.load(f)
 
@@ -111,7 +113,9 @@ def _align_distinguishing_token_columns(
     if column_name not in df_addresses_to_match.columns:
         df_addresses_to_match = df_addresses_to_match.select(f"*, {empty_tokens}")
     if column_name not in df_addresses_to_search_within.columns:
-        df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {empty_tokens}")
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            f"*, {empty_tokens}"
+        )
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -130,7 +134,9 @@ def _align_sub_premise_columns(
         if column not in df_addresses_to_match.columns:
             df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
         if column not in df_addresses_to_search_within.columns:
-            df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {expression}")
+            df_addresses_to_search_within = df_addresses_to_search_within.select(
+                f"*, {expression}"
+            )
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -152,7 +158,9 @@ def _align_address_structure_feature_columns(
         if column not in df_addresses_to_match.columns:
             df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
         if column not in df_addresses_to_search_within.columns:
-            df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {expression}")
+            df_addresses_to_search_within = df_addresses_to_search_within.select(
+                f"*, {expression}"
+            )
 
     premise_aliases = (
         ("address_structure_premise_type", "commercial_premise_type", "VARCHAR"),
@@ -174,7 +182,9 @@ def _align_address_structure_feature_columns(
         return relation
 
     df_addresses_to_match = add_missing_premise_aliases(df_addresses_to_match)
-    df_addresses_to_search_within = add_missing_premise_aliases(df_addresses_to_search_within)
+    df_addresses_to_search_within = add_missing_premise_aliases(
+        df_addresses_to_search_within
+    )
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -204,7 +214,9 @@ def _align_numeric_range_columns(
         ]
         return relation.select("*, " + ", ".join(aliases)) if aliases else relation
 
-    return align_relation(df_addresses_to_match), align_relation(df_addresses_to_search_within)
+    return align_relation(df_addresses_to_match), align_relation(
+        df_addresses_to_search_within
+    )
 
 
 def _get_linker(
@@ -251,7 +263,9 @@ def _get_linker(
         ).select(f"* EXCLUDE({exclude_sql})")
 
     if "original_address_concat" in df_addresses_to_match.columns:
-        df_addresses_to_match = df_addresses_to_match.select("* EXCLUDE(original_address_concat)")
+        df_addresses_to_match = df_addresses_to_match.select(
+            "* EXCLUDE(original_address_concat)"
+        )
     if "original_address_concat" in df_addresses_to_search_within.columns:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             "* EXCLUDE(original_address_concat)"
@@ -319,10 +333,13 @@ def _get_linker(
         retained_columns.extend(
             column
             for column in additional_columns_to_retain
-            if column not in {"original_address_concat", "original_address_concat_canonical"}
+            if column
+            not in {"original_address_concat", "original_address_concat_canonical"}
             and column in available_columns
         )
-    settings_as_dict["additional_columns_to_retain"] = list(dict.fromkeys(retained_columns))
+    settings_as_dict["additional_columns_to_retain"] = list(
+        dict.fromkeys(retained_columns)
+    )
 
     # Use ukam_address_id as unique_id column name
     # (created as part of our cleaning process).
@@ -341,7 +358,9 @@ def _get_linker(
     # errors. Only retain it for the comparison when present on the messy side.
     _empty_score_map = "MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map"
     messy_has_score_map = "signature_score_map" in df_addresses_to_match.columns
-    canonical_has_score_map = "signature_score_map" in df_addresses_to_search_within.columns
+    canonical_has_score_map = (
+        "signature_score_map" in df_addresses_to_search_within.columns
+    )
     if messy_has_score_map and not canonical_has_score_map:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             f"*, {_empty_score_map}"
@@ -361,7 +380,9 @@ def _get_linker(
     # signature comparison can reward unique rare-span hits.
     _empty_hits_map = "MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map"
     messy_has_hits_map = "signature_unique_hits_map" in df_addresses_to_match.columns
-    canonical_has_hits_map = "signature_unique_hits_map" in df_addresses_to_search_within.columns
+    canonical_has_hits_map = (
+        "signature_unique_hits_map" in df_addresses_to_search_within.columns
+    )
     if messy_has_hits_map and not canonical_has_hits_map:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             f"*, {_empty_hits_map}"
@@ -371,14 +392,17 @@ def _get_linker(
     if messy_has_hits_map or canonical_has_hits_map:
         settings_as_dict["additional_columns_to_retain"] = list(
             dict.fromkeys(
-                settings_as_dict["additional_columns_to_retain"] + ["signature_unique_hits_map"]
+                settings_as_dict["additional_columns_to_retain"]
+                + ["signature_unique_hits_map"]
             )
         )
 
     # Auto-detect ukam_label: if present in messy data, retain it for accuracy testing.
     if "ukam_label" in df_addresses_to_match.columns:
         settings_as_dict["additional_columns_to_retain"] = list(
-            dict.fromkeys(settings_as_dict["additional_columns_to_retain"] + ["ukam_label"])
+            dict.fromkeys(
+                settings_as_dict["additional_columns_to_retain"] + ["ukam_label"]
+            )
         )
         if "ukam_label" not in df_addresses_to_search_within.columns:
             df_addresses_to_search_within = df_addresses_to_search_within.select(
@@ -453,7 +477,9 @@ def _get_linker(
         )
 
     cols_to_select = [
-        column for column in df_addresses_to_match.columns if column != "original_address_concat"
+        column
+        for column in df_addresses_to_match.columns
+        if column != "original_address_concat"
     ]
     select_expr = ", ".join(cols_to_select)
     messy_subquery = df_addresses_to_match_fix.sql_query()

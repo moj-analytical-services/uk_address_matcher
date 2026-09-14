@@ -4,6 +4,8 @@ import pytest
 from splink import DuckDBAPI
 from splink.comparison_level_library import CustomLevel
 from splink.internals.testing import is_in_level
+
+from uk_address_matcher import AddressMatcher
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import (
     _align_distinguishing_token_columns,
@@ -13,8 +15,6 @@ from uk_address_matcher.linking_model.splink_model import (
     _sanitise_null_comparison_levels,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
-
-from uk_address_matcher import AddressMatcher
 
 
 @pytest.fixture
@@ -143,7 +143,8 @@ def test_get_linker_raises_when_canonical_empty(
 def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_con):
     messy = duck_con.sql("SELECT 1 AS unique_id")
     canonical = duck_con.sql(
-        "SELECT 2 AS unique_id, ['FLAT', 'A']::VARCHAR[] AS distinguishing_adj_start_tokens"
+        "SELECT 2 AS unique_id, ['FLAT', 'A']::VARCHAR[] "
+        "AS distinguishing_adj_start_tokens"
     )
 
     aligned_messy, aligned_canonical = _align_distinguishing_token_columns(
@@ -184,15 +185,21 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
     )
 
     assert aligned_messy.project("numeric_range").fetchone() == (None,)
-    assert aligned_messy.project("numeric_range_lower, numeric_range_upper").fetchone() == (
+    assert aligned_messy.project(
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (
         None,
         None,
     )
-    assert aligned_canonical.project("numeric_range.lower, numeric_range.upper").fetchone() == (
+    assert aligned_canonical.project(
+        "numeric_range.lower, numeric_range.upper"
+    ).fetchone() == (
         20,
         23,
     )
-    assert aligned_canonical.project("numeric_range_lower, numeric_range_upper").fetchone() == (
+    assert aligned_canonical.project(
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (
         20,
         23,
     )
@@ -207,7 +214,8 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"] == "commercial_distinguishing_ordered_signature"
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
     )
     levels = comparison["comparison_levels"]
 
@@ -224,12 +232,18 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
         "label_for_charts": "No distinguishing tokens",
         "is_null_level": True,
     }
-    assert levels[1]["sql_condition"].startswith("postcode_l = postcode_r AND list_slice(")
-    assert [math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]] == [
+    assert levels[1]["sql_condition"].startswith(
+        "postcode_l = postcode_r AND list_slice("
+    )
+    assert [
+        math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
+    ] == [
         10.0,
         0.0,
     ]
-    assert all(level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:])
+    assert all(
+        level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
+    )
 
 
 @pytest.mark.parametrize(
@@ -256,7 +270,8 @@ def test_postcode_exact_safe_gap_level_matches_expected_rows(
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"] == "commercial_distinguishing_ordered_signature"
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
     )
     safe_gap_level = CustomLevel(
         comparison["comparison_levels"][1]["sql_condition"],

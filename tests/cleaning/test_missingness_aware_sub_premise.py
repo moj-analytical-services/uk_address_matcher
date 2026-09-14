@@ -2,6 +2,7 @@ import math
 
 import duckdb
 import pytest
+
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps import (
     _derive_missingness_aware_sub_premise_features,
@@ -91,15 +92,15 @@ def test_splink_scores_marker_missingness_and_identifier_conflict(duck_con):
         dataset_role="messy",
         show_progress=False,
     )
-    assert canonical_clean.project("unique_id, sub_premise_role, sub_premise_identifier").order(
-        "unique_id"
-    ).fetchall() == [
+    assert canonical_clean.project(
+        "unique_id, sub_premise_role, sub_premise_identifier"
+    ).order("unique_id").fetchall() == [
         ("c_flat_2", "FLAT", "2"),
         ("c_flat_3", "FLAT", "3"),
     ]
-    assert messy_clean.project("unique_id, sub_premise_role, sub_premise_identifier").order(
-        "unique_id"
-    ).fetchall() == [
+    assert messy_clean.project(
+        "unique_id, sub_premise_role, sub_premise_identifier"
+    ).order("unique_id").fetchall() == [
         ("m_conflict", "FLAT", "3"),
         ("m_missing", None, "2"),
         ("m_typo", None, "2"),
