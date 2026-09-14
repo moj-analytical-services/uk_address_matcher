@@ -16,11 +16,17 @@ _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
 
 def _get_model_settings_dict():
     with (
-        pkg_resources.files("uk_address_matcher.data")
-        .joinpath("splink_model.json")
-        .open("r") as f
+        pkg_resources.files("uk_address_matcher.data").joinpath("splink_model.json").open("r") as f
     ):
         return json.load(f)
+
+
+def _get_production_model_settings_dict() -> dict:
+    return _get_model_settings_dict()
+
+
+def _get_production_model_settings() -> SettingsCreator:
+    return SettingsCreator.from_path_or_dict(_get_production_model_settings_dict())
 
 
 def _get_missing_marker_recovery_settings() -> SettingsCreator:
@@ -105,9 +111,7 @@ def _align_distinguishing_token_columns(
     if column_name not in df_addresses_to_match.columns:
         df_addresses_to_match = df_addresses_to_match.select(f"*, {empty_tokens}")
     if column_name not in df_addresses_to_search_within.columns:
-        df_addresses_to_search_within = df_addresses_to_search_within.select(
-            f"*, {empty_tokens}"
-        )
+        df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {empty_tokens}")
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -126,9 +130,51 @@ def _align_sub_premise_columns(
         if column not in df_addresses_to_match.columns:
             df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
         if column not in df_addresses_to_search_within.columns:
-            df_addresses_to_search_within = df_addresses_to_search_within.select(
-                f"*, {expression}"
-            )
+            df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {expression}")
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
+def _align_address_structure_feature_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add neutral arrays for address-structure features absent from older data."""
+    array_columns = (
+        "distinguishing_adj_start_tokens",
+        "common_adj_start_tokens",
+        "distinguishing_lexical_tokens",
+        "distinguishing_structural_tokens",
+        "numeric_tokens",
+        "numeric_specific_markers",
+    )
+    for column in array_columns:
+        expression = f"[]::VARCHAR[] AS {column}"
+        if column not in df_addresses_to_match.columns:
+            df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
+        if column not in df_addresses_to_search_within.columns:
+            df_addresses_to_search_within = df_addresses_to_search_within.select(f"*, {expression}")
+
+    premise_aliases = (
+        ("address_structure_premise_type", "commercial_premise_type", "VARCHAR"),
+        ("address_structure_premise_id", "commercial_premise_id", "VARCHAR"),
+        ("has_address_structure_premise", "has_commercial_premise", "BOOLEAN"),
+    )
+
+    def add_missing_premise_aliases(relation: DuckDBPyRelation) -> DuckDBPyRelation:
+        for generalized, legacy, data_type in premise_aliases:
+            if generalized not in relation.columns:
+                if legacy in relation.columns:
+                    expression = f"CAST({legacy} AS {data_type}) AS {generalized}"
+                else:
+                    expression = f"CAST(NULL AS {data_type}) AS {generalized}"
+                relation = relation.select(f"*, {expression}")
+            if legacy not in relation.columns:
+                expression = f"CAST({generalized} AS {data_type}) AS {legacy}"
+                relation = relation.select(f"*, {expression}")
+        return relation
+
+    df_addresses_to_match = add_missing_premise_aliases(df_addresses_to_match)
+    df_addresses_to_search_within = add_missing_premise_aliases(df_addresses_to_search_within)
     return df_addresses_to_match, df_addresses_to_search_within
 
 
@@ -136,23 +182,11 @@ def _align_commercial_feature_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
 ) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
-    """Add neutral arrays for commercial features absent from older data."""
-    columns = (
-        "distinguishing_adj_start_tokens",
-        "common_adj_start_tokens",
-        "distinguishing_lexical_tokens",
-        "distinguishing_structural_tokens",
-        "numeric_specific_markers",
+    """Compatibility wrapper for the address-structure feature alignment."""
+    return _align_address_structure_feature_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
     )
-    for column in columns:
-        expression = f"[]::VARCHAR[] AS {column}"
-        if column not in df_addresses_to_match.columns:
-            df_addresses_to_match = df_addresses_to_match.select(f"*, {expression}")
-        if column not in df_addresses_to_search_within.columns:
-            df_addresses_to_search_within = df_addresses_to_search_within.select(
-                f"*, {expression}"
-            )
-    return df_addresses_to_match, df_addresses_to_search_within
 
 
 def _align_numeric_range_columns(
@@ -170,9 +204,7 @@ def _align_numeric_range_columns(
         ]
         return relation.select("*, " + ", ".join(aliases)) if aliases else relation
 
-    return align_relation(df_addresses_to_match), align_relation(
-        df_addresses_to_search_within
-    )
+    return align_relation(df_addresses_to_match), align_relation(df_addresses_to_search_within)
 
 
 def _get_linker(
@@ -219,9 +251,7 @@ def _get_linker(
         ).select(f"* EXCLUDE({exclude_sql})")
 
     if "original_address_concat" in df_addresses_to_match.columns:
-        df_addresses_to_match = df_addresses_to_match.select(
-            "* EXCLUDE(original_address_concat)"
-        )
+        df_addresses_to_match = df_addresses_to_match.select("* EXCLUDE(original_address_concat)")
     if "original_address_concat" in df_addresses_to_search_within.columns:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             "* EXCLUDE(original_address_concat)"
@@ -257,7 +287,7 @@ def _get_linker(
     (
         df_addresses_to_match,
         df_addresses_to_search_within,
-    ) = _align_commercial_feature_columns(
+    ) = _align_address_structure_feature_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )
@@ -276,29 +306,32 @@ def _get_linker(
 
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
+    available_columns = set(df_addresses_to_match.columns).intersection(
+        df_addresses_to_search_within.columns
+    )
+    retained_columns = [
+        column
+        for column in settings_as_dict.get("additional_columns_to_retain", [])
+        if column not in {"original_address_concat", "original_address_concat_canonical"}
+        and column in available_columns
+    ]
     if additional_columns_to_retain:
-        available_columns = set(df_addresses_to_match.columns).intersection(
-            df_addresses_to_search_within.columns
-        )
-        additional_columns_to_retain = [
+        retained_columns.extend(
             column
             for column in additional_columns_to_retain
-            if column
-            not in {"original_address_concat", "original_address_concat_canonical"}
+            if column not in {"original_address_concat", "original_address_concat_canonical"}
             and column in available_columns
-        ]
-        if additional_columns_to_retain:
-            settings_as_dict.setdefault("additional_columns_to_retain", [])
-            settings_as_dict["additional_columns_to_retain"] += (
-                additional_columns_to_retain
-            )
+        )
+    settings_as_dict["additional_columns_to_retain"] = list(dict.fromkeys(retained_columns))
 
     # Use ukam_address_id as unique_id column name
     # (created as part of our cleaning process).
     settings_as_dict["unique_id_column_name"] = "ukam_address_id"
     # Also make sure we now retain unique_id from both datasets...
 
-    settings_as_dict["additional_columns_to_retain"].append("unique_id")
+    settings_as_dict["additional_columns_to_retain"] = list(
+        dict.fromkeys(settings_as_dict["additional_columns_to_retain"] + ["unique_id"])
+    )
 
     # Align the signature evidence score map across both inputs. Live messy
     # cleaning always emits `signature_score_map`, but a prepared canonical
@@ -308,9 +341,7 @@ def _get_linker(
     # errors. Only retain it for the comparison when present on the messy side.
     _empty_score_map = "MAP([]::VARCHAR[], []::DOUBLE[]) AS signature_score_map"
     messy_has_score_map = "signature_score_map" in df_addresses_to_match.columns
-    canonical_has_score_map = (
-        "signature_score_map" in df_addresses_to_search_within.columns
-    )
+    canonical_has_score_map = "signature_score_map" in df_addresses_to_search_within.columns
     if messy_has_score_map and not canonical_has_score_map:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             f"*, {_empty_score_map}"
@@ -318,7 +349,11 @@ def _get_linker(
     elif canonical_has_score_map and not messy_has_score_map:
         df_addresses_to_match = df_addresses_to_match.select(f"*, {_empty_score_map}")
     if messy_has_score_map or canonical_has_score_map:
-        settings_as_dict["additional_columns_to_retain"].append("signature_score_map")
+        settings_as_dict["additional_columns_to_retain"] = list(
+            dict.fromkeys(
+                settings_as_dict["additional_columns_to_retain"] + ["signature_score_map"]
+            )
+        )
 
     # Align the parallel unique-hit count map the same way. It carries, per
     # candidate canonical id, the number of shared inverted-index keys whose
@@ -326,9 +361,7 @@ def _get_linker(
     # signature comparison can reward unique rare-span hits.
     _empty_hits_map = "MAP([]::VARCHAR[], []::BIGINT[]) AS signature_unique_hits_map"
     messy_has_hits_map = "signature_unique_hits_map" in df_addresses_to_match.columns
-    canonical_has_hits_map = (
-        "signature_unique_hits_map" in df_addresses_to_search_within.columns
-    )
+    canonical_has_hits_map = "signature_unique_hits_map" in df_addresses_to_search_within.columns
     if messy_has_hits_map and not canonical_has_hits_map:
         df_addresses_to_search_within = df_addresses_to_search_within.select(
             f"*, {_empty_hits_map}"
@@ -336,13 +369,17 @@ def _get_linker(
     elif canonical_has_hits_map and not messy_has_hits_map:
         df_addresses_to_match = df_addresses_to_match.select(f"*, {_empty_hits_map}")
     if messy_has_hits_map or canonical_has_hits_map:
-        settings_as_dict["additional_columns_to_retain"].append(
-            "signature_unique_hits_map"
+        settings_as_dict["additional_columns_to_retain"] = list(
+            dict.fromkeys(
+                settings_as_dict["additional_columns_to_retain"] + ["signature_unique_hits_map"]
+            )
         )
 
     # Auto-detect ukam_label: if present in messy data, retain it for accuracy testing.
     if "ukam_label" in df_addresses_to_match.columns:
-        settings_as_dict["additional_columns_to_retain"].append("ukam_label")
+        settings_as_dict["additional_columns_to_retain"] = list(
+            dict.fromkeys(settings_as_dict["additional_columns_to_retain"] + ["ukam_label"])
+        )
         if "ukam_label" not in df_addresses_to_search_within.columns:
             df_addresses_to_search_within = df_addresses_to_search_within.select(
                 "*, NULL::VARCHAR AS ukam_label"
@@ -416,9 +453,7 @@ def _get_linker(
         )
 
     cols_to_select = [
-        column
-        for column in df_addresses_to_match.columns
-        if column != "original_address_concat"
+        column for column in df_addresses_to_match.columns if column != "original_address_concat"
     ]
     select_expr = ", ".join(cols_to_select)
     messy_subquery = df_addresses_to_match_fix.sql_query()
