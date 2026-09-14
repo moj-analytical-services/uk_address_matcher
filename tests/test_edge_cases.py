@@ -4,13 +4,13 @@ from pathlib import Path
 import duckdb
 import pytest
 from splink import block_on
-
-from tests.utils import prepare_combined_test_data
-from uk_address_matcher import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
+
+from tests.utils import prepare_combined_test_data
+from uk_address_matcher import prepare_data_for_matching
 
 # Splink match weight constants
 MATCH_WEIGHT_THRESHOLD_PREDICT = -50
@@ -39,7 +39,12 @@ def run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con=None):
     canonical_clean = prepare_data_for_matching(canonical_addresses, con=duckdb_con)
 
     # Configure the linker
-    columns_to_retain = ["original_address_concat", "true_match_id"]
+    columns_to_retain = [
+        "original_address_concat",
+        "true_match_id",
+        "common_end_tokens_hist",
+        "clean_full_address",
+    ]
     linker = _get_linker(
         df_addresses_to_match=messy_clean,
         df_addresses_to_search_within=canonical_clean,
@@ -223,9 +228,7 @@ def evaluate_matching_results(matching_results, duckdb_con):
 
             mismatch = {
                 "test_block_id": test_block_id,
-                "distinguishability_penalty": penalty
-                if penalty is not None
-                else float("inf"),
+                "distinguishability_penalty": penalty if penalty is not None else float("inf"),
                 "records": [
                     {
                         "record_type": r[0],
@@ -279,15 +282,11 @@ def print_matching_results(test_results):
                 else "inf"
             )
             logger.info(f"Distinguishability Penalty: {penalty}")
-            logger.info(
-                f"{'Record Type':<15} {'Address':<60} {'Postcode':<10} {'Match Weight'}"
-            )
+            logger.info(f"{'Record Type':<15} {'Address':<60} {'Postcode':<10} {'Match Weight'}")
             logger.info("-" * 100)
             for record in mismatch["records"]:
                 weight = (
-                    f"{record['match_weight']:.2f}"
-                    if record["match_weight"] is not None
-                    else "N/A"
+                    f"{record['match_weight']:.2f}" if record["match_weight"] is not None else "N/A"
                 )
                 logger.info(
                     f"{record['record_type']:<15} "
@@ -309,14 +308,10 @@ def test_address_matching_combined():
     yaml_path = Path(__file__).parent / "edge_case_addresses.yaml"
 
     # Prepare data
-    messy_addresses, canonical_addresses = prepare_combined_test_data(
-        yaml_path, duckdb_con
-    )
+    messy_addresses, canonical_addresses = prepare_combined_test_data(yaml_path, duckdb_con)
 
     # Run matching workflow
-    matching_results = run_matcher_workflow(
-        messy_addresses, canonical_addresses, duckdb_con
-    )
+    matching_results = run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con)
 
     # Evaluate results
     test_results = evaluate_matching_results(matching_results, duckdb_con)
