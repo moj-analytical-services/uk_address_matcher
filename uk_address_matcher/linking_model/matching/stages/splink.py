@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 from uk_address_matcher.cleaning.steps.roadlike_places import (
@@ -18,6 +19,50 @@ if TYPE_CHECKING:
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+def _prepare_inferred_road_scoring_features(
+    con: duckdb.DuckDBPyConnection,
+    df_unmatched: duckdb.DuckDBPyRelation,
+    df_canonical: duckdb.DuckDBPyRelation,
+    canonical_road_keys_path: str | None = None,
+    roadlike_places: duckdb.DuckDBPyRelation | None = None,
+) -> tuple[duckdb.DuckDBPyRelation, duckdb.DuckDBPyRelation]:
+    # TODO(ThomasHepworth): remove in 2.0; support the legacy explicit road-key file.
+    if "road_1_norm" not in df_canonical.columns and canonical_road_keys_path:
+        escaped_path = canonical_road_keys_path.replace("'", "''")
+        df_canonical = con.sql(
+            "SELECT canonical.*, road.road_1_norm "
+            f"FROM ({df_canonical.sql_query()}) AS canonical "
+            f"LEFT JOIN read_parquet('{escaped_path}') AS road "
+            "USING (ukam_address_id)"
+        )
+    elif "road_1_norm" not in df_canonical.columns and roadlike_places is not None:
+        df_canonical = add_road_blocking_features(
+            con,
+            df_canonical,
+            roadlike_places=roadlike_places,
+        )
+
+    if "road_1_norm" in df_canonical.columns:
+        if "road_1_norm" not in df_unmatched.columns:
+            if roadlike_places is not None:
+                df_unmatched = add_road_blocking_features(
+                    con,
+                    df_unmatched,
+                    roadlike_places=roadlike_places,
+                )
+            else:
+                # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+                df_unmatched = df_unmatched.select("*, NULL::VARCHAR AS road_1_norm")
+    else:
+        if "road_1_norm" not in df_unmatched.columns:
+            # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+            df_unmatched = df_unmatched.select("*, NULL::VARCHAR AS road_1_norm")
+        # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
+        df_canonical = df_canonical.select("*, NULL::VARCHAR AS road_1_norm")
+
+    return df_unmatched, df_canonical
 
 
 SPLINK_POST_LINKAGE_COLUMNS = (

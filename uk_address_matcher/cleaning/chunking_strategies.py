@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
+
+ROAD_SCORING_CHUNK_ROWS = 10_000_000
 
 DISTINGUISHING_FEATURE_COLUMNS = (
     "distinguishing_adj_start_tokens",
