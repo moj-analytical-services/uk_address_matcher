@@ -105,10 +105,10 @@ def test_packaged_settings_include_promoted_commercial_features():
         ]
     }
     assert (
-        contradiction_levels["Confident same-role numeric contradiction (-4)"][
+        contradiction_levels["Confident same-role numeric contradiction (-6)"][
             "m_probability"
         ]
-        == 0.0625
+        == 0.015625
     )
 
     numeric_context_levels = {
