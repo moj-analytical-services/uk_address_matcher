@@ -267,7 +267,10 @@ def _derive_keys_for_strategy(
             unique_id,
             {filtered_expr} AS __index_keys
         FROM (
-            SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
+            SELECT
+                unique_id,
+                clean_full_address,
+                regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
             FROM {{input}}
         ) AS tokenised
         """

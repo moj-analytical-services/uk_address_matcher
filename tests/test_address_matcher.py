@@ -336,6 +336,47 @@ def test_prepared_canonical_without_numeric_range_still_matches(
     assert result.matches().count("*").fetchone()[0] > 0
 
 
+def test_inferred_road_scoring_without_road_catalogue_still_matches(
+    con, canonical_data, messy_data, tmp_path, caplog
+):
+    prepared_folder = tmp_path / "without_inferred_road"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    without_road_path = prepared_folder / "ukam_canonical_addresses.without_road.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT * EXCLUDE (road_1_norm)
+            FROM read_parquet('{canonical_path}')
+        ) TO '{without_road_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    without_road_path.rename(canonical_path)
+    (prepared_folder / "roadlike_places.parquet").unlink()
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        result = AddressMatcher(
+            canonical_addresses=prepared_folder,
+            addresses_to_match=messy_data,
+            con=con,
+            stages=[SplinkStage()],
+            show_progress=False,
+        ).match()
+
+    assert result.matches().count("*").fetchone()[0] > 0
+    assert any(
+        record.getMessage() == "No road catalogue available; skipping road parsing"
+        for record in caplog.records
+    )
+
+
 def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
     con,
     caplog,

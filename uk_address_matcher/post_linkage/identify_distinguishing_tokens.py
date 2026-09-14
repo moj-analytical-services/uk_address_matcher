@@ -139,6 +139,7 @@ def improve_predictions_using_distinguishing_tokens(
             unnest(candidates, recursive := true)
         FROM grouped
     """).create("candidate_search_keys")
+
     con.sql(f"""
         SELECT prediction.*
         FROM df_predict AS prediction
@@ -404,8 +405,6 @@ def improve_predictions_using_distinguishing_tokens(
         adjusted_evidence AS (
             SELECT
                 *,
-                overlapping_tokens_this_l_and_r_again
-                    AS overlapping_tokens_this_l_and_r,
                 map_from_entries(
                     list_filter(
                         map_entries(hist_all_bigrams_in_block_l),
@@ -423,6 +422,8 @@ def improve_predictions_using_distinguishing_tokens(
         components AS (
             SELECT
                 *,
+                overlapping_tokens_this_l_and_r_again
+                    AS overlapping_tokens_this_l_and_r,
                 map_from_entries(
                     list_filter(
                         map_entries(hist_overlapping_bigrams_r_block_l),

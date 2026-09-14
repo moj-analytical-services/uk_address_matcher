@@ -57,7 +57,7 @@ _DATASETS: dict[str, dict[str, str]] = {
     },
     "mid_sussex": {
         "label": "Mid Sussex business rates",
-        "file_name": "mid_sussex_district_council_redacted-database-020226.xlsx",
+        "file_name": "mid_sussex_business_rates.csv",
         "data_path_env": "UKAM_MID_SUSSEX_DATA_PATH",
     },
     "rhondda": {
@@ -279,6 +279,7 @@ def _load_mid_sussex(
     con: duckdb.DuckDBPyConnection,
     source_path: str,
 ) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
     relation = con.sql(
         f"""
         WITH cleaned AS (
@@ -292,7 +293,7 @@ def _load_mid_sussex(
                 NULLIF(NULLIF(TRIM("Address 2"), ''), 'NULL') AS address_2,
                 NULLIF(NULLIF(TRIM("Address 3"), ''), 'NULL') AS address_3,
                 NULLIF(NULLIF(TRIM("Address 4"), ''), 'NULL') AS address_4
-            FROM read_xlsx('{source_path}', all_varchar = true)
+            FROM {reader}('{source_path}', all_varchar = true)
         )
         SELECT
             unique_id,
@@ -340,9 +341,9 @@ def _load_pooled_councils(
     """Union Hackney, Rhondda and Aberdeenshire into one pooled benchmark dataset.
 
     Each member is loaded via its own source resolver. ``unique_id`` is prefixed
-    with the member key so the council-local PROPREF/identifier values cannot
-    collide once combined. ``ukam_label`` (the national UPRN) is left untouched so
-    accuracy scoring against the canonical dataset still works.
+    with the member key so council-local values cannot collide, and repeated source
+    identifiers receive a deterministic row suffix so reranking keeps observations
+    separate. ``ukam_label`` is left untouched for canonical accuracy scoring.
     """
     member_queries: list[str] = []
     for member_key in _POOLED_MEMBERS:
@@ -354,11 +355,25 @@ def _load_pooled_councils(
         member_queries.append(
             f"""
             SELECT
-                '{member_key}:' || unique_id AS unique_id,
+                '{member_key}:' || unique_id
+                    || CASE
+                        WHEN source_id_count > 1
+                            THEN ':row:' || CAST(source_id_row AS VARCHAR)
+                        ELSE ''
+                    END AS unique_id,
                 address_concat,
                 ukam_label,
                 postcode
-            FROM ({member_relation.sql_query()}) AS {member_key}_src
+            FROM (
+                SELECT
+                    *,
+                    count(*) OVER (PARTITION BY unique_id) AS source_id_count,
+                    row_number() OVER (
+                        PARTITION BY unique_id
+                        ORDER BY address_concat, postcode, ukam_label
+                    ) AS source_id_row
+                FROM ({member_relation.sql_query()}) AS source
+            ) AS identified
             """
         )
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from uk_address_matcher.cleaning.steps.roadlike_places import (
+    add_road_blocking_features,
+)
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     NumericRangeRerankerConfig,
@@ -57,6 +60,10 @@ class SplinkStage(MatchingStage):
             to retain for the token-based score adjustment step.
         improve_use_bigrams: Whether the token-based improvement step should
             use bigrams as well as single tokens.
+        reranker_token_reward_multiplier: Multiplier for distinctive token
+            agreement in the local reranker.
+        reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
+            agreement in the local reranker.
         final_match_weight_threshold: Minimum ``match_weight`` required for a
             Splink match to be emitted in the final results.
         final_distinguishability_threshold: Minimum distinguishability required
@@ -81,6 +88,8 @@ class SplinkStage(MatchingStage):
     improve_threshold_match_weight: float = -20
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
+    reranker_token_reward_multiplier: float = 3.0
+    reranker_bigram_reward_multiplier: float = 2.2
 
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
@@ -99,11 +108,20 @@ class SplinkStage(MatchingStage):
     # Whether to retain intermediate calculation columns (for debugging)
     retain_intermediate_calculation_columns: bool = False
 
+    canonical_road_keys_path: str | None = None
+    roadlike_places: duckdb.DuckDBPyRelation | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
     # Populated after find_matches runs — used by MatchResult for inspection
     linker: Any = field(default=None, init=False, repr=False)
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
+    phase_timings: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
     def find_matches(
         self,
@@ -134,6 +152,16 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        self.phase_timings = {}
+        phase_started = perf_counter()
+        df_unmatched, df_canonical = _prepare_inferred_road_scoring_features(
+            con,
+            df_unmatched,
+            df_canonical,
+            canonical_road_keys_path=self.canonical_road_keys_path,
+            roadlike_places=self.roadlike_places,
+        )
+
         numeric_range_reranker = NumericRangeRerankerConfig()
         range_metadata_available = (
             "numeric_range" in df_canonical.columns
@@ -158,8 +186,12 @@ class SplinkStage(MatchingStage):
         linker_columns.extend(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))
+        self.phase_timings["road_and_reranker_preparation"] = (
+            perf_counter() - phase_started
+        )
 
         # Step 1: Build linker
+        phase_started = perf_counter()
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
             df_addresses_to_search_within=df_canonical,
@@ -172,38 +204,45 @@ class SplinkStage(MatchingStage):
         )
 
         self.linker = linker
+        self.phase_timings["linker_setup"] = perf_counter() - phase_started
 
         # Step 2: Predict
+        phase_started = perf_counter()
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
-        df_predict_ddb = df_predict.as_duckdbpyrelation()
+        raw_prediction_ddb = df_predict.as_duckdbpyrelation()
 
         prediction_output = project_splink_predictions(
             con,
-            df_predict_ddb,
+            raw_prediction_ddb,
             retain_intermediate_calculation_columns=(
                 self.retain_intermediate_calculation_columns
             ),
         )
-
         table_name = f"__ukam__splink__predictions__{_uid()}"
         con.execute(
-            "CREATE OR REPLACE TEMP VIEW "
+            "CREATE OR REPLACE TEMP TABLE "
             + table_name
             + " AS SELECT * FROM ("
             + prediction_output.sql_query()
             + ")"
         )
         self.predictions_table = table_name
-
-        # Step 3: Improve predictions using distinguishing tokens
+        self.phase_timings["raw_prediction"] = perf_counter() - phase_started
+        df_predict_ddb = con.table(table_name)
+        df_predict_for_improvement = (
+            raw_prediction_ddb if numeric_range_reranker is not None else df_predict_ddb
+        )
+        phase_started = perf_counter()
         df_improved = improve_predictions_using_distinguishing_tokens(
-            df_predict=df_predict_ddb,
+            df_predict=df_predict_for_improvement,
             con=con,
             match_weight_threshold=self.improve_threshold_match_weight,
             top_n_matches=self.improve_top_n_matches,
             use_bigrams=self.improve_use_bigrams,
+            REWARD_MULTIPLIER=self.reranker_token_reward_multiplier,
+            BIGRAM_REWARD_MULTIPLIER=self.reranker_bigram_reward_multiplier,
             additional_columns_to_retain=[
                 column
                 for column in linker_columns
@@ -218,20 +257,40 @@ class SplinkStage(MatchingStage):
             df_predict=df_improved,
             con=con,
         )
-        self.improved_predictions_table = getattr(df_improved, "alias", None)
+        improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE "
+            + improved_table_name
+            + " AS SELECT * FROM ("
+            + df_improved.sql_query()
+            + ")"
+        )
+        self.improved_predictions_table = improved_table_name
+        df_improved = con.table(improved_table_name)
+        self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
+        phase_started = perf_counter()
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
             con=con,
             best_match_only=False,
         )
+        self.phase_timings["best_match_relation_build"] = perf_counter() - phase_started
 
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
-        df_best.create(df_best_name)
+        phase_started = perf_counter()
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE "
+            + df_best_name
+            + " AS SELECT * FROM ("
+            + df_best.sql_query()
+            + ")"
+        )
         self.best_matches_table = df_best_name
+        self.phase_timings["best_match_materialisation"] = perf_counter() - phase_started
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value

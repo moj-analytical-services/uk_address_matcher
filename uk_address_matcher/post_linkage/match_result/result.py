@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -98,6 +99,48 @@ class MatchResult:
                 {", ".join(cols)}
             FROM ({base_relation_sql}) AS match_result
             """
+        )
+
+    def _export_labelling_bundle_beta(
+        self,
+        output_directory: str | Path = "ukam_labelling_bundle",
+        *,
+        top_n_candidates: int = 3,
+        overwrite: bool = False,
+        total_records_to_export: int | None = None,
+        review_data_chunk_count: int = 1,
+    ) -> Path:
+        """Export a durable bundle for the UKAM labelling workflow.
+
+        Args:
+            output_directory: Directory in which to create the bundle.
+            top_n_candidates: Maximum number of candidates to include per record.
+            overwrite: Replace an existing labelling bundle in ``output_directory``.
+            total_records_to_export: Exact number of messy records to export.
+                ``None`` exports every retained messy record. Records are selected
+                in ascending ``unique_id`` order for reproducibility.
+            review_data_chunk_count: Number of review-data Parquet files to create.
+                Records are divided into contiguous chunks whose sizes differ by at
+                most one record. ``1`` preserves the single-file bundle format.
+
+        Returns:
+            The resolved path to the created bundle directory.
+
+        Raises:
+            TypeError: If an integer argument has the wrong type.
+            ValueError: If the requested record count or chunk count is invalid.
+            FileExistsError: If the output directory is already populated and
+                ``overwrite`` is false.
+        """
+        from uk_address_matcher.labelling import _export_labelling_bundle_beta
+
+        return _export_labelling_bundle_beta(
+            match_result=self,
+            output_directory=output_directory,
+            top_n_candidates=top_n_candidates,
+            overwrite=overwrite,
+            total_records_to_export=total_records_to_export,
+            review_data_chunk_count=review_data_chunk_count,
         )
 
     def match_metrics(

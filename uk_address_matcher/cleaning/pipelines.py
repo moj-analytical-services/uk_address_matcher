@@ -23,6 +23,7 @@ from uk_address_matcher.cleaning.steps import (
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _parse_out_sub_premise_location,
+    _prepare_roadlike_place_input,
     _preserve_original_address_concat,
     _remove_duplicate_end_tokens,
     _rename_and_select_columns,
@@ -108,6 +109,11 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
 QUEUE_PRE_TF = [
     *QUEUE_CLEAN_FULL_ADDRESS,
     *QUEUE_DERIVE_NON_TF_FEATURES,
+]
+
+
+QUEUE_ROADLIKE_PLACE_PREPARATION = [
+    _prepare_roadlike_place_input,
 ]
 
 

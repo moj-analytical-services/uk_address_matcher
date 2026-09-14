@@ -15,10 +15,14 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/robinL/uk_address_matcher"
 
+[project.scripts]
+ukam-labelling = "uk_address_matcher.labelling.generator:main"
+
 [dependency-groups]
 dev = [
     "pyarrow>=19.0.1",
     "pytest>=8.3.4",
+    "pytest-playwright>=0.7.2",
     "pyyaml>=6.0.2",
     "ipykernel>=6.29.4",
     "boto3>=1.40.0"
@@ -38,6 +42,12 @@ linting = [
     "ruff>=0.6,<1.0"
 ]
 
+model-training = [
+    "joblib>=1.4",
+    "pandas>=2.2",
+    "scikit-learn>=1.7,<2",
+]
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -48,6 +58,11 @@ build-backend = "setuptools.build_meta"
     "data/*.csv",
     "data/*.json",
     "analysis/chart_defs/*.json",
+    "labelling/app/*.css",
+    "labelling/app/*.html",
+    "labelling/app/*.js",
+    "labelling/app/*.png",
+    "labelling/app/static/**",
 ]
 
 [tool.setuptools.packages.find]

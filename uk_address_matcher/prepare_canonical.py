@@ -39,6 +39,7 @@ PREPARED_ADDRESSES_FILENAME = "ukam_canonical_addresses.parquet"
 PREPARED_ADDRESSES_CHUNK_DIRNAME = "ukam_canonical_addresses_chunks"
 PREPARED_TERM_FREQUENCIES_FILENAME = "ukam_term_frequencies.parquet"
 PREPARED_INVERTED_INDEX_FILENAME = "ukam_inverted_index.parquet"
+ROADLIKE_PLACES_FILENAME = "roadlike_places.parquet"
 MANIFEST_FILENAME = "ukam_manifest.json"
 CHUNK_FILE_INDEX_DIGITS = 5
 MAX_CHUNK_COUNT = (10**CHUNK_FILE_INDEX_DIGITS) - 1
@@ -53,6 +54,7 @@ _MANAGED_FILES = [
     PREPARED_ADDRESSES_FILENAME,
     PREPARED_ADDRESSES_CHUNK_DIRNAME,
     *REQUIRED_FILES,
+    ROADLIKE_PLACES_FILENAME,
     MANIFEST_FILENAME,
     f"{MANIFEST_FILENAME}.tmp",
 ]
@@ -93,11 +95,14 @@ class _PreparedCanonical:
         addresses: Cleaned and tokenised canonical addresses.
         term_frequencies: Term frequency lookup table.
         inverted_index: Inverted index for candidate retrieval.
+        roadlike_places: Optional road phrase catalogue for inferred-road scoring.
     """
 
     addresses: duckdb.DuckDBPyRelation
     term_frequencies: duckdb.DuckDBPyRelation
     inverted_index: duckdb.DuckDBPyRelation
+    # TODO(ThomasHepworth): remove in 2.0; support old bundles without the catalogue.
+    roadlike_places: duckdb.DuckDBPyRelation | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +270,7 @@ def _load_prepared_canonical_data_remote(
 
     tf_uri = join_remote_path(folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
     idx_uri = join_remote_path(folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
+    roadlike_places_uri = join_remote_path(folder_uri, ROADLIKE_PLACES_FILENAME)
     single_canonical_uri = join_remote_path(folder_uri, PREPARED_ADDRESSES_FILENAME)
     chunk_glob_uri = join_remote_path(
         folder_uri,
@@ -335,12 +341,30 @@ def _load_prepared_canonical_data_remote(
     if canonical_address_filter is not None:
         addresses = addresses.filter(canonical_address_filter)
 
+    roadlike_places: duckdb.DuckDBPyRelation | None = None
+    try:
+        roadlike_places = con.read_parquet(roadlike_places_uri)
+        roadlike_places.limit(1).fetchone()
+    except Exception as exc:
+        _rollback_if_needed(con)
+        if _is_permission_error(exc):
+            raise PermissionError(
+                f"Cannot access optional road catalogue at '{roadlike_places_uri}'. "
+                "Check object-store credentials and permissions. "
+                f"Underlying error: {exc}"
+            ) from exc
+        logger.debug(
+            "Optional road catalogue not found at remote '%s'; road parsing disabled",
+            folder_uri,
+        )
+
     logger.debug("Loaded prepared canonical data from remote '%s'", folder_uri)
 
     return _PreparedCanonical(
         addresses=addresses,
         term_frequencies=term_frequencies,
         inverted_index=inverted_index,
+        roadlike_places=roadlike_places,
     )
 
 
@@ -441,6 +465,7 @@ def prepare_canonical_folder(
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
+    derive_road_blocking_keys: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
@@ -473,6 +498,9 @@ def prepare_canonical_folder(
             `ukam_canonical_addresses_chunks/`.
         derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
             leading tokens that distinguish suffix-similar nearby records.
+        derive_road_blocking_keys: Whether to derive the canonical road key.
+            Disable only when no configured matching stage uses inferred-road
+            scoring or blocking.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -492,9 +520,11 @@ def prepare_canonical_folder(
             and `overwrite` is `False`.
     """
     from uk_address_matcher.cleaning.chunking_strategies import (
+        _add_canonical_road_blocking_keys,
         _derive_term_frequencies_from_precleaned,
         clean_data_pre_term_frequencies,
         derive_inverted_index,
+        derive_roadlike_places,
         prepare_data_for_matching,
     )
 
@@ -571,6 +601,23 @@ def prepare_canonical_folder(
         show_progress=progress_mode,
     )
 
+    if derive_road_blocking_keys:
+        logger.debug("Deriving canonical road blocking keys")
+        roadlike_places = derive_roadlike_places(
+            df_clean,
+            con,
+            show_progress=progress_mode,
+        )
+        df_clean = _add_canonical_road_blocking_keys(
+            df_clean,
+            con,
+            num_of_chunks=num_of_chunks,
+            roadlike_places=roadlike_places,
+        )
+        logger.debug("Canonical road blocking keys derived")
+    else:
+        roadlike_places = None
+
     canonical_output_relation = df_clean
     addr_count = df_clean.count("*").fetchone()[0]
 
@@ -585,6 +632,11 @@ def prepare_canonical_folder(
         if output_is_remote
         else output_folder_path / PREPARED_INVERTED_INDEX_FILENAME
     )
+    roadlike_places_path = (
+        join_remote_path(output_folder_uri, ROADLIKE_PLACES_FILENAME)
+        if output_is_remote
+        else output_folder_path / ROADLIKE_PLACES_FILENAME
+    )
 
     _write_parquet_artefact(con, tf_table, tf_path)
     _write_parquet_artefact(
@@ -594,6 +646,8 @@ def prepare_canonical_folder(
         order_by=INVERTED_INDEX_ORDER_BY,
         compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
     )
+    if roadlike_places is not None:
+        _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
 
     canonical_paths: list[str | Path]
     chunk_output_location: str | Path | None = None
@@ -684,6 +738,8 @@ def prepare_canonical_folder(
         PREPARED_TERM_FREQUENCIES_FILENAME: tf_table.columns,
         PREPARED_INVERTED_INDEX_FILENAME: inverted_index.columns,
     }
+    if roadlike_places is not None:
+        artefact_columns[ROADLIKE_PLACES_FILENAME] = roadlike_places.columns
     for canonical_path in canonical_paths:
         relative_name = (
             relative_remote_path(output_folder_uri, str(canonical_path))
@@ -700,12 +756,17 @@ def prepare_canonical_folder(
         "inverted_index": idx_count,
         "canonical_output_chunks": output_chunk_count,
     }
+    artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
+    if roadlike_places is not None:
+        roadlike_count = roadlike_places.count("*").fetchone()[0]
+        manifest_row_counts["roadlike_places"] = roadlike_count
+        artefact_paths.append(roadlike_places_path)
 
     if output_is_remote:
         _write_manifest_remote(
             output_folder_uri,
             con=con,
-            artefact_paths=[str(path) for path in [*canonical_paths, tf_path, idx_path]],
+            artefact_paths=[str(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
             preparation_options={"add_debug_features": add_debug_features},
@@ -714,7 +775,7 @@ def prepare_canonical_folder(
         _write_manifest_local(
             output_folder_path,
             con=con,
-            artefact_paths=[Path(path) for path in [*canonical_paths, tf_path, idx_path]],
+            artefact_paths=[Path(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
             preparation_options={"add_debug_features": add_debug_features},
@@ -915,7 +976,12 @@ def _validate_prepared_folder(
 
     # Verify each file is a readable Parquet file
     required_paths = [folder / f for f in REQUIRED_FILES]
-    for path in [*canonical_paths, *required_paths]:
+    optional_paths = (
+        [folder / ROADLIKE_PLACES_FILENAME]
+        if (folder / ROADLIKE_PLACES_FILENAME).exists()
+        else []
+    )
+    for path in [*canonical_paths, *required_paths, *optional_paths]:
         relative_name = str(path.relative_to(folder))
         try:
             con.read_parquet(str(path)).limit(1).fetchone()
@@ -963,6 +1029,13 @@ def load_prepared_canonical_data(
     inverted_index = con.read_parquet(
         str(layout.folder / PREPARED_INVERTED_INDEX_FILENAME)
     )
+    # TODO(ThomasHepworth): remove in 2.0; support old bundles without the catalogue.
+    roadlike_places_path = layout.folder / ROADLIKE_PLACES_FILENAME
+    roadlike_places = (
+        con.read_parquet(str(roadlike_places_path))
+        if roadlike_places_path.exists()
+        else None
+    )
 
     addresses = _rehydrate_canonical_addresses(addresses)
 
@@ -975,4 +1048,5 @@ def load_prepared_canonical_data(
         addresses=addresses,
         term_frequencies=term_frequencies,
         inverted_index=inverted_index,
+        roadlike_places=roadlike_places,
     )
