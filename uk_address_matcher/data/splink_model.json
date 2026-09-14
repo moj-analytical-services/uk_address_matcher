@@ -134,8 +134,8 @@
         },
         {
           "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_structural_tokens_l)",
-          "label_for_charts": "All structural distinguishing tokens present (+2)",
-          "m_probability": 4.0,
+          "label_for_charts": "All structural distinguishing tokens present (+0)",
+          "m_probability": 1.0,
           "u_probability": 1.0,
           "fix_m_probability": true,
           "fix_u_probability": true
@@ -143,7 +143,7 @@
         {
           "sql_condition": "list_has_any(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_structural_tokens_l)",
           "label_for_charts": "Some structural distinguishing tokens present",
-          "m_probability": 0.25,
+          "m_probability": 1.0,
           "u_probability": 1.0,
           "fix_m_probability": true,
           "fix_u_probability": true
@@ -1017,8 +1017,8 @@
       "comparison_levels": [
         {
           "sql_condition": "((numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') != nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] = numeric_specific_markers_r[1] AND numeric_specific_markers_l[1] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT')) OR ((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL AND numeric_token_2_l != numeric_token_2_r) AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] = numeric_specific_markers_r[2] AND numeric_specific_markers_l[2] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT'))",
-          "label_for_charts": "Confident same-role numeric contradiction (-4)",
-          "m_probability": 0.0625,
+          "label_for_charts": "Confident same-role numeric contradiction (-6)",
+          "m_probability": 0.015625,
           "u_probability": 1.0,
           "fix_m_probability": true,
           "fix_u_probability": true

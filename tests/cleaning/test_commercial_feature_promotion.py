@@ -44,11 +44,17 @@ def test_derives_lexical_residuals_and_numeric_roles():
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
 
     assert result.project(
-        "distinguishing_lexical_tokens, numeric_specific_markers"
+        "distinguishing_lexical_tokens, numeric_role_keys, "
+        "numeric_broad_roles, numeric_specific_markers"
     ).fetchall() == [
-        (["ACME"], ["UNIT"]),
-        ([], ["PARKING_SPACE"]),
-        (["69", "GIPSY", "HILL"], ["ADDRESS_NUMBER"]),
+        (["ACME"], ["unit|UNIT|7"], ["unit"], ["UNIT"]),
+        ([], ["asset|PARKING_SPACE|20"], ["asset"], ["PARKING_SPACE"]),
+        (
+            ["69", "MY", "HILL"],
+            ["location|ADDRESS_NUMBER|69"],
+            ["location"],
+            ["ADDRESS_NUMBER"],
+        ),
     ]
 
 
@@ -68,34 +74,65 @@ def test_packaged_settings_include_promoted_commercial_features():
 
     lexical_levels = {
         level["label_for_charts"]: level
-        for level in comparisons[
-            "commercial_distinguishing_lexical_tokens"
-        ]["comparison_levels"]
+        for level in comparisons["commercial_distinguishing_lexical_tokens"][
+            "comparison_levels"
+        ]
     }
-    assert lexical_levels["No lexical distinguishing tokens present (-2)"][
-        "m_probability"
-    ] == 1.0
-    assert lexical_levels["No lexical distinguishing tokens present (-2)"][
-        "u_probability"
-    ] == 4.0
+    assert (
+        lexical_levels["No lexical distinguishing tokens present (-2)"]["m_probability"]
+        == 1.0
+    )
+    assert (
+        lexical_levels["No lexical distinguishing tokens present (-2)"]["u_probability"]
+        == 4.0
+    )
 
     numeric_cap_levels = {
         level["label_for_charts"]: level
         for level in comparisons["numeric_token_1"]["comparison_levels"]
     }
-    assert numeric_cap_levels[
-        "Numeric 1 agrees but role marker conflicts (cap 6)"
-    ]["m_probability"] == 64.0
+    assert (
+        numeric_cap_levels["Numeric 1 agrees but role marker conflicts (cap 6)"][
+            "m_probability"
+        ]
+        == 64.0
+    )
 
     contradiction_levels = {
         level["label_for_charts"]: level
-        for level in comparisons[
-            "commercial_same_role_numeric_contradiction"
-        ]["comparison_levels"]
+        for level in comparisons["commercial_same_role_numeric_contradiction"][
+            "comparison_levels"
+        ]
     }
-    assert contradiction_levels[
-        "Confident same-role numeric contradiction (-6)"
-    ]["m_probability"] == 0.015625
+    assert (
+        contradiction_levels["Confident same-role numeric contradiction (-4)"][
+            "m_probability"
+        ]
+        == 0.0625
+    )
+
+    numeric_context_levels = {
+        level["label_for_charts"]: level
+        for level in comparisons["address_structure_numeric_context"]["comparison_levels"]
+    }
+    assert (
+        numeric_context_levels["Exact numeric structure with strong context (+2)"][
+            "m_probability"
+        ]
+        == 4.0
+    )
+    assert (
+        numeric_context_levels["Numeric overlap with strong context (+1)"][
+            "m_probability"
+        ]
+        == 2.0
+    )
+    assert (
+        numeric_context_levels["Numeric conflict with strong context (-4)"][
+            "m_probability"
+        ]
+        == 0.0625
+    )
 
 
 def test_canonical_preparation_carries_distinguishing_lexical_tokens():
@@ -119,9 +156,9 @@ def test_canonical_preparation_carries_distinguishing_lexical_tokens():
     )
 
     assert "distinguishing_lexical_tokens" in prepared.columns
-    assert prepared.project(
-        "unique_id, distinguishing_lexical_tokens"
-    ).order("unique_id").fetchall() == [
+    assert prepared.project("unique_id, distinguishing_lexical_tokens").order(
+        "unique_id"
+    ).fetchall() == [
         ("c_7", ["COMMERCIAL"]),
         ("c_8", ["COMMERCIAL"]),
     ]
