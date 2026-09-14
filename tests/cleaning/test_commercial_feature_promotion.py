@@ -72,6 +72,14 @@ def test_packaged_settings_include_promoted_commercial_features():
         for comparison in settings["comparisons"]
     }
 
+    sub_premise_labels = {
+        level["label_for_charts"]
+        for level in comparisons["sub_premise_identifier"]["comparison_levels"]
+    }
+    assert "Exact known sub-premise identifier" not in sub_premise_labels
+    assert "Identifier agrees with a fuzzy marker" in sub_premise_labels
+    assert "commercial_distinguishing_structural_tokens" not in comparisons
+
     lexical_levels = {
         level["label_for_charts"]: level
         for level in comparisons["commercial_distinguishing_lexical_tokens"][

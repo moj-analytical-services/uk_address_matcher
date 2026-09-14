@@ -121,41 +121,6 @@
       "comparison_description": "Commercial lexical distinguishing tokens"
     },
     {
-      "output_column_name": "commercial_distinguishing_structural_tokens",
-      "comparison_levels": [
-        {
-          "sql_condition": "distinguishing_structural_tokens_l IS NULL OR len(distinguishing_structural_tokens_l) = 0",
-          "label_for_charts": "No structural distinguishing tokens",
-          "is_null_level": true
-        },
-        {
-          "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_structural_tokens_l)",
-          "label_for_charts": "All structural distinguishing tokens present (+0)",
-          "m_probability": 1.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        },
-        {
-          "sql_condition": "list_has_any(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_structural_tokens_l)",
-          "label_for_charts": "Some structural distinguishing tokens present",
-          "m_probability": 1.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        },
-        {
-          "sql_condition": "ELSE",
-          "label_for_charts": "No structural distinguishing tokens present",
-          "m_probability": 1.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        }
-      ],
-      "comparison_description": "Commercial structural distinguishing tokens"
-    },
-    {
       "output_column_name": "address_structure_numeric_context",
       "comparison_levels": [
         {
@@ -415,14 +380,6 @@
           "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND ((sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NULL) OR (sub_premise_role_r IS NOT NULL AND sub_premise_role_l IS NULL))",
           "label_for_charts": "Identifier agrees with a missing marker",
           "m_probability": 4.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        },
-        {
-          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND sub_premise_role_l IS NOT NULL AND sub_premise_role_l = sub_premise_role_r",
-          "label_for_charts": "Exact known sub-premise identifier",
-          "m_probability": 16.0,
           "u_probability": 1.0,
           "fix_m_probability": true,
           "fix_u_probability": true
