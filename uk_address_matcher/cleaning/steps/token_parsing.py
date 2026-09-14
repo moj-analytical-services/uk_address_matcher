@@ -197,7 +197,7 @@ def _parse_out_flat_position_and_letter():
       - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
       - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
-      - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
+    - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
     """
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
@@ -339,7 +339,7 @@ def _parse_out_flat_position_and_letter():
 
         -- 3) flat_number (priority explained inline)
         -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
-        -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
+        -- Ambiguous cases like "7 42 FICTIONAL ROAD" should NOT populate flat_number
         -- since "2" might be a building number, not a flat.
         -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
         -- we use NULLIF(..., '') to normalise non-matches.
@@ -643,6 +643,53 @@ def _parse_out_numbers():
 
 
 @pipeline_stage(
+    name="derive_missingness_aware_sub_premise_features",
+    description=(
+        "Derive role and identifier candidates without promoting unknown markers"
+    ),
+    tags=["token_extraction", "sub_premise_parsing"],
+)
+def _derive_missingness_aware_sub_premise_features():
+    marker_pattern = r"^\s*([A-Z]+)\s+(?:[A-Z]?\d{1,5}[A-Z]?|[A-Z])\b"
+    return f"""
+    SELECT
+        i.*,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{marker_pattern}', 1),
+            ''
+        ) AS sub_premise_marker_token,
+        CASE
+            WHEN i.has_flat_indicator
+                OR i.flat_number IS NOT NULL
+                OR i.flat_letter IS NOT NULL
+                OR i.flat_positional IS NOT NULL
+                THEN 'FLAT'
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN 'BUSINESS_UNIT'
+            ELSE NULL
+        END AS sub_premise_role,
+        CASE
+            WHEN i.has_flat_indicator
+                AND i.flat_number IS NOT NULL
+                AND i.flat_letter IS NOT NULL
+                THEN CONCAT(i.flat_number, i.flat_letter)
+            WHEN i.has_flat_indicator
+                THEN COALESCE(
+                    NULLIF(i.flat_number, ''),
+                    NULLIF(i.flat_letter, '')
+                )
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN NULLIF(i.business_unit_id, '')
+            WHEN i.numeric_tokens IS NOT NULL
+                AND len(i.numeric_tokens) >= 1
+                THEN list_extract(i.numeric_tokens, 1)
+            ELSE NULL
+        END AS sub_premise_identifier
+    FROM {{input}} AS i
+    """
+
+
+@pipeline_stage(
     name="clean_address_string_second_pass",
     description=(
         "Apply final cleaning to address without numbers: remove multiple spaces and trim"
@@ -716,3 +763,141 @@ def _generalised_token_aliases():
     FROM {{input}}
     """
     return sql
+
+
+def _address_structure_premise_sql() -> str:
+    address_structure_premise_patterns = [
+        r"CAR\s+PARK\s+SPACE",
+        r"PARKING\s+SPACE",
+        r"CAR\s+PARK",
+        r"LOCK\s+UP",
+        "LOCKUP",
+        "SHOP",
+        "KIOSK",
+        "PLOT",
+        "STALL",
+        "GARAGE",
+        "YARD",
+        "BAY",
+    ]
+    premise_pattern = "|".join(address_structure_premise_patterns)
+    identifier_pattern = r"[A-Za-z]?\d{1,4}[A-Za-z]?|[A-Za-z]"
+    return f"""
+    SELECT
+        source.* EXCLUDE (__address_structure_premise_match),
+        NULLIF(
+            regexp_replace(
+                UPPER(
+                    source.__address_structure_premise_match.address_structure_premise_type
+                ),
+                '\\s+',
+                ' ',
+                'g'
+            ),
+            ''
+        ) AS address_structure_premise_type,
+        NULLIF(
+            UPPER(source.__address_structure_premise_match.address_structure_premise_id),
+            ''
+        ) AS address_structure_premise_id,
+        source.__address_structure_premise_match.address_structure_premise_type != ''
+            AS has_address_structure_premise,
+        NULLIF(
+            regexp_replace(
+                UPPER(
+                    source.__address_structure_premise_match.address_structure_premise_type
+                ),
+                '\\s+',
+                ' ',
+                'g'
+            ),
+            ''
+        ) AS commercial_premise_type,
+        NULLIF(
+            UPPER(source.__address_structure_premise_match.address_structure_premise_id),
+            ''
+        ) AS commercial_premise_id,
+        source.__address_structure_premise_match.address_structure_premise_type != ''
+            AS has_commercial_premise
+    FROM (
+        SELECT
+            input.*,
+            regexp_extract(
+                input.clean_full_address,
+                '\\b({premise_pattern})\\b(?:\\s+({identifier_pattern})\\b)?',
+                ['address_structure_premise_type', 'address_structure_premise_id']
+            ) AS __address_structure_premise_match
+        FROM {{input}} AS input
+    ) AS source
+    """
+
+
+@pipeline_stage(
+    name="parse_out_address_structure_premise",
+    description="Extract address-structure premise types and identifiers from addresses",
+    tags=["token_extraction", "address_structure_parsing"],
+)
+def _parse_out_address_structure_premise():
+    return _address_structure_premise_sql()
+
+
+@pipeline_stage(
+    name="parse_out_commercial_premise",
+    description="Compatibility alias for address-structure premise parsing",
+    tags=["token_extraction", "business_parsing"],
+)
+def _parse_out_commercial_premise():
+    return _address_structure_premise_sql()
+
+
+@pipeline_stage(
+    name="derive_distinguishing_token_components",
+    description="Split canonical distinguishing prefixes into lexical residuals",
+    tags=["token_analysis", "address_structure_parsing"],
+)
+def _derive_distinguishing_token_components():
+    marker_values = (
+        "'ANNEXE', 'WORKSHOP', 'DEPOT', 'FARM', 'BUSINESS', 'CENTRE', 'CENTER', "
+        "'BUILDING', 'STUDIO', 'WAREHOUSE', 'OFFICE', 'UNIT', 'UNITS', 'SUITE', "
+        "'SUITES', 'ROOM', 'FLOOR', 'FLOORS', 'SHOP', 'KIOSK', 'PLOT', 'STALL', "
+        "'GARAGE', 'YARD', 'BAY', 'PARKING', 'CAR', 'PARK', 'SPACE', 'LOCK', "
+        "'LOCKUP', 'CONTAINER', 'FLAT'"
+    )
+    return f"""
+    WITH marked AS (
+        SELECT
+            input.*,
+            list_filter(
+                range(1, len(input.distinguishing_adj_start_tokens) + 1),
+                position -> list_extract(
+                    input.distinguishing_adj_start_tokens, position
+                ) IN ({marker_values})
+                OR (
+                    position > 1
+                    AND list_extract(
+                        input.distinguishing_adj_start_tokens, position - 1
+                    ) IN ({marker_values})
+                    AND regexp_matches(
+                        list_extract(
+                            input.distinguishing_adj_start_tokens, position
+                        ),
+                        '^[A-Z]?[0-9]{{1,4}}[A-Z]?$|^[A-Z]$'
+                    )
+                )
+            ) AS __structural_positions
+        FROM {{input}} AS input
+    )
+    SELECT
+        marked.* EXCLUDE (__structural_positions),
+        list_transform(
+            __structural_positions,
+            position -> list_extract(distinguishing_adj_start_tokens, position)
+        ) AS distinguishing_structural_tokens,
+        list_filter(
+            distinguishing_adj_start_tokens,
+            (token, position) -> NOT list_contains(
+                __structural_positions, position
+            )
+        ) AS distinguishing_lexical_tokens
+    FROM marked
+    """

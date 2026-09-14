@@ -191,7 +191,10 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
     assert aligned_messy.project("numeric_range").fetchone() == (None,)
     assert aligned_messy.project(
         "numeric_range_lower, numeric_range_upper"
-    ).fetchone() == (None, None)
+    ).fetchone() == (
+        None,
+        None,
+    )
     assert aligned_canonical.project(
         "numeric_range.lower, numeric_range.upper"
     ).fetchone() == (
@@ -200,7 +203,10 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
     )
     assert aligned_canonical.project(
         "numeric_range_lower, numeric_range_upper"
-    ).fetchone() == (20, 23)
+    ).fetchone() == (
+        20,
+        23,
+    )
     range_type = aligned_messy.types[aligned_messy.columns.index("numeric_range")]
     assert "lower UINTEGER" in str(range_type)
     assert "lower_tf DOUBLE" in str(range_type)
@@ -208,19 +214,19 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
 
 def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     settings = _get_model_settings_dict()
+    assert "additional_columns_to_retain" not in settings
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"] == "neighbour_distinguishing_tokens"
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
     )
     levels = comparison["comparison_levels"]
 
     assert [level["label_for_charts"] for level in levels] == [
         "No distinguishing tokens",
-        "Ordered two-token signature with up to two safe gaps, postcode exact",
-        "All distinguishing tokens present",
-        "Some distinguishing tokens present",
-        "No distinguishing tokens present",
+        "Existing ordered distinguishing signature",
+        "No ordered distinguishing signature",
     ]
     assert levels[0] == {
         "sql_condition": (
@@ -235,7 +241,10 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     )
     assert [
         math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
-    ] == [10.0, 1.0, 0.5000000000000001, -10.0]
+    ] == [
+        10.0,
+        0.0,
+    ]
     assert all(
         level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
     )
@@ -333,7 +342,8 @@ def test_postcode_exact_safe_gap_level_matches_expected_rows(
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"] == "neighbour_distinguishing_tokens"
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
     )
     safe_gap_level = CustomLevel(
         comparison["comparison_levels"][1]["sql_condition"],
@@ -488,25 +498,32 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
         con=duck_con,
         include_full_postcode_block=True,
         include_outside_postcode_block=False,
+        additional_columns_to_retain=["missing_optional_diagnostic"],
         retain_intermediate_calculation_columns=True,
     )
     predictions = linker.inference.predict(threshold_match_weight=-100)
     prediction_rows = predictions.as_pandas_dataframe()
 
-    expected_weights = {
-        frozenset(("c_all", "m_all")): 10.0,
-        frozenset(("c_some", "m_some")): 0.5,
-        frozenset(("c_some", "m_none")): -10.0,
+    expected_pairs = {
+        frozenset(("c_all", "m_all")),
+        frozenset(("c_some", "m_some")),
+        frozenset(("c_some", "m_none")),
     }
     actual_weights = {}
     for _, row in prediction_rows.iterrows():
         pair = frozenset((row["unique_id_l"], row["unique_id_r"]))
-        if pair in expected_weights:
+        if pair in expected_pairs:
             actual_weights[pair] = math.log2(
-                float(row["bf_neighbour_distinguishing_tokens"])
+                float(row["bf_commercial_distinguishing_ordered_signature"])
             )
 
-    assert actual_weights == pytest.approx(expected_weights)
+    assert actual_weights == pytest.approx(
+        {
+            frozenset(("c_all", "m_all")): 10.0,
+            frozenset(("c_some", "m_some")): 0.0,
+            frozenset(("c_some", "m_none")): 0.0,
+        }
+    )
 
 
 def test_address_matcher_derives_distinguishing_tokens_only_for_canonical(duck_con):

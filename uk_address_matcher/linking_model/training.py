@@ -46,7 +46,7 @@ def get_address_without_numbers_comparison(
     based) rather than Levenshtein because it is:
 
     - Robust to space insertion:  MIDLOTHIAN vs MID LOTHIAN → 0.90
-    - Robust to character transposition:  GIPSY HILL vs GYPSY HILL → 1.0
+    - Robust to character transposition:  FICTIONAL ROAD vs FICTIONAL ROD → 1.0
     - Robust to truncation:  SHAKESPEARE vs SHAKESPEAR → 1.0
     - Still discriminating for genuine differences:  LOVE LANE vs LOVE LAND → 0.875
 
@@ -442,6 +442,149 @@ def get_flat_identity_comparison(
         "comparison_description": "Combined flat identity comparison",
     }
     return flat_identity_comparison
+
+
+def get_missingness_aware_sub_premise_comparison(
+    WEIGHT_EXACT=4,
+    WEIGHT_MISSING_MARKER=2,
+    WEIGHT_FUZZY_MARKER=3,
+    WEIGHT_ROLE_CONFLICT=-6,
+    WEIGHT_IDENTIFIER_MISMATCH=-8,
+    WEIGHT_ONE_SIDED=-1,
+):
+    """Compare sub-premise identifiers while distinguishing unknown markers."""
+    role_conflict_sql = """
+        sub_premise_role_l IS NOT NULL
+        AND sub_premise_role_r IS NOT NULL
+        AND sub_premise_role_l != sub_premise_role_r
+    """
+    identifier_mismatch_sql = """
+        sub_premise_identifier_l IS NOT NULL
+        AND sub_premise_identifier_r IS NOT NULL
+        AND sub_premise_identifier_l != sub_premise_identifier_r
+        AND sub_premise_role_l = sub_premise_role_r
+        AND sub_premise_role_l IS NOT NULL
+    """
+    fuzzy_marker_sql = """
+        sub_premise_identifier_l = sub_premise_identifier_r
+        AND (
+            (
+                sub_premise_role_l IS NOT NULL
+                AND sub_premise_role_r IS NULL
+                AND sub_premise_marker_token_l IS NOT NULL
+                AND sub_premise_marker_token_r IS NOT NULL
+            )
+            OR (
+                sub_premise_role_r IS NOT NULL
+                AND sub_premise_role_l IS NULL
+                AND sub_premise_marker_token_l IS NOT NULL
+                AND sub_premise_marker_token_r IS NOT NULL
+            )
+        )
+        AND COALESCE(
+            jaccard(sub_premise_marker_token_l, sub_premise_marker_token_r),
+            0
+        ) >= 0.5
+    """
+    missing_marker_sql = """
+        sub_premise_identifier_l = sub_premise_identifier_r
+        AND (
+            (
+                sub_premise_role_l IS NOT NULL
+                AND sub_premise_role_r IS NULL
+            )
+            OR (
+                sub_premise_role_r IS NOT NULL
+                AND sub_premise_role_l IS NULL
+            )
+        )
+    """
+    exact_known_sql = """
+        sub_premise_identifier_l = sub_premise_identifier_r
+        AND sub_premise_role_l IS NOT NULL
+        AND sub_premise_role_l = sub_premise_role_r
+    """
+    one_sided_sql = """
+        (
+            sub_premise_identifier_l IS NULL
+            AND sub_premise_identifier_r IS NOT NULL
+        )
+        OR (
+            sub_premise_identifier_l IS NOT NULL
+            AND sub_premise_identifier_r IS NULL
+        )
+    """
+
+    return {
+        "output_column_name": "sub_premise_identifier",
+        "comparison_levels": [
+            {
+                "sql_condition": (
+                    "sub_premise_identifier_l IS NULL AND "
+                    "sub_premise_identifier_r IS NULL"
+                ),
+                "label_for_charts": "Both sub-premise identifiers absent",
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": role_conflict_sql,
+                "label_for_charts": "Confident sub-premise roles conflict",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_ROLE_CONFLICT),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": identifier_mismatch_sql,
+                "label_for_charts": "Confident sub-premise identifiers differ",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_IDENTIFIER_MISMATCH),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": fuzzy_marker_sql,
+                "label_for_charts": "Identifier agrees with a fuzzy marker",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_FUZZY_MARKER),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": missing_marker_sql,
+                "label_for_charts": "Identifier agrees with a missing marker",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_MISSING_MARKER),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": exact_known_sql,
+                "label_for_charts": "Exact known sub-premise identifier",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_EXACT),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": one_sided_sql,
+                "label_for_charts": "One sub-premise identifier absent",
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_ONE_SIDED),
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+            {
+                "sql_condition": "ELSE",
+                "label_for_charts": "No sub-premise evidence",
+                "m_probability": 1,
+                "u_probability": 1,
+                "fix_m_probability": toggle_m_probability_fix,
+                "fix_u_probability": toggle_u_probability_fix,
+            },
+        ],
+        "comparison_description": "Missingness-aware sub-premise identifier",
+    }
 
 
 def get_first_n_tokens_comparison(
@@ -966,6 +1109,7 @@ def get_settings_for_training(
     num_2_weights=None,
     token_rel_freq_arr_weights=None,
     flat_identity_weights=None,
+    missingness_aware_sub_premise_weights=None,
     address_without_numbers_weights=None,
     first_n_tokens_weights=None,
     include_first_n_tokens=False,
@@ -974,12 +1118,16 @@ def get_settings_for_training(
     num_2_weights = num_2_weights or {}
     token_rel_freq_arr_weights = token_rel_freq_arr_weights or {}
     flat_identity_weights = flat_identity_weights or {}
+    missingness_aware_sub_premise_weights = missingness_aware_sub_premise_weights or {}
     address_without_numbers_weights = address_without_numbers_weights or {}
     first_n_tokens_weights = first_n_tokens_weights or {}
 
     comparisons = [
         get_address_without_numbers_comparison(**address_without_numbers_weights),
         get_flat_identity_comparison(**flat_identity_weights),
+        get_missingness_aware_sub_premise_comparison(
+            **missingness_aware_sub_premise_weights
+        ),
         get_num_1_comparison(**num_1_weights),
         get_num_2_comparison(**num_2_weights),
         num_3_comparison,

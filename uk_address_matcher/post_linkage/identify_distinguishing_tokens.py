@@ -204,9 +204,14 @@ def improve_predictions_using_distinguishing_tokens(
         """).create("top_n_matches")
         reranker_source = "top_n_matches"
 
+    common_end_tokens_expression = (
+        "map_keys(common_end_tokens_hist_r)"
+        if "common_end_tokens_hist_r" in df_predict.columns
+        else "CAST([] AS VARCHAR[])"
+    )
     con.sql(f"""
         WITH intermediate AS (
-            SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
+            SELECT *, {common_end_tokens_expression} AS common_end_tokens_r
             FROM {reranker_source}
         ),
         enriched AS (

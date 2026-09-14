@@ -39,7 +39,12 @@ def run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con=None):
     canonical_clean = prepare_data_for_matching(canonical_addresses, con=duckdb_con)
 
     # Configure the linker
-    columns_to_retain = ["original_address_concat", "true_match_id"]
+    columns_to_retain = [
+        "original_address_concat",
+        "true_match_id",
+        "common_end_tokens_hist",
+        "clean_full_address",
+    ]
     linker = _get_linker(
         df_addresses_to_match=messy_clean,
         df_addresses_to_search_within=canonical_clean,

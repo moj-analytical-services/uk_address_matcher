@@ -1,5 +1,3 @@
-from typing import Optional
-
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
@@ -9,6 +7,8 @@ from uk_address_matcher.cleaning.steps import (
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _clean_address_string_second_pass,
+    _derive_missingness_aware_sub_premise_features,
+    _derive_numeric_context_roles,
     _derive_numeric_range,
     _extract_postcode_from_address,
     _first_unusual_token,
@@ -18,6 +18,7 @@ from uk_address_matcher.cleaning.steps import (
     _lookup_keys_in_inverted_index,
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
+    _parse_out_address_structure_premise,
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
@@ -94,10 +95,13 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
     _parse_out_flat_position_and_letter,
     _parse_out_sub_premise_location,
     _parse_out_business_unit,
+    _parse_out_address_structure_premise,
     _parse_out_numbers,
     _derive_numeric_range,
+    _derive_missingness_aware_sub_premise_features,
     _clean_address_string_second_pass,
     _split_numeric_tokens_to_cols,
+    _derive_numeric_context_roles,
     _tokenise_address_without_numbers,
 ]
 
@@ -145,7 +149,7 @@ def _clean_data_pre_term_frequencies(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     address_table_with_postcode = _ensure_postcode_column(address_table)
@@ -180,7 +184,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
     *,
     pre_cleaned_addresses: bool = False,
     additional_stages: list = [],
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     if not pre_cleaned_addresses:
@@ -234,7 +238,7 @@ def get_numeric_term_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
@@ -280,7 +284,7 @@ def get_address_token_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
@@ -309,7 +313,7 @@ def get_address_token_frequencies_from_address_table(
 
 def _create_term_frequency_tables(
     con: DuckDBPyConnection,
-    term_frequency_lookup: Optional[DuckDBPyRelation] = None,
+    term_frequency_lookup: DuckDBPyRelation | None = None,
 ) -> DuckDBPyRelation:
     """Register address token  and numeric term frequency tables.
 
@@ -357,9 +361,9 @@ def _create_term_frequency_tables(
 
 def _register_inverted_index_table(
     con: DuckDBPyConnection,
-    inverted_index: Optional[DuckDBPyRelation] = None,
-    inverted_index_n: Optional[int] = None,
-) -> Optional[str]:
+    inverted_index: DuckDBPyRelation | None = None,
+    inverted_index_n: int | None = None,
+) -> str | None:
     """Register inverted index table for key lookups.
 
     Args:
@@ -396,7 +400,7 @@ def _register_inverted_index_table(
 
 def _register_inverted_index_meta(
     con: DuckDBPyConnection,
-    inverted_index_n: Optional[int],
+    inverted_index_n: int | None,
 ) -> None:
     """Register ``__ukam_index_meta`` holding ``N`` for IDF weighting.
 
