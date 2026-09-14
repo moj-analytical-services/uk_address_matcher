@@ -341,6 +341,14 @@ def _build_diff_records(
             if not (min_comparison_recall <= baseline_recall <= max_comparison_recall):
                 continue
 
+            baseline_fp_value = baseline_record.get("fp")
+            if baseline_fp_value is None:
+                continue
+
+            baseline_fp = float(baseline_fp_value)
+            if baseline_fp <= 0.0:
+                continue
+
             baseline_precision = float(baseline_record["precision"])
             comparison_precision = _interpolate_precision_for_recall(
                 comparison_records,
@@ -351,20 +359,27 @@ def _build_diff_records(
                 field_name="fp",
                 target_recall=baseline_recall,
             )
+            if comparison_fp is None:
+                continue
+
+            false_positive_reduction = baseline_fp - comparison_fp
+            false_positive_reduction_percent = (
+                false_positive_reduction / baseline_fp * 100.0
+            )
             diff_records.append(
                 {
                     "baseline_recall": baseline_recall,
                     "recall": baseline_recall,
                     "baseline_precision": baseline_precision,
-                    "baseline_fp": baseline_record.get("fp"),
+                    "baseline_fp": baseline_fp,
                     "comparison_label": comparison_label,
                     "series_id": series_id,
                     "comparison_precision": comparison_precision,
                     "comparison_fp": comparison_fp,
-                    "precision_gap_percentage_points": (
-                        comparison_precision - baseline_precision
-                    )
-                    * 100.0,
+                    "false_positive_reduction": false_positive_reduction,
+                    "false_positive_reduction_percent": (
+                        false_positive_reduction_percent
+                    ),
                     "baseline_truth_threshold": baseline_record.get("truth_threshold"),
                     "baseline_match_probability": baseline_record.get(
                         "match_probability"
@@ -441,6 +456,7 @@ def _build_overlay_chart_definition(
         recall_axis_maximum,
     ]
     top_panel["encoding"]["y"]["scale"]["domain"] = [precision_axis_floor, 1.0]
+    top_panel["encoding"]["y"]["axis"]["format"] = ".2%"
     top_panel["encoding"]["color"] = {
         "field": "series_label",
         "type": "nominal",
@@ -717,25 +733,32 @@ def _build_overlay_chart_definition(
         recall_axis_minimum,
         recall_axis_maximum,
     ]
-    precision_gap_extent = max(
+    false_positive_reduction_extent = max(
         (
-            abs(float(record["precision_gap_percentage_points"]))
+            abs(float(record["false_positive_reduction_percent"]))
             for record in diff_records
         ),
         default=1.0,
     )
-    precision_gap_extent = round(precision_gap_extent, 12)
-    if precision_gap_extent == 0:
-        precision_gap_extent = 1.0
+    false_positive_reduction_extent = round(
+        false_positive_reduction_extent,
+        12,
+    )
+    if false_positive_reduction_extent == 0:
+        false_positive_reduction_extent = 1.0
     bottom_panel["layer"][1]["encoding"]["y"]["scale"] = {
-        "domain": [-precision_gap_extent, precision_gap_extent],
+        "domain": [
+            -false_positive_reduction_extent,
+            false_positive_reduction_extent,
+        ],
         "nice": False,
     }
 
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "description": (
-            "Overlayed precision-recall curves with recall-aligned precision gaps"
+            "Overlayed precision-recall curves with recall-aligned false-positive "
+            "reductions"
         ),
         "title": "Precision-Recall Curve Comparison",
         "background": "#FFFFFF",
