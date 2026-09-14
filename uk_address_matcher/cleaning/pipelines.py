@@ -1,5 +1,3 @@
-from typing import Optional
-
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
@@ -20,8 +18,8 @@ from uk_address_matcher.cleaning.steps import (
     _lookup_keys_in_inverted_index,
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
+    _parse_out_address_structure_premise,
     _parse_out_business_unit,
-    _parse_out_commercial_premise,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _parse_out_sub_premise_location,
@@ -69,9 +67,7 @@ def _ensure_postcode_column(rel: DuckDBPyRelation) -> DuckDBPyRelation:
             )
         else:
             # Already lowercase, just ensure VARCHAR type
-            return rel.select(
-                "* EXCLUDE (postcode), CAST(postcode AS VARCHAR) AS postcode"
-            )
+            return rel.select("* EXCLUDE (postcode), CAST(postcode AS VARCHAR) AS postcode")
     else:
         # No postcode column exists, add NULL
         return rel.select("*, CAST(NULL AS VARCHAR) AS postcode")
@@ -96,7 +92,7 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
     _parse_out_flat_position_and_letter,
     _parse_out_sub_premise_location,
     _parse_out_business_unit,
-    _parse_out_commercial_premise,
+    _parse_out_address_structure_premise,
     _parse_out_numbers,
     _derive_numeric_range,
     _derive_missingness_aware_sub_premise_features,
@@ -145,7 +141,7 @@ def _clean_data_pre_term_frequencies(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     address_table_with_postcode = _ensure_postcode_column(address_table)
@@ -166,9 +162,7 @@ def _clean_data_pre_term_frequencies(
 
     if exclude_columns:
         exclude_sql = ", ".join(exclude_columns)
-        result = con.sql(
-            f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned"
-        )
+        result = con.sql(f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned")
 
     return result
 
@@ -180,7 +174,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
     *,
     pre_cleaned_addresses: bool = False,
     additional_stages: list = [],
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     if not pre_cleaned_addresses:
@@ -222,9 +216,7 @@ def _clean_data_using_precomputed_rel_tok_freq(
 
     if exclude_columns:
         exclude_sql = ", ".join(exclude_columns)
-        result = con.sql(
-            f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned"
-        )
+        result = con.sql(f"SELECT * EXCLUDE ({exclude_sql}) FROM ({result.sql_query()}) AS cleaned")
 
     return result
 
@@ -234,7 +226,7 @@ def get_numeric_term_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
@@ -251,9 +243,7 @@ def get_numeric_term_frequencies_from_address_table(
             df_address_table,
             stage_queue,
             pipeline_name="Get numeric term frequencies",
-            pipeline_description=(
-                "Derive numeric tokens and compute frequency distribution"
-            ),
+            pipeline_description=("Derive numeric tokens and compute frequency distribution"),
         )
         numeric_tokens_rel = pipeline.run(debug_options)
         con.register(_NUMERIC_TOKENS_WORK_NAME, numeric_tokens_rel)
@@ -280,7 +270,7 @@ def get_address_token_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
@@ -309,7 +299,7 @@ def get_address_token_frequencies_from_address_table(
 
 def _create_term_frequency_tables(
     con: DuckDBPyConnection,
-    term_frequency_lookup: Optional[DuckDBPyRelation] = None,
+    term_frequency_lookup: DuckDBPyRelation | None = None,
 ) -> DuckDBPyRelation:
     """Register address token  and numeric term frequency tables.
 
@@ -357,9 +347,9 @@ def _create_term_frequency_tables(
 
 def _register_inverted_index_table(
     con: DuckDBPyConnection,
-    inverted_index: Optional[DuckDBPyRelation] = None,
-    inverted_index_n: Optional[int] = None,
-) -> Optional[str]:
+    inverted_index: DuckDBPyRelation | None = None,
+    inverted_index_n: int | None = None,
+) -> str | None:
     """Register inverted index table for key lookups.
 
     Args:
@@ -380,15 +370,11 @@ def _register_inverted_index_table(
     existing_alias = getattr(inverted_index, "alias", None)
     if isinstance(existing_alias, str) and _duckdb_table_exists(con, existing_alias):
         con.sql("DROP VIEW IF EXISTS __ukam_inverted_index")
-        con.execute(
-            f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
-        )
+        con.execute(f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}")
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
-        con.sql(f"SELECT * FROM ({inverted_index.sql_query()})").create(
-            "__ukam_inverted_index"
-        )
+        con.sql(f"SELECT * FROM ({inverted_index.sql_query()})").create("__ukam_inverted_index")
 
     _register_inverted_index_meta(con, inverted_index_n)
     return "__ukam_inverted_index"
@@ -396,7 +382,7 @@ def _register_inverted_index_table(
 
 def _register_inverted_index_meta(
     con: DuckDBPyConnection,
-    inverted_index_n: Optional[int],
+    inverted_index_n: int | None,
 ) -> None:
     """Register ``__ukam_index_meta`` holding ``N`` for IDF weighting.
 
@@ -406,8 +392,7 @@ def _register_inverted_index_meta(
     """
     if inverted_index_n is None:
         inverted_index_n = con.sql(
-            "SELECT COUNT(DISTINCT u) "
-            "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
+            "SELECT COUNT(DISTINCT u) FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
         ).fetchone()[0]
     n_value = max(int(inverted_index_n or 0), 1)
     con.execute("DROP TABLE IF EXISTS __ukam_index_meta")

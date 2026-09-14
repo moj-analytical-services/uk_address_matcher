@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
@@ -79,9 +79,7 @@ def _materialise_relation_with_ukam_address_id(
 ) -> DuckDBPyRelation:
     """Sort cleaned rows and assign matching public and private row IDs."""
     source_columns = tuple(
-        column
-        for column in relation.columns
-        if column not in {"ukam_address_id", "__ukam_row_id"}
+        column for column in relation.columns if column not in {"ukam_address_id", "__ukam_row_id"}
     )
     sort_columns = tuple(
         column
@@ -93,9 +91,7 @@ def _materialise_relation_with_ukam_address_id(
         missing = sorted(required_sort_columns.difference(sort_columns))
         raise ValueError(f"Cleaned relation is missing ordering columns: {missing}")
 
-    tie_breaker_columns = tuple(
-        column for column in source_columns if column not in sort_columns
-    )
+    tie_breaker_columns = tuple(column for column in source_columns if column not in sort_columns)
     order_columns = (*sort_columns, *tie_breaker_columns)
     qualified_order = ", ".join(f'_ukam_src."{column}"' for column in order_columns)
     source_projection = ", ".join(f'_ukam_src."{column}"' for column in source_columns)
@@ -128,9 +124,7 @@ def _drop_tables_with_prefix(con: DuckDBPyConnection, prefix: str) -> None:
 
 def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
     if total_records <= 0:
-        raise ValueError(
-            "Supplied address table has no records. Please provide a non-empty table."
-        )
+        raise ValueError("Supplied address table has no records. Please provide a non-empty table.")
 
     # Ensure chunk size is reasonable: minimum 10k records per chunk
     max_chunks = max(1, total_records // 10_000)
@@ -144,7 +138,7 @@ def clean_data_pre_term_frequencies(
     con: DuckDBPyConnection,
     num_of_chunks: int = 10,
     *,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Clean address data with foundational steps only (no term frequencies).
@@ -270,7 +264,7 @@ def derive_term_frequencies_table(
     con: DuckDBPyConnection,
     num_of_chunks: int = 10,
     *,
-    debug_options: Optional["DebugOptions"] = None,
+    debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Derive a term frequency lookup table from address data.
@@ -362,9 +356,7 @@ def derive_term_frequencies_table(
                 input_rel=chunk,
                 stage_specs=QUEUE_FOR_TF_DERIVATION,
                 pipeline_name="Clean for TF derivation",
-                pipeline_description=(
-                    "Clean and tokenise for term frequency computation"
-                ),
+                pipeline_description=("Clean and tokenise for term frequency computation"),
             )
             processed_chunk = pipeline.run(debug_options if chunk_index == 0 else None)
 
@@ -445,7 +437,7 @@ def derive_inverted_index(
     num_of_chunks: int = 1,
     strategies: list[PhysicalIndexStrategy] | None = None,
     *,
-    debug_options: Optional["DebugOptions"] = None,
+    debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Derive an inverted index from already-cleaned canonical data.
@@ -624,8 +616,7 @@ def derive_inverted_index(
                         chunk_result.insert_into(result_table)
 
                     processed_records = min(
-                        (chunk_index + 1)
-                        * ((total_rows + num_of_chunks - 1) // num_of_chunks),
+                        (chunk_index + 1) * ((total_rows + num_of_chunks - 1) // num_of_chunks),
                         total_rows,
                     )
                     progress.update(
@@ -665,15 +656,15 @@ def prepare_data_for_matching(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     num_of_chunks: int = 10,
-    term_frequency_lookup: Optional[DuckDBPyRelation] = None,
-    inverted_index: Optional[DuckDBPyRelation] = None,
+    term_frequency_lookup: DuckDBPyRelation | None = None,
+    inverted_index: DuckDBPyRelation | None = None,
     _inverted_index_strategies: list[InvertedIndexLookupStrategy] | None = None,
-    inverted_index_n: Optional[int] = None,
+    inverted_index_n: int | None = None,
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
     _precleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
@@ -779,7 +770,7 @@ def prepare_data_for_matching(
             con,
             input_rel=distinguishing_input,
             stage_specs=[_derive_distinguishing_token_components],
-            pipeline_name="Derive commercial distinguishing tokens",
+            pipeline_name="Derive address-structure distinguishing tokens",
             pipeline_description="Split distinguishing prefixes into structural and lexical tokens",
         )
         distinguishing_tokens = distinguishing_pipeline.run(debug_options)
@@ -789,9 +780,7 @@ def prepare_data_for_matching(
             if column not in DISTINGUISHING_FEATURE_COLUMNS
         ]
         distinguishing_columns.extend(DISTINGUISHING_FEATURE_COLUMNS)
-        distinguishing_tokens = distinguishing_tokens.project(
-            ", ".join(distinguishing_columns)
-        )
+        distinguishing_tokens = distinguishing_tokens.project(", ".join(distinguishing_columns))
         distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
         _materialise_relation(
             con,
@@ -803,9 +792,7 @@ def prepare_data_for_matching(
     total_rows = cleaned_address_table.count("*").fetchone()[0]
     _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
 
-    inv_idx_table_name = _register_inverted_index_table(
-        con, inverted_index, inverted_index_n
-    )
+    inv_idx_table_name = _register_inverted_index_table(con, inverted_index, inverted_index_n)
 
     lookup_strategies = _inverted_index_strategies
     if lookup_strategies is None:
@@ -840,8 +827,7 @@ def prepare_data_for_matching(
         distinguishing_join_sql = ""
     else:
         distinguishing_select_sql = ",\n                " + ",\n                ".join(
-            f"distinguishing.{column}"
-            for column in DISTINGUISHING_FEATURE_COLUMNS
+            f"distinguishing.{column}" for column in DISTINGUISHING_FEATURE_COLUMNS
         )
         distinguishing_join_sql = f"""
             LEFT JOIN {distinguishing_table_name} AS distinguishing

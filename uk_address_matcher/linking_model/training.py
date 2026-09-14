@@ -345,9 +345,7 @@ def get_flat_identity_comparison(
             },
             # Both null → neutral
             {
-                "sql_condition": (
-                    '"flat_identity_l" IS NULL AND "flat_identity_r" IS NULL'
-                ),
+                "sql_condition": ('"flat_identity_l" IS NULL AND "flat_identity_r" IS NULL'),
                 "label_for_charts": "Both null (no flat info)",
                 "is_null_level": True,
             },
@@ -397,9 +395,7 @@ def get_flat_identity_comparison(
             {
                 "sql_condition": both_positional_differ_sql,
                 "label_for_charts": "Both positional but different floors",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_BOTH_POSITIONAL_DIFFER
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_BOTH_POSITIONAL_DIFFER),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -409,9 +405,7 @@ def get_flat_identity_comparison(
             {
                 "sql_condition": same_number_letter_onesided_sql,
                 "label_for_charts": "Same number, letter one-sided",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_SAME_NUMBER_LETTER_ONESIDED
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_SAME_NUMBER_LETTER_ONESIDED),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -422,9 +416,7 @@ def get_flat_identity_comparison(
             {
                 "sql_condition": same_number_letters_differ_sql,
                 "label_for_charts": "Same number, letters both differ",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_SAME_NUMBER_LETTERS_DIFFER
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_SAME_NUMBER_LETTERS_DIFFER),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -520,8 +512,7 @@ def get_missingness_aware_sub_premise_comparison(
         "comparison_levels": [
             {
                 "sql_condition": (
-                    "sub_premise_identifier_l IS NULL "
-                    "AND sub_premise_identifier_r IS NULL"
+                    "sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NULL"
                 ),
                 "label_for_charts": "Both sub-premise identifiers absent",
                 "is_null_level": True,
@@ -537,9 +528,7 @@ def get_missingness_aware_sub_premise_comparison(
             {
                 "sql_condition": identifier_mismatch_sql,
                 "label_for_charts": "Confident sub-premise identifiers differ",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_IDENTIFIER_MISMATCH
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_IDENTIFIER_MISMATCH),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -555,9 +544,7 @@ def get_missingness_aware_sub_premise_comparison(
             {
                 "sql_condition": missing_marker_sql,
                 "label_for_charts": "Identifier agrees with a missing marker",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_MISSING_MARKER
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_MISSING_MARKER),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -739,8 +726,7 @@ def get_num_1_comparison(
             },
             {
                 "sql_condition": (
-                    "numeric_token_2_l = numeric_token_1_r or "
-                    "numeric_token_1_l = numeric_token_2_r"
+                    "numeric_token_2_l = numeric_token_1_r or numeric_token_1_l = numeric_token_2_r"
                 ),
                 "label_for_charts": "Exact match inverted numbers",
                 "m_probability": match_weight_to_bayes_factor(WEIGHT_3),
@@ -803,9 +789,7 @@ def get_num_2_comparison(
         "comparison_levels": [
             # Both null → neutral
             {
-                "sql_condition": (
-                    '"numeric_token_2_l" IS NULL AND "numeric_token_2_r" IS NULL'
-                ),
+                "sql_condition": ('"numeric_token_2_l" IS NULL AND "numeric_token_2_r" IS NULL'),
                 "label_for_charts": "Both null",
                 "is_null_level": True,
             },
@@ -821,8 +805,7 @@ def get_num_2_comparison(
             },
             {
                 "sql_condition": (
-                    "numeric_token_1_l = numeric_token_2_r OR "
-                    "numeric_token_1_r = numeric_token_2_l"
+                    "numeric_token_1_l = numeric_token_2_r OR numeric_token_1_r = numeric_token_2_l"
                 ),
                 "label_for_charts": "Exact match inverted numbers",
                 "m_probability": match_weight_to_bayes_factor(WEIGHT_2),
@@ -845,9 +828,7 @@ def get_num_2_comparison(
             },
             # One has a num_2 and the other does not
             {
-                "sql_condition": (
-                    '"numeric_token_2_l" IS NULL OR "numeric_token_2_r" IS NULL'
-                ),
+                "sql_condition": ('"numeric_token_2_l" IS NULL OR "numeric_token_2_r" IS NULL'),
                 "label_for_charts": "One null",
                 "m_probability": match_weight_to_bayes_factor(WEIGHT_4),
                 "u_probability": 1,
@@ -870,9 +851,7 @@ num_3_comparison = {
     "output_column_name": "numeric_token_3",
     "comparison_levels": [
         {
-            "sql_condition": (
-                '"numeric_token_3_l" IS NULL AND "numeric_token_3_r" IS NULL'
-            ),
+            "sql_condition": ('"numeric_token_3_l" IS NULL AND "numeric_token_3_r" IS NULL'),
             "label_for_charts": "Null",
             "is_null_level": True,
         },
@@ -1063,9 +1042,7 @@ postcode_comparison = {
             "fix_u_probability": toggle_u_probability_fix,
         },
         {
-            "sql_condition": (
-                "split_part(postcode_l, ' ', 1) = split_part(postcode_r, ' ', 1)"
-            ),
+            "sql_condition": ("split_part(postcode_l, ' ', 1) = split_part(postcode_r, ' ', 1)"),
             "label_for_charts": "District",
             "m_probability": 3000,
             "u_probability": 1,
@@ -1073,9 +1050,7 @@ postcode_comparison = {
             "fix_u_probability": toggle_u_probability_fix,
         },
         {
-            "sql_condition": (
-                "split_part(postcode_l, ' ', 2) = split_part(postcode_r, ' ', 2)"
-            ),
+            "sql_condition": ("split_part(postcode_l, ' ', 2) = split_part(postcode_r, ' ', 2)"),
             "label_for_charts": "Unit not District",
             "m_probability": 2000,
             "u_probability": 1,
@@ -1122,18 +1097,14 @@ def get_settings_for_training(
     num_2_weights = num_2_weights or {}
     token_rel_freq_arr_weights = token_rel_freq_arr_weights or {}
     flat_identity_weights = flat_identity_weights or {}
-    missingness_aware_sub_premise_weights = (
-        missingness_aware_sub_premise_weights or {}
-    )
+    missingness_aware_sub_premise_weights = missingness_aware_sub_premise_weights or {}
     address_without_numbers_weights = address_without_numbers_weights or {}
     first_n_tokens_weights = first_n_tokens_weights or {}
 
     comparisons = [
         get_address_without_numbers_comparison(**address_without_numbers_weights),
         get_flat_identity_comparison(**flat_identity_weights),
-        get_missingness_aware_sub_premise_comparison(
-            **missingness_aware_sub_premise_weights
-        ),
+        get_missingness_aware_sub_premise_comparison(**missingness_aware_sub_premise_weights),
         get_num_1_comparison(**num_1_weights),
         get_num_2_comparison(**num_2_weights),
         num_3_comparison,
