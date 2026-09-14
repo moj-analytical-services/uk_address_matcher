@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
@@ -15,6 +15,12 @@ if TYPE_CHECKING:
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+SPLINK_POST_LINKAGE_COLUMNS = (
+    "common_end_tokens_hist",
+    "clean_full_address",
+)
 
 
 @dataclass(repr=False)
@@ -78,17 +84,17 @@ class SplinkStage(MatchingStage):
 
     # Thresholds for final candidate selection
     final_match_weight_threshold: float = -20.0
-    final_distinguishability_threshold: Optional[float] = 0.0
+    final_distinguishability_threshold: float | None = 0.0
 
     # Blocking configuration
     include_full_postcode_block: bool = False
     include_outside_postcode_block: bool = True
 
     # Additional columns to retain through Splink
-    additional_columns_to_retain: Optional[list[str]] = field(default=None)
+    additional_columns_to_retain: list[str] | None = field(default=None)
 
     # Advanced: supply custom Splink settings
-    settings: Optional[SettingsCreator] = field(default=None, repr=False)
+    settings: SettingsCreator | None = field(default=None, repr=False)
 
     # Whether to retain intermediate calculation columns (for debugging)
     retain_intermediate_calculation_columns: bool = False
@@ -105,9 +111,9 @@ class SplinkStage(MatchingStage):
         stage_name: str,
         df_unmatched: duckdb.DuckDBPyRelation,
         df_canonical: duckdb.DuckDBPyRelation,
-        debug_options: Optional[DebugOptions] = None,
+        debug_options: DebugOptions | None = None,
         explain: bool = False,
-    ) -> Optional[duckdb.DuckDBPyRelation]:
+    ) -> duckdb.DuckDBPyRelation | None:
         from uk_address_matcher.linking_model.splink_model import _get_linker
         from uk_address_matcher.post_linkage.analyse_results import (
             best_matches_with_distinguishability,
@@ -148,7 +154,8 @@ class SplinkStage(MatchingStage):
         else:
             numeric_range_reranker = None
             range_input_columns = []
-        linker_columns = list(self.additional_columns_to_retain or [])
+        linker_columns = list(SPLINK_POST_LINKAGE_COLUMNS)
+        linker_columns.extend(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))
 

@@ -22,9 +22,9 @@ def test_derives_known_unknown_and_absent_sub_premise_evidence():
     input_relation = connection.sql(
         """
         SELECT * FROM (VALUES
-            ('FLAT 2 69 GIPSY HILL', 'FLAT 2 69 GIPSY HILL'),
-            ('2 69 GIPSY HILL', '2 69 GIPSY HILL'),
-            ('FLT 2 69 GIPSY HILL', 'FLT 2 69 GIPSY HILL'),
+            ('FLAT 7 42 FICTIONAL ROAD', 'FLAT 7 42 FICTIONAL ROAD'),
+            ('7 42 FICTIONAL ROAD', '7 42 FICTIONAL ROAD'),
+            ('FLT 7 42 FICTIONAL ROAD', 'FLT 7 42 FICTIONAL ROAD'),
             ('UNIT 7 ACME WORKS', 'UNIT 7 ACME WORKS'),
             ('7 ACME WORKS', '7 ACME WORKS'),
             ('HIGH STREET', 'HIGH STREET')
@@ -49,9 +49,9 @@ def test_derives_known_unknown_and_absent_sub_premise_evidence():
     ).fetchall()
 
     assert actual == [
-        ("FLAT 2 69 GIPSY HILL", "FLAT", "2", "FLAT"),
-        ("2 69 GIPSY HILL", None, "2", None),
-        ("FLT 2 69 GIPSY HILL", None, "2", "FLT"),
+        ("FLAT 7 42 FICTIONAL ROAD", "FLAT", "7", "FLAT"),
+        ("7 42 FICTIONAL ROAD", None, "7", None),
+        ("FLT 7 42 FICTIONAL ROAD", None, "7", "FLT"),
         ("UNIT 7 ACME WORKS", "BUSINESS_UNIT", "7", "UNIT"),
         ("7 ACME WORKS", None, "7", None),
         ("HIGH STREET", None, None, None),
@@ -62,17 +62,17 @@ def test_splink_scores_marker_missingness_and_identifier_conflict(duck_con):
     canonical = duck_con.sql(
         """
         SELECT * FROM (VALUES
-            ('c_flat_2', 'FLAT 2 69 GIPSY HILL', 'N1 1AA'),
-            ('c_flat_3', 'FLAT 3 69 GIPSY HILL', 'N1 1AA')
+            ('c_flat_2', 'FLAT 2 42 FICTIONAL ROAD', 'N1 1AA'),
+            ('c_flat_3', 'FLAT 3 42 FICTIONAL ROAD', 'N1 1AA')
         ) AS t(unique_id, address_concat, postcode)
         """
     )
     messy = duck_con.sql(
         """
         SELECT * FROM (VALUES
-            ('m_missing', '2 69 GIPSY HILL', 'N1 1AA'),
-            ('m_typo', 'FLET 2 69 GIPSY HILL', 'N1 1AA'),
-            ('m_conflict', 'FLAT 3 69 GIPSY HILL', 'N1 1AA')
+            ('m_missing', '2 42 FICTIONAL ROAD', 'N1 1AA'),
+            ('m_typo', 'FLET 2 42 FICTIONAL ROAD', 'N1 1AA'),
+            ('m_conflict', 'FLAT 3 42 FICTIONAL ROAD', 'N1 1AA')
         ) AS t(unique_id, address_concat, postcode)
         """
     )
@@ -118,14 +118,8 @@ def test_splink_scores_marker_missingness_and_identifier_conflict(duck_con):
 
     def score(messy_id, canonical_id):
         matching_rows = rows[
-            (
-                (rows["unique_id_l"] == messy_id)
-                & (rows["unique_id_r"] == canonical_id)
-            )
-            | (
-                (rows["unique_id_l"] == canonical_id)
-                & (rows["unique_id_r"] == messy_id)
-            )
+            ((rows["unique_id_l"] == messy_id) & (rows["unique_id_r"] == canonical_id))
+            | ((rows["unique_id_l"] == canonical_id) & (rows["unique_id_r"] == messy_id))
         ]
         assert len(matching_rows) == 1
         return math.log2(float(matching_rows.iloc[0]["bf_sub_premise_identifier"]))
@@ -142,10 +136,7 @@ def test_recovery_ablation_removes_redundant_exact_identifier_level():
         for comparison in settings["comparisons"]
         if comparison["output_column_name"] == "sub_premise_identifier"
     )
-    labels = {
-        level["label_for_charts"]
-        for level in comparison["comparison_levels"]
-    }
+    labels = {level["label_for_charts"] for level in comparison["comparison_levels"]}
 
     assert "Exact known sub-premise identifier" not in labels
     assert "Identifier agrees with a missing marker" in labels

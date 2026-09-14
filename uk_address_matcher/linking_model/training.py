@@ -46,7 +46,7 @@ def get_address_without_numbers_comparison(
     based) rather than Levenshtein because it is:
 
     - Robust to space insertion:  MIDLOTHIAN vs MID LOTHIAN → 0.90
-    - Robust to character transposition:  GIPSY HILL vs GYPSY HILL → 1.0
+    - Robust to character transposition:  FICTIONAL ROAD vs FICTIONAL ROD → 1.0
     - Robust to truncation:  SHAKESPEARE vs SHAKESPEAR → 1.0
     - Still discriminating for genuine differences:  LOVE LANE vs LOVE LAND → 0.875
 
@@ -520,8 +520,8 @@ def get_missingness_aware_sub_premise_comparison(
         "comparison_levels": [
             {
                 "sql_condition": (
-                    "sub_premise_identifier_l IS NULL "
-                    "AND sub_premise_identifier_r IS NULL"
+                    "sub_premise_identifier_l IS NULL AND "
+                    "sub_premise_identifier_r IS NULL"
                 ),
                 "label_for_charts": "Both sub-premise identifiers absent",
                 "is_null_level": True,
@@ -537,9 +537,7 @@ def get_missingness_aware_sub_premise_comparison(
             {
                 "sql_condition": identifier_mismatch_sql,
                 "label_for_charts": "Confident sub-premise identifiers differ",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_IDENTIFIER_MISMATCH
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_IDENTIFIER_MISMATCH),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -555,9 +553,7 @@ def get_missingness_aware_sub_premise_comparison(
             {
                 "sql_condition": missing_marker_sql,
                 "label_for_charts": "Identifier agrees with a missing marker",
-                "m_probability": match_weight_to_bayes_factor(
-                    WEIGHT_MISSING_MARKER
-                ),
+                "m_probability": match_weight_to_bayes_factor(WEIGHT_MISSING_MARKER),
                 "u_probability": 1,
                 "fix_m_probability": toggle_m_probability_fix,
                 "fix_u_probability": toggle_u_probability_fix,
@@ -1122,9 +1118,7 @@ def get_settings_for_training(
     num_2_weights = num_2_weights or {}
     token_rel_freq_arr_weights = token_rel_freq_arr_weights or {}
     flat_identity_weights = flat_identity_weights or {}
-    missingness_aware_sub_premise_weights = (
-        missingness_aware_sub_premise_weights or {}
-    )
+    missingness_aware_sub_premise_weights = missingness_aware_sub_premise_weights or {}
     address_without_numbers_weights = address_without_numbers_weights or {}
     first_n_tokens_weights = first_n_tokens_weights or {}
 
