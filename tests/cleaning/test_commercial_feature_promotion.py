@@ -78,6 +78,7 @@ def test_packaged_settings_include_promoted_commercial_features():
     }
     assert "Exact known sub-premise identifier" not in sub_premise_labels
     assert "Identifier agrees with a fuzzy marker" in sub_premise_labels
+    assert "commercial_distinguishing_structural_tokens" not in comparisons
 
     lexical_levels = {
         level["label_for_charts"]: level
