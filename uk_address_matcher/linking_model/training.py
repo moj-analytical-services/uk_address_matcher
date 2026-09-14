@@ -46,7 +46,7 @@ def get_address_without_numbers_comparison(
     based) rather than Levenshtein because it is:
 
     - Robust to space insertion:  MIDLOTHIAN vs MID LOTHIAN → 0.90
-    - Robust to character transposition:  GIPSY HILL vs GYPSY HILL → 1.0
+    - Robust to character transposition:  FICTIONAL ROAD vs FICTIONAL ROD → 1.0
     - Robust to truncation:  SHAKESPEARE vs SHAKESPEAR → 1.0
     - Still discriminating for genuine differences:  LOVE LANE vs LOVE LAND → 0.875
 

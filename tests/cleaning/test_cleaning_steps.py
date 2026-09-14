@@ -1,10 +1,10 @@
 import logging
 
 import duckdb
-
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps import (
+    _parse_out_address_structure_premise,
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
     _parse_out_sub_premise_location,
@@ -112,9 +112,7 @@ def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
     first_address = partitioned_addresses[0][0]
     first_partition = partitioned_addresses[0][1]
     second_address = next(
-        address
-        for address, partition in partitioned_addresses[1:]
-        if partition != first_partition
+        address for address, partition in partitioned_addresses[1:] if partition != first_partition
     )
     input_relation = connection.sql(
         f"""
@@ -144,9 +142,7 @@ def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
     ).fetchall()
     assert len(rows) == 2
     assert all(distinguishing for _, distinguishing, _ in rows)
-    assert all(
-        common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows
-    )
+    assert all(common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows)
 
 
 def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
@@ -205,14 +201,14 @@ def test_parse_out_flat_positional():
         ("GROUND FLOOR FLAT B 25 MAIN ROAD", "GROUND FLOOR", "B", None),
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
-        ("FLAT 2 733 GIPSY HILL", None, None, "2"),
+        ("FLAT 2 733 FICTIONAL ROAD", None, None, "2"),
         (
-            "2 7 GIPSY HILL",
+            "2 7 FICTIONAL ROAD",
             None,
             None,
             None,
         ),  # Ambiguous - no explicit FLAT indicator
-        ("773 GIPSY HILL", None, None, None),
+        ("773 FICTIONAL ROAD", None, None, None),
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
         ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
@@ -302,9 +298,7 @@ def test_parse_out_flat_positional():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(
-        _parse_out_flat_position_and_letter, input_relation, connection
-    )
+    result = _run_single_stage(_parse_out_flat_position_and_letter, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     positional_idx = columns.index("flat_positional")
@@ -323,20 +317,15 @@ def test_parse_out_flat_positional():
             f"but got '{row[positional_idx]}'"
         )
         assert row[letter_idx] == expected_letter, (
-            f"Address '{address}' expected letter '{expected_letter}' "
-            f"but got '{row[letter_idx]}'"
+            f"Address '{address}' expected letter '{expected_letter}' but got '{row[letter_idx]}'"
         )
         assert row[number_idx] == expected_number, (
-            f"Address '{address}' expected number '{expected_number}' "
-            f"but got '{row[number_idx]}'"
+            f"Address '{address}' expected number '{expected_number}' but got '{row[number_idx]}'"
         )
         # has_flat_indicator is True if any of the three fields are set,
         # OR if the word FLAT appears in the address
         expected_indicator = (
-            any(
-                value is not None
-                for value in (expected_pos, expected_letter, expected_number)
-            )
+            any(value is not None for value in (expected_pos, expected_letter, expected_number))
             or "FLAT" in address
         )
         assert row[indicator_idx] == expected_indicator, (
@@ -422,9 +411,7 @@ def test_remove_duplicate_end_tokens():
     rows = result.fetchall()
 
     for (address, expected), row in zip(test_cases, rows):
-        assert row[0] == expected, (
-            f"Address '{address}' expected '{expected}' but got '{row[0]}'"
-        )
+        assert row[0] == expected, f"Address '{address}' expected '{expected}' but got '{row[0]}'"
 
 
 def test_supplied_postcode_does_not_strip_postcode_like_floor_tokens():
@@ -502,13 +489,33 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
     stage_prefixes = ("Cleaning and preprocessing", "Applying term frequencies")
     assert not any(
         record.getMessage().startswith(stage_prefix)
-        and (
-            " records across " in record.getMessage()
-            or " completed:" in record.getMessage()
-        )
+        and (" records across " in record.getMessage() or " completed:" in record.getMessage())
         for record in caplog.records
         for stage_prefix in stage_prefixes
     )
+
+
+def test_parse_out_address_structure_premise_keeps_legacy_aliases():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT 'PARKING SPACE 12 HIGH STREET' AS clean_full_address
+        """
+    )
+
+    stage = _parse_out_address_structure_premise()
+    result = _run_single_stage(
+        _parse_out_address_structure_premise,
+        input_relation,
+        connection,
+    )
+
+    assert stage.name == "parse_out_address_structure_premise"
+    assert result.project(
+        "address_structure_premise_type, address_structure_premise_id, "
+        "has_address_structure_premise, commercial_premise_type, "
+        "commercial_premise_id, has_commercial_premise"
+    ).fetchall() == [("PARKING SPACE", "12", True, "PARKING SPACE", "12", True)]
 
 
 def test_parse_out_business_unit():
@@ -566,12 +573,9 @@ def test_parse_out_business_unit():
     id_idx = columns.index("business_unit_id")
     indicator_idx = columns.index("has_business_unit")
 
-    for (address, expected_type, expected_id, expected_indicator), row in zip(
-        test_cases, rows
-    ):
+    for (address, expected_type, expected_id, expected_indicator), row in zip(test_cases, rows):
         assert row[type_idx] == expected_type, (
-            f"Address '{address}' expected type '{expected_type}' "
-            f"but got '{row[type_idx]}'"
+            f"Address '{address}' expected type '{expected_type}' but got '{row[type_idx]}'"
         )
         assert row[id_idx] == expected_id, (
             f"Address '{address}' expected id '{expected_id}' but got '{row[id_idx]}'"

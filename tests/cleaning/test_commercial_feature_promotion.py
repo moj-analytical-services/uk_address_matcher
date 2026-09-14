@@ -27,9 +27,9 @@ def test_derives_lexical_residuals_and_numeric_roles():
                 ['20']::VARCHAR[]
             ),
             (
-                '69 GIPSY HILL',
-                ['69', 'GIPSY', 'HILL']::VARCHAR[],
-                ['69']::VARCHAR[]
+                '42 FICTIONAL ROAD',
+                ['42', 'FICTIONAL', 'ROAD']::VARCHAR[],
+                ['42']::VARCHAR[]
             )
         ) AS t(
             clean_full_address,
@@ -50,8 +50,8 @@ def test_derives_lexical_residuals_and_numeric_roles():
         (["ACME"], ["unit|UNIT|7"], ["unit"], ["UNIT"]),
         ([], ["asset|PARKING_SPACE|20"], ["asset"], ["PARKING_SPACE"]),
         (
-            ["69", "MY", "HILL"],
-            ["location|ADDRESS_NUMBER|69"],
+            ["42", "FICTIONAL", "ROAD"],
+            ["location|ADDRESS_NUMBER|42"],
             ["location"],
             ["ADDRESS_NUMBER"],
         ),
