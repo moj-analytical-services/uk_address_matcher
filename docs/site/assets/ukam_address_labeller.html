@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UKAM Address Labeller</title>
+<style>
+:root{--blue:#1261a0;--light:#f4f7fa;--border:#d7dee7;--text:#17212b}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--light);color:var(--text)}header{background:var(--blue);color:#fff;padding:18px 24px}header h1{margin:0 0 4px;font-size:24px}main{max-width:1200px;margin:22px auto;padding:0 16px}.card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:14px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.file-label{border:0;border-radius:6px;padding:10px 14px;cursor:pointer;font-weight:600}button,.file-label{background:var(--blue);color:#fff}button.secondary{background:#e7edf3;color:var(--text)}button:disabled{opacity:.45}.file-label input{display:none}.progress{margin-left:auto;font-weight:600}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}.comparison.stacked{grid-template-columns:1fr}.view-toggle{display:flex;align-items:center;gap:8px;margin-left:auto}.view-toggle button{padding:8px 11px}.view-toggle button.active{background:#17212b;color:#fff}.panel-title{font-size:13px;font-weight:700;color:#52606d;text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px}.address-box{font-size:19px;line-height:1.45;padding:15px;border-radius:8px;min-height:88px}.messy-box{background:#fff7d6;border-left:5px solid #e5b700}.candidate-box{background:#edf6fd;border-left:5px solid var(--blue)}.candidate-list{margin-top:12px}.candidate{display:grid;grid-template-columns:38px 1fr auto;gap:12px;align-items:center;padding:12px;border:1px solid var(--border);border-radius:8px;margin:8px 0;cursor:pointer}.candidate:hover,.candidate.selected{background:#edf6fd;border-color:var(--blue)}.key{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;background:#17212b;color:#fff;font-weight:700}.candidate-address{font-size:16px;line-height:1.35}.meta{font-size:12px;color:#66727e;margin-top:4px}.score{color:#52606d;font-size:13px;white-space:nowrap}.help{background:#eef6fc;border-left:5px solid var(--blue)}.hidden{display:none}@media(max-width:760px){.comparison{grid-template-columns:1fr}.progress{margin-left:0;width:100%}}
+</style></head>
+<body><header><h1>UKAM Address Labeller</h1><div>Compare the source address with each candidate.</div></header><main>
+<section class="card"><div class="toolbar"><label class="file-label">Choose candidate CSV<input id="csvFile" type="file" accept=".csv,text/csv"></label><span id="fileName"></span></div></section>
+<section id="help" class="card help hidden"><b>Shortcuts:</b> 1 to 9 = choose candidate and move next, 0 = no match, U = unsure, left arrow = previous.</section>
+<section id="review" class="card hidden"><div class="toolbar"><button class="secondary" id="prev">Previous</button><button id="next">Save & Next</button><button class="secondary" id="export">Export labels CSV</button><div class="view-toggle"><span>Compare:</span><button type="button" id="sideView" class="secondary active">Side by side</button><button type="button" id="stackView" class="secondary">Top and bottom</button></div><span id="progress" class="progress"></span></div><div id="status" class="meta"></div>
+<div id="comparison" class="comparison"><div><div class="panel-title">Messy address</div><div id="messy" class="address-box messy-box"></div></div><div><div class="panel-title">Selected candidate</div><div id="selected" class="address-box candidate-box">Choose a candidate below</div></div></div>
+<div id="candidates" class="candidate-list"></div></section></main>
+<script>
+let groups=[],idx=0,labels={};const $=x=>document.getElementById(x);
+function parseCSV(t){const rows=[];let row=[],cell='',q=false;for(let i=0;i<t.length;i++){const c=t[i],n=t[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if(c===','&&!q){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell);if(row.some(x=>x!==''))rows.push(row);row=[];cell=''}else cell+=c}if(cell.length||row.length){row.push(cell);rows.push(row)}const h=rows.shift().map(x=>x.trim().replace(/^\uFEFF/,''));return rows.map(r=>Object.fromEntries(h.map((x,i)=>[x,(r[i]??'').trim()]))) }
+function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+$('csvFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;$('fileName').textContent=f.name;const d=parseCSV(await f.text()),req=['source_id','messy_address','candidate_uprn','candidate_address'],missing=req.filter(c=>!Object.prototype.hasOwnProperty.call(d[0]||{},c));if(missing.length){alert('Missing columns: '+missing.join(', '));return}const m=new Map();d.forEach(r=>{if(!m.has(r.source_id))m.set(r.source_id,{id:r.source_id,messy:r.messy_address,c:[]});m.get(r.source_id).c.push(r)});groups=[...m.values()];idx=0;labels=JSON.parse(localStorage.getItem('ukam_labels')||'{}');$('review').classList.remove('hidden');$('help').classList.remove('hidden');render()};
+function selectedCandidate(value){const g=groups[idx],c=g.c.find(x=>x.candidate_uprn===value);if(c)return c;if(value==='__NO_MATCH__')return {candidate_address:'No suitable match',match_reason:'Manual decision'};if(value==='__UNSURE__')return {candidate_address:'Unsure / further review',match_reason:'Manual decision'};return null}
+function showSelected(value){const c=selectedCandidate(value);if(!c){$('selected').innerHTML='Choose a candidate below';return}$('selected').innerHTML=`<div>${esc(c.candidate_address)}</div><div class="meta">Match type: ${esc(c.match_reason||'Not supplied')}</div>`}
+function add(value,text,score,key){const old=labels[groups[idx].id]?.selected_uprn===value,l=document.createElement('label');l.className='candidate'+(old?' selected':'');l.innerHTML=`<input type="radio" name="candidate" value="${esc(value)}" ${old?'checked':''} hidden><span class="key">${esc(key)}</span><span><div class="candidate-address">${esc(text)}</div><div class="meta">UPRN: ${esc(value.startsWith('__')?'Not applicable':value)} · Match type: ${esc((groups[idx].c.find(x=>x.candidate_uprn===value)?.match_reason)||'Manual decision')}</div></span><span class="score">${esc(score||'')}</span>`;l.querySelector('input').onchange=()=>{document.querySelectorAll('.candidate').forEach(x=>x.classList.remove('selected'));l.classList.add('selected');showSelected(value)};$('candidates').appendChild(l)}
+function render(){const g=groups[idx];$('messy').textContent=g.messy;$('progress').textContent=`${idx+1} of ${groups.length}`;$('status').textContent=labels[g.id]?'Previously labelled':'Not yet labelled';$('candidates').innerHTML='';g.c.slice(0,9).forEach((c,i)=>add(c.candidate_uprn,c.candidate_address,c.match_score?`Score: ${Number(c.match_score).toFixed(2)}`:'',String(i+1)));add('__NO_MATCH__','No suitable match','','0');add('__UNSURE__','Unsure / needs further review','','U');const savedValue=labels[g.id]?.selected_uprn;
+if(savedValue){
+  showSelected(savedValue);
+} else {
+  const first=document.querySelector('input[name=candidate]');
+  if(first){first.checked=true;first.closest('label').classList.add('selected');showSelected(first.value)}
+  else showSelected(null);
+}
+$('prev').disabled=idx===0;$('next').textContent=idx===groups.length-1?'Save':'Save & Next'}
+function save(){const r=document.querySelector('input[name=candidate]:checked');if(!r){alert('Select a candidate, No suitable match, or Unsure.');return false}const g=groups[idx],c=g.c.find(x=>x.candidate_uprn===r.value);labels[g.id]={source_id:g.id,messy_address:g.messy,selected_uprn:r.value,selected_address:c?.candidate_address||r.value,reviewed_at:new Date().toISOString()};localStorage.setItem('ukam_labels',JSON.stringify(labels));return true}
+function choose(v){const r=[...document.querySelectorAll('input[name=candidate]')].find(x=>x.value===v);if(!r)return;r.checked=true;r.dispatchEvent(new Event('change'));if(save()){if(idx<groups.length-1)idx++;render()}}
+$('next').onclick=()=>{if(save()){if(idx<groups.length-1)idx++;render()}};$('prev').onclick=()=>{if(idx>0)idx--;render()};document.onkeydown=e=>{if($('review').classList.contains('hidden')||e.ctrlKey||e.metaKey||e.altKey)return;if(/^[1-9]$/.test(e.key)){const a=[...document.querySelectorAll('input[name=candidate]')].filter(x=>!x.value.startsWith('__')),r=a[Number(e.key)-1];if(r){e.preventDefault();choose(r.value)}}else if(e.key==='0'){e.preventDefault();choose('__NO_MATCH__')}else if(e.key.toLowerCase()==='u'){e.preventDefault();choose('__UNSURE__')}else if(e.key==='ArrowLeft'){e.preventDefault();$('prev').click()}};
+
+function setComparisonView(mode){
+  const comparison=$('comparison');
+  const stacked=mode==='stacked';
+  comparison.classList.toggle('stacked',stacked);
+  $('sideView').classList.toggle('active',!stacked);
+  $('stackView').classList.toggle('active',stacked);
+  localStorage.setItem('ukam_comparison_view',mode);
+}
+$('sideView').onclick=()=>setComparisonView('side');
+$('stackView').onclick=()=>setComparisonView('stacked');
+setComparisonView(localStorage.getItem('ukam_comparison_view')||'side');
+$('export').onclick=()=>{const h=['source_id','messy_address','selected_uprn','selected_address','reviewed_at'],q=v=>'"'+String(v??'').replaceAll('"','""')+'"',s=[h.join(','),...Object.values(labels).map(r=>h.map(k=>q(r[k])).join(','))].join('\r\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([s],{type:'text/csv;charset=utf-8'}));a.download='ukam_address_labels.csv';a.click();URL.revokeObjectURL(a.href)};
+</script></body></html>
