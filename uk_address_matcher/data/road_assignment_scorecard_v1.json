@@ -1,0 +1,1512 @@
+{
+  "calibration": {
+    "exact_top_one": 0.9183471541172323,
+    "reachable_addresses": 2953161,
+    "safe_core_f1": 0.9676258761374676,
+    "safe_core_precision": 0.9676258761374676,
+    "safe_core_recall": 0.9676258761374676,
+    "safe_core_top_one": 0.9676258761374676,
+    "top_one_correct": 2857555
+  },
+  "coefficients": {
+    "candidate_width": 0.20217157915016332,
+    "contains_business_token": -1.3128408990753202,
+    "contains_residence_token": -3.8224404848785563,
+    "district_count": -0.00028634608127725303,
+    "district_count_ge_15_0": 0.24644372479428325,
+    "district_count_ge_1_0": 0.0,
+    "district_count_ge_2_0": 0.07735082389788023,
+    "district_count_ge_3_0": -0.4378245038251258,
+    "district_count_ge_42_0": 0.28482183910949505,
+    "district_count_ge_79_0": 0.5027978974667733,
+    "district_count_ge_7_0": -0.026665451476541667,
+    "end_tail_fraction": 4.496758594392959,
+    "end_tail_fraction_ge_0_4189": -1.8410063883828454,
+    "end_tail_fraction_ge_0_6754": -0.883024105767677,
+    "end_tail_fraction_ge_0_6754_x_terminal_right_context_diversity_ge_1707": 0.6092415380447372,
+    "end_tail_fraction_ge_0_7208": -1.1498857679681629,
+    "end_tail_fraction_ge_0_8619": -1.2306224969697641,
+    "ends_at_tail": -1.0629456503307146,
+    "log_phrase_support": 0.3291747298775858,
+    "log_phrase_support_ge_10_8718": -0.08563295872689757,
+    "log_phrase_support_ge_1_7918": 0.7586189303207911,
+    "log_phrase_support_ge_2_4849": 0.31424933549283834,
+    "log_phrase_support_ge_6_1159": 0.5606708343666404,
+    "log_phrase_support_ge_7_0648": 0.5191053311690722,
+    "log_phrase_support_ge_8_6155": -0.5277420213746744,
+    "log_phrase_support_ge_9_964": -0.7622140917202288,
+    "log_postcode_support": 0.13915067424507038,
+    "log_postcode_support_ge_0_6931": 0.0,
+    "log_postcode_support_ge_1_3863": 0.24599296301201912,
+    "log_postcode_support_ge_1_6094": 0.24599296301201912,
+    "log_postcode_support_ge_2_4849": -0.30881226904630127,
+    "log_postcode_support_ge_3_4012": -0.9197579786057606,
+    "log_postcode_support_ge_4_4308": -0.8034907090428685,
+    "log_postcode_support_ge_4_7791": -0.4076431338376434,
+    "log_terminal_right_context_diversity": -0.28967708173882567,
+    "log_terminal_support": 0.22668095483588488,
+    "log_terminal_support_ge_11_0794": -0.40386379012988266,
+    "log_terminal_support_ge_12_5114": -0.5068894474581817,
+    "log_terminal_support_ge_13_3338": 0.2196994124411441,
+    "log_terminal_support_ge_13_8957": 1.079886751583017,
+    "log_terminal_support_ge_14_6659": 0.44434399226146676,
+    "number_diversity_ratio": -2.0106175445246333,
+    "number_diversity_ratio_ge_0_0557": 0.48538009209066657,
+    "number_diversity_ratio_ge_0_1081": 0.6290711749545526,
+    "number_diversity_ratio_ge_0_1481": 0.4736052048589032,
+    "number_diversity_ratio_ge_0_2072": 0.244463748166565,
+    "number_diversity_ratio_ge_0_2174": 0.1278185442472059,
+    "number_diversity_ratio_ge_0_2429": 0.3795327434427847,
+    "number_diversity_ratio_ge_0_3779": 0.4419744183966795,
+    "number_diversity_ratio_ge_0_4805": 0.5913250132470362,
+    "residence_x_start_tail_fraction_ge_0_5119": 1.1181646177908737,
+    "road_syntax_terminal": 0.3370637217855372,
+    "road_terminal_x_end_tail_fraction_ge_0_6754": -2.6130712304070483,
+    "road_terminal_x_start_tail_fraction_ge_0_5119": 1.1622665406513009,
+    "road_terminal_x_tail_length_ge_4_5": 0.05900462356576144,
+    "road_terminal_x_terminal_right_context_diversity_ge_1707": 0.3009042188914245,
+    "road_terminal_x_width_tail_fraction_ge_0_3875": -0.1307408158722523,
+    "start_tail_fraction": 4.87023267788942,
+    "start_tail_fraction_ge_0_2566": -2.3111229695554374,
+    "start_tail_fraction_ge_0_5119": -1.183189693831002,
+    "start_tail_fraction_ge_0_542": -1.0856405821810655,
+    "start_tail_fraction_ge_0_5635": 0.19855160300729865,
+    "tail_length": 0.0,
+    "tail_length_ge_2_5": 0.0,
+    "tail_length_ge_3_5": 0.0,
+    "tail_length_ge_3_5_x_start_tail_fraction_ge_0_5119": 3.4535838629168714,
+    "tail_length_ge_4_5": 0.0,
+    "tail_length_ge_4_5_x_end_tail_fraction_ge_0_6754": 1.4128595590972652,
+    "tail_length_ge_4_5_x_terminal_right_context_diversity_ge_1707": 0.0921905373718292,
+    "tail_length_ge_5_5": 0.0,
+    "tail_length_ge_6_5": 0.0,
+    "tail_length_ge_7_5": 0.0,
+    "terminal_right_context_diversity": -4.3361925621588585e-06,
+    "terminal_right_context_diversity_ge_1707_0": 0.19870535913591583,
+    "terminal_right_context_diversity_ge_1707_x_log_terminal_support_ge_13_3338": 0.2196994124411441,
+    "terminal_right_context_diversity_ge_19793_0": -0.546201360688761,
+    "terminal_right_context_diversity_ge_3628_0": -0.1582222679826678,
+    "tree_rule_001": -0.3370637217855372,
+    "tree_rule_002": 0.3370637217855372,
+    "tree_rule_003": 0.29273236852524703,
+    "tree_rule_004": 0.927656424191247,
+    "tree_rule_005": 0.5415256961893283,
+    "tree_rule_006": -0.47055885850939805,
+    "tree_rule_007": 0.40203279048449175,
+    "tree_rule_008": 0.23686073961156806,
+    "tree_rule_009": -0.003821831053083884,
+    "tree_rule_010": -0.3259897334929948,
+    "tree_rule_011": 0.0,
+    "tree_rule_012": -0.47055885850939805,
+    "tree_rule_013": 0.29273236852524703,
+    "tree_rule_014": -0.4554821482208842,
+    "tree_rule_015": 0.4516683543562109,
+    "tree_rule_016": -0.6189469077863226,
+    "tree_rule_017": 0.362851001393145,
+    "tree_rule_018": -0.06838605007387459,
+    "tree_rule_019": 0.0,
+    "tree_rule_020": -0.3259897334929948,
+    "tree_rule_021": 0.32832304619090474,
+    "tree_rule_022": 0.36241058174808655,
+    "tree_rule_023": 0.420960588889349,
+    "tree_rule_024": -0.17217801535895613,
+    "tree_rule_025": 0.6786933230662258,
+    "tree_rule_026": -0.19707367030314493,
+    "tree_rule_027": 0.1248957562295057,
+    "tree_rule_028": -0.4447256319363802,
+    "tree_rule_029": 0.7621990383264606,
+    "tree_rule_030": -0.09373471410664794,
+    "tree_rule_031": 0.0,
+    "tree_rule_032": 0.0,
+    "tree_rule_033": -0.04686358102567018,
+    "tree_rule_034": 0.04686358102567018,
+    "tree_rule_035": 0.0,
+    "tree_rule_036": -0.4447256319363802,
+    "tree_rule_037": -0.32223236728982163,
+    "tree_rule_038": 0.6080401138049899,
+    "tree_rule_039": -0.07941646136821728,
+    "tree_rule_040": -0.005081700238431864,
+    "tree_rule_041": 0.0,
+    "tree_rule_042": -0.005081700238431864,
+    "tree_rule_043": -0.3330337772515273,
+    "tree_rule_044": 0.3330337772515273,
+    "tree_rule_045": 0.3149653360021333,
+    "tree_rule_046": -0.31254254626051736,
+    "tree_rule_047": -0.2601864109164766,
+    "tree_rule_048": -0.2957261543019344,
+    "tree_rule_049": -0.5400952198240215,
+    "tree_rule_050": 1.2011615597871554,
+    "tree_rule_051": 0.7035578290745618,
+    "tree_rule_052": -0.35012308467224124,
+    "tree_rule_053": -0.2595786744178055,
+    "tree_rule_054": -0.6623246912972486,
+    "tree_rule_055": 0.20187183526093308,
+    "tree_rule_056": 3.8116577827257463,
+    "tree_rule_057": 0.48916152464963525,
+    "tree_rule_058": 0.002889045670710989,
+    "tree_rule_059": -0.30352405625157003,
+    "tree_rule_060": 0.30352405625157003,
+    "tree_rule_061": 0.5935816033583002,
+    "tree_rule_062": -0.4008281437094316,
+    "tree_rule_063": -0.08532069170032688,
+    "tree_rule_064": 0.08532069170032688,
+    "width_tail_fraction": 2.9007569538667313,
+    "width_tail_fraction_ge_0_2792": -0.8362874882042919,
+    "width_tail_fraction_ge_0_3542": -0.12316897505282152,
+    "width_tail_fraction_ge_0_3875": 0.247496049832394,
+    "width_tail_fraction_ge_0_4143": -0.7126684774236173,
+    "width_tail_fraction_ge_0_4643": 0.22802930364113916,
+    "width_tail_fraction_ge_0_55": -0.17856095105268344,
+    "width_tail_fraction_ge_0_6333": 0.3065024696766009,
+    "width_tail_fraction_ge_0_875": 1.6349678688207603
+  },
+  "feature_columns": [
+    "start_tail_fraction",
+    "end_tail_fraction",
+    "width_tail_fraction",
+    "candidate_width",
+    "tail_length",
+    "ends_at_tail",
+    "road_syntax_terminal",
+    "contains_residence_token",
+    "contains_business_token",
+    "log_phrase_support",
+    "number_diversity_ratio",
+    "log_postcode_support",
+    "district_count",
+    "log_terminal_support",
+    "terminal_right_context_diversity",
+    "tail_length_ge_2_5",
+    "tail_length_ge_3_5",
+    "tail_length_ge_4_5",
+    "tail_length_ge_5_5",
+    "start_tail_fraction_ge_0_2566",
+    "start_tail_fraction_ge_0_5119",
+    "start_tail_fraction_ge_0_542",
+    "start_tail_fraction_ge_0_5635",
+    "end_tail_fraction_ge_0_4189",
+    "end_tail_fraction_ge_0_6754",
+    "end_tail_fraction_ge_0_7208",
+    "end_tail_fraction_ge_0_8619",
+    "log_terminal_right_context_diversity",
+    "terminal_right_context_diversity_ge_1707_0",
+    "terminal_right_context_diversity_ge_3628_0",
+    "terminal_right_context_diversity_ge_19793_0",
+    "log_terminal_support_ge_11_0794",
+    "log_terminal_support_ge_12_5114",
+    "log_terminal_support_ge_13_3338",
+    "log_terminal_support_ge_13_8957",
+    "log_terminal_support_ge_14_6659",
+    "width_tail_fraction_ge_0_2792",
+    "width_tail_fraction_ge_0_3542",
+    "width_tail_fraction_ge_0_3875",
+    "width_tail_fraction_ge_0_4143",
+    "width_tail_fraction_ge_0_4643",
+    "width_tail_fraction_ge_0_55",
+    "width_tail_fraction_ge_0_6333",
+    "width_tail_fraction_ge_0_875",
+    "log_postcode_support_ge_0_6931",
+    "log_postcode_support_ge_1_3863",
+    "log_postcode_support_ge_1_6094",
+    "log_postcode_support_ge_2_4849",
+    "log_postcode_support_ge_3_4012",
+    "log_postcode_support_ge_4_4308",
+    "log_postcode_support_ge_4_7791",
+    "district_count_ge_1_0",
+    "district_count_ge_2_0",
+    "district_count_ge_3_0",
+    "district_count_ge_7_0",
+    "district_count_ge_15_0",
+    "district_count_ge_42_0",
+    "district_count_ge_79_0",
+    "log_phrase_support_ge_1_7918",
+    "log_phrase_support_ge_2_4849",
+    "log_phrase_support_ge_6_1159",
+    "log_phrase_support_ge_7_0648",
+    "log_phrase_support_ge_8_6155",
+    "log_phrase_support_ge_9_964",
+    "log_phrase_support_ge_10_8718",
+    "number_diversity_ratio_ge_0_0557",
+    "number_diversity_ratio_ge_0_1081",
+    "number_diversity_ratio_ge_0_1481",
+    "number_diversity_ratio_ge_0_2072",
+    "number_diversity_ratio_ge_0_2174",
+    "number_diversity_ratio_ge_0_2429",
+    "number_diversity_ratio_ge_0_3779",
+    "number_diversity_ratio_ge_0_4805",
+    "tail_length_ge_6_5",
+    "tail_length_ge_7_5",
+    "road_terminal_x_tail_length_ge_4_5",
+    "road_terminal_x_start_tail_fraction_ge_0_5119",
+    "road_terminal_x_end_tail_fraction_ge_0_6754",
+    "tail_length_ge_4_5_x_end_tail_fraction_ge_0_6754",
+    "tail_length_ge_3_5_x_start_tail_fraction_ge_0_5119",
+    "residence_x_start_tail_fraction_ge_0_5119",
+    "road_terminal_x_terminal_right_context_diversity_ge_1707",
+    "tail_length_ge_4_5_x_terminal_right_context_diversity_ge_1707",
+    "end_tail_fraction_ge_0_6754_x_terminal_right_context_diversity_ge_1707",
+    "terminal_right_context_diversity_ge_1707_x_log_terminal_support_ge_13_3338",
+    "road_terminal_x_width_tail_fraction_ge_0_3875",
+    "tree_rule_001",
+    "tree_rule_002",
+    "tree_rule_003",
+    "tree_rule_004",
+    "tree_rule_005",
+    "tree_rule_006",
+    "tree_rule_007",
+    "tree_rule_008",
+    "tree_rule_009",
+    "tree_rule_010",
+    "tree_rule_011",
+    "tree_rule_012",
+    "tree_rule_013",
+    "tree_rule_014",
+    "tree_rule_015",
+    "tree_rule_016",
+    "tree_rule_017",
+    "tree_rule_018",
+    "tree_rule_019",
+    "tree_rule_020",
+    "tree_rule_021",
+    "tree_rule_022",
+    "tree_rule_023",
+    "tree_rule_024",
+    "tree_rule_025",
+    "tree_rule_026",
+    "tree_rule_027",
+    "tree_rule_028",
+    "tree_rule_029",
+    "tree_rule_030",
+    "tree_rule_031",
+    "tree_rule_032",
+    "tree_rule_033",
+    "tree_rule_034",
+    "tree_rule_035",
+    "tree_rule_036",
+    "tree_rule_037",
+    "tree_rule_038",
+    "tree_rule_039",
+    "tree_rule_040",
+    "tree_rule_041",
+    "tree_rule_042",
+    "tree_rule_043",
+    "tree_rule_044",
+    "tree_rule_045",
+    "tree_rule_046",
+    "tree_rule_047",
+    "tree_rule_048",
+    "tree_rule_049",
+    "tree_rule_050",
+    "tree_rule_051",
+    "tree_rule_052",
+    "tree_rule_053",
+    "tree_rule_054",
+    "tree_rule_055",
+    "tree_rule_056",
+    "tree_rule_057",
+    "tree_rule_058",
+    "tree_rule_059",
+    "tree_rule_060",
+    "tree_rule_061",
+    "tree_rule_062",
+    "tree_rule_063",
+    "tree_rule_064"
+  ],
+  "frozen_test": {
+    "exact_top_one": 0.9182479254868755,
+    "reachable_addresses": 2952500,
+    "safe_core_f1": 0.9677259949195597,
+    "safe_core_precision": 0.9677259949195597,
+    "safe_core_recall": 0.9677259949195597,
+    "safe_core_top_one": 0.9677259949195597,
+    "top_one_correct": 2857211
+  },
+  "frozen_test_split": "experiment_split = 'test'",
+  "intercept": 5.200022330815135e-16,
+  "model_type": "tree_rule_distilled_additive_pairwise_ranker",
+  "regularization_c": 0.03,
+  "rule_count": 64,
+  "rules": [
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        }
+      ],
+      "name": "tree_rule_001",
+      "training_gain": 19695155.190883588
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        }
+      ],
+      "name": "tree_rule_002",
+      "training_gain": 19695155.190883588
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.6754386126995087
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 4.5
+        }
+      ],
+      "name": "tree_rule_003",
+      "training_gain": 1986115.9002252875
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.6754386126995087
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 4.5
+        }
+      ],
+      "name": "tree_rule_004",
+      "training_gain": 1986115.9002252875
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.6754386126995087
+        }
+      ],
+      "name": "tree_rule_005",
+      "training_gain": 1736109.3808191908
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.6754386126995087
+        }
+      ],
+      "name": "tree_rule_006",
+      "training_gain": 1736109.3808191908
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_007",
+      "training_gain": 1084616.4914379737
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_008",
+      "training_gain": 1084616.4914379737
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.7207792401313782
+        }
+      ],
+      "name": "tree_rule_009",
+      "training_gain": 963555.6856241497
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.7207792401313782
+        }
+      ],
+      "name": "tree_rule_010",
+      "training_gain": 963555.6856241497
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.6754386126995087
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_011",
+      "training_gain": 941391.3099940793
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.6754386126995087
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_012",
+      "training_gain": 941391.3099940793
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.7207792401313782
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 4.5
+        }
+      ],
+      "name": "tree_rule_013",
+      "training_gain": 821979.8366332896
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.7207792401313782
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 4.5
+        }
+      ],
+      "name": "tree_rule_014",
+      "training_gain": 821979.8366332896
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.511904776096344
+        }
+      ],
+      "name": "tree_rule_015",
+      "training_gain": 695185.5315905489
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": ">",
+          "threshold": 0.511904776096344
+        }
+      ],
+      "name": "tree_rule_016",
+      "training_gain": 695185.5315905489
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.2565789520740509
+        }
+      ],
+      "name": "tree_rule_017",
+      "training_gain": 674997.1283815785
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": ">",
+          "threshold": 0.2565789520740509
+        }
+      ],
+      "name": "tree_rule_018",
+      "training_gain": 674997.1283815785
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.7207792401313782
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_019",
+      "training_gain": 452373.1728333506
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.7207792401313782
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_020",
+      "training_gain": 452373.1728333506
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": "<=",
+          "threshold": 0.5
+        }
+      ],
+      "name": "tree_rule_021",
+      "training_gain": 283581.7420324087
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": ">",
+          "threshold": 0.5
+        }
+      ],
+      "name": "tree_rule_022",
+      "training_gain": 283581.7420324087
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.2792207896709442
+        }
+      ],
+      "name": "tree_rule_023",
+      "training_gain": 233037.15446370564
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": ">",
+          "threshold": 0.2792207896709442
+        }
+      ],
+      "name": "tree_rule_024",
+      "training_gain": 233037.15446370564
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_025",
+      "training_gain": 188906.40464243264
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_026",
+      "training_gain": 188906.40464243264
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        }
+      ],
+      "name": "tree_rule_027",
+      "training_gain": 171739.84719931876
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        }
+      ],
+      "name": "tree_rule_028",
+      "training_gain": 171739.84719931876
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_029",
+      "training_gain": 82496.99245823134
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_030",
+      "training_gain": 82496.99245823134
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_031",
+      "training_gain": 81134.41325879483
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_032",
+      "training_gain": 81134.41325879483
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        }
+      ],
+      "name": "tree_rule_033",
+      "training_gain": 67170.75755276851
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 21865.0
+        }
+      ],
+      "name": "tree_rule_034",
+      "training_gain": 67170.75755276851
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_035",
+      "training_gain": 54251.43267088145
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_036",
+      "training_gain": 54251.43267088145
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_037",
+      "training_gain": 35107.52648284489
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_038",
+      "training_gain": 35107.52648284489
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        }
+      ],
+      "name": "tree_rule_039",
+      "training_gain": 27147.959921594535
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        }
+      ],
+      "name": "tree_rule_040",
+      "training_gain": 27147.959921594535
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_041",
+      "training_gain": 20821.45605867099
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        }
+      ],
+      "name": "tree_rule_042",
+      "training_gain": 20821.45605867099
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 11.464239120483398
+        }
+      ],
+      "name": "tree_rule_043",
+      "training_gain": 18819.282603288804
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": ">",
+          "threshold": 11.464239120483398
+        }
+      ],
+      "name": "tree_rule_044",
+      "training_gain": 18819.282603288804
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_045",
+      "training_gain": 17178.640397676194
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_046",
+      "training_gain": 17178.640397676194
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 11.464239120483398
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.9045454561710358
+        }
+      ],
+      "name": "tree_rule_047",
+      "training_gain": 15806.445577323984
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 11.464239120483398
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.9045454561710358
+        }
+      ],
+      "name": "tree_rule_048",
+      "training_gain": 15806.445577323984
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 1358.0
+        }
+      ],
+      "name": "tree_rule_049",
+      "training_gain": 14754.762012610403
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": "<=",
+          "threshold": 0.5
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.8619047701358795
+        },
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 1358.0
+        }
+      ],
+      "name": "tree_rule_050",
+      "training_gain": 14754.762012610403
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": ">",
+          "threshold": 11.464239120483398
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_051",
+      "training_gain": 14416.466351629359
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": ">",
+          "threshold": 11.464239120483398
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_052",
+      "training_gain": 14416.466351629359
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.511904776096344
+        }
+      ],
+      "name": "tree_rule_053",
+      "training_gain": 14277.923720096405
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 21865.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        },
+        {
+          "feature": "start_tail_fraction",
+          "operator": ">",
+          "threshold": 0.511904776096344
+        }
+      ],
+      "name": "tree_rule_054",
+      "training_gain": 14277.923720096405
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "width_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.875
+        }
+      ],
+      "name": "tree_rule_055",
+      "training_gain": 12994.71377327896
+    },
+    {
+      "conditions": [
+        {
+          "feature": "road_syntax_terminal",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "contains_residence_token",
+          "operator": ">",
+          "threshold": 0.5
+        },
+        {
+          "feature": "width_tail_fraction",
+          "operator": ">",
+          "threshold": 0.875
+        }
+      ],
+      "name": "tree_rule_056",
+      "training_gain": 12994.71377327896
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 8662.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": "<=",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_057",
+      "training_gain": 12199.96743435452
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 8662.0
+        },
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 3.5
+        }
+      ],
+      "name": "tree_rule_058",
+      "training_gain": 12199.96743435452
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": "<=",
+          "threshold": 8662.0
+        }
+      ],
+      "name": "tree_rule_059",
+      "training_gain": 11957.820459874574
+    },
+    {
+      "conditions": [
+        {
+          "feature": "terminal_right_context_diversity",
+          "operator": ">",
+          "threshold": 8662.0
+        }
+      ],
+      "name": "tree_rule_060",
+      "training_gain": 11957.820459874574
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 13.895676612854004
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": "<=",
+          "threshold": 0.839743584394455
+        }
+      ],
+      "name": "tree_rule_061",
+      "training_gain": 6868.312498000913
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 13.895676612854004
+        },
+        {
+          "feature": "end_tail_fraction",
+          "operator": ">",
+          "threshold": 0.839743584394455
+        }
+      ],
+      "name": "tree_rule_062",
+      "training_gain": 6868.312498000913
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": "<=",
+          "threshold": 13.895676612854004
+        }
+      ],
+      "name": "tree_rule_063",
+      "training_gain": 6744.192447598263
+    },
+    {
+      "conditions": [
+        {
+          "feature": "tail_length",
+          "operator": ">",
+          "threshold": 2.5
+        },
+        {
+          "feature": "log_terminal_support",
+          "operator": ">",
+          "threshold": 13.895676612854004
+        }
+      ],
+      "name": "tree_rule_064",
+      "training_gain": 6744.192447598263
+    }
+  ],
+  "runtime": {
+    "frozen_test_evaluation_seconds": 0.28397537500131875,
+    "frozen_test_scoring": {
+      "candidate_count": 10884840,
+      "candidates_per_second": 3453948.109155121,
+      "seconds": 3.1514196670032106
+    }
+  },
+  "selection_split": "experiment_split = 'calibration'",
+  "training": {
+    "address_balanced": true,
+    "reachable_address_population": 23604540,
+    "sampled_address_cutoff": 21182,
+    "training_pairs": 1408830,
+    "training_rows": 2817660
+  },
+  "version": 1
+}

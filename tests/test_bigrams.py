@@ -63,8 +63,8 @@ def test_relation_marker_reranker_prefers_target_over_anchor_only_candidate():
         ) AS predictions(
             unique_id_l,
             unique_id_r,
-            original_address_concat_l,
-            original_address_concat_r,
+                clean_full_address_l,
+                clean_full_address_r,
             match_weight
         )
     """)

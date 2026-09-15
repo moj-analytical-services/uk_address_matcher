@@ -92,6 +92,33 @@ def best_matches_with_distinguishability(
     if "ukam_label_r" in df_predict.columns:
         add_cols_select += "t.ukam_label_r, "
 
+    range_audit_columns = (
+        "legacy_numeric_bits",
+        "numeric_range_relationship",
+        "numeric_range_guard_passed",
+        "numeric_range_guard_reason",
+        "numeric_range_base_bits",
+        "numeric_range_tf_bits",
+        "numeric_range_adjustment",
+    )
+    add_cols_select += "".join(
+        f"t.{column}, " for column in range_audit_columns if column in df_predict.columns
+    )
+
+    canonical_address_column = next(
+        (
+            column
+            for column in ("clean_full_address_l", "original_address_concat_l")
+            if column in df_predict.columns
+        ),
+        None,
+    )
+    canonical_address_select = (
+        f"t.{canonical_address_column} AS clean_full_address_l"
+        if canonical_address_column is not None
+        else "NULL::VARCHAR AS clean_full_address_l"
+    )
+
     if 0 not in distinguishability_thresholds:
         distinguishability_thresholds.append(0)
     thres_sorted = sorted(distinguishability_thresholds, reverse=True)
@@ -162,7 +189,7 @@ def best_matches_with_distinguishability(
         t.ukam_address_id_l,
         a.original_address_concat AS address_concat_r,
         a.postcode AS postcode_r,
-        t.original_address_concat_l,
+        {canonical_address_select},
         t.postcode_l,
         t.match_weight,
         t.distinguishability,

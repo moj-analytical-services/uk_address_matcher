@@ -18,6 +18,9 @@ def strip_input_data(duck_con):
             ('10 DOWNING STREET LONDON WALES UK'),
             ('10 DOWNING STREET LONDON GREAT BRITAIN'),
             ('10 DOWNING STREET LONDON NORTHERN IRELAND UK'),
+            ('10 DOWNING STREET LONDON NORTH EAST WALES'),
+            ('10 DOWNING STREET LONDON SOUTH WEST ENGLAND UK'),
+            ('10 DOWNING STREET LONDON EAST MIDLANDS'),
             ('SCOTLAND STREET GLASGOW'),
             (''),
             ('   '),
@@ -36,6 +39,9 @@ def test_strip_country_suffix_stage_sql(duck_con, strip_input_data):
     result = pipeline.run()
 
     expected = [
+        "10 DOWNING STREET LONDON",
+        "10 DOWNING STREET LONDON",
+        "10 DOWNING STREET LONDON",
         "10 DOWNING STREET LONDON",
         "10 DOWNING STREET LONDON",
         "10 DOWNING STREET LONDON",

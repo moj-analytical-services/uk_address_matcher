@@ -17,6 +17,12 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
+def merge_split_flat_number(input: str):
+    """Merge zero-padded split flat numbers such as ``FLAT 3 02 AT``."""
+    pattern = r"\bFLAT\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
+    return f"regexp_replace({input}, '{pattern}', 'FLAT \\1\\2 \\3', 'g')"
+
+
 def standarise_num_dash_num(input: str):
     """
     Standardizes numeric ranges with dashes by removing spaces around the dash.

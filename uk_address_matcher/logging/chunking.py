@@ -74,6 +74,9 @@ def log_chunk_progress(
     if progress_mode != "auto":
         return
 
+    if progress is not None and getattr(progress, "enabled", False):
+        return
+
     if progress is not None:
         ensure_line_break = getattr(progress, "ensure_line_break", None)
         if callable(ensure_line_break):
@@ -87,7 +90,7 @@ def log_chunk_progress(
     if chunk_elapsed_seconds is not None:
         elapsed_suffix = f", elapsed={_format_elapsed_brief(chunk_elapsed_seconds)}"
 
-    logger.debug(
+    logger.info(
         "%s: chunk %s, %s/%s records%s",
         stage_label,
         chunk_position,

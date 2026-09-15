@@ -99,8 +99,9 @@ The examples below use the fictional London datasets from `ukam_datasets`, which
     print(result.matches().limit(5).to_df().to_markdown(index=False))
     ```
 
-    The `output_folder` contains parquet files plus `ukam_manifest.json`
-    (package version, row counts, file hashes) for reproducibility.
+    The `output_folder` contains prepared Parquet files and
+    `ukam_manifest.json` (package version, row counts, and hashes) for
+    reproducibility.
 
     Subsequent matching exercises that use the same canonical data can reuse this folder, skipping the `prepare_canonical_folder` step.
 
@@ -114,6 +115,12 @@ The examples below use the fictional London datasets from `ukam_datasets`, which
 | `.matches()` | DuckDB relation with `unique_id`, `resolved_canonical_id`, `match_reason`, and more. |
 | `.match_metrics()` | Match-reason breakdown with counts and percentages. |
 | `.accuracy_analysis()` | Threshold-based accuracy analysis from labelled data (requires `ukam_label` in messy input). |
+
+## Exporting a labelling bundle
+
+After matching, `result._export_labelling_bundle_beta()` creates a durable review
+folder for later labelling. See [Labelling bundles](labelling.md) for the
+initial workflow and a high-level description of the exported artefacts.
 
 
 ??? info "Customising stages"

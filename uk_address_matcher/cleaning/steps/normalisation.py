@@ -4,6 +4,7 @@ from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
+    merge_split_flat_number,
     move_flat_to_front,
     remove_apostrophes,
     remove_commas_periods,
@@ -101,10 +102,7 @@ def _extract_postcode_from_address() -> str:
 
 @pipeline_stage(
     name="rename_and_select_columns",
-    description=(
-        "Rename and select key columns for downstream processing "
-        "and assign ukam_address_id"
-    ),
+    description=("Rename and select key columns for downstream processing"),
     tags=["setup"],
 )
 def _rename_and_select_columns() -> str:
@@ -114,13 +112,11 @@ def _rename_and_select_columns() -> str:
         original_address_concat,
         address_concat,
         postcode,
-        ukam_address_id,
         * EXCLUDE (
             unique_id,
             original_address_concat,
             address_concat,
-            postcode,
-            ukam_address_id
+            postcode
         )
     FROM {input}
     """
@@ -209,6 +205,7 @@ def _clean_address_string_first_pass() -> str:
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
+            merge_split_flat_number,
             # remove_repeated_tokens,   # left commented as in original
             trim,
         ],
@@ -238,7 +235,12 @@ def _clean_address_string_first_pass() -> str:
 def _strip_country_suffix() -> str:
     suffix_regex = (
         r"(?:\s+(?:UNITED KINGDOM|GREAT BRITAIN|NORTHERN IRELAND|"
-        r"UK|BRITAIN|ENGLAND|SCOTLAND|WALES))+$"
+        r"UK|BRITAIN|ENGLAND|SCOTLAND|WALES|NORTH EAST ENGLAND|"
+        r"NORTH WEST ENGLAND|SOUTH EAST ENGLAND|SOUTH WEST ENGLAND|"
+        r"NORTH EAST WALES|NORTH WEST WALES|SOUTH EAST WALES|"
+        r"SOUTH WEST WALES|NORTH WALES|SOUTH WALES|WEST WALES|MID WALES|"
+        r"CENTRAL WALES|EAST MIDLANDS|WEST MIDLANDS|EAST ANGLIA|NORTH EAST|"
+        r"NORTH WEST|SOUTH EAST|SOUTH WEST))+$"
     )
     sql = f"""
     SELECT

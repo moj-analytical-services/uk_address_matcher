@@ -93,7 +93,7 @@ class _MatchResultDebugTools:
         address = " ".join(
             str(part)
             for part in [
-                row.get("original_address_concat"),
+                row.get("original_address_concat") or row.get("clean_full_address"),
                 row.get("postcode"),
             ]
             if part not in {None, ""}
@@ -144,7 +144,7 @@ class _MatchResultDebugTools:
             address = " ".join(
                 str(part)
                 for part in [
-                    row.get("original_address_concat"),
+                    row.get("original_address_concat") or row.get("clean_full_address"),
                     row.get("postcode"),
                 ]
                 if part not in {None, ""}
@@ -172,7 +172,9 @@ class _MatchResultDebugTools:
             address = " ".join(
                 str(part)
                 for part in [
-                    row.get("original_address_concat_l") or row.get("original_address"),
+                    row.get("original_address_concat_l")
+                    or row.get("clean_full_address_l")
+                    or row.get("original_address"),
                     row.get("postcode_l") or row.get("postcode"),
                 ]
                 if part not in {None, ""}
@@ -628,22 +630,55 @@ class _MatchResultDebugTools:
             )
 
         table_name = self._splink_best_matches_table()
+        best_columns = self._owner.con.table(table_name).columns
+        messy_clean_sql = (
+            "best.clean_full_address_r"
+            if "clean_full_address_r" in best_columns
+            else "NULL::VARCHAR"
+        )
+        canonical_clean_sql = (
+            "best.clean_full_address_l"
+            if "clean_full_address_l" in best_columns
+            else "NULL::VARCHAR"
+        )
+        messy_address_sql = messy_clean_sql
+        canonical_address_sql = canonical_clean_sql
+        relation_joins = ""
+        if self._owner._messy_relation is not None:
+            messy_address_sql = (
+                f"COALESCE(messy.original_address_concat, {messy_clean_sql})"
+            )
+            relation_joins += f"""
+                LEFT JOIN ({self._owner._messy_relation.sql_query()}) AS messy
+                    ON messy.ukam_address_id = best.ukam_address_id_r
+            """
+        if self._owner._canonical_relation is not None:
+            if "original_address_concat" in self._owner._canonical_relation.columns:
+                canonical_address_sql = (
+                    f"COALESCE(canonical.original_address_concat, {canonical_clean_sql})"
+                )
+            relation_joins += f"""
+                LEFT JOIN ({self._owner._canonical_relation.sql_query()}) AS canonical
+                    ON canonical.ukam_address_id = best.ukam_address_id_l
+            """
         return self._owner.con.sql(f"""
             SELECT
-                candidate_rank,
-                address_concat_r AS original_address_messy,
-                postcode_r AS original_postcode_messy,
-                original_address_concat_l AS original_address_canonical,
-                postcode_l AS original_postcode_canonical,
-                match_weight,
-                distinguishability,
-                unique_id_r,
-                unique_id_l,
-                ukam_address_id_r,
-                ukam_address_id_l
-            FROM {table_name}
-            WHERE unique_id_r = {_sql_literal(messy_id)}
-            ORDER BY candidate_rank ASC, match_weight DESC, unique_id_l, ukam_address_id_l
+                best.candidate_rank,
+                {messy_address_sql} AS original_address_messy,
+                best.postcode_r AS original_postcode_messy,
+                {canonical_address_sql} AS original_address_canonical,
+                best.postcode_l AS original_postcode_canonical,
+                best.match_weight,
+                best.distinguishability,
+                best.unique_id_r,
+                best.unique_id_l,
+                best.ukam_address_id_r,
+                best.ukam_address_id_l
+            FROM {table_name} AS best
+            {relation_joins}
+            WHERE best.unique_id_r = {_sql_literal(messy_id)}
+            ORDER BY best.candidate_rank ASC, best.match_weight DESC,
+                best.unique_id_l, best.ukam_address_id_l
         """)
 
     def messy_id_report(
@@ -688,25 +723,31 @@ class _MatchResultDebugTools:
 
         best_variants: list[dict[str, Any]] = []
         true_variants: list[dict[str, Any]] = []
+        canonical_order_column = "clean_full_address"
+        if (
+            self._owner._canonical_relation is not None
+            and "original_address_concat" in self._owner._canonical_relation.columns
+        ):
+            canonical_order_column = "original_address_concat"
         if self._owner._canonical_relation is not None and best_id is not None:
             best_variants = self._query_rows(f"""
                 SELECT *
                 FROM ({self._owner._canonical_relation.sql_query()}) AS canonical
                 WHERE unique_id = {_sql_literal(best_id)}
-                ORDER BY ukam_address_id, original_address_concat
+                ORDER BY ukam_address_id, {canonical_order_column}
             """)
         if self._owner._canonical_relation is not None and true_id is not None:
             true_variants = self._query_rows(f"""
                 SELECT *
                 FROM ({self._owner._canonical_relation.sql_query()}) AS canonical
                 WHERE unique_id = {_sql_literal(true_id)}
-                ORDER BY ukam_address_id, original_address_concat
+                ORDER BY ukam_address_id, {canonical_order_column}
             """)
 
         match_scores = self._owner.con.sql(f"""
             SELECT
                 candidate_rank,
-                original_address_concat_l AS original_address,
+                clean_full_address_l AS original_address,
                 postcode_l AS postcode,
                 match_weight,
                 distinguishability,

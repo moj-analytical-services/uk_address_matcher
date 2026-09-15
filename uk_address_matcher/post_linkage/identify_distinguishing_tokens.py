@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    NumericRangeRerankerConfig,
+    build_numeric_range_candidate_pool,
+)
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _uid,
@@ -25,85 +29,203 @@ def improve_predictions_using_distinguishing_tokens(
     BIGRAM_PUNISHMENT_MULTIPLIER: float = 1.15,
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
+    numeric_range_reranker: NumericRangeRerankerConfig | None = None,
 ) -> DuckDBPyRelation:
-    table_suffix = _uid()
-    matches_table = f"__ukam__tmp_distinguishability_matches_{table_suffix}"
-    good_matches_table = f"__ukam__tmp_good_matches_{table_suffix}"
-    top_n_matches_table = f"__ukam__tmp_top_n_matches_{table_suffix}"
-    token_addresses_table = f"__ukam__tmp_token_addresses_{table_suffix}"
-    block_statistics_table = f"__ukam__tmp_block_statistics_{table_suffix}"
-    intermediate_tables = (
-        good_matches_table,
-        top_n_matches_table,
-        token_addresses_table,
-        block_statistics_table,
-    )
+    run_id = _uid()
+    matches_table = f"__ukam__tmp_distinguishability_matches_{run_id}"
+    good_match_keys_table = f"__ukam__tmp_good_match_keys_{run_id}"
+    candidate_search_keys_table = f"__ukam__tmp_candidate_search_keys_{run_id}"
+    good_matches_table = f"__ukam__tmp_good_matches_{run_id}"
+    top_n_matches_table = f"__ukam__tmp_top_n_matches_{run_id}"
+    token_addresses_table = f"__ukam__tmp_token_addresses_{run_id}"
+    block_statistics_table = f"__ukam__tmp_block_statistics_{run_id}"
 
-    # The four intermediates are consumed only inside this function, so they
-    # are dropped on every exit path (finally). The matches table is this
-    # function's output — the caller owns it on success — so it is dropped
-    # only if we fail part-way through building it.
-    try:
+    if numeric_range_reranker is not None:
+        required_range_columns = {
+            "numeric_range_l",
+            "numeric_range_r",
+            "numeric_tokens_l",
+            "numeric_tokens_r",
+            "flat_identity_l",
+            "flat_identity_r",
+        }
+        if not required_range_columns.issubset(df_predict.columns):
+            numeric_range_reranker = None
 
-        retained_columns = ""
-        if additional_columns_to_retain:
-            retained_columns = "".join(
-                f"{column}_l, {column}_r, " for column in additional_columns_to_retain
+    retained_columns = ""
+    if additional_columns_to_retain:
+        retained_columns = "".join(
+            f"{column}_l, {column}_r, "
+            for column in additional_columns_to_retain
+            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns
+        )
+    if "ukam_label_r" in df_predict.columns:
+        retained_columns += "ukam_label_r, "
+
+    eligibility_filter = ""
+    if histogram_eligibility_column is not None:
+        if histogram_eligibility_column not in df_predict.columns:
+            raise ValueError(
+                "histogram_eligibility_column must exist in df_predict: "
+                f"{histogram_eligibility_column}"
             )
-        if "ukam_label_r" in df_predict.columns:
-            retained_columns += "ukam_label_r, "
+        eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
 
-        eligibility_filter = ""
-        if histogram_eligibility_column is not None:
-            if histogram_eligibility_column not in df_predict.columns:
-                raise ValueError(
-                    "histogram_eligibility_column must exist in df_predict: "
-                    f"{histogram_eligibility_column}"
+    candidate_token_lists_sql = """
+        array_agg(candidate_tokens).
+        list_transform(candidate_tokens -> list_distinct(candidate_tokens))
+    """
+    canonical_bigrams_sql = """
+        list_transform(
+            array_agg(candidate_tokens),
+            candidate_tokens -> list_distinct(
+                list_transform(
+                    list_zip(
+                        list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
+                        list_slice(candidate_tokens, 2, length(candidate_tokens))
+                    ),
+                    pair -> ARRAY[pair[1], pair[2]]
                 )
-            eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
-
-        candidate_token_lists_sql = """
-            array_agg(candidate_tokens).
-            list_transform(candidate_tokens -> list_distinct(candidate_tokens))
+            )
+        ).flatten() AS bigrams_in_block_l,
         """
-        canonical_bigrams_sql = """
-            list_transform(
-                array_agg(candidate_tokens),
-                candidate_tokens -> list_distinct(
-                    list_transform(
-                        list_zip(
-                            list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
-                            list_slice(candidate_tokens, 2, length(candidate_tokens))
+
+    completed = False
+    try:
+        con.sql(f"""
+            WITH grouped AS (
+                SELECT
+                    unique_id_l,
+                    unique_id_r,
+                    max_by(
+                        struct_pack(
+                            ukam_address_id_l := ukam_address_id_l,
+                            ukam_address_id_r := ukam_address_id_r,
+                            match_weight := match_weight
                         ),
-                        pair -> ARRAY[pair[1], pair[2]]
-                    )
-                )
-            ).flatten() AS bigrams_in_block_l,
-            """
+                        struct_pack(
+                            match_weight := match_weight,
+                            ukam_address_id_r := ukam_address_id_r,
+                            ukam_address_id_l := ukam_address_id_l
+                        )
+                    ) AS best
+                FROM df_predict
+                WHERE match_weight > {match_weight_threshold}
+                GROUP BY unique_id_l, unique_id_r
+            )
+            SELECT
+                unique_id_l,
+                unique_id_r,
+                best.ukam_address_id_l AS ukam_address_id_l,
+                best.ukam_address_id_r AS ukam_address_id_r,
+                best.match_weight AS match_weight
+            FROM grouped
+        """).create(good_match_keys_table)
+
+        candidate_search_depth = top_n_matches
+        if numeric_range_reranker is not None:
+            candidate_search_depth = max(
+                top_n_matches,
+                numeric_range_reranker.numeric_search_depth,
+            )
+        con.sql(f"""
+            WITH grouped AS (
+                SELECT
+                    unique_id_r,
+                    max_by(
+                        struct_pack(
+                            unique_id_l := unique_id_l,
+                            ukam_address_id_l := ukam_address_id_l,
+                            ukam_address_id_r := ukam_address_id_r
+                        ),
+                        struct_pack(
+                            match_weight := match_weight,
+                            unique_id_l := unique_id_l
+                        ),
+                        {candidate_search_depth}
+                    ) AS candidates
+                FROM {good_match_keys_table}
+                GROUP BY unique_id_r
+            )
+            SELECT
+                unique_id_r,
+                unnest(candidates, recursive := true)
+            FROM grouped
+        """).create(candidate_search_keys_table)
 
         con.sql(f"""
-            SELECT *
-            FROM df_predict
-            WHERE match_weight > {match_weight_threshold}
+            SELECT prediction.*
+            FROM df_predict AS prediction
+            INNER JOIN {candidate_search_keys_table} AS candidate
+              ON candidate.unique_id_l = prediction.unique_id_l
+             AND candidate.unique_id_r = prediction.unique_id_r
+             AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
+             AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
+            WHERE prediction.match_weight > {match_weight_threshold}
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY unique_id_r, unique_id_l
-                ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
+                PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+                ORDER BY
+                    prediction.match_weight DESC,
+                    prediction.ukam_address_id_r DESC,
+                    prediction.ukam_address_id_l DESC
             ) = 1
         """).create(good_matches_table)
 
-        con.sql(f"""
-            SELECT *
-            FROM {good_matches_table}
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY unique_id_r
-                ORDER BY match_weight DESC, unique_id_l DESC
-            ) <= {top_n_matches}
-        """).create(top_n_matches_table)
+        reranker_source = ""
+        range_intermediate_columns = ""
+        range_projection = ""
+        range_adjustment_sql = ""
+        token_adjustment_alias = "mw_adjustment"
+        if numeric_range_reranker is not None:
+            reranked = build_numeric_range_candidate_pool(
+                con,
+                con.table(good_matches_table),
+                numeric_range_reranker,
+                top_n_matches=top_n_matches,
+                numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
+                numeric_search_depth=numeric_range_reranker.numeric_search_depth,
+            )
+            reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
+            range_intermediate_columns = """
+                candidate.legacy_numeric_bits,
+                candidate.numeric_range_relationship,
+                candidate.numeric_range_guard_passed,
+                candidate.numeric_range_guard_reason,
+                candidate.numeric_range_base_bits,
+                candidate.numeric_range_tf_bits,
+                candidate.numeric_range_adjustment,
+            """
+            range_projection = """
+            legacy_numeric_bits,
+            numeric_range_relationship,
+            numeric_range_guard_passed,
+            numeric_range_guard_reason,
+            numeric_range_base_bits,
+            numeric_range_tf_bits,
+            numeric_range_adjustment,
+            """
+            range_adjustment_sql = " + numeric_range_adjustment"
+            token_adjustment_alias = "distinguishing_token_adjustment"
+        else:
+            con.sql(f"""
+                SELECT *
+                FROM {good_matches_table}
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY unique_id_r
+                    ORDER BY match_weight DESC, unique_id_l DESC
+                ) <= {top_n_matches}
+            """).create(top_n_matches_table)
+            reranker_source = top_n_matches_table
 
+        common_end_tokens_expression = (
+            "map_keys(common_end_tokens_hist_r)"
+            if "common_end_tokens_hist_r" in df_predict.columns
+            else "CAST([] AS VARCHAR[])"
+        )
         con.sql(f"""
             WITH intermediate AS (
-                SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-                FROM {top_n_matches_table}
+                SELECT *, {common_end_tokens_expression} AS common_end_tokens_r
+                FROM {reranker_source}
             ),
             enriched AS (
                 SELECT
@@ -112,9 +234,9 @@ def improve_predictions_using_distinguishing_tokens(
                         common_end_tokens_r.list_transform(
                             value -> COALESCE(
                                 struct_extract(
-                                    TRY_CAST(
-                                    value AS STRUCT(tok VARCHAR, rel_freq DOUBLE)
-                                ),
+                                    TRY_CAST(value AS STRUCT(
+                                        tok VARCHAR, rel_freq DOUBLE
+                                    )),
                                     'tok'
                                 ),
                                 TRY_CAST(value AS VARCHAR)
@@ -169,9 +291,7 @@ def improve_predictions_using_distinguishing_tokens(
                 SELECT
                     source.ukam_address_id_r,
                     source.tokens_r,
-                    concat_ws(
-                                ' ', candidate.__token_address_l, candidate.postcode_l
-                            )
+                    concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
                         .trim()
                         .upper()
                         .regexp_split_to_array('\\s+') AS candidate_tokens
@@ -218,15 +338,13 @@ def improve_predictions_using_distinguishing_tokens(
                     candidate.match_probability,
                     candidate.unique_id_l,
                     candidate.unique_id_r,
-                    candidate.original_address_concat_l,
-                    candidate.original_address_concat_r,
+                    candidate.clean_full_address_l,
+                    candidate.clean_full_address_r,
                     candidate.ukam_address_id_l,
                     candidate.ukam_address_id_r,
                     candidate.postcode_l,
                     candidate.postcode_r,
-                    concat_ws(
-                                ' ', candidate.__token_address_l, candidate.postcode_l
-                            )
+                    concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
                         .trim()
                         .upper()
                         .regexp_split_to_array('\\s+') AS tokens_l,
@@ -235,6 +353,7 @@ def improve_predictions_using_distinguishing_tokens(
                     statistics.hist_overlapping_tokens_r_block_l,
                     statistics.hist_all_bigrams_in_block_l,
                     statistics.bigrams_r,
+                    {range_intermediate_columns}
                     {retained_columns}
                     list_distinct(
                         list_filter(
@@ -304,8 +423,6 @@ def improve_predictions_using_distinguishing_tokens(
             adjusted_evidence AS (
                 SELECT
                     *,
-                    overlapping_tokens_this_l_and_r_again
-                        AS overlapping_tokens_this_l_and_r,
                     map_from_entries(
                         list_filter(
                             map_entries(hist_all_bigrams_in_block_l),
@@ -323,6 +440,8 @@ def improve_predictions_using_distinguishing_tokens(
             components AS (
                 SELECT
                     *,
+                    overlapping_tokens_this_l_and_r_again
+                        AS overlapping_tokens_this_l_and_r,
                     map_from_entries(
                         list_filter(
                             map_entries(hist_overlapping_bigrams_r_block_l),
@@ -343,9 +462,9 @@ def improve_predictions_using_distinguishing_tokens(
                         WHEN COALESCE(len(positional_tokens_l), 0) > 0
                             AND COALESCE(len(positional_tokens_r), 0) > 0
                             AND COALESCE(
-                                len(
-                                list_intersect(positional_tokens_l, positional_tokens_r)
-                            ),
+                                len(list_intersect(
+                                    positional_tokens_l, positional_tokens_r
+                                )),
                                 0
                             ) = 0
                         THEN {POSITIONAL_CONFLICT_PENALTY}
@@ -413,6 +532,7 @@ def improve_predictions_using_distinguishing_tokens(
                 ukam_address_id_r,
                 ukam_address_id_l,
                 match_weight AS match_weight_original,
+                {range_projection}
                 token_reward,
                 token_absence_penalty,
                 bigram_reward,
@@ -424,8 +544,14 @@ def improve_predictions_using_distinguishing_tokens(
                     + bigram_reward
                     - bigram_absence_penalty
                     - missing_token_penalty
+                    - positional_conflict_penalty AS {token_adjustment_alias},
+                token_reward
+                    - token_absence_penalty
+                    + bigram_reward
+                    - bigram_absence_penalty
+                    - missing_token_penalty
                     - positional_conflict_penalty AS mw_adjustment,
-                match_weight + mw_adjustment AS match_weight,
+                match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
                 overlapping_tokens_this_l_and_r,
                 tokens_elsewhere_in_block_but_not_this,
                 hist_all_tokens_in_block_l,
@@ -439,24 +565,27 @@ def improve_predictions_using_distinguishing_tokens(
                 {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
                 {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
                 {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
-                {
-                    "bigrams_elsewhere_in_block_but_not_this_filtered, "
-                    if use_bigrams
-                    else ""
-                }
-                original_address_concat_l,
+            {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
+                clean_full_address_l,
                 postcode_l,
-                original_address_concat_r,
+                clean_full_address_r,
                 postcode_r,
                 {retained_columns}
             FROM scored_candidates
         """).create(matches_table)
 
-    except BaseException:
-        _drop_table_and_registered_aliases(con, matches_table)
-        raise
+        completed = True
     finally:
-        for intermediate_table in intermediate_tables:
-            _drop_table_and_registered_aliases(con, intermediate_table)
+        if not completed:
+            _drop_table_and_registered_aliases(con, matches_table)
+        for table_name in (
+            good_match_keys_table,
+            candidate_search_keys_table,
+            good_matches_table,
+            top_n_matches_table,
+            token_addresses_table,
+            block_statistics_table,
+        ):
+            _drop_table_and_registered_aliases(con, table_name)
 
     return con.table(matches_table)

@@ -9,10 +9,18 @@ class MatchReason(Enum):
     EXACT = "exact: full match"
     EXACT_NO_WHITESPACE = "exact_no_whitespace: full match after removing whitespace"
     EXACT_FLAT_RETRACTION = "exact_flat_retraction: match after removing FLAT keyword"
+    EXACT_PARTIAL_POSTCODE = (
+        "exact_partial_postcode: exact address with an inward postcode "
+        "Levenshtein distance within the configured cap"
+    )
     PEELED_ADDRESS = "peeled_address: match after removing common UK end tokens"
     PEELED_ADDRESS_STRIPPED = (
         "peeled_address_stripped: match after peeling and removing whitespace "
         "and punctuation"
+    )
+    PEELED_ADDRESS_PARTIAL_POSTCODE = (
+        "peeled_address_partial_postcode: match after peeling with an outward "
+        "postcode match and an inward Levenshtein distance within the cap"
     )
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
@@ -29,10 +37,14 @@ class MatchReason(Enum):
             return "exact_no_whitespace"
         if self is MatchReason.EXACT_FLAT_RETRACTION:
             return "exact_flat_retraction"
+        if self is MatchReason.EXACT_PARTIAL_POSTCODE:
+            return "exact_partial_postcode"
         if self is MatchReason.PEELED_ADDRESS:
             return "peeled_address"
         if self is MatchReason.PEELED_ADDRESS_STRIPPED:
             return "peeled_address_stripped"
+        if self is MatchReason.PEELED_ADDRESS_PARTIAL_POSTCODE:
+            return "peeled_address_partial_postcode"
         if self is MatchReason.SPLINK:
             return "splink"
         if self is MatchReason.UNIQUE_TRIGRAM:

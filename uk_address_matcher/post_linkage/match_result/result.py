@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
@@ -96,6 +97,7 @@ class MatchResult:
             "resolved_canonical_id",
             "ukam_label",
             "original_address_concat",
+            "clean_full_address_canonical",
             "original_address_concat_canonical",
             "match_reason",
             "match_weight",
@@ -116,27 +118,75 @@ class MatchResult:
 
         Idempotent. Drops only objects owned by this result, so closing an
         earlier result never invalidates a later live result on the same
-        connection. After close(), `.matches()` and inspection methods raise.
+        connection. The caller's DuckDB connection remains open. Close results
+        before closing the connection. Relations backed by released tables can
+        no longer be queried; DuckDB may raise when a relation is executed.
+
+        Use a context manager to release a result even if processing fails::
+
+            with matcher.match() as result:
+                rows = result.matches().fetchall()
+
+        Materialised Python values such as ``rows`` remain usable after exit;
+        lazy DuckDB relations still depend on the released tables.
         """
         for frame in self._owned_splink_frames:
-            try:
-                frame.drop_table_from_database_and_remove_from_cache(
-                    force_non_splink_table=True
-                )
-            except Exception:
-                # Best-effort: already dropped, or connection closing.
-                pass
+            frame.drop_table_from_database_and_remove_from_cache(
+                force_non_splink_table=True
+            )
         self._owned_splink_frames = ()
         for table_name in self._owned_table_names:
             _drop_table_and_registered_aliases(self.con, table_name)
         self._owned_table_names = ()
 
-    def __enter__(self) -> "MatchResult":
+    def __enter__(self) -> MatchResult:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         self.close()
         return False
+
+    def _export_labelling_bundle_beta(
+        self,
+        output_directory: str | Path = "ukam_labelling_bundle",
+        *,
+        top_n_candidates: int = 3,
+        overwrite: bool = False,
+        total_records_to_export: int | None = None,
+        review_data_chunk_count: int = 1,
+    ) -> Path:
+        """Export a durable bundle for the UKAM labelling workflow.
+
+        Args:
+            output_directory: Directory in which to create the bundle.
+            top_n_candidates: Maximum number of candidates to include per record.
+            overwrite: Replace an existing labelling bundle in ``output_directory``.
+            total_records_to_export: Exact number of messy records to export.
+                ``None`` exports every retained messy record. Records are selected
+                in ascending ``unique_id`` order for reproducibility.
+            review_data_chunk_count: Number of review-data Parquet files to create.
+                Records are divided into contiguous chunks whose sizes differ by at
+                most one record. ``1`` preserves the single-file bundle format.
+
+        Returns:
+            The resolved path to the created bundle directory.
+
+        Raises:
+            TypeError: If an integer argument has the wrong type.
+            ValueError: If the requested record count or chunk count is invalid.
+            FileExistsError: If the output directory is already populated and
+                ``overwrite`` is false.
+        """
+        from uk_address_matcher.labelling import _export_labelling_bundle_beta
+
+        return _export_labelling_bundle_beta(
+            match_result=self,
+            output_directory=output_directory,
+            top_n_candidates=top_n_candidates,
+            overwrite=overwrite,
+            total_records_to_export=total_records_to_export,
+            review_data_chunk_count=review_data_chunk_count,
+        )
 
     def match_metrics(
         self,

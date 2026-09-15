@@ -6,10 +6,7 @@ _RELATION_MARKERS_SQL = (
     "ADJACENT TO|OPPOSITE TO|REAR OFF|REAR OF|ADJ TO|NEXT TO|R O|RO|"
     "ADJACENT|OPPOSITE|BEHIND|REAR|ADJ|OPP"
 )
-_RELATION_STOP_TOKENS_SQL = (
-    "('AND', 'AT', 'FOR', 'IN', 'MID', 'GLAM', 'GLAMORGAN', 'NR', 'OF', 'ON', "
-    "'THE', 'TO')"
-)
+_RELATION_STOP_TOKENS_SQL = "('AND', 'AT', 'FOR', 'IN', 'NR', 'OF', 'ON', 'THE', 'TO')"
 _WEAK_RELATION_TARGETS_SQL = (
     "('LAND', 'PLOT', 'SITE', 'GARAGE', 'YARD', 'FIELD', 'BUILDING', 'FLAT', "
     "'BUNGALOW', 'MOBILE HOME', 'CARAVAN', 'NEW DWELLING')"
@@ -39,13 +36,13 @@ def improve_predictions_using_relation_markers(
                 *,
                 trim(
                     regexp_replace(
-                        upper(original_address_concat_r), '[^A-Z0-9]+', ' ', 'g'
+                        upper(clean_full_address_r), '[^A-Z0-9]+', ' ', 'g'
                     )
                 )
                     AS source_address,
                 trim(
                     regexp_replace(
-                        upper(original_address_concat_l), '[^A-Z0-9]+', ' ', 'g'
+                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
                     )
                 )
                     AS candidate_address

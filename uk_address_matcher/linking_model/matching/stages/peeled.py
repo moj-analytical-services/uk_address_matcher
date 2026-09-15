@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher.linking_model.matching.input_filters import (
     _restrict_canonical_to_messy_postcodes,
+    _validate_inward_postcode_levenshtein,
 )
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
@@ -27,20 +28,26 @@ class PeeledAddressStage(MatchingStage):
     This stage removes trailing locality words such as borough, county, or city
     names, then performs an exact match on the peeled address plus postcode.
     It is useful when one side includes extra suffixes such as ``"Hackney
-    London"`` and the other does not, but it still requires the postcodes to
-    be identical.
+    London"`` and the other does not. A second, optional pass supports the
+    configured inward-postcode edit distance when outward postcodes match.
 
     Use this before ``SplinkStage`` so these high-precision cases are resolved
     without needing probabilistic thresholds.
 
+    Set ``inward_postcode_levenshtein`` to a positive integer to enable the
+    optional inward postcode phase; the default ``0`` skips it.
+
     Example:
         ``"100 Test Street Hackney London"`` can match
-        ``"100 Test Street"`` when both share the same postcode. Peeling only
-        relaxes the address text comparison; it does not allow cross-postcode
-        matches.
+        ``"100 Test Street"`` when both share the same postcode. The optional
+        partial-postcode pass also permits the configured inward edit distance.
     """
 
     enable_whitespace_punctuation_stripping: bool = True
+    inward_postcode_levenshtein: int = 0
+
+    def __post_init__(self) -> None:
+        _validate_inward_postcode_levenshtein(self.inward_postcode_levenshtein)
 
     def find_matches(
         self,
@@ -58,11 +65,14 @@ class PeeledAddressStage(MatchingStage):
         return run_sql_pipeline(
             con=con,
             pipeline_stages=[
-                _restrict_canonical_to_messy_postcodes("exact"),
+                _restrict_canonical_to_messy_postcodes(
+                    "outward" if self.inward_postcode_levenshtein > 0 else "exact"
+                ),
                 _peeled_address_matches(
                     enable_whitespace_punctuation_stripping=(
                         self.enable_whitespace_punctuation_stripping
-                    )
+                    ),
+                    inward_postcode_levenshtein=self.inward_postcode_levenshtein,
                 ),
             ],
             stage_name=stage_name,
@@ -78,7 +88,7 @@ class PeeledAddressStage(MatchingStage):
     description=(
         "Find matches by comparing addresses after peeling common UK end tokens "
         "(cities, counties, boroughs), with an optional whitespace/punctuation "
-        "stripping fallback on the peeled shell."
+        "stripping fallback on the peeled shell and partial-postcode fallback."
     ),
     tags=["phase_1", "matching"],
     depends_on=["restrict_canonical_to_messy_postcodes"],
@@ -86,6 +96,7 @@ class PeeledAddressStage(MatchingStage):
 def _peeled_address_matches(
     *,
     enable_whitespace_punctuation_stripping: bool = True,
+    inward_postcode_levenshtein: int = 0,
 ) -> list[CTEStep]:
     """Find matches using peeled addresses (after removing common UK end tokens).
 
@@ -103,13 +114,18 @@ def _peeled_address_matches(
     upstream cleaning stages to populate `peeled_tokens_list`.
 
     Matching rules:
-        1. Postcodes must be identical
-        2. Peeled addresses (address_tokens minus peeled words) must be identical
-        3. At least one side must have peeled something (to avoid duplicating
-           exact match results)
+        1. Exact postcodes are considered first.
+          2. Optionally, unmatched rows can use an exact outward postcode and an
+              inward postcode Levenshtein distance within the configured cap.
+        3. Peeled addresses (address_tokens minus peeled words) must be identical.
+        4. At least one side must have peeled something (to avoid duplicating
+           exact match results).
     """
     match_reason_value = MatchReason.PEELED_ADDRESS.value
     stripped_match_reason_value = MatchReason.PEELED_ADDRESS_STRIPPED.value
+    partial_postcode_match_reason_value = (
+        MatchReason.PEELED_ADDRESS_PARTIAL_POSTCODE.value
+    )
     enum_values = str(MatchReason.enum_values())
 
     messy_peeled_sql = _build_regex_peel_sql(
@@ -123,6 +139,106 @@ def _peeled_address_matches(
         id_column="ukam_address_id",
         canonical=True,
     )
+
+    if inward_postcode_levenshtein > 0:
+        single_pass_messy_sql = f"""
+            SELECT
+                messy.*,
+                messy.peeled_address AS match_key,
+                1 AS key_priority
+            FROM {{messy_peeled}} AS messy
+            UNION ALL
+            SELECT
+                messy.*,
+                {_compacted_address_sql("messy.peeled_address")} AS match_key,
+                2 AS key_priority
+            FROM {{messy_peeled}} AS messy
+            WHERE {_compacted_address_sql("messy.peeled_address")} <> ''
+            AND {_compacted_address_sql("messy.peeled_address")}
+                <> messy.peeled_address
+        """
+        single_pass_canonical_sql = f"""
+            SELECT
+                canon.*,
+                canon.peeled_address AS match_key,
+                1 AS key_priority
+            FROM {{canonical_peeled}} AS canon
+            UNION ALL
+            SELECT
+                canon.*,
+                {_compacted_address_sql("canon.peeled_address")} AS match_key,
+                2 AS key_priority
+            FROM {{canonical_peeled}} AS canon
+            WHERE {_compacted_address_sql("canon.peeled_address")} <> ''
+            AND {_compacted_address_sql("canon.peeled_address")}
+                <> canon.peeled_address
+        """
+        single_pass_candidates_sql = f"""
+            SELECT
+                messy.ukam_address_id,
+                canon.canonical_ukam_address_id,
+                canon.canonical_unique_id AS resolved_canonical_id,
+                CASE
+                    WHEN messy.postcode <> canon.postcode
+                    THEN '{partial_postcode_match_reason_value}'::ENUM {enum_values}
+                    WHEN messy.key_priority = 1 AND canon.key_priority = 1
+                    THEN '{match_reason_value}'::ENUM {enum_values}
+                    ELSE '{stripped_match_reason_value}'::ENUM {enum_values}
+                END AS match_reason,
+                CASE WHEN messy.postcode = canon.postcode THEN 0 ELSE 1 END
+                    AS postcode_priority,
+                messy.key_priority + canon.key_priority AS key_priority
+            FROM {{single_pass_messy}} AS messy
+            INNER JOIN {{single_pass_canonical}} AS canon
+                ON split_part(messy.postcode, ' ', 1)
+                    = split_part(canon.postcode, ' ', 1)
+                AND messy.match_key = canon.match_key
+            WHERE messy.postcode IS NOT NULL
+            AND canon.postcode IS NOT NULL
+            AND split_part(messy.postcode, ' ', 2) <> ''
+            AND split_part(canon.postcode, ' ', 2) <> ''
+            AND (messy.did_peel OR canon.did_peel)
+            AND (
+                messy.postcode = canon.postcode
+                OR levenshtein(
+                    split_part(messy.postcode, ' ', 2),
+                    split_part(canon.postcode, ' ', 2)
+                ) <= {inward_postcode_levenshtein}
+            )
+        """
+        single_pass_ranked_sql = """
+            SELECT
+                candidates.ukam_address_id,
+                candidates.canonical_ukam_address_id,
+                candidates.resolved_canonical_id,
+                candidates.match_reason,
+                ROW_NUMBER() OVER (
+                    PARTITION BY candidates.ukam_address_id
+                    ORDER BY
+                        candidates.postcode_priority,
+                        candidates.key_priority,
+                        candidates.canonical_ukam_address_id
+                ) AS rn
+            FROM {single_pass_candidates} AS candidates
+        """
+        single_pass_matches_sql = """
+            SELECT
+                ukam_address_id,
+                canonical_ukam_address_id,
+                resolved_canonical_id,
+                match_reason
+            FROM {single_pass_ranked}
+            WHERE rn = 1
+        """
+        return [
+            CTEStep("messy_peeled", messy_peeled_sql),
+            CTEStep("canonical_peeled", canonical_peeled_sql),
+            CTEStep("single_pass_messy", single_pass_messy_sql),
+            CTEStep("single_pass_canonical", single_pass_canonical_sql),
+            CTEStep("single_pass_candidates", single_pass_candidates_sql),
+            CTEStep("single_pass_ranked", single_pass_ranked_sql),
+            CTEStep("peeled_address_matches", single_pass_matches_sql),
+        ]
 
     peeled_candidates_sql = f"""
         SELECT
@@ -244,13 +360,118 @@ def _peeled_address_matches(
             ]
         )
 
-        final_matches_sql = """
+        exact_postcode_matches_sql = """
             SELECT * FROM {pre_stripped_matches}
             UNION ALL
             SELECT * FROM {stripped_candidates}
         """
     else:
-        final_matches_sql = "SELECT * FROM {pre_stripped_matches}"
+        exact_postcode_matches_sql = "SELECT * FROM {pre_stripped_matches}"
+
+    steps.append(CTEStep("exact_postcode_matches", exact_postcode_matches_sql))
+
+    if inward_postcode_levenshtein > 0:
+        partial_messy_residual_sql = """
+            SELECT messy.*
+            FROM {messy_peeled} AS messy
+            LEFT JOIN {exact_postcode_matches} AS matched
+                ON matched.ukam_address_id = messy.ukam_address_id
+            WHERE matched.ukam_address_id IS NULL
+        """
+
+        partial_canonical_restricted_sql = """
+            SELECT
+                canon.clean_full_address,
+                canon.postcode,
+                canon.unique_id AS canonical_unique_id,
+                canon.ukam_address_id AS ukam_address_id
+            FROM {__ukam__tmp_canonical_addresses} AS canon
+            SEMI JOIN (
+                SELECT DISTINCT
+                    split_part(postcode, ' ', 1) AS postcode_outward
+                FROM {partial_messy_residual}
+                WHERE postcode IS NOT NULL
+                AND split_part(postcode, ' ', 1) <> ''
+            ) AS messy
+                ON split_part(canon.postcode, ' ', 1) = messy.postcode_outward
+            WHERE canon.unique_id IS NOT NULL
+        """
+
+        partial_canonical_peeled_sql = _build_regex_peel_sql(
+            source_placeholder="partial_canonical_addresses_restricted",
+            id_column="ukam_address_id",
+            canonical=True,
+        )
+
+        partial_candidates_sql = f"""
+            SELECT
+                messy.ukam_address_id,
+                canon.canonical_ukam_address_id,
+                canon.canonical_unique_id AS resolved_canonical_id,
+                '{partial_postcode_match_reason_value}'::ENUM {enum_values}
+                    AS match_reason
+            FROM {{partial_messy_residual}} AS messy
+            INNER JOIN {{partial_canonical_peeled}} AS canon
+                ON split_part(messy.postcode, ' ', 1)
+                    = split_part(canon.postcode, ' ', 1)
+                AND levenshtein(
+                    split_part(messy.postcode, ' ', 2),
+                    split_part(canon.postcode, ' ', 2)
+                ) <= {inward_postcode_levenshtein}
+                AND messy.peeled_address = canon.peeled_address
+            WHERE messy.postcode <> canon.postcode
+            AND split_part(messy.postcode, ' ', 2) <> ''
+            AND split_part(canon.postcode, ' ', 2) <> ''
+            AND (messy.did_peel OR canon.did_peel)
+        """
+
+        ranked_partial_candidates_sql = """
+            SELECT
+                candidates.ukam_address_id,
+                candidates.canonical_ukam_address_id,
+                candidates.resolved_canonical_id,
+                candidates.match_reason,
+                ROW_NUMBER() OVER (
+                    PARTITION BY candidates.ukam_address_id
+                    ORDER BY candidates.canonical_ukam_address_id
+                ) AS rn
+            FROM {partial_candidates} AS candidates
+        """
+
+        partial_matches_sql = """
+            SELECT
+                ukam_address_id,
+                canonical_ukam_address_id,
+                resolved_canonical_id,
+                match_reason
+            FROM {ranked_partial_candidates}
+            WHERE rn = 1
+        """
+
+        steps.extend(
+            [
+                CTEStep("partial_messy_residual", partial_messy_residual_sql),
+                CTEStep(
+                    "partial_canonical_addresses_restricted",
+                    partial_canonical_restricted_sql,
+                ),
+                CTEStep("partial_canonical_peeled", partial_canonical_peeled_sql),
+                CTEStep("partial_candidates", partial_candidates_sql),
+                CTEStep(
+                    "ranked_partial_candidates",
+                    ranked_partial_candidates_sql,
+                ),
+                CTEStep("partial_matches", partial_matches_sql),
+            ]
+        )
+
+        final_matches_sql = """
+            SELECT * FROM {exact_postcode_matches}
+            UNION ALL
+            SELECT * FROM {partial_matches}
+        """
+    else:
+        final_matches_sql = "SELECT * FROM {exact_postcode_matches}"
 
     steps.append(CTEStep("peeled_address_matches", final_matches_sql))
     return steps

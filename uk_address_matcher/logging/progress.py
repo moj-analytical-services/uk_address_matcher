@@ -6,7 +6,8 @@ import time
 from typing import Literal, TypeAlias, cast
 
 ProgressMode: TypeAlias = Literal["auto", "stages", "off"]
-ShowProgress: TypeAlias = bool | ProgressMode
+ShowProgress: TypeAlias = ProgressMode
+_LegacyShowProgress: TypeAlias = bool | ShowProgress
 
 _PROGRESS_MODES = frozenset({"auto", "stages", "off"})
 _NOTEBOOK_ENVIRONMENT_VARIABLES = (
@@ -17,19 +18,15 @@ _NOTEBOOK_ENVIRONMENT_VARIABLES = (
 
 
 def resolve_progress_mode(
-    show_progress: ShowProgress = True,
+    show_progress: _LegacyShowProgress = "auto",
 ) -> ProgressMode:
-    """Normalise boolean and named progress-output settings."""
+    """Normalise named progress settings and legacy boolean values."""
     if isinstance(show_progress, bool):
         return "auto" if show_progress else "off"
     if not isinstance(show_progress, str):
-        raise TypeError(
-            "show_progress must be a boolean or one of: 'auto', 'stages', or 'off'."
-        )
+        raise TypeError("show_progress must be one of: 'auto', 'stages', or 'off'.")
     if show_progress not in _PROGRESS_MODES:
-        raise ValueError(
-            "show_progress must be a boolean or one of: 'auto', 'stages', or 'off'."
-        )
+        raise ValueError("show_progress must be one of: 'auto', 'stages', or 'off'.")
 
     return cast(ProgressMode, show_progress)
 

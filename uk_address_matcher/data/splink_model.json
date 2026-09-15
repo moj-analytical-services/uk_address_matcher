@@ -3,9 +3,6 @@
   "probability_two_random_records_match": 3e-08,
   "retain_matching_columns": true,
   "retain_intermediate_calculation_columns": true,
-  "additional_columns_to_retain": [
-    "common_end_tokens_hist"
-  ],
   "sql_dialect": "duckdb",
   "em_convergence": 0.0001,
   "max_iterations": 25,
@@ -28,14 +25,6 @@
       "sql_dialect": "duckdb"
     },
     {
-      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and split_part(l.postcode, ' ', 2) = split_part(r.postcode, ' ', 2)",
-      "sql_dialect": "duckdb"
-    },
-    {
-      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode",
-      "sql_dialect": "duckdb"
-    },
-    {
       "blocking_rule": "list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 2) and l.postcode = r.postcode",
       "sql_dialect": "duckdb"
     },
@@ -52,14 +41,127 @@
       "sql_dialect": "duckdb"
     },
     {
+      "blocking_rule": "l.postcode = r.postcode AND l.numeric_range IS NOT NULL AND r.numeric_range IS NOT NULL AND l.numeric_range_lower = r.numeric_range_lower AND l.numeric_range_upper = r.numeric_range_upper",
+      "sql_dialect": "duckdb"
+    },
+    {
       "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
       "sql_dialect": "duckdb",
       "arrays_to_explode": [
         "exploding_unique_ids"
       ]
+    },
+    {
+      "blocking_rule": "l.road_1_norm = r.road_1_norm and l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1)",
+      "sql_dialect": "duckdb"
     }
   ],
   "comparisons": [
+    {
+      "output_column_name": "commercial_distinguishing_ordered_signature",
+      "comparison_levels": [
+        {
+          "sql_condition": "distinguishing_adj_start_tokens_l IS NULL OR len(distinguishing_adj_start_tokens_l) = 0",
+          "label_for_charts": "No distinguishing tokens",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "postcode_l = postcode_r AND list_slice(regexp_split_to_array(clean_full_address_r, '\\s+'), 1, len(distinguishing_adj_start_tokens_l)) = distinguishing_adj_start_tokens_l AND list_contains(flatten(list_transform(range(1, 5), first_offset -> list_transform(range(first_offset + 1, 5), second_offset -> list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + first_offset) = list_extract(regexp_split_to_array(clean_full_address_l, '\\s+'), len(distinguishing_adj_start_tokens_l) + 1) AND list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + second_offset) = list_extract(regexp_split_to_array(clean_full_address_l, '\\s+'), len(distinguishing_adj_start_tokens_l) + 2) AND NOT list_contains(list_transform(list_filter(range(1, second_offset + 1), gap_offset -> gap_offset != first_offset AND gap_offset != second_offset), gap_offset -> regexp_matches(list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + gap_offset), '[0-9]') OR list_extract(regexp_split_to_array(clean_full_address_r, '\\s+'), len(distinguishing_adj_start_tokens_l) + gap_offset) IN ('APARTMENT', 'BLOCK', 'BUILDING', 'COTTAGE', 'FLAT', 'HOUSE', 'MAISONETTE', 'OFFICE', 'STEADING', 'STUDIO', 'SUITE', 'UNIT', 'WAREHOUSE', 'WORKSHOP')), TRUE)))), TRUE)",
+          "label_for_charts": "Existing ordered distinguishing signature",
+          "m_probability": 1024.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No ordered distinguishing signature",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Existing ordered signature retained as a control"
+    },
+    {
+      "output_column_name": "commercial_distinguishing_lexical_tokens",
+      "comparison_levels": [
+        {
+          "sql_condition": "distinguishing_lexical_tokens_l IS NULL OR len(distinguishing_lexical_tokens_l) = 0",
+          "label_for_charts": "No lexical distinguishing tokens",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "list_has_all(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_lexical_tokens_l)",
+          "label_for_charts": "All lexical distinguishing tokens present",
+          "m_probability": 2.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "list_has_any(regexp_split_to_array(clean_full_address_r, '\\s+'), distinguishing_lexical_tokens_l)",
+          "label_for_charts": "Some lexical distinguishing tokens present",
+          "m_probability": 1.4142135623730951,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No lexical distinguishing tokens present (-2)",
+          "m_probability": 1.0,
+          "u_probability": 4.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Commercial lexical distinguishing tokens"
+    },
+    {
+      "output_column_name": "address_structure_numeric_context",
+      "comparison_levels": [
+        {
+          "sql_condition": "NOT (numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) > 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) > 0)",
+          "label_for_charts": "No numeric structure available",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "(numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) > 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) > 0) AND numeric_tokens_l != numeric_tokens_r AND (regexp_replace(regexp_replace(lower(clean_full_address_l), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g') = regexp_replace(regexp_replace(lower(clean_full_address_r), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g'))",
+          "label_for_charts": "Numeric conflict with strong context (-4)",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) > 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) > 0 AND (numeric_tokens_l = numeric_tokens_r) AND (regexp_replace(regexp_replace(lower(clean_full_address_l), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g') = regexp_replace(regexp_replace(lower(clean_full_address_r), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g'))",
+          "label_for_charts": "Exact numeric structure with strong context (+2)",
+          "m_probability": 4.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) > 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) > 0 AND list_has_any(numeric_tokens_l, numeric_tokens_r) AND (regexp_replace(regexp_replace(lower(clean_full_address_l), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g') = regexp_replace(regexp_replace(lower(clean_full_address_r), '[0-9]+', '#', 'g'), '[^a-z#]+', ' ', 'g'))",
+          "label_for_charts": "Numeric overlap with strong context (+1)",
+          "m_probability": 2.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "Insufficient numeric/context evidence",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Generic marker-free numeric/context evidence"
+    },
     {
       "output_column_name": "address_without_numbers",
       "comparison_levels": [
@@ -120,6 +222,33 @@
         }
       ],
       "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "inferred_road",
+      "comparison_levels": [
+        {
+          "sql_condition": "road_1_norm_l IS NULL OR road_1_norm_r IS NULL",
+          "label_for_charts": "Inferred road unavailable",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "road_1_norm_l = road_1_norm_r",
+          "label_for_charts": "Exact inferred road agreement",
+          "m_probability": 4,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No exact inferred road agreement",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Positive-only inferred road agreement"
     },
     {
       "output_column_name": "flat_identity",
@@ -215,6 +344,65 @@
       "comparison_description": "Combined flat identity comparison"
     },
     {
+      "output_column_name": "sub_premise_identifier",
+      "comparison_levels": [
+        {
+          "sql_condition": "sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NULL",
+          "label_for_charts": "Both sub-premise identifiers absent",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NOT NULL AND sub_premise_role_l != sub_premise_role_r",
+          "label_for_charts": "Confident sub-premise roles conflict",
+          "m_probability": 0.015625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "sub_premise_identifier_l IS NOT NULL AND sub_premise_identifier_r IS NOT NULL AND sub_premise_identifier_l != sub_premise_identifier_r AND sub_premise_role_l = sub_premise_role_r AND sub_premise_role_l IS NOT NULL",
+          "label_for_charts": "Confident sub-premise identifiers differ",
+          "m_probability": 0.00390625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND ((sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL) OR (sub_premise_role_r IS NOT NULL AND sub_premise_role_l IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL)) AND COALESCE(jaccard(sub_premise_marker_token_l, sub_premise_marker_token_r), 0) >= 0.5",
+          "label_for_charts": "Identifier agrees with a fuzzy marker",
+          "m_probability": 8.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND ((sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NULL) OR (sub_premise_role_r IS NOT NULL AND sub_premise_role_l IS NULL))",
+          "label_for_charts": "Identifier agrees with a missing marker",
+          "m_probability": 4.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NOT NULL) OR (sub_premise_identifier_l IS NOT NULL AND sub_premise_identifier_r IS NULL)",
+          "label_for_charts": "One sub-premise identifier absent",
+          "m_probability": 0.5,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No sub-premise evidence",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Missingness-aware sub-premise identifier"
+    },
+    {
       "output_column_name": "numeric_token_1",
       "comparison_levels": [
         {
@@ -223,6 +411,14 @@
           "fix_m_probability": false,
           "fix_u_probability": false,
           "is_null_level": true
+        },
+        {
+          "sql_condition": "(numeric_token_1_l = numeric_token_1_r OR nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] IS NOT NULL AND numeric_specific_markers_r[1] IS NOT NULL AND numeric_specific_markers_l[1] != numeric_specific_markers_r[1]",
+          "label_for_charts": "Numeric 1 agrees but role marker conflicts (cap 6)",
+          "m_probability": 64.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
         },
         {
           "sql_condition": "\"numeric_token_1_l\" = \"numeric_token_1_r\"",
@@ -280,6 +476,14 @@
           "fix_m_probability": false,
           "fix_u_probability": false,
           "is_null_level": true
+        },
+        {
+          "sql_condition": "numeric_token_2_l = numeric_token_2_r AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] IS NOT NULL AND numeric_specific_markers_r[2] IS NOT NULL AND numeric_specific_markers_l[2] != numeric_specific_markers_r[2]",
+          "label_for_charts": "Numeric 2 agrees but role marker conflicts (cap 6)",
+          "m_probability": 64.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
         },
         {
           "sql_condition": "\"numeric_token_2_l\" = \"numeric_token_2_r\"",
@@ -786,6 +990,28 @@
         }
       ],
       "comparison_description": "Bigram/trigram inverted-index signature overlap (IDF-weighted; filter_condition IS NULL; outward singleton four-gram rows are candidate-only)"
+    },
+    {
+      "output_column_name": "commercial_same_role_numeric_contradiction",
+      "comparison_levels": [
+        {
+          "sql_condition": "((numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') != nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] = numeric_specific_markers_r[1] AND numeric_specific_markers_l[1] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT')) OR ((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL AND numeric_token_2_l != numeric_token_2_r) AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] = numeric_specific_markers_r[2] AND numeric_specific_markers_l[2] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT'))",
+          "label_for_charts": "Confident same-role numeric contradiction (-6)",
+          "m_probability": 0.015625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No confident same-role numeric contradiction",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "Commercial same-role structural/numeric contradiction"
     }
   ]
 }

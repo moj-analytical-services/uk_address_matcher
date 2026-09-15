@@ -57,6 +57,57 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> tuple[str,
             True,
         ),
         (
+            "1 HIGH STREET LONDON BOROUGH OF BEXLEY",
+            "1 HIGH STREET",
+            True,
+        ),
+        (
+            "2 HIGH STREET COUNTY BOROUGH OF BLAENAU GWENT",
+            "2 HIGH STREET",
+            True,
+        ),
+        (
+            "3 HIGH STREET CITY OF EDINBURGH",
+            "3 HIGH STREET",
+            True,
+        ),
+        (
+            "4 HIGH STREET CITY AND COUNTY OF SWANSEA",
+            "4 HIGH STREET",
+            True,
+        ),
+        (
+            "5 HIGH STREET ROYAL BOROUGH OF KENSINGTON AND CHELSEA",
+            "5 HIGH STREET",
+            True,
+        ),
+        (
+            "5 HIGH STREET LONDON BOROUGH OF HAMMERSMITH AND FULHAM",
+            "5 HIGH STREET",
+            True,
+        ),
+        (
+            "5 HIGH STREET LONDON BOROUGH OF BARKING AND DAGENHAM",
+            "5 HIGH STREET",
+            True,
+        ),
+        (
+            "5 HIGH STREET LONDON BOROUGH OF RICHMOND UPON THAMES",
+            "5 HIGH STREET",
+            True,
+        ),
+        (
+            "6 HIGH STREET CITY OF LONDON",
+            "6 HIGH STREET",
+            True,
+        ),
+        (
+            "7 HIGH STREET ROYAL BOROUGH OF KINGSTON UPON THAMES",
+            "7 HIGH STREET",
+            True,
+        ),
+        ("3 HIGH STREET WALTHAMSTOW", "3 HIGH STREET", True),
+        (
             "THE OLD RECTORY CHURCH LANE HERTFORDSHIRE",
             "THE OLD RECTORY CHURCH LANE",
             True,
@@ -87,7 +138,7 @@ def test_regex_peeling_does_not_handle_fuzzy_typoes(connection):
 def test_regex_peeling_handles_long_suffix_chains(connection):
     """Regex peeling removes chained suffix tokens in one pass."""
     peeled_address, did_peel = _run_peel_single(
-        "1 TEST ROAD LONDON GREATER LONDON WEST MIDLANDS",
+        "1 TEST ROAD LONDON GREATER LONDON CITY OF LONDON",
         connection,
     )
     assert peeled_address == "1 TEST ROAD"

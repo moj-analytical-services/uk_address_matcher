@@ -1,7 +1,9 @@
+import json
 import logging
 import re
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import duckdb
 import pyarrow
@@ -168,6 +170,214 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
     assert "match_reason" in cols
 
 
+def test_lean_and_debug_prepared_canonical_matching_is_identical(
+    con, canonical_data, messy_data, tmp_path
+):
+    lean_folder = tmp_path / "lean"
+    debug_folder = tmp_path / "debug"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=lean_folder,
+        con=con,
+        overwrite=True,
+    )
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=debug_folder,
+        con=con,
+        add_debug_features=True,
+        overwrite=True,
+    )
+
+    results = []
+    for canonical_folder in (lean_folder, debug_folder):
+        variant_con = duckdb.connect(database=":memory:")
+        try:
+            variant_messy_data = _make_addresses(variant_con, MESSY_RECORDS)
+            result = AddressMatcher(
+                canonical_addresses=canonical_folder,
+                addresses_to_match=variant_messy_data,
+                con=variant_con,
+            ).match()
+            all_matches = result.matches(all_columns=True)
+            results.append(
+                (
+                    set(all_matches.columns),
+                    all_matches.select(
+                        "unique_id, resolved_canonical_id, "
+                        "canonical_ukam_address_id, match_reason, match_weight, "
+                        "distinguishability"
+                    )
+                    .order("unique_id")
+                    .fetchall(),
+                )
+            )
+        finally:
+            variant_con.close()
+
+    lean_columns, lean_rows = results[0]
+    debug_columns, debug_rows = results[1]
+
+    assert lean_rows == debug_rows
+    assert {"original_address_concat", "clean_full_address_canonical"} <= lean_columns
+    assert "original_address_concat_canonical" not in lean_columns
+    assert {
+        "original_address_concat",
+        "clean_full_address_canonical",
+        "original_address_concat_canonical",
+    } <= debug_columns
+
+
+def test_lean_splink_inspection_uses_clean_canonical_address(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "lean"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+    ).match()
+
+    candidates = result._splink_results_for_messy_id("M2")
+
+    assert "original_address_canonical" in candidates.columns
+    assert candidates.fetchall()[0][3] == "2 LOW STREET MANCHESTER"
+
+
+def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "legacy"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        add_debug_features=True,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    legacy_path = prepared_folder / "ukam_canonical_addresses.legacy.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT *, []::VARCHAR[] AS very_unusual_tokens_arr
+            FROM read_parquet('{canonical_path}')
+        ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    legacy_path.rename(canonical_path)
+
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("preparation_options")
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+    ).match()
+
+    assert "original_address_concat_canonical" in result.matches().columns
+    assert (
+        result.matches()
+        .filter("unique_id = 'M2'")
+        .select("original_address_concat_canonical")
+        .fetchone()[0]
+        == "2 low street manchester"
+    )
+    assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
+
+
+def test_prepared_canonical_without_numeric_range_still_matches(
+    con, canonical_data, messy_data, tmp_path
+):
+    prepared_folder = tmp_path / "without_numeric_range"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    without_range_path = (
+        prepared_folder / "ukam_canonical_addresses.without_range.parquet"
+    )
+    con.execute(
+        f"""
+        COPY (
+            SELECT * EXCLUDE (
+                numeric_range
+            )
+            FROM read_parquet('{canonical_path}')
+        ) TO '{without_range_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    without_range_path.rename(canonical_path)
+
+    result = AddressMatcher(
+        canonical_addresses=prepared_folder,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[SplinkStage()],
+        show_progress=False,
+    ).match()
+
+    assert result.matches().count("*").fetchone()[0] > 0
+
+
+def test_inferred_road_scoring_without_road_catalogue_still_matches(
+    con, canonical_data, messy_data, tmp_path, caplog
+):
+    prepared_folder = tmp_path / "without_inferred_road"
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=prepared_folder,
+        con=con,
+        overwrite=True,
+    )
+
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    without_road_path = prepared_folder / "ukam_canonical_addresses.without_road.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT * EXCLUDE (road_1_norm)
+            FROM read_parquet('{canonical_path}')
+        ) TO '{without_road_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    without_road_path.rename(canonical_path)
+    (prepared_folder / "roadlike_places.parquet").unlink()
+
+    with caplog.at_level(logging.DEBUG, logger="uk_address_matcher"):
+        result = AddressMatcher(
+            canonical_addresses=prepared_folder,
+            addresses_to_match=messy_data,
+            con=con,
+            stages=[SplinkStage()],
+            show_progress=False,
+        ).match()
+
+    assert result.matches().count("*").fetchone()[0] > 0
+    assert any(
+        record.getMessage() == "No road catalogue available; skipping road parsing"
+        for record in caplog.records
+    )
+
+
 def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
     con,
     caplog,
@@ -212,17 +422,6 @@ def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
         for message in info_messages
         if message.startswith("Applying term frequencies")
     ]
-    cleaned_debug_logs = [
-        message
-        for message in debug_messages
-        if message.startswith("Cleaning and preprocessing:")
-    ]
-    tf_debug_logs = [
-        message
-        for message in debug_messages
-        if message.startswith("Applying term frequencies:")
-    ]
-
     assert any(
         "Cleaning and preprocessing: 20,500 records across 2 chunks" == message
         for message in cleaned_info_logs
@@ -239,10 +438,10 @@ def test_cleaning_num_chunks_is_propagated_to_cleaning_steps(
         message.startswith("Applying term frequencies completed:")
         for message in tf_info_logs
     )
-    assert any("chunk 1/2" in message for message in cleaned_debug_logs)
-    assert any("chunk 2/2" in message for message in cleaned_debug_logs)
-    assert any("chunk 1/2" in message for message in tf_debug_logs)
-    assert any("chunk 2/2" in message for message in tf_debug_logs)
+    assert any("chunk 1/2" in message for message in cleaned_info_logs)
+    assert any("chunk 2/2" in message for message in cleaned_info_logs)
+    assert any("chunk 1/2" in message for message in tf_info_logs)
+    assert any("chunk 2/2" in message for message in tf_info_logs)
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
@@ -309,7 +508,7 @@ def test_matcher_progress_off_suppresses_stage_status_logs(
 
 
 def test_matcher_rejects_unknown_progress_mode(con, canonical_data, messy_data):
-    with pytest.raises(ValueError, match="show_progress must be a boolean"):
+    with pytest.raises(ValueError, match="show_progress must be one of"):
         AddressMatcher(
             canonical_addresses=canonical_data,
             addresses_to_match=messy_data,
@@ -379,12 +578,16 @@ def test_sequential_matchers_share_connection_with_splink(
 
 
 def _catalogue_snapshot(con):
-    tables = {name for (name,) in con.execute(
-        "SELECT table_name FROM duckdb_tables()"
-    ).fetchall()}
-    views = {name for (name,) in con.execute(
-        "SELECT view_name FROM duckdb_views() WHERE NOT internal"
-    ).fetchall()}
+    tables = {
+        name
+        for (name,) in con.execute("SELECT table_name FROM duckdb_tables()").fetchall()
+    }
+    views = {
+        name
+        for (name,) in con.execute(
+            "SELECT view_name FROM duckdb_views() WHERE NOT internal"
+        ).fetchall()
+    }
     return tables | views
 
 
@@ -394,6 +597,8 @@ def test_splink_matching_preserves_user_tables_with_legacy_internal_names(
     user_table_names = (
         "m_",
         "c_",
+        "good_match_keys",
+        "candidate_search_keys",
         "good_matches",
         "top_n_matches",
         "token_addresses",
@@ -423,22 +628,22 @@ def test_splink_stage_failure_restores_user_tables_and_leaves_no_leftovers(
 
     con.execute("CREATE TABLE m_ AS SELECT 'user data' AS marker")
     con.execute("CREATE TABLE c_ AS SELECT 'user data' AS marker")
-    baseline = _catalogue_snapshot(con)
 
     def boom(**kwargs):
         raise RuntimeError("simulated failure mid-splink")
 
-    monkeypatch.setattr(
-        analyse_results, "best_matches_with_distinguishability", boom
-    )
+    monkeypatch.setattr(analyse_results, "best_matches_with_distinguishability", boom)
 
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[SplinkStage(final_match_weight_threshold=-20.0)],
+    )
+    # Matcher input bindings remain available for retrying a failed run.
+    baseline = _catalogue_snapshot(con)
     with pytest.raises(RuntimeError, match="simulated failure"):
-        AddressMatcher(
-            canonical_addresses=canonical_data,
-            addresses_to_match=messy_data,
-            con=con,
-            stages=[SplinkStage(final_match_weight_threshold=-20.0)],
-        ).match()
+        matcher.match()
 
     # User tables must resolve to user data again, not the matcher's relations
     assert con.sql("SELECT * FROM m_").fetchall() == [("user data",)]
@@ -447,21 +652,24 @@ def test_splink_stage_failure_restores_user_tables_and_leaves_no_leftovers(
     leftovers = {
         name
         for name in _catalogue_snapshot(con) - baseline
-        if name.startswith(("__splink__", "__ukam__tmp_", "__ukam__splink__"))
+        if name.startswith(("__splink__", "__ukam"))
+        and name not in {"__ukam_derived_term_frequencies", "__ukam_index_meta"}
     }
     assert leftovers == set()
 
 
 def test_match_result_close_is_scoped_and_idempotent(con, canonical_data, messy_data):
     baseline = _catalogue_snapshot(con)
+    stages = [SplinkStage(final_match_weight_threshold=-20.0)]
 
     first_result = AddressMatcher(
         canonical_addresses=canonical_data,
         addresses_to_match=messy_data,
         con=con,
-        stages=[SplinkStage(final_match_weight_threshold=-20.0)],
+        stages=stages,
     ).match()
 
+    first_predictions = first_result._splink_predictions().fetchall()
     second_messy = _make_addresses(
         con,
         [
@@ -476,12 +684,15 @@ def test_match_result_close_is_scoped_and_idempotent(con, canonical_data, messy_
         canonical_addresses=canonical_data,
         addresses_to_match=second_messy,
         con=con,
-        stages=[SplinkStage(final_match_weight_threshold=-20.0)],
+        stages=stages,
     ).match()
 
+    assert first_result._splink_predictions().fetchall() == first_predictions
+    second_predictions = second_result._splink_predictions().fetchall()
     # Closing the earlier result must not break the later live one
     first_result.close()
     assert second_result.matches().count("*").fetchone()[0] == 1
+    assert second_result._splink_predictions().fetchall() == second_predictions
 
     second_result.close()
     second_result.close()  # idempotent
@@ -490,9 +701,14 @@ def test_match_result_close_is_scoped_and_idempotent(con, canonical_data, messy_
         name
         for name in _catalogue_snapshot(con) - baseline
         if name.startswith(
-            ("__splink__", "__ukam__splink__", "__ukam__processed_",
-             "__ukam_final_matches_", "__ukam__inverted_index_",
-             "__ukam_derived_inverted_index_")
+            (
+                "__splink__",
+                "__ukam__splink__",
+                "__ukam__processed_",
+                "__ukam_final_matches_",
+                "__ukam__inverted_index_",
+                "__ukam_derived_inverted_index_",
+            )
         )
     }
     assert leftovers == set()
@@ -509,21 +725,21 @@ def test_match_result_is_a_context_manager(con, canonical_data, messy_data):
     assert result._owned_table_names == ()
 
 
-def test_file_backed_database_is_clean_after_close(
-    canonical_data, con, tmp_path
-):
+def test_file_backed_database_is_clean_after_close(canonical_data, con, tmp_path):
     database_path = tmp_path / "matcher.duckdb"
     file_con = duckdb.connect(str(database_path))
     try:
-        baseline = _catalogue_snapshot(file_con)
         canonical = _make_addresses(file_con, CANONICAL_RECORDS)
         messy = _make_addresses(file_con, MESSY_RECORDS)
-        result = AddressMatcher(
+        matcher = AddressMatcher(
             canonical_addresses=canonical,
             addresses_to_match=messy,
             con=file_con,
             stages=[ExactMatchStage(), SplinkStage(final_match_weight_threshold=-20.0)],
-        ).match()
+        )
+        # Input registrations belong to the reusable matcher, not one result.
+        baseline = _catalogue_snapshot(file_con)
+        result = matcher.match()
         result.matches().fetchall()
         result.close()
         leftovers = _catalogue_snapshot(file_con) - baseline
@@ -877,3 +1093,99 @@ def test_matching_does_not_leak_unnamed_relations(con, canonical_data, messy_dat
         "Legacy processed table names should no longer be created: "
         f"{sorted(legacy_processed_tables)}"
     )
+
+
+@pytest.mark.parametrize(
+    "failure_point", ["before_registration", "after_tf_registration"]
+)
+def test_linker_setup_failure_cleans_only_new_objects(
+    con, canonical_data, messy_data, monkeypatch, failure_point
+):
+    import uk_address_matcher.linking_model.splink_model as splink_model
+
+    stage = SplinkStage()
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[stage],
+    )
+    # A previous run and caller-owned tables must survive a later failure.
+    previous = matcher.match()
+    previous_predictions = previous._splink_predictions().fetchall()
+    for name in ("m_", "c_", "__ukam_results_existing", "__ukam__tmp_existing"):
+        con.execute(f"CREATE TABLE {name} AS SELECT 'user data' AS marker")
+    baseline = _catalogue_snapshot(con)
+    original_get_linker = splink_model._get_linker
+
+    def fail_setup(**kwargs):
+        if failure_point == "after_tf_registration":
+            original_get_linker(**kwargs)
+            assert kwargs["owned_splink_frames"]
+        raise ValueError("simulated linker setup failure")
+
+    monkeypatch.setattr(splink_model, "_get_linker", fail_setup)
+    with pytest.raises(ValueError, match="simulated linker setup failure"):
+        matcher.match()
+
+    assert _catalogue_snapshot(con) == baseline
+    assert previous.matches().count("*").fetchone()[0] == 2
+    assert previous._splink_predictions().fetchall() == previous_predictions
+    for name in ("m_", "c_", "__ukam_results_existing", "__ukam__tmp_existing"):
+        assert con.table(name).fetchall() == [("user data",)]
+    previous.close()
+
+
+def test_failed_stage_write_removes_results_and_stage_tables(
+    con, canonical_data, messy_data, monkeypatch
+):
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy_data,
+        con=con,
+        stages=[ExactMatchStage()],
+    )
+    baseline = _catalogue_snapshot(con)
+
+    def fail_write(self, **kwargs):
+        assert kwargs["results_table"] in _catalogue_snapshot(con)
+        con.execute("CREATE TABLE __ukam_stage_matches_failure AS SELECT 1")
+        raise RuntimeError("simulated stage write failure")
+
+    monkeypatch.setattr(ExactMatchStage, "_write_matches_to_results", fail_write)
+    with pytest.raises(RuntimeError, match="simulated stage write failure"):
+        matcher.match()
+    leftovers = _catalogue_snapshot(con) - baseline
+    assert leftovers <= {"__ukam_derived_term_frequencies", "__ukam_index_meta"}
+
+
+def test_result_context_manager_releases_tables_when_body_raises(con):
+    con.execute("CREATE TABLE __ukam_final_matches_context AS SELECT 1 AS marker")
+    result = MatchResult(
+        con.table("__ukam_final_matches_context"),
+        con=con,
+        _owned_table_names=("__ukam_final_matches_context",),
+    )
+    with pytest.raises(ValueError, match="consumer failed"):
+        with result:
+            raise ValueError("consumer failed")
+    assert "__ukam_final_matches_context" not in _catalogue_snapshot(con)
+    assert con.sql("SELECT 42").fetchone() == (42,)
+    result.close()
+
+
+@pytest.mark.parametrize("owner_kind", ["stage", "result"])
+def test_splink_cleanup_does_not_hide_unexpected_errors(con, owner_kind):
+    frame = Mock()
+    frame.drop_table_from_database_and_remove_from_cache.side_effect = RuntimeError(
+        "unexpected cleanup error"
+    )
+    if owner_kind == "stage":
+        owner = SplinkStage()
+        cleanup = owner._release_splink_tables
+    else:
+        owner = MatchResult(con.sql("SELECT 1"), con=con)
+        cleanup = owner.close
+    owner._owned_splink_frames = (frame,)
+    with pytest.raises(RuntimeError, match="unexpected cleanup error"):
+        cleanup()

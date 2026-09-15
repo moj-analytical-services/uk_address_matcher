@@ -27,6 +27,7 @@ def test_duplicate_records_get_unique_ukam_address_id(duck_con):
     assert "ukam_address_id" in cleaned.columns, (
         "ukam_address_id column should exist in cleaned data"
     )
+    assert "__ukam_row_id" in cleaned.columns
 
     # Get the ukam_address_id values
     result = duck_con.sql(

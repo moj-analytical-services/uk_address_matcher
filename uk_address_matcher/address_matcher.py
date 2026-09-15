@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import logging
+import re
+from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 from uk_address_matcher.cleaning.chunking_strategies import (
+    _add_canonical_road_blocking_keys,
     derive_inverted_index,
+    derive_roadlike_places,
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
 )
+from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
 )
@@ -73,11 +78,10 @@ class AddressMatcher:
         cleaning_num_chunks: Number of chunks to use for cleaning and term
             frequency derivation when canonical input is a raw relation. Also
             used for messy-address cleaning. Must be a positive integer.
-        show_progress: ``True`` uses automatic live progress when supported;
-            ``False`` suppresses progress output. ``"auto"`` renders live
-            updates only in a supported interactive terminal and otherwise logs
-            stage boundaries. ``"stages"`` logs only stage boundaries; ``"off"``
-            suppresses progress output.
+        show_progress: ``"auto"`` renders live updates in a supported
+            interactive terminal and otherwise logs stage boundaries.
+            ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
+            progress output.
         debug_options: Optional `DebugOptions` to control debug output and logging.
 
     Examples:
@@ -139,7 +143,7 @@ class AddressMatcher:
         stages: Optional[list[MatchingStage]] = None,
         debug_options: Optional[DebugOptions] = None,
         cleaning_num_chunks: int = 10,
-        show_progress: ShowProgress = True,
+        show_progress: ShowProgress = "auto",
     ):
         self.con = con
         self.stages = stages if stages is not None else _default_stages()
@@ -151,7 +155,6 @@ class AddressMatcher:
         if cleaning_num_chunks < 1:
             raise ValueError("cleaning_num_chunks must be >= 1.")
         self.cleaning_num_chunks = cleaning_num_chunks
-
         if self.canonical_address_filter is not None and not isinstance(
             self.canonical_address_filter, str
         ):
@@ -180,6 +183,7 @@ class AddressMatcher:
 
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
+        self._roadlike_places: duckdb.DuckDBPyRelation | None = None
         self._tf_table: duckdb.DuckDBPyRelation | None = None
         self._inverted_index_table_name: str | None = None
         self._messy_clean: duckdb.DuckDBPyRelation | None = None
@@ -224,6 +228,8 @@ class AddressMatcher:
     def _resolve_canonical_data(self) -> None:
         """Loads or cleans canonical data depending on the input type."""
 
+        self._roadlike_places = None
+
         if isinstance(self._raw_canonical, (str, Path)):
             logger.debug("Loading prepared canonical data from '%s'", self._raw_canonical)
             prepared = load_prepared_canonical_data(
@@ -232,13 +238,25 @@ class AddressMatcher:
                 canonical_address_filter=self.canonical_address_filter,
             )
             self._canonical_clean = prepared.addresses
+            self._roadlike_places = prepared.roadlike_places
             self._tf_table = prepared.term_frequencies
             self._register_inverted_index(prepared.inverted_index)
+            if (
+                self._roadlike_places is not None
+                and "road_1_norm" not in self._canonical_clean.columns
+            ):
+                self._canonical_clean = _add_canonical_road_blocking_keys(
+                    self._canonical_clean,
+                    self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
+                    roadlike_places=self._roadlike_places,
+                )
 
         else:
             canonical_for_preparation = normalise_and_validate_raw_canonical(
                 self._raw_canonical
             )
+
             # Data is either raw or only pre-cleaned.  In both cases we need
             # term frequencies and the inverted index.  `prepare_data_for_matching`
             # handles pre-cleaned input correctly (it checks internally).
@@ -257,11 +275,23 @@ class AddressMatcher:
                 con=self.con,
                 num_of_chunks=self.cleaning_num_chunks,
                 term_frequency_lookup=self._tf_table,
+                derive_distinguishing_wrt_adjacent_records=True,
                 dataset_role="canonical",
                 debug_options=self.debug_options,
                 show_progress=self.show_progress,
             )
-
+            if any(isinstance(stage, SplinkStage) for stage in self.stages):
+                self._roadlike_places = derive_roadlike_places(
+                    self._canonical_clean,
+                    self.con,
+                    show_progress=self.show_progress,
+                )
+                self._canonical_clean = _add_canonical_road_blocking_keys(
+                    self._canonical_clean,
+                    self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
+                    roadlike_places=self._roadlike_places,
+                )
             logger.debug("Building inverted index from canonical data")
             inverted_index = derive_inverted_index(
                 self._canonical_clean,
@@ -270,6 +300,10 @@ class AddressMatcher:
                 show_progress=self.show_progress,
             )
             self._register_inverted_index(inverted_index)
+
+        for stage in self.stages:
+            if isinstance(stage, SplinkStage):
+                stage.roadlike_places = self._roadlike_places
 
     def _resolve_messy_data(self) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
@@ -291,6 +325,15 @@ class AddressMatcher:
             debug_options=self.debug_options,
             show_progress=self.show_progress,
         )
+        if self._roadlike_places is not None:
+            logger.debug("Deriving messy road blocking keys from canonical catalogue")
+            self._messy_clean = add_road_blocking_features(
+                self.con,
+                self._messy_clean,
+                roadlike_places=self._roadlike_places,
+            )
+        else:
+            logger.debug("No road catalogue available; skipping road parsing")
 
     def _coerce_addresses_to_match(
         self,
@@ -348,18 +391,26 @@ class AddressMatcher:
         stage_list = "\n".join(f"    - {s.__class__.__name__}" for s in self.stages)
         logger.info("Running address matcher with stages:\n%s", stage_list)
 
-        self._resolve_canonical_data()
-        self._resolve_messy_data()
+        existing_tables = {name for (name,) in self.con.execute("SHOW TABLES").fetchall()}
+        for stage in self.stages:
+            if isinstance(stage, SplinkStage):
+                stage.linker = None
+                stage.predictions_table = None
+                stage.improved_predictions_table = None
+                stage.best_matches_table = None
+                stage._owned_splink_frames = ()
 
-        # The inverted index is only consumed while cleaning the messy data,
-        # which has now happened. Drop it so it does not accumulate.
-        if self._inverted_index_table_name is not None:
-            _drop_table_and_registered_aliases(
-                self.con, self._inverted_index_table_name
-            )
-            self._inverted_index_table_name = None
-
+        completed = False
         try:
+            self._resolve_canonical_data()
+            self._resolve_messy_data()
+            # The index is no longer needed once messy cleaning has finished.
+            if self._inverted_index_table_name is not None:
+                _drop_table_and_registered_aliases(
+                    self.con, self._inverted_index_table_name
+                )
+                self._inverted_index_table_name = None
+
             result, stage_diagnostics = _run_matching(
                 con=self.con,
                 df_messy_clean=self._messy_clean,
@@ -367,40 +418,30 @@ class AddressMatcher:
                 stages=self.stages,
                 debug_options=self.debug_options,
             )
-        except BaseException:
-            # Failed matching must not strand transient objects: run the same
-            # sweep the success path runs (there is no result to keep).
-            self._cleanup_intermediate_tables(None)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                for stage in self.stages:
+                    if isinstance(stage, SplinkStage):
+                        stage._release_splink_tables()
+                self._cleanup_intermediate_tables(None, existing_tables)
+                self._inverted_index_table_name = None
 
         splink_stage = next(
             (stage for stage in self.stages if isinstance(stage, SplinkStage)),
             None,
         )
 
-        self._cleanup_intermediate_tables(result)
-
-        # Objects retained for this result's inspection APIs. Snapshot the
-        # names/handles now: if the caller reuses the same stage objects for a
-        # later run, this result must still clean up ITS run, not the newer one.
-        owned_tables = [
-            getattr(result, "alias", None),
-            getattr(self._messy_clean, "alias", None),
-        ]
-        if not isinstance(self._raw_canonical, (str, Path)):
-            # Raw canonical input was cleaned into a run-scoped table.
-            # (Prepared-folder canonical relations read parquet directly and
-            # own no catalogue objects.)
-            owned_tables.append(getattr(self._canonical_clean, "alias", None))
-        owned_splink_frames: tuple = ()
+        owned_tables = self._cleanup_intermediate_tables(result, existing_tables)
+        # Snapshot inspection state too: callers may reuse these stage objects.
         if splink_stage is not None:
-            owned_tables.extend(
-                (
-                    splink_stage.predictions_table,
-                    splink_stage.best_matches_table,
-                )
-            )
-            owned_splink_frames = splink_stage._owned_splink_frames
+            splink_stage = copy(splink_stage)
+        owned_splink_frames = tuple(
+            frame
+            for stage in self.stages
+            if isinstance(stage, SplinkStage)
+            for frame in stage._owned_splink_frames
+        )
 
         return MatchResult(
             result,
@@ -409,34 +450,33 @@ class AddressMatcher:
             _canonical_relation=self._canonical_clean,
             _messy_relation=self._messy_clean,
             _stage_diagnostics=stage_diagnostics,
-            _owned_table_names=tuple(
-                dict.fromkeys(
-                    name for name in owned_tables if isinstance(name, str)
-                )
-            ),
+            _owned_table_names=owned_tables,
             _owned_splink_frames=owned_splink_frames,
         )
 
     def _cleanup_intermediate_tables(
-        self, result: duckdb.DuckDBPyRelation | None
-    ) -> None:
-        """A simple cleaning utility to drop transient tables created during
-        matching, while keeping the final result and canonical/messy tables."""
-        keep_names = {
-            getattr(result, "alias", None),
-            getattr(self._canonical_clean, "alias", None),
-            getattr(self._messy_clean, "alias", None),
-            self._inverted_index_table_name,
-        }
-        keep_names = {name for name in keep_names if isinstance(name, str) and name}
-
-        transient_prefixes = ("__ukam__tmp_",)
-
+        self,
+        result: duckdb.DuckDBPyRelation | None,
+        existing_tables: set[str],
+    ) -> tuple[str, ...]:
+        """Clean only this run's objects, returning those retained for inspection."""
+        retained = []
         table_names = [name for (name,) in self.con.execute("SHOW TABLES").fetchall()]
         for table_name in table_names:
-            if table_name in keep_names:
+            if table_name in existing_tables:
                 continue
-            if not table_name.startswith(transient_prefixes):
+            # These pre-existing fixed-name caches have a separate lifecycle.
+            if table_name in {"__ukam_derived_term_frequencies", "__ukam_index_meta"}:
                 continue
-
-            _drop_table_and_registered_aliases(self.con, table_name)
+            is_pipeline_input = re.fullmatch(r"root_[a-z0-9]{4}", table_name) is not None
+            if not is_pipeline_input and not table_name.startswith(
+                ("__ukam", "__splink__")
+            ):
+                continue
+            if result is None or table_name.startswith(
+                ("__ukam__tmp_", "__ukam_results_", "__ukam_stage_matches_")
+            ):
+                _drop_table_and_registered_aliases(self.con, table_name)
+            elif not table_name.startswith("__splink__"):
+                retained.append(table_name)
+        return tuple(retained)

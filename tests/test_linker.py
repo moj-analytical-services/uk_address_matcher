@@ -1,6 +1,23 @@
-import pytest
+import math
 
-from uk_address_matcher.linking_model.splink_model import _get_linker
+import pytest
+from splink import DuckDBAPI
+from splink.comparison_level_library import CustomLevel
+from splink.internals.testing import is_in_level
+
+from uk_address_matcher import AddressMatcher
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
+from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
+from uk_address_matcher.linking_model.matching.stages.splink import (
+    _prepare_inferred_road_scoring_features,
+)
+from uk_address_matcher.linking_model.splink_model import (
+    _align_distinguishing_token_columns,
+    _align_numeric_range_columns,
+    _get_linker,
+    _get_model_settings_dict,
+    _sanitise_null_comparison_levels,
+)
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
@@ -89,6 +106,18 @@ def canonical_empty(duck_con):
     )
 
 
+@pytest.fixture
+def canonical_without_raw_address(duck_con):
+    return duck_con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES (100::BIGINT, 'CANONICAL 1'::VARCHAR, 'POSTCODE 1'::VARCHAR)
+        ) AS t(unique_id, clean_full_address, postcode)
+        """
+    )
+
+
 def test_get_linker_raises_when_no_unresolved_rows(
     duck_con,
     resolved_only_matches,
@@ -113,3 +142,433 @@ def test_get_linker_raises_when_canonical_empty(
             df_addresses_to_search_within=canonical_empty,
             con=duck_con,
         )
+
+
+def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_con):
+    messy = duck_con.sql("SELECT 1 AS unique_id")
+    canonical = duck_con.sql(
+        "SELECT 2 AS unique_id, ['FLAT', 'A']::VARCHAR[] "
+        "AS distinguishing_adj_start_tokens"
+    )
+
+    aligned_messy, aligned_canonical = _align_distinguishing_token_columns(
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project("distinguishing_adj_start_tokens").fetchone() == ([],)
+    assert str(aligned_messy.types[-1]) == "VARCHAR[]"
+    assert aligned_canonical.project("distinguishing_adj_start_tokens").fetchone() == (
+        ["FLAT", "A"],
+    )
+
+
+def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
+    messy = duck_con.sql("SELECT 1 AS unique_id")
+    canonical = duck_con.sql(
+        """
+        SELECT
+            2 AS unique_id,
+            struct_pack(
+                raw := '20-23',
+                lower := 20::UINTEGER,
+                upper := 23::UINTEGER,
+                width := 3::UINTEGER,
+                lower_suffix := NULL::VARCHAR,
+                upper_suffix := NULL::VARCHAR,
+                role := 1::UTINYINT,
+                flags := 0::UTINYINT,
+                lower_tf := NULL::DOUBLE
+            ) AS numeric_range
+        """
+    )
+
+    aligned_messy, aligned_canonical = _align_numeric_range_columns(
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project("numeric_range").fetchone() == (None,)
+    assert aligned_messy.project(
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (
+        None,
+        None,
+    )
+    assert aligned_canonical.project(
+        "numeric_range.lower, numeric_range.upper"
+    ).fetchone() == (
+        20,
+        23,
+    )
+    assert aligned_canonical.project(
+        "numeric_range_lower, numeric_range_upper"
+    ).fetchone() == (
+        20,
+        23,
+    )
+    range_type = aligned_messy.types[aligned_messy.columns.index("numeric_range")]
+    assert "lower UINTEGER" in str(range_type)
+    assert "lower_tf DOUBLE" in str(range_type)
+
+
+def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
+    settings = _get_model_settings_dict()
+    assert "additional_columns_to_retain" not in settings
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
+    )
+    levels = comparison["comparison_levels"]
+
+    assert [level["label_for_charts"] for level in levels] == [
+        "No distinguishing tokens",
+        "Existing ordered distinguishing signature",
+        "No ordered distinguishing signature",
+    ]
+    assert levels[0] == {
+        "sql_condition": (
+            "distinguishing_adj_start_tokens_l IS NULL OR "
+            "len(distinguishing_adj_start_tokens_l) = 0"
+        ),
+        "label_for_charts": "No distinguishing tokens",
+        "is_null_level": True,
+    }
+    assert levels[1]["sql_condition"].startswith(
+        "postcode_l = postcode_r AND list_slice("
+    )
+    assert [
+        math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
+    ] == [
+        10.0,
+        0.0,
+    ]
+    assert all(
+        level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
+    )
+
+
+def test_packaged_inferred_road_comparison_is_positive_only():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "inferred_road"
+    )
+    levels = comparison["comparison_levels"]
+
+    assert [level["label_for_charts"] for level in levels] == [
+        "Inferred road unavailable",
+        "Exact inferred road agreement",
+        "No exact inferred road agreement",
+    ]
+    assert math.log2(levels[1]["m_probability"] / levels[1]["u_probability"]) == 2
+    assert levels[2]["m_probability"] == levels[2]["u_probability"] == 1
+
+
+def test_legacy_canonical_gets_neutral_inferred_road_columns(duck_con):
+    messy = duck_con.sql("SELECT 1 AS unique_id, '12 HIGH STREET' AS address_concat")
+    canonical = duck_con.sql("SELECT 2 AS unique_id, '12 HIGH STREET' AS address_concat")
+
+    aligned_messy, aligned_canonical = _prepare_inferred_road_scoring_features(
+        duck_con,
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project("road_1_norm").fetchone() == (None,)
+    assert aligned_canonical.project("road_1_norm").fetchone() == (None,)
+    assert str(aligned_messy.types[-1]) == "VARCHAR"
+    assert str(aligned_canonical.types[-1]) == "VARCHAR"
+
+
+def test_inferred_road_artifact_loads_canonical_road_key(duck_con, tmp_path):
+    road_keys_path = tmp_path / "road_keys.parquet"
+    duck_con.execute(
+        "COPY (SELECT 20 AS ukam_address_id, 'HIGH STREET' AS road_1_norm, "
+        "'E8' AS unused_outward_postcode) "
+        f"TO '{road_keys_path}' (FORMAT PARQUET)"
+    )
+    messy = duck_con.sql("SELECT 1 AS unique_id, 'HIGH STREET'::VARCHAR AS road_1_norm")
+    canonical = duck_con.sql("SELECT 2 AS unique_id, 20 AS ukam_address_id")
+
+    _, aligned_canonical = _prepare_inferred_road_scoring_features(
+        duck_con,
+        messy,
+        canonical,
+        canonical_road_keys_path=str(road_keys_path),
+    )
+
+    assert aligned_canonical.project("road_1_norm").fetchone() == ("HIGH STREET",)
+    assert "outward_postcode" not in aligned_canonical.columns
+
+
+def test_packaged_numberless_comparison_omits_reordered_token_level():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_without_numbers"
+    )
+    assert all(
+        level["label_for_charts"] != "Exact alphabetic token set, reordered"
+        for level in comparison["comparison_levels"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("messy_address", "messy_postcode", "expected"),
+    [
+        ("FLAT A 1 HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A NORTH SOUTH 1 HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A NORTH 1 SOUTH HIGH STREET CAMDEN", "N1 1AA", True),
+        ("FLAT A 1 HIGH STREET CAMDEN", "N1 1AB", False),
+        ("FLAT A 9 1 HIGH STREET CAMDEN", "N1 1AA", False),
+        ("FLAT A HOUSE 1 HIGH STREET CAMDEN", "N1 1AA", False),
+        ("FLAT A NORTH SOUTH EAST 1 HIGH STREET", "N1 1AA", False),
+        ("FLAT A HIGH 1 STREET CAMDEN", "N1 1AA", False),
+        ("1 HIGH STREET FLAT A CAMDEN", "N1 1AA", False),
+    ],
+)
+def test_postcode_exact_safe_gap_level_matches_expected_rows(
+    duck_con,
+    messy_address,
+    messy_postcode,
+    expected,
+):
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"]
+        == "commercial_distinguishing_ordered_signature"
+    )
+    safe_gap_level = CustomLevel(
+        comparison["comparison_levels"][1]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+
+    actual = is_in_level(
+        safe_gap_level,
+        {
+            "postcode_l": "N1 1AA",
+            "postcode_r": messy_postcode,
+            "distinguishing_adj_start_tokens_l": ["FLAT", "A"],
+            "clean_full_address_l": "FLAT A 1 HIGH STREET CAMDEN LONDON",
+            "clean_full_address_r": messy_address,
+        },
+        DuckDBAPI(connection=duck_con),
+    )
+
+    assert actual is expected
+
+
+def test_sanitise_null_comparison_level_removes_probabilities():
+    settings = {
+        "comparisons": [
+            {
+                "comparison_levels": [
+                    {
+                        "is_null_level": True,
+                        "m_probability": 1.0,
+                        "u_probability": 1.0,
+                    }
+                ]
+            }
+        ]
+    }
+
+    sanitised = _sanitise_null_comparison_levels(settings)
+
+    assert sanitised["comparisons"][0]["comparison_levels"][0] == {"is_null_level": True}
+
+
+def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_con):
+    canonical = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('c1', '12 HIGH STREET', 'AB1 2CD')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    messy = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('m1', '12 HIGH STREET', 'AB1 2CD')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    canonical_clean = add_road_blocking_features(
+        duck_con,
+        prepare_data_for_matching(canonical, duck_con, num_of_chunks=1),
+    )
+    messy_clean = add_road_blocking_features(
+        duck_con,
+        prepare_data_for_matching(messy, duck_con, num_of_chunks=1),
+    )
+
+    linker = _get_linker(
+        messy_clean,
+        canonical_clean,
+        con=duck_con,
+        include_full_postcode_block=True,
+        include_outside_postcode_block=False,
+        additional_blocking_rules=[
+            "l.road_1_norm = r.road_1_norm AND l.numeric_token_1 = r.numeric_token_1"
+        ],
+    )
+
+    rule_text = " ".join(
+        str(rule) for rule in linker._settings_obj._blocking_rules_to_generate_predictions
+    )
+    comparison_columns = {
+        comparison["output_column_name"]
+        for comparison in linker._settings_obj.as_dict()["comparisons"]
+    }
+
+    assert "l.road_1_norm = r.road_1_norm" in rule_text
+    assert "inferred_road" in comparison_columns
+    assert "inferred_road_top_2" not in comparison_columns
+
+
+def test_packaged_model_contains_the_promoted_road_blocking_rule():
+    settings = _get_model_settings_dict()
+    packaged_rules = [
+        rule["blocking_rule"]
+        for rule in settings["blocking_rules_to_generate_predictions"]
+    ]
+
+    assert len(packaged_rules) == 10
+    assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
+    assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
+        packaged_rules
+    )
+    assert any(
+        "l.road_1_norm = r.road_1_norm" in rule
+        and "list_extract(l.unusual_tokens_arr, 1)" in rule
+        for rule in packaged_rules
+    )
+
+
+def test_distinguishing_token_comparison_contributes_expected_match_weights(duck_con):
+    canonical = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('c_all', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('c_all_base', '1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            (
+                'c_some',
+                'OLD STATION HOUSE RAINBOW LANE TAUNTON',
+                'TA1 1AA'
+            ),
+            ('c_some_neighbour', 'NEW RAINBOW LANE TAUNTON', 'TA1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+    messy = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('m_all', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('m_some', 'OLD RAINBOW LANE TAUNTON', 'TA1 1AA'),
+            ('m_none', 'RAINBOW LANE TAUNTON', 'TA1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+    canonical_clean = prepare_data_for_matching(
+        canonical,
+        con=duck_con,
+        num_of_chunks=1,
+        derive_distinguishing_wrt_adjacent_records=True,
+        dataset_role="canonical",
+        show_progress=False,
+    )
+    messy_clean = prepare_data_for_matching(
+        messy,
+        con=duck_con,
+        num_of_chunks=1,
+        dataset_role="messy",
+        show_progress=False,
+    )
+
+    assert canonical_clean.filter("unique_id = 'c_some'").project(
+        "distinguishing_adj_start_tokens"
+    ).fetchone() == (["OLD", "STATION", "HOUSE"],)
+
+    linker = _get_linker(
+        messy_clean,
+        canonical_clean,
+        con=duck_con,
+        include_full_postcode_block=True,
+        include_outside_postcode_block=False,
+        additional_columns_to_retain=["missing_optional_diagnostic"],
+        retain_intermediate_calculation_columns=True,
+    )
+    predictions = linker.inference.predict(threshold_match_weight=-100)
+    prediction_rows = predictions.as_pandas_dataframe()
+
+    expected_pairs = {
+        frozenset(("c_all", "m_all")),
+        frozenset(("c_some", "m_some")),
+        frozenset(("c_some", "m_none")),
+    }
+    actual_weights = {}
+    for _, row in prediction_rows.iterrows():
+        pair = frozenset((row["unique_id_l"], row["unique_id_r"]))
+        if pair in expected_pairs:
+            actual_weights[pair] = math.log2(
+                float(row["bf_commercial_distinguishing_ordered_signature"])
+            )
+
+    assert actual_weights == pytest.approx(
+        {
+            frozenset(("c_all", "m_all")): 10.0,
+            frozenset(("c_some", "m_some")): 0.0,
+            frozenset(("c_some", "m_none")): 0.0,
+        }
+    )
+
+
+def test_address_matcher_derives_distinguishing_tokens_only_for_canonical(duck_con):
+    canonical = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('c_flat', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('c_base', '1 HIGH STREET CAMDEN LONDON', 'N1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+    messy = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('m_flat', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+    matcher = AddressMatcher(
+        canonical_addresses=canonical,
+        addresses_to_match=messy,
+        con=duck_con,
+        show_progress=False,
+    )
+
+    matcher._resolve_canonical_data()
+    matcher._resolve_messy_data()
+
+    assert "distinguishing_adj_start_tokens" in matcher._canonical_clean.columns
+    assert matcher._canonical_clean.filter("unique_id = 'c_flat'").project(
+        "distinguishing_adj_start_tokens"
+    ).fetchone() == (["FLAT", "A"],)
+    assert "distinguishing_adj_start_tokens" not in matcher._messy_clean.columns
+
+
+def test_get_linker_accepts_canonical_without_raw_address(
+    duck_con,
+    unresolved_matches,
+    canonical_without_raw_address,
+):
+    linker = _get_linker(
+        df_addresses_to_match=unresolved_matches,
+        df_addresses_to_search_within=canonical_without_raw_address,
+        con=duck_con,
+    )
+
+    retained_columns = linker._settings_obj.as_dict()["additional_columns_to_retain"]
+    assert "original_address_concat" not in retained_columns

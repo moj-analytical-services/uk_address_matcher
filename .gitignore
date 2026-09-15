@@ -181,3 +181,4 @@ benchmarking/.config.json
 ukam_prepared_canonical/*
 tmp/*
 benchmarking/results/*
+ukam_labelling_bundle/*

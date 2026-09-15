@@ -6,6 +6,9 @@ In 'biggest wins' we describe the most important settings that are likely to res
 
 In 'optimising match stages' we describe settings which are harder to make recommendations about because the best settings depend on the input data.
 
+Once you have run the matcher, use the [labelling tool](labelling.md) to review
+candidate matches and correct individual records before using the results.
+
 ## Biggest wins
 
 ### If matching to Ordnance Survey data, use `ukam-os-builder` to prepare it for matching

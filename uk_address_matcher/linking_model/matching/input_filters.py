@@ -4,11 +4,19 @@ from typing import Literal
 
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
-PostcodeStrategy = Literal["exact", "drop_last_char"]
-POSTCODE_STRATEGIES: tuple[PostcodeStrategy, PostcodeStrategy] = (
+PostcodeStrategy = Literal["exact", "drop_last_char", "outward"]
+POSTCODE_STRATEGIES: tuple[PostcodeStrategy, ...] = (
     "exact",
     "drop_last_char",
+    "outward",
 )
+
+
+def _validate_inward_postcode_levenshtein(value: int) -> int:
+    """Validate the configured inward postcode edit-distance cap."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("inward_postcode_levenshtein must be a non-negative integer")
+    return value
 
 
 @pipeline_stage(
@@ -53,6 +61,10 @@ def _restrict_canonical_to_messy_postcodes(
     if postcode_strategy == "exact":
         messy_key_expr = "postcode"
         canonical_key_expr = "canon.postcode"
+
+    elif postcode_strategy == "outward":
+        messy_key_expr = "split_part(postcode, ' ', 1)"
+        canonical_key_expr = "split_part(canon.postcode, ' ', 1)"
 
     else:
         messy_key_expr = _postcode_prefix("postcode")

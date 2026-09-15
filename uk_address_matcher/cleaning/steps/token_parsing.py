@@ -9,121 +9,173 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
-    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
+    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records",
     description=(
         "Identify common suffixes between addresses and separate them "
         "into unique and common token parts"
     ),
     tags=["token_analysis", "address_comparison"],
 )
-def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records():
-    """
-    Identifies common suffixes between addresses and separates them
-    into unique and common parts.
-
-    This function analyses each address in relation to its neighbours
-    (previous and next addresses when sorted by unique_id) to find
-    common suffix patterns. It then splits each address into:
-
-        - unique_tokens: tokens unique to this address,
-            typically the beginning part.
-        - common_tokens: tokens shared with neighbouring addresses,
-            typically the end part.
-
-    Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation
-        con (DuckDBPyConnection): The DuckDB connection
-
-    Returns:
-        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
-    """
-    # We will only ever have FLAT in the code by this point, as APARTMENT and UNIT
-    # have already been removed in earlier cleaning steps
-    tokens_sql = """
+def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+    *,
+    include_input_columns: bool = True,
+    carry_neighbour_tokens: bool = True,
+):
+    """Split each address around its longest suffix shared by a local neighbour."""
+    tokenised_addresses_sql = r"""
     SELECT
-        ['FLAT'] AS __tokens_to_remove,
-        list_filter(
-            regexp_split_to_array(clean_full_address, '\\s+'),
-            x -> NOT list_contains(__tokens_to_remove, x)
-        ) AS __tokens,
-        row_number() OVER (ORDER BY reverse(clean_full_address)) AS row_order,
-        *
-    FROM {input}
+        __ukam_row_id,
+        unique_id,
+        clean_full_address,
+        regexp_split_to_array(clean_full_address, '\s+')::VARCHAR[] AS __tokens
+    FROM {input} AS input_address
     """
 
-    neighbors_sql = """
+    neighbour_value = "__tokens" if carry_neighbour_tokens else "clean_full_address"
+    neighbour_suffix = "tokens" if carry_neighbour_tokens else "address"
+    neighbouring_addresses_sql = """
     SELECT
-        lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
-        lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
-        *
-    FROM {tokens}
-    """
+        __ukam_row_id,
+        unique_id,
+        __tokens,
+        lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
+        lag({neighbour_value}, 1) OVER address_order AS __lag_1_{neighbour_suffix},
+        lag(unique_id, 2) OVER address_order AS __lag_2_unique_id,
+        lag({neighbour_value}, 2) OVER address_order AS __lag_2_{neighbour_suffix},
+        lag(unique_id, 3) OVER address_order AS __lag_3_unique_id,
+        lag({neighbour_value}, 3) OVER address_order AS __lag_3_{neighbour_suffix},
+        lead(unique_id, 1) OVER address_order AS __lead_1_unique_id,
+        lead({neighbour_value}, 1) OVER address_order AS __lead_1_{neighbour_suffix},
+        lead(unique_id, 2) OVER address_order AS __lead_2_unique_id,
+        lead({neighbour_value}, 2) OVER address_order AS __lead_2_{neighbour_suffix},
+        lead(unique_id, 3) OVER address_order AS __lead_3_unique_id,
+        lead({neighbour_value}, 3) OVER address_order AS __lead_3_{neighbour_suffix}
+    FROM {tokenised_addresses} AS tokenised
+    WINDOW address_order AS (
+        ORDER BY
+            reverse(clean_full_address),
+            CAST(unique_id AS VARCHAR),
+            __ukam_row_id
+    )
+    """.replace("{neighbour_value}", neighbour_value).replace(
+        "{neighbour_suffix}", neighbour_suffix
+    )
+
+    neighbour_names = (
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "lead_1",
+        "lead_2",
+        "lead_3",
+    )
+    suffix_length_expressions = []
+    for neighbour_name in neighbour_names:
+        neighbour_id = f"__{neighbour_name}_unique_id"
+        neighbour_tokens = (
+            f"__{neighbour_name}_tokens"
+            if carry_neighbour_tokens
+            else f"regexp_split_to_array(__{neighbour_name}_address, '\\s+')::VARCHAR[]"
+        )
+        suffix_length_expressions.append(f"""
+        CASE
+            WHEN {neighbour_id} IS NULL OR {neighbour_id} = unique_id THEN 0
+            ELSE COALESCE(
+                list_position(
+                    list_transform(
+                        list_zip(
+                            list_reverse(__tokens),
+                            list_reverse({neighbour_tokens}),
+                            true
+                        ),
+                        token_pair -> token_pair[1] != token_pair[2]
+                    ),
+                    true
+                ) - 1,
+                least(len(__tokens), len({neighbour_tokens}))
+            )
+        END AS __{neighbour_name}_common_suffix_length
+        """)
 
     suffix_lengths_sql = """
     SELECT
-        len(__tokens) AS __token_count,
-        CASE WHEN __prev_tokens IS NOT NULL THEN
-            (
-                SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
-                    list_slice(list_reverse(__prev_tokens), 1, i + 1)
-            )
-        ELSE 0 END AS prev_common_suffix,
-        CASE WHEN __next_tokens IS NOT NULL THEN
-            (
-                SELECT max(i)
-                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
-                WHERE list_slice(list_reverse(__tokens), 1, i + 1) =
-                    list_slice(list_reverse(__next_tokens), 1, i + 1)
-            )
-        ELSE 0 END AS next_common_suffix,
-        *
-    FROM {with_neighbors}
-    """
+        __ukam_row_id,
+        __tokens,
+        {suffix_length_expressions}
+    FROM {neighbouring_addresses} AS neighbours
+    """.replace(
+        "{suffix_length_expressions}",
+        ",\n".join(suffix_length_expressions),
+    )
 
-    unique_parts_sql = """
+    maximum_suffix_lengths_sql = """
     SELECT
-        *,
-        greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
-        list_filter(
-            __tokens,
-            (token, i) ->
-                i < __token_count - greatest(prev_common_suffix, next_common_suffix)
-        ) AS unique_tokens,
-        list_filter(
-            __tokens,
-            (token, i) ->
-                i >= __token_count - greatest(prev_common_suffix, next_common_suffix)
-        ) AS common_tokens
-    FROM {with_suffix_lengths}
+        suffix_lengths.__ukam_row_id,
+        suffix_lengths.__tokens,
+        greatest(
+            __lag_1_common_suffix_length,
+            __lag_2_common_suffix_length,
+            __lag_3_common_suffix_length,
+            __lead_1_common_suffix_length,
+            __lead_2_common_suffix_length,
+            __lead_3_common_suffix_length
+        ) AS __max_common_suffix_length
+    FROM {suffix_lengths} AS suffix_lengths
     """
 
+    output_columns_sql = (
+        "input_address.*," if include_input_columns else "maximums.__ukam_row_id,"
+    )
+    output_source_sql = (
+        "FROM {input} AS input_address\n"
+        "LEFT JOIN {maximum_suffix_lengths} AS maximums\n"
+        "  ON input_address.__ukam_row_id = maximums.__ukam_row_id"
+        if include_input_columns
+        else "FROM {maximum_suffix_lengths} AS maximums"
+    )
     final_sql = """
     SELECT
-        * EXCLUDE (
-            __tokens,
-            __prev_tokens,
-            __next_tokens,
-            __token_count,
-            __tokens_to_remove,
-            max_common_suffix,
-            next_common_suffix,
-            prev_common_suffix,
-            row_order,
-            common_tokens,
-            unique_tokens
-        ),
-        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
-        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens
-    FROM {with_unique_parts}
-    """
+        {output_columns_sql}
+        CASE
+            WHEN COALESCE(maximums.__max_common_suffix_length, 0) > 0
+                THEN COALESCE(
+                    list_slice(
+                        maximums.__tokens,
+                        1,
+                        len(maximums.__tokens)
+                            - maximums.__max_common_suffix_length
+                    ),
+                    []::VARCHAR[]
+                )
+            ELSE []::VARCHAR[]
+        END::VARCHAR[] AS distinguishing_adj_start_tokens,
+        CASE
+            WHEN COALESCE(maximums.__max_common_suffix_length, 0) > 0
+                THEN COALESCE(
+                    list_slice(
+                        maximums.__tokens,
+                        len(maximums.__tokens)
+                            - maximums.__max_common_suffix_length + 1,
+                        len(maximums.__tokens)
+                    ),
+                    []::VARCHAR[]
+                )
+            ELSE COALESCE(maximums.__tokens, []::VARCHAR[])
+        END::VARCHAR[] AS common_adj_start_tokens
+    {output_source_sql}
+    """.replace(
+        "{output_columns_sql}",
+        output_columns_sql,
+    ).replace(
+        "{output_source_sql}",
+        output_source_sql,
+    )
 
     steps = [
-        CTEStep("tokens", tokens_sql),
-        CTEStep("with_neighbors", neighbors_sql),
-        CTEStep("with_suffix_lengths", suffix_lengths_sql),
-        CTEStep("with_unique_parts", unique_parts_sql),
+        CTEStep("tokenised_addresses", tokenised_addresses_sql),
+        CTEStep("neighbouring_addresses", neighbouring_addresses_sql),
+        CTEStep("suffix_lengths", suffix_lengths_sql),
+        CTEStep("maximum_suffix_lengths", maximum_suffix_lengths_sql),
         CTEStep("final", final_sql),
     ]
 
@@ -145,7 +197,7 @@ def _parse_out_flat_position_and_letter():
       - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
       - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
-      - Ambiguous patterns like '2 69 GIPSY HILL' do NOT populate flat_number
+    - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
     """
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
@@ -287,7 +339,7 @@ def _parse_out_flat_position_and_letter():
 
         -- 3) flat_number (priority explained inline)
         -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
-        -- Ambiguous cases like "2 69 GIPSY HILL" should NOT populate flat_number
+        -- Ambiguous cases like "7 42 FICTIONAL ROAD" should NOT populate flat_number
         -- since "2" might be a building number, not a flat.
         -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
         -- we use NULLIF(..., '') to normalise non-matches.
@@ -515,27 +567,26 @@ def _parse_out_business_unit():
 
     sql = f"""
     SELECT
-        i.*,
-
-        -- Extract the business unit type (UNIT, SUITE, OFFICE, etc.)
+        i.* EXCLUDE (__business_unit_match),
         NULLIF(
-            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 1)),
+            UPPER(i.__business_unit_match.business_unit_type),
             ''
         ) AS business_unit_type,
-
-        -- Extract the business unit identifier (A, 5, 5A, etc.)
         NULLIF(
-            UPPER(regexp_extract(i.clean_full_address, '{singular_pattern}', 2)),
+            UPPER(i.__business_unit_match.business_unit_id),
             ''
         ) AS business_unit_id,
-
-        -- Boolean indicator for having a business unit
-        regexp_matches(
-            i.clean_full_address,
-            '\\b({keywords_pattern})S?\\s+([A-Za-z]?\\d{{1,4}}[A-Za-z]?|[A-Za-z])\\b'
-        ) AS has_business_unit
-
-    FROM {{input}} i
+        i.__business_unit_match.business_unit_type != '' AS has_business_unit
+    FROM (
+        SELECT
+            source.*,
+            regexp_extract(
+                source.clean_full_address,
+                '{singular_pattern}',
+                ['business_unit_type', 'business_unit_id']
+            ) AS __business_unit_match
+        FROM {{input}} AS source
+    ) AS i
     """
     return sql
 
@@ -568,7 +619,7 @@ def _parse_out_numbers():
     regex_pattern = (
         r"\b"  # Word boundary
         # Prioritize matching number ranges first
-        r"(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)"
+        r"(\d{1,5}[A-Za-z]?-\d{1,5}[A-Za-z]?|[A-Za-z]?\d{1,5}[A-Za-z]?)"
         r"\b"  # Word boundary
     )
     sql = f"""
@@ -589,6 +640,53 @@ def _parse_out_numbers():
     FROM {{input}}
     """
     return sql
+
+
+@pipeline_stage(
+    name="derive_missingness_aware_sub_premise_features",
+    description=(
+        "Derive role and identifier candidates without promoting unknown markers"
+    ),
+    tags=["token_extraction", "sub_premise_parsing"],
+)
+def _derive_missingness_aware_sub_premise_features():
+    marker_pattern = r"^\s*([A-Z]+)\s+(?:[A-Z]?\d{1,5}[A-Z]?|[A-Z])\b"
+    return f"""
+    SELECT
+        i.*,
+        NULLIF(
+            regexp_extract(i.clean_full_address, '{marker_pattern}', 1),
+            ''
+        ) AS sub_premise_marker_token,
+        CASE
+            WHEN i.has_flat_indicator
+                OR i.flat_number IS NOT NULL
+                OR i.flat_letter IS NOT NULL
+                OR i.flat_positional IS NOT NULL
+                THEN 'FLAT'
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN 'BUSINESS_UNIT'
+            ELSE NULL
+        END AS sub_premise_role,
+        CASE
+            WHEN i.has_flat_indicator
+                AND i.flat_number IS NOT NULL
+                AND i.flat_letter IS NOT NULL
+                THEN CONCAT(i.flat_number, i.flat_letter)
+            WHEN i.has_flat_indicator
+                THEN COALESCE(
+                    NULLIF(i.flat_number, ''),
+                    NULLIF(i.flat_letter, '')
+                )
+            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
+                THEN NULLIF(i.business_unit_id, '')
+            WHEN i.numeric_tokens IS NOT NULL
+                AND len(i.numeric_tokens) >= 1
+                THEN list_extract(i.numeric_tokens, 1)
+            ELSE NULL
+        END AS sub_premise_identifier
+    FROM {{input}} AS i
+    """
 
 
 @pipeline_stage(
@@ -665,3 +763,141 @@ def _generalised_token_aliases():
     FROM {{input}}
     """
     return sql
+
+
+def _address_structure_premise_sql() -> str:
+    address_structure_premise_patterns = [
+        r"CAR\s+PARK\s+SPACE",
+        r"PARKING\s+SPACE",
+        r"CAR\s+PARK",
+        r"LOCK\s+UP",
+        "LOCKUP",
+        "SHOP",
+        "KIOSK",
+        "PLOT",
+        "STALL",
+        "GARAGE",
+        "YARD",
+        "BAY",
+    ]
+    premise_pattern = "|".join(address_structure_premise_patterns)
+    identifier_pattern = r"[A-Za-z]?\d{1,4}[A-Za-z]?|[A-Za-z]"
+    return f"""
+    SELECT
+        source.* EXCLUDE (__address_structure_premise_match),
+        NULLIF(
+            regexp_replace(
+                UPPER(
+                    source.__address_structure_premise_match.address_structure_premise_type
+                ),
+                '\\s+',
+                ' ',
+                'g'
+            ),
+            ''
+        ) AS address_structure_premise_type,
+        NULLIF(
+            UPPER(source.__address_structure_premise_match.address_structure_premise_id),
+            ''
+        ) AS address_structure_premise_id,
+        source.__address_structure_premise_match.address_structure_premise_type != ''
+            AS has_address_structure_premise,
+        NULLIF(
+            regexp_replace(
+                UPPER(
+                    source.__address_structure_premise_match.address_structure_premise_type
+                ),
+                '\\s+',
+                ' ',
+                'g'
+            ),
+            ''
+        ) AS commercial_premise_type,
+        NULLIF(
+            UPPER(source.__address_structure_premise_match.address_structure_premise_id),
+            ''
+        ) AS commercial_premise_id,
+        source.__address_structure_premise_match.address_structure_premise_type != ''
+            AS has_commercial_premise
+    FROM (
+        SELECT
+            input.*,
+            regexp_extract(
+                input.clean_full_address,
+                '\\b({premise_pattern})\\b(?:\\s+({identifier_pattern})\\b)?',
+                ['address_structure_premise_type', 'address_structure_premise_id']
+            ) AS __address_structure_premise_match
+        FROM {{input}} AS input
+    ) AS source
+    """
+
+
+@pipeline_stage(
+    name="parse_out_address_structure_premise",
+    description="Extract address-structure premise types and identifiers from addresses",
+    tags=["token_extraction", "address_structure_parsing"],
+)
+def _parse_out_address_structure_premise():
+    return _address_structure_premise_sql()
+
+
+@pipeline_stage(
+    name="parse_out_commercial_premise",
+    description="Compatibility alias for address-structure premise parsing",
+    tags=["token_extraction", "business_parsing"],
+)
+def _parse_out_commercial_premise():
+    return _address_structure_premise_sql()
+
+
+@pipeline_stage(
+    name="derive_distinguishing_token_components",
+    description="Split canonical distinguishing prefixes into lexical residuals",
+    tags=["token_analysis", "address_structure_parsing"],
+)
+def _derive_distinguishing_token_components():
+    marker_values = (
+        "'ANNEXE', 'WORKSHOP', 'DEPOT', 'FARM', 'BUSINESS', 'CENTRE', 'CENTER', "
+        "'BUILDING', 'STUDIO', 'WAREHOUSE', 'OFFICE', 'UNIT', 'UNITS', 'SUITE', "
+        "'SUITES', 'ROOM', 'FLOOR', 'FLOORS', 'SHOP', 'KIOSK', 'PLOT', 'STALL', "
+        "'GARAGE', 'YARD', 'BAY', 'PARKING', 'CAR', 'PARK', 'SPACE', 'LOCK', "
+        "'LOCKUP', 'CONTAINER', 'FLAT'"
+    )
+    return f"""
+    WITH marked AS (
+        SELECT
+            input.*,
+            list_filter(
+                range(1, len(input.distinguishing_adj_start_tokens) + 1),
+                position -> list_extract(
+                    input.distinguishing_adj_start_tokens, position
+                ) IN ({marker_values})
+                OR (
+                    position > 1
+                    AND list_extract(
+                        input.distinguishing_adj_start_tokens, position - 1
+                    ) IN ({marker_values})
+                    AND regexp_matches(
+                        list_extract(
+                            input.distinguishing_adj_start_tokens, position
+                        ),
+                        '^[A-Z]?[0-9]{{1,4}}[A-Z]?$|^[A-Z]$'
+                    )
+                )
+            ) AS __structural_positions
+        FROM {{input}} AS input
+    )
+    SELECT
+        marked.* EXCLUDE (__structural_positions),
+        list_transform(
+            __structural_positions,
+            position -> list_extract(distinguishing_adj_start_tokens, position)
+        ) AS distinguishing_structural_tokens,
+        list_filter(
+            distinguishing_adj_start_tokens,
+            (token, position) -> NOT list_contains(
+                __structural_positions, position
+            )
+        ) AS distinguishing_lexical_tokens
+    FROM marked
+    """
