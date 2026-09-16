@@ -11,14 +11,17 @@ Note that runtimes depend on whether the canonical data covers a local council r
 | 1. Create data package and API key | 5 minutes | 5 minutes |
 | 2. Install Python, uv, and `uk_address_matcher` | 5 minutes | 5 minutes |
 | 3. Download and process OS data into a flat file | 5 seconds[^1] | 4 minutes[^2] |
-| 4. Pre-process indexes and features | Not necessary | 12 min 53 sec[^3] |
+| 4. Pre-process indexes and features | Not necessary | 13 min 43 sec[^3] |
 | 5. Match 100,000 records | 18 seconds | 30 seconds |
+| Total one-off setup (steps 1-4) | About 10 min 20 sec[^4] | About 45 min 43 sec[^4] |
 
 [^1]: Plus ~15 seconds to download the data.
 [^2]: Plus ~18 minutes to download the data.
 [^3]: See [Canonical preparation runtime](#canonical-preparation-runtime) for
     the latest benchmark configuration, e2e timing breakdown, and comparison
     with previous implementations.
+[^4]: Approximate total from the component timings above, including download time
+    and excluding the matching step.
 
 These timings are measured on a MacBook Pro M4 Max.
 
@@ -431,3 +434,13 @@ The full precision-recall curve is shown below:
     These figures are indicative rather than a hardware-independent guarantee.
     Available memory, temporary-disk speed, source schema, enabled features, and
     output-shard count can materially affect national-scale preparation time.
+
+    Since this benchmark, deterministic ID assignment has been changed to order
+    physical output by `postcode, unique_id`, avoiding the former full-feature sort
+    and redundant final ordering. A focused national preclean rerun completed its
+    ten cleaning chunks in **891.36 seconds (14 min 51 sec)**, compared with
+    **903.62 seconds** previously. The subsequent global ID materialisation did not
+    complete under the uncapped diagnostic configuration, so this result does not
+    replace the **823.349-second** end-to-end production benchmark. The detailed
+    investigation is recorded in the dated canonical storage and runtime trade-offs
+    experiment note in the repository.
