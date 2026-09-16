@@ -9,6 +9,10 @@ from splink import DuckDBAPI, Linker, SettingsCreator
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     ensure_numeric_range_struct,
 )
+from uk_address_matcher.rehydration.token_views import (
+    _distinguishing_lexical_tokens_expression,
+    _distinguishing_token_parts_view_expressions,
+)
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
 _SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
@@ -145,6 +149,32 @@ def _align_address_structure_feature_columns(
     df_addresses_to_search_within: DuckDBPyRelation,
 ) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
     """Add neutral arrays for address-structure features absent from older data."""
+    for relation_name, relation in (
+        ("match", df_addresses_to_match),
+        ("search", df_addresses_to_search_within),
+    ):
+        if "distinguishing_token_parts" in relation.columns:
+            view_expressions = _distinguishing_token_parts_view_expressions()
+            columns_to_replace = [
+                "distinguishing_token_parts",
+                *(column for column in view_expressions if column in relation.columns),
+            ]
+            projection = f"* EXCLUDE ({', '.join(columns_to_replace)}), " + ", ".join(
+                view_expressions.values()
+            )
+            relation = relation.select(projection)
+        if (
+            "distinguishing_lexical_tokens" not in relation.columns
+            and "distinguishing_adj_start_tokens" in relation.columns
+        ):
+            relation = relation.select(
+                f"*, {_distinguishing_lexical_tokens_expression()}"
+            )
+        if relation_name == "match":
+            df_addresses_to_match = relation
+        else:
+            df_addresses_to_search_within = relation
+
     array_columns = (
         "distinguishing_adj_start_tokens",
         "common_adj_start_tokens",
@@ -215,6 +245,52 @@ def _align_numeric_range_columns(
         return relation.select("*, " + ", ".join(aliases)) if aliases else relation
 
     return align_relation(df_addresses_to_match), align_relation(
+        df_addresses_to_search_within
+    )
+
+
+def _align_numeric_tf_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+    *,
+    numeric_tf_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Lazily restore numeric TF columns omitted from prepared canonical data."""
+
+    def add_missing_columns(relation: DuckDBPyRelation) -> DuckDBPyRelation:
+        missing = [
+            index
+            for index in range(1, 4)
+            if f"tf_numeric_token_{index}" not in relation.columns
+        ]
+        if not missing:
+            return relation
+
+        select_expressions = []
+        joins = []
+        numeric_columns = set(relation.columns)
+        for index in missing:
+            tf_column = f"tf_numeric_token_{index}"
+            numeric_column = f"numeric_token_{index}"
+            if numeric_column not in numeric_columns:
+                select_expressions.append(f"NULL::DOUBLE AS {tf_column}")
+                continue
+            alias = f"numeric_tf_{index}"
+            joins.append(
+                f"LEFT JOIN ({numeric_tf_table.sql_query()}) AS {alias} "
+                f"ON base.{numeric_column} = {alias}.numeric_token"
+            )
+            select_expressions.append(f"{alias}.tf_numeric_token AS {tf_column}")
+
+        if not select_expressions:
+            return relation
+        return con.sql(
+            f"SELECT base.*, {', '.join(select_expressions)} "
+            f"FROM ({relation.sql_query()}) AS base {' '.join(joins)}"
+        )
+
+    return add_missing_columns(df_addresses_to_match), add_missing_columns(
         df_addresses_to_search_within
     )
 
@@ -344,6 +420,18 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_road_key_columns(df_addresses_to_match, df_addresses_to_search_within)
+
+    if precomputed_numeric_tf_table is None:
+        precomputed_numeric_tf_table = _get_precomputed_numeric_tf_table(con)
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_numeric_tf_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+        numeric_tf_table=precomputed_numeric_tf_table,
+        con=con,
+    )
 
     if settings is None:
         settings_as_dict = _get_model_settings_dict()
@@ -508,9 +596,6 @@ def _get_linker(
             set_up_basic_logging=False,
         )
 
-    if precomputed_numeric_tf_table is None:
-        precomputed_numeric_tf_table = _get_precomputed_numeric_tf_table(con)
-
     for i in range(1, 4):
         df_sql = f"""
             select
@@ -529,6 +614,7 @@ def _get_linker(
         column
         for column in df_addresses_to_match.columns
         if column != "original_address_concat"
+        and column in df_addresses_to_search_within.columns
     ]
     select_expr = ", ".join(cols_to_select)
     messy_subquery = df_addresses_to_match.sql_query()

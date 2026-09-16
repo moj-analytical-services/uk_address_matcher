@@ -164,7 +164,7 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         f"only_in_chunked={chunked_columns_excl_tf - set(no_chunk_rel.columns)}"
     )
 
-    ordered_columns = "postcode, unique_id, clean_full_address, ukam_address_id"
+    ordered_columns = "postcode, unique_id, ukam_address_id"
     assert (
         no_chunk_rel.order(ordered_columns).fetchall()
         == chunked_rel.order(ordered_columns).fetchall()

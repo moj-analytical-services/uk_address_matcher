@@ -119,3 +119,28 @@ def test_existing_ukam_address_id_is_replaced_with_fresh_integer(duck_con):
     ).fetchall()
 
     assert result == [("1", 1), ("2", 2)]
+
+
+def test_ids_follow_postcode_and_unique_id_storage_order(duck_con):
+    duck_con.execute(
+        """
+        CREATE OR REPLACE TABLE test_data AS
+        SELECT * FROM (VALUES
+            ('2', '1 DOWNING STREET LONDON', 'SW1A 2AA'),
+            ('1', '99 DOWNING STREET LONDON', 'SW1A 2AA'),
+            ('3', '1 HIGH STREET OXFORD', 'OX1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+        """
+    )
+
+    cleaned = clean_data_pre_term_frequencies(
+        duck_con.table("test_data"),
+        con=duck_con,
+        num_of_chunks=1,
+    )
+
+    assert cleaned.select("postcode, unique_id, ukam_address_id").fetchall() == [
+        ("OX1 1AA", "3", 1),
+        ("SW1A 2AA", "1", 2),
+        ("SW1A 2AA", "2", 3),
+    ]
