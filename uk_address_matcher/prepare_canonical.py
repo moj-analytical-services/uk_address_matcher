@@ -28,6 +28,10 @@ from uk_address_matcher.helpers.path_parsing import (
     relative_remote_path,
 )
 from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
+from uk_address_matcher.rehydration.token_views import (
+    _distinguishing_lexical_tokens_expression,
+    _distinguishing_token_parts_view_expressions,
+)
 from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
 
 if TYPE_CHECKING:
@@ -83,8 +87,23 @@ INVERTED_INDEX_ORDER_BY = (
 
 # Columns that are not needed after preparation and therefore not persisted.
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
-RECOMPUTABLE_DROP_COLUMNS = ("address_tokens", "exploding_unique_ids")
-DEBUG_ONLY_CANONICAL_COLUMNS = ("original_address_concat",)
+RECOMPUTABLE_DROP_COLUMNS = (
+    "address_tokens",
+    "exploding_unique_ids",
+    "numeric_token_2",
+    "numeric_token_3",
+    "tf_numeric_token_1",
+    "tf_numeric_token_2",
+    "tf_numeric_token_3",
+)
+DEBUG_ONLY_CANONICAL_COLUMNS = (
+    "original_address_concat",
+    "numeric_role_keys",
+    "numeric_broad_roles",
+    "distinguishing_structural_tokens",
+    "distinguishing_adj_start_tokens",
+    "distinguishing_lexical_tokens",
+)
 
 
 @dataclass(frozen=True)
@@ -243,18 +262,45 @@ def _rollback_if_needed(con: duckdb.DuckDBPyConnection) -> None:
 def _rehydrate_canonical_addresses(
     addresses: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    """Restore recomputable columns not persisted in the canonical parquet.
+    """Restore compatibility columns missing from older canonical parquet.
 
-    ``exploding_unique_ids`` is always ``[unique_id]`` for canonical data. It is
-    omitted at write time and reconstructed here to keep the in-memory schema
-    identical to a freshly-prepared relation. ``address_tokens`` is no longer
-    part of the prepared schema; inverted-index stages derive it inline.
+    New canonical outputs persist the active address-structure feature views.
+    This fallback keeps older lean bundles usable. ``address_tokens`` and
+    ``common_adj_start_tokens`` are not part of the matching contract;
+    inverted-index stages derive address tokens inline and the linker adds a
+    neutral common-token array for legacy schema alignment when required.
     """
     columns = addresses.columns
     if "address_tokens" in columns:
         addresses = addresses.select("* EXCLUDE (address_tokens)")
     if "exploding_unique_ids" not in columns and "unique_id" in columns:
         addresses = addresses.select("*, list_value(unique_id) AS exploding_unique_ids")
+    columns = addresses.columns
+    numeric_token_views = [
+        f"list_extract(numeric_tokens, {position}) AS numeric_token_{position}"
+        for position in (2, 3)
+        if f"numeric_token_{position}" not in columns
+    ]
+    if numeric_token_views and "numeric_tokens" in columns:
+        addresses = addresses.select("*, " + ", ".join(numeric_token_views))
+        columns = addresses.columns
+    if "distinguishing_token_parts" in columns:
+        view_expressions = _distinguishing_token_parts_view_expressions()
+        missing_views = [
+            expression
+            for column, expression in view_expressions.items()
+            if column not in columns
+        ]
+        projection = "* EXCLUDE (distinguishing_token_parts)"
+        if missing_views:
+            projection += ", " + ", ".join(missing_views)
+        addresses = addresses.select(projection)
+        columns = addresses.columns
+    if (
+        "distinguishing_lexical_tokens" not in columns
+        and "distinguishing_adj_start_tokens" in columns
+    ):
+        addresses = addresses.select(f"*, {_distinguishing_lexical_tokens_expression()}")
     return addresses
 
 
@@ -593,6 +639,11 @@ def prepare_canonical_folder(
         _precleaned_addresses=True,
         show_progress=progress_mode,
     )
+    pre_artefact_drop_columns = tuple(
+        column for column in canonical_drop_columns if column in df_clean.columns
+    )
+    if pre_artefact_drop_columns:
+        df_clean = df_clean.select(f"* EXCLUDE ({', '.join(pre_artefact_drop_columns)})")
     logger.debug("Building inverted index")
     inverted_index = derive_inverted_index(
         df_clean,
