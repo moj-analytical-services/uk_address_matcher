@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -194,6 +196,7 @@ class AddressMatcher:
         if self._inverted_index_table_name is not None:
             _drop_table_and_registered_aliases(self.con, self._inverted_index_table_name)
 
+        source_name = getattr(inverted_index, "alias", None)
         source_relation = _register_input_relation_once(
             inverted_index,
             con=self.con,
@@ -208,6 +211,11 @@ class AddressMatcher:
             + source_relation.sql_query()
             + ")"
         )
+        # The derived source table has been copied; it has no further use.
+        if isinstance(source_name, str) and source_name.startswith(
+            "__ukam_derived_inverted_index_"
+        ):
+            _drop_table_and_registered_aliases(self.con, source_name)
         self._inverted_index_table_name = table_name
 
     @property
@@ -383,23 +391,57 @@ class AddressMatcher:
         stage_list = "\n".join(f"    - {s.__class__.__name__}" for s in self.stages)
         logger.info("Running address matcher with stages:\n%s", stage_list)
 
-        self._resolve_canonical_data()
-        self._resolve_messy_data()
+        existing_tables = {name for (name,) in self.con.execute("SHOW TABLES").fetchall()}
+        for stage in self.stages:
+            if isinstance(stage, SplinkStage):
+                stage.linker = None
+                stage.predictions_table = None
+                stage.improved_predictions_table = None
+                stage.best_matches_table = None
+                stage._owned_splink_frames = ()
 
-        result, stage_diagnostics = _run_matching(
-            con=self.con,
-            df_messy_clean=self._messy_clean,
-            df_canonical_clean=self._canonical_clean,
-            stages=self.stages,
-            debug_options=self.debug_options,
-        )
+        completed = False
+        try:
+            self._resolve_canonical_data()
+            self._resolve_messy_data()
+            # The index is no longer needed once messy cleaning has finished.
+            if self._inverted_index_table_name is not None:
+                _drop_table_and_registered_aliases(
+                    self.con, self._inverted_index_table_name
+                )
+                self._inverted_index_table_name = None
+
+            result, stage_diagnostics = _run_matching(
+                con=self.con,
+                df_messy_clean=self._messy_clean,
+                df_canonical_clean=self._canonical_clean,
+                stages=self.stages,
+                debug_options=self.debug_options,
+            )
+            completed = True
+        finally:
+            if not completed:
+                for stage in self.stages:
+                    if isinstance(stage, SplinkStage):
+                        stage._release_splink_tables()
+                self._cleanup_intermediate_tables(None, existing_tables)
+                self._inverted_index_table_name = None
 
         splink_stage = next(
             (stage for stage in self.stages if isinstance(stage, SplinkStage)),
             None,
         )
 
-        self._cleanup_intermediate_tables(result)
+        owned_tables = self._cleanup_intermediate_tables(result, existing_tables)
+        # Snapshot inspection state too: callers may reuse these stage objects.
+        if splink_stage is not None:
+            splink_stage = copy(splink_stage)
+        owned_splink_frames = tuple(
+            frame
+            for stage in self.stages
+            if isinstance(stage, SplinkStage)
+            for frame in stage._owned_splink_frames
+        )
 
         return MatchResult(
             result,
@@ -408,26 +450,33 @@ class AddressMatcher:
             _canonical_relation=self._canonical_clean,
             _messy_relation=self._messy_clean,
             _stage_diagnostics=stage_diagnostics,
+            _owned_table_names=owned_tables,
+            _owned_splink_frames=owned_splink_frames,
         )
 
-    def _cleanup_intermediate_tables(self, result: duckdb.DuckDBPyRelation) -> None:
-        """A simple cleaning utility to drop transient tables created during
-        matching, while keeping the final result and canonical/messy tables."""
-        keep_names = {
-            getattr(result, "alias", None),
-            getattr(self._canonical_clean, "alias", None),
-            getattr(self._messy_clean, "alias", None),
-            self._inverted_index_table_name,
-        }
-        keep_names = {name for name in keep_names if isinstance(name, str) and name}
-
-        transient_prefixes = ("__ukam__tmp_",)
-
+    def _cleanup_intermediate_tables(
+        self,
+        result: duckdb.DuckDBPyRelation | None,
+        existing_tables: set[str],
+    ) -> tuple[str, ...]:
+        """Clean only this run's objects, returning those retained for inspection."""
+        retained = []
         table_names = [name for (name,) in self.con.execute("SHOW TABLES").fetchall()]
         for table_name in table_names:
-            if table_name in keep_names:
+            if table_name in existing_tables:
                 continue
-            if not table_name.startswith(transient_prefixes):
+            # These pre-existing fixed-name caches have a separate lifecycle.
+            if table_name in {"__ukam_derived_term_frequencies", "__ukam_index_meta"}:
                 continue
-
-            _drop_table_and_registered_aliases(self.con, table_name)
+            is_pipeline_input = re.fullmatch(r"root_[a-z0-9]{4}", table_name) is not None
+            if not is_pipeline_input and not table_name.startswith(
+                ("__ukam", "__splink__")
+            ):
+                continue
+            if result is None or table_name.startswith(
+                ("__ukam__tmp_", "__ukam_results_", "__ukam_stage_matches_")
+            ):
+                _drop_table_and_registered_aliases(self.con, table_name)
+            elif not table_name.startswith("__splink__"):
+                retained.append(table_name)
+        return tuple(retained)

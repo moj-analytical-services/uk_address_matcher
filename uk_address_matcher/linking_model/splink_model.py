@@ -3,7 +3,7 @@ import json
 import logging
 from contextlib import contextmanager
 
-from duckdb import DuckDBPyConnection, DuckDBPyRelation
+from duckdb import DuckDBPyConnection, DuckDBPyRelation, InvalidInputException
 from splink import DuckDBAPI, Linker, SettingsCreator
 
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
@@ -248,8 +248,17 @@ def _get_linker(
     retain_intermediate_calculation_columns=False,
     retain_matching_columns=True,
     settings: SettingsCreator | None = None,
+    owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
 ) -> Linker:
+    """Build a configured Splink linker for the given relations.
+
+    If ``owned_splink_frames`` is provided, every ``SplinkDataFrame`` this
+    function registers on the connection (the three numeric-token term
+    frequency lookups and the concat-with-tf input) is appended to it so the
+    caller can later drop them via Splink's public
+    ``drop_table_from_database_and_remove_from_cache`` API.
+    """
     # Check if either input dataset contains a source_dataset column
     if (
         "source_dataset" in df_addresses_to_match.columns
@@ -341,6 +350,7 @@ def _get_linker(
     else:
         settings_as_dict = settings.create_settings_dict("duckdb")
 
+    settings_as_dict["linker_uid"] = None
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
     available_columns = set(df_addresses_to_match.columns).intersection(
@@ -462,21 +472,36 @@ def _get_linker(
 
     settings = SettingsCreator.from_path_or_dict(settings_as_dict)
 
-    # Drop stale Splink views/tables from any prior linker on this connection.
-    messy_name, canonical_name = (
-        "m_",
-        "c_",
-    )
+    df_addresses_to_match_fix = df_addresses_to_match
 
-    for tbl in (messy_name, canonical_name):
-        con.execute(f"DROP VIEW IF EXISTS {tbl}")
-        con.execute(f"DROP TABLE IF EXISTS {tbl}")
+    # See https://github.com/moj-analytical-services/uk_address_matcher/issues/253
+    # con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
+    # df_addresses_to_search_within_fix = con.table("df_addresses_to_search_within_fix")
+    df_addresses_to_search_within_fix = df_addresses_to_search_within
+
+    # Splink expects the prediction-side dataset labels to be `m_` and `c_`.
+    # Register the matching relations under those names for the duration of the
+    # Splink run instead of dropping any user table that happens to share the
+    # name. The caller (SplinkStage) is responsible for unregistering both
+    # names once Splink has materialised its outputs, restoring any shadowed
+    # user tables. Registration order: unregister first so a stale
+    # registration from a previous (possibly failed) run is replaced.
+    messy_name, canonical_name = "m_", "c_"
+    for table_name, relation in (
+        (messy_name, df_addresses_to_match_fix),
+        (canonical_name, df_addresses_to_search_within_fix),
+    ):
+        try:
+            con.unregister(table_name)
+        except InvalidInputException:
+            pass
+        con.register(table_name, relation)
 
     db_api = DuckDBAPI(connection=con)
 
     with _suppress_known_splink_warnings():
         linker = Linker(
-            [df_addresses_to_match, df_addresses_to_search_within],
+            [messy_name, canonical_name],
             settings=settings,
             db_api=db_api,
             input_table_aliases=[messy_name, canonical_name],
@@ -494,9 +519,11 @@ def _get_linker(
             from precomputed_numeric_tf_table"""
 
         df = con.sql(df_sql)
-        linker.table_management.register_term_frequency_lookup(
+        tf_frame = linker.table_management.register_term_frequency_lookup(
             df, f"numeric_token_{i}", overwrite=True
         )
+        if owned_splink_frames is not None:
+            owned_splink_frames.append(tf_frame)
 
     cols_to_select = [
         column
@@ -517,6 +544,10 @@ def _get_linker(
     """
 
     concat_with_tf = con.sql(sql)
-    linker.table_management.register_table_input_nodes_concat_with_tf(concat_with_tf)
+    concat_frame = linker.table_management.register_table_input_nodes_concat_with_tf(
+        concat_with_tf
+    )
+    if owned_splink_frames is not None:
+        owned_splink_frames.append(concat_frame)
 
     return linker

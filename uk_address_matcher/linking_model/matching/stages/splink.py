@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
+
+from duckdb import InvalidInputException
 
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     add_road_blocking_features,
@@ -168,6 +171,16 @@ class SplinkStage(MatchingStage):
     best_matches_table: str | None = field(default=None, init=False, repr=False)
     phase_timings: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
+    _owned_splink_frames: tuple = field(default=(), init=False, repr=False)
+
+    def _release_splink_tables(self) -> None:
+        """Drop this run's Splink tables via Splink's public API."""
+        for frame in self._owned_splink_frames:
+            frame.drop_table_from_database_and_remove_from_cache(
+                force_non_splink_table=True
+            )
+        self._owned_splink_frames = ()
+
     def find_matches(
         self,
         con: duckdb.DuckDBPyConnection,
@@ -187,7 +200,10 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
-        from uk_address_matcher.sql_pipeline.helpers import _uid
+        from uk_address_matcher.sql_pipeline.helpers import (
+            _drop_table_and_registered_aliases,
+            _uid,
+        )
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:
@@ -197,186 +213,227 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
-        self.phase_timings = {}
-        phase_started = perf_counter()
-        df_unmatched, df_canonical = _prepare_inferred_road_scoring_features(
-            con,
-            df_unmatched,
-            df_canonical,
-            canonical_road_keys_path=self.canonical_road_keys_path,
-            roadlike_places=self.roadlike_places,
-        )
-
-        numeric_range_reranker = NumericRangeRerankerConfig()
-        range_metadata_available = (
-            "numeric_range" in df_canonical.columns
-            and "numeric_range" in df_unmatched.columns
-            and "numeric_tokens" in df_canonical.columns
-            and "numeric_tokens" in df_unmatched.columns
-            and "flat_identity" in df_canonical.columns
-            and "flat_identity" in df_unmatched.columns
-        )
-        if range_metadata_available:
-            df_unmatched = ensure_numeric_range_struct(df_unmatched)
-            df_canonical = ensure_numeric_range_struct(df_canonical)
-            range_input_columns = [
-                "numeric_range",
-                "numeric_tokens",
-                "flat_identity",
-            ]
-        else:
-            numeric_range_reranker = None
-            range_input_columns = []
-        linker_columns = list(SPLINK_POST_LINKAGE_COLUMNS)
-        linker_columns.extend(self.additional_columns_to_retain or [])
-        linker_columns.extend(range_input_columns)
-        linker_columns = list(dict.fromkeys(linker_columns))
-        self.phase_timings["road_and_reranker_preparation"] = (
-            perf_counter() - phase_started
-        )
-
-        # Step 1: Build linker
-        phase_started = perf_counter()
-        linker = _get_linker(
-            df_addresses_to_match=df_unmatched,
-            df_addresses_to_search_within=df_canonical,
-            con=con,
-            include_full_postcode_block=self.include_full_postcode_block,
-            include_outside_postcode_block=self.include_outside_postcode_block,
-            additional_columns_to_retain=linker_columns or None,
-            retain_intermediate_calculation_columns=True,
-            settings=self.settings,
-        )
-
-        self.linker = linker
-        self.phase_timings["linker_setup"] = perf_counter() - phase_started
-
-        # Step 2: Predict
-        phase_started = perf_counter()
-        df_predict = linker.inference.predict(
-            threshold_match_weight=self.predict_threshold_match_weight
-        )
-        raw_prediction_ddb = df_predict.as_duckdbpyrelation()
-
-        prediction_output = project_splink_predictions(
-            con,
-            raw_prediction_ddb,
-            retain_intermediate_calculation_columns=(
-                self.retain_intermediate_calculation_columns
-            ),
-        )
-        table_name = f"__ukam__splink__predictions__{_uid()}"
-        con.execute(
-            "CREATE OR REPLACE TEMP TABLE "
-            + table_name
-            + " AS SELECT * FROM ("
-            + prediction_output.sql_query()
-            + ")"
-        )
-        self.predictions_table = table_name
-        self.phase_timings["raw_prediction"] = perf_counter() - phase_started
-        df_predict_ddb = con.table(table_name)
-        df_predict_for_improvement = (
-            raw_prediction_ddb if numeric_range_reranker is not None else df_predict_ddb
-        )
-        phase_started = perf_counter()
-        df_improved = improve_predictions_using_distinguishing_tokens(
-            df_predict=df_predict_for_improvement,
-            con=con,
-            match_weight_threshold=self.improve_threshold_match_weight,
-            top_n_matches=self.improve_top_n_matches,
-            use_bigrams=self.improve_use_bigrams,
-            REWARD_MULTIPLIER=self.reranker_token_reward_multiplier,
-            BIGRAM_REWARD_MULTIPLIER=self.reranker_bigram_reward_multiplier,
-            additional_columns_to_retain=[
-                column
-                for column in linker_columns
-                if column not in range_input_columns
-                if f"{column}_l" in df_predict_ddb.columns
-                and f"{column}_r" in df_predict_ddb.columns
-            ]
-            or None,
-            numeric_range_reranker=numeric_range_reranker,
-        )
-        df_improved = relation_markers.improve_predictions_using_relation_markers(
-            df_predict=df_improved,
-            con=con,
-        )
-        improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
-        con.execute(
-            "CREATE OR REPLACE TEMP TABLE "
-            + improved_table_name
-            + " AS SELECT * FROM ("
-            + df_improved.sql_query()
-            + ")"
-        )
-        self.improved_predictions_table = improved_table_name
-        df_improved = con.table(improved_table_name)
-        self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
-
-        # Step 4: Compute distinguishability and select best match per record
-        # This returns an unmaterialised relation
-        phase_started = perf_counter()
-        df_best = best_matches_with_distinguishability(
-            df_predict=df_improved,
-            df_addresses_to_match=df_unmatched,
-            con=con,
-            best_match_only=False,
-        )
-        self.phase_timings["best_match_relation_build"] = perf_counter() - phase_started
-
-        df_best_name = f"__ukam__splink__best_matches__{_uid()}"
-        phase_started = perf_counter()
-        con.execute(
-            "CREATE OR REPLACE TEMP TABLE "
-            + df_best_name
-            + " AS SELECT * FROM ("
-            + df_best.sql_query()
-            + ")"
-        )
-        self.best_matches_table = df_best_name
-        self.phase_timings["best_match_materialisation"] = perf_counter() - phase_started
-
-        # Step 5: Apply thresholds and project to standard columns
-        splink_label = MatchReason.SPLINK.value
-
-        dist_filter = ""
-        if self.final_distinguishability_threshold is not None:
-            dist_filter = (
-                "AND (distinguishability IS NULL "
-                f"OR distinguishability >= {self.final_distinguishability_threshold})"
+        owned_frames: list = []
+        reranker_matches_table: str | None = None
+        self.linker = None
+        self.predictions_table = None
+        self.improved_predictions_table = None
+        self.best_matches_table = None
+        self._owned_splink_frames = ()
+        completed = False
+        try:
+            self.phase_timings = {}
+            phase_started = perf_counter()
+            df_unmatched, df_canonical = _prepare_inferred_road_scoring_features(
+                con,
+                df_unmatched,
+                df_canonical,
+                canonical_road_keys_path=self.canonical_road_keys_path,
+                roadlike_places=self.roadlike_places,
             )
 
-        range_audit_projection = ""
-        range_audit_projection = "".join(
-            f", best_match.{column}"
-            for column in (
-                "legacy_numeric_bits",
-                "numeric_range_relationship",
-                "numeric_range_guard_passed",
-                "numeric_range_guard_reason",
-                "numeric_range_base_bits",
-                "numeric_range_tf_bits",
-                "numeric_range_adjustment",
+            numeric_range_reranker = NumericRangeRerankerConfig()
+            range_metadata_available = (
+                "numeric_range" in df_canonical.columns
+                and "numeric_range" in df_unmatched.columns
+                and "numeric_tokens" in df_canonical.columns
+                and "numeric_tokens" in df_unmatched.columns
+                and "flat_identity" in df_canonical.columns
+                and "flat_identity" in df_unmatched.columns
             )
-            if column in df_best.columns
-        )
+            if range_metadata_available:
+                df_unmatched = ensure_numeric_range_struct(df_unmatched)
+                df_canonical = ensure_numeric_range_struct(df_canonical)
+                range_input_columns = [
+                    "numeric_range",
+                    "numeric_tokens",
+                    "flat_identity",
+                ]
+            else:
+                numeric_range_reranker = None
+                range_input_columns = []
+            linker_columns = list(SPLINK_POST_LINKAGE_COLUMNS)
+            linker_columns.extend(self.additional_columns_to_retain or [])
+            linker_columns.extend(range_input_columns)
+            linker_columns = list(dict.fromkeys(linker_columns))
+            self.phase_timings["road_and_reranker_preparation"] = (
+                perf_counter() - phase_started
+            )
 
-        return con.sql(f"""
-            SELECT
-                best_match.ukam_address_id_r AS ukam_address_id,
-                best_match.unique_id_l AS resolved_canonical_id,
-                best_match.ukam_address_id_l AS canonical_ukam_address_id,
-                '{splink_label}' AS match_reason,
-                best_match.match_weight,
-                best_match.distinguishability
-                {range_audit_projection}
-            FROM (
-                SELECT *
-                FROM {df_best_name}
-                WHERE candidate_rank = 1
-            ) AS best_match
-            WHERE best_match.match_weight >= {self.final_match_weight_threshold}
-            {dist_filter}
-            AND best_match.unique_id_l IS NOT NULL
-        """)
+            # Step 1: Build linker
+            phase_started = perf_counter()
+            linker = _get_linker(
+                df_addresses_to_match=df_unmatched,
+                df_addresses_to_search_within=df_canonical,
+                con=con,
+                include_full_postcode_block=self.include_full_postcode_block,
+                include_outside_postcode_block=self.include_outside_postcode_block,
+                additional_columns_to_retain=linker_columns or None,
+                retain_intermediate_calculation_columns=True,
+                settings=self.settings,
+                owned_splink_frames=owned_frames,
+            )
+
+            self.linker = linker
+            self.phase_timings["linker_setup"] = perf_counter() - phase_started
+
+            # Step 2: Predict
+            phase_started = perf_counter()
+            df_predict = linker.inference.predict(
+                threshold_match_weight=self.predict_threshold_match_weight
+            )
+            owned_frames.append(df_predict)
+            raw_prediction_ddb = df_predict.as_duckdbpyrelation()
+
+            prediction_output = project_splink_predictions(
+                con,
+                raw_prediction_ddb,
+                retain_intermediate_calculation_columns=(
+                    self.retain_intermediate_calculation_columns
+                ),
+            )
+            table_name = f"__ukam__splink__predictions__{_uid()}"
+            con.execute(
+                "CREATE OR REPLACE TEMP TABLE "
+                + table_name
+                + " AS SELECT * FROM ("
+                + prediction_output.sql_query()
+                + ")"
+            )
+            self.predictions_table = table_name
+            self.phase_timings["raw_prediction"] = perf_counter() - phase_started
+            df_predict_ddb = con.table(table_name)
+            df_predict_for_improvement = (
+                raw_prediction_ddb
+                if numeric_range_reranker is not None
+                else df_predict_ddb
+            )
+            phase_started = perf_counter()
+            df_improved = improve_predictions_using_distinguishing_tokens(
+                df_predict=df_predict_for_improvement,
+                con=con,
+                match_weight_threshold=self.improve_threshold_match_weight,
+                top_n_matches=self.improve_top_n_matches,
+                use_bigrams=self.improve_use_bigrams,
+                REWARD_MULTIPLIER=self.reranker_token_reward_multiplier,
+                BIGRAM_REWARD_MULTIPLIER=self.reranker_bigram_reward_multiplier,
+                additional_columns_to_retain=[
+                    column
+                    for column in linker_columns
+                    if column not in range_input_columns
+                    if f"{column}_l" in df_predict_ddb.columns
+                    and f"{column}_r" in df_predict_ddb.columns
+                ]
+                or None,
+                numeric_range_reranker=numeric_range_reranker,
+            )
+            reranker_matches_table = df_improved.alias
+            df_improved = relation_markers.improve_predictions_using_relation_markers(
+                df_predict=df_improved,
+                con=con,
+            )
+            improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
+            con.execute(
+                "CREATE OR REPLACE TEMP TABLE "
+                + improved_table_name
+                + " AS SELECT * FROM ("
+                + df_improved.sql_query()
+                + ")"
+            )
+            self.improved_predictions_table = improved_table_name
+            df_improved = con.table(improved_table_name)
+            self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
+
+            # Step 4: Compute distinguishability and select best match per record
+            # This returns an unmaterialised relation
+            phase_started = perf_counter()
+            df_best = best_matches_with_distinguishability(
+                df_predict=df_improved,
+                df_addresses_to_match=df_unmatched,
+                con=con,
+                best_match_only=False,
+            )
+            self.phase_timings["best_match_relation_build"] = (
+                perf_counter() - phase_started
+            )
+
+            df_best_name = f"__ukam__splink__best_matches__{_uid()}"
+            phase_started = perf_counter()
+            con.execute(
+                "CREATE OR REPLACE TEMP TABLE "
+                + df_best_name
+                + " AS SELECT * FROM ("
+                + df_best.sql_query()
+                + ")"
+            )
+            self.best_matches_table = df_best_name
+            self.phase_timings["best_match_materialisation"] = (
+                perf_counter() - phase_started
+            )
+
+            # Step 5: Apply thresholds and project to standard columns
+            splink_label = MatchReason.SPLINK.value
+
+            dist_filter = ""
+            if self.final_distinguishability_threshold is not None:
+                dist_filter = (
+                    "AND (distinguishability IS NULL "
+                    f"OR distinguishability >= {self.final_distinguishability_threshold})"
+                )
+
+            range_audit_projection = ""
+            range_audit_projection = "".join(
+                f", best_match.{column}"
+                for column in (
+                    "legacy_numeric_bits",
+                    "numeric_range_relationship",
+                    "numeric_range_guard_passed",
+                    "numeric_range_guard_reason",
+                    "numeric_range_base_bits",
+                    "numeric_range_tf_bits",
+                    "numeric_range_adjustment",
+                )
+                if column in df_best.columns
+            )
+
+            result = con.sql(f"""
+                SELECT
+                    best_match.ukam_address_id_r AS ukam_address_id,
+                    best_match.unique_id_l AS resolved_canonical_id,
+                    best_match.ukam_address_id_l AS canonical_ukam_address_id,
+                    '{splink_label}' AS match_reason,
+                    best_match.match_weight,
+                    best_match.distinguishability
+                    {range_audit_projection}
+                FROM (
+                    SELECT *
+                    FROM {df_best_name}
+                    WHERE candidate_rank = 1
+                ) AS best_match
+                WHERE best_match.match_weight >= {self.final_match_weight_threshold}
+                {dist_filter}
+                AND best_match.unique_id_l IS NOT NULL
+            """)
+            completed = True
+            return result
+        finally:
+            # Unregister both aliases even if linker setup failed before registration.
+            for input_name in ("m_", "c_"):
+                with suppress(InvalidInputException):
+                    con.unregister(input_name)
+            self._owned_splink_frames = tuple(owned_frames)
+            if reranker_matches_table is not None:
+                _drop_table_and_registered_aliases(con, reranker_matches_table)
+            if not completed:
+                self._release_splink_tables()
+                for table_name in (
+                    self.predictions_table,
+                    self.improved_predictions_table,
+                    self.best_matches_table,
+                ):
+                    if table_name is not None:
+                        _drop_table_and_registered_aliases(con, table_name)
+                self.linker = None
+                self.predictions_table = None
+                self.improved_predictions_table = None
+                self.best_matches_table = None
