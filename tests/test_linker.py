@@ -12,6 +12,7 @@ from uk_address_matcher.linking_model.matching.stages.splink import (
     _prepare_inferred_road_scoring_features,
 )
 from uk_address_matcher.linking_model.splink_model import (
+    _align_address_structure_feature_columns,
     _align_distinguishing_token_columns,
     _align_numeric_range_columns,
     _get_linker,
@@ -161,6 +162,27 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
     assert aligned_canonical.project("distinguishing_adj_start_tokens").fetchone() == (
         ["FLAT", "A"],
     )
+
+
+def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
+    parts = "[struct_pack(token := 'FLAT', is_lexical := false)]"
+    messy = duck_con.sql(f"SELECT 1 AS unique_id, {parts} AS distinguishing_token_parts")
+    canonical = duck_con.sql(
+        f"SELECT 2 AS unique_id, {parts} AS distinguishing_token_parts"
+    )
+
+    aligned_messy, aligned_canonical = _align_address_structure_feature_columns(
+        messy,
+        canonical,
+    )
+
+    assert aligned_messy.project(
+        "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
+    ).fetchone() == (["FLAT"], [])
+    assert aligned_canonical.project(
+        "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
+    ).fetchone() == (["FLAT"], [])
+    assert "distinguishing_token_parts" not in aligned_messy.columns
 
 
 def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):

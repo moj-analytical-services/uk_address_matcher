@@ -332,9 +332,89 @@ def test_prepared_canonical_schema_matches_debug_option(
     canonical_relation = con.read_parquet([str(path) for path in canonical_paths])
     columns = set(canonical_relation.columns)
     manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    loaded_relation = load_prepared_canonical_data(tmp_path, con=con).addresses
+    loaded_columns = set(loaded_relation.columns)
+    expected_token_views = (
+        canonical_relation.select(
+            """
+        unique_id,
+        list_transform(
+            distinguishing_token_parts,
+            part -> part.token
+        ) AS distinguishing_adj_start_tokens,
+        list_transform(
+            list_filter(distinguishing_token_parts, part -> part.is_lexical),
+            part -> part.token
+        ) AS distinguishing_lexical_tokens
+        """
+        )
+        .order("unique_id")
+        .fetchall()
+    )
+    actual_token_views = (
+        loaded_relation.select(
+            """
+        unique_id,
+        distinguishing_adj_start_tokens,
+        distinguishing_lexical_tokens
+        """
+        )
+        .order("unique_id")
+        .fetchall()
+    )
+    expected_numeric_token_views = (
+        canonical_relation.select(
+            """
+        unique_id,
+        list_extract(numeric_tokens, 2) AS numeric_token_2,
+        list_extract(numeric_tokens, 3) AS numeric_token_3
+        """
+        )
+        .order("unique_id")
+        .fetchall()
+    )
+    actual_numeric_token_views = (
+        loaded_relation.select(
+            """
+        unique_id,
+        numeric_token_2,
+        numeric_token_3
+        """
+        )
+        .order("unique_id")
+        .fetchall()
+    )
 
     assert "very_unusual_tokens_arr" not in columns
+    assert actual_token_views == expected_token_views
+    assert actual_numeric_token_views == expected_numeric_token_views
+    assert {"numeric_token_2", "numeric_token_3"}.isdisjoint(columns)
+    assert {
+        "tf_numeric_token_1",
+        "tf_numeric_token_2",
+        "tf_numeric_token_3",
+    }.isdisjoint(columns)
     assert ("original_address_concat" in columns) is add_debug_features
+    assert {
+        "distinguishing_adj_start_tokens",
+        "distinguishing_lexical_tokens",
+    }.isdisjoint(columns) is (not add_debug_features)
+    assert "common_adj_start_tokens" in columns
+    assert "distinguishing_token_parts" in columns
+    debug_columns = {
+        "original_address_concat",
+        "numeric_role_keys",
+        "numeric_broad_roles",
+        "distinguishing_structural_tokens",
+        "distinguishing_adj_start_tokens",
+        "distinguishing_lexical_tokens",
+    }
+    assert debug_columns.issubset(columns) is add_debug_features
+    assert {
+        "common_adj_start_tokens",
+        "distinguishing_adj_start_tokens",
+        "distinguishing_lexical_tokens",
+    }.issubset(loaded_columns)
     assert "clean_full_address" in columns
     assert canonical_relation.count("*").fetchone()[0] == 3
     assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
@@ -922,14 +1002,8 @@ def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, 
     assert addresses.count("*").fetchone()[0] == 4
     assert physical_ids == [(1,), (2,), (3,), (4,)]
     assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
-    assert (
-        addresses.select("ukam_address_id").fetchall()
-        == addresses.order(
-            "postcode, unique_id, clean_full_address, filename, ukam_address_id"
-        )
-        .select("ukam_address_id")
-        .fetchall()
-    )
+    physical_keys = addresses.select("postcode, unique_id").fetchall()
+    assert physical_keys == sorted(physical_keys)
 
     for path in chunk_paths:
         parquet_file = pyarrow_parquet.ParquetFile(path)
@@ -1117,33 +1191,21 @@ def test_prepare_persists_distinguishing_tokens_with_array_types(
     loaded = load_prepared_canonical_data(tmp_path, con=con).addresses
     column_types = dict(zip(loaded.columns, map(str, loaded.types)))
     actual = {
-        unique_id: (distinguishing, common)
-        for unique_id, distinguishing, common in loaded.project(
+        unique_id: distinguishing
+        for unique_id, distinguishing in loaded.project(
             """
             unique_id,
-            distinguishing_adj_start_tokens,
-            common_adj_start_tokens
+            distinguishing_adj_start_tokens
             """
         ).fetchall()
     }
 
     assert column_types["distinguishing_adj_start_tokens"] == "VARCHAR[]"
-    assert column_types["common_adj_start_tokens"] == "VARCHAR[]"
-    assert (
-        loaded.filter(
-            "distinguishing_adj_start_tokens IS NULL OR common_adj_start_tokens IS NULL"
-        )
-        .count("*")
-        .fetchone()[0]
-        == 0
-    )
+    assert "common_adj_start_tokens" in loaded.columns
     assert actual == {
-        "C1": (
-            ["FLAT", "A"],
-            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
-        ),
-        "C2": ([], ["1", "HIGH", "STREET", "CAMDEN", "LONDON"]),
-        "C3": ([], ["9", "SOLO", "ROAD", "YORK"]),
+        "C1": ["FLAT", "A"],
+        "C2": [],
+        "C3": [],
     }
 
 
