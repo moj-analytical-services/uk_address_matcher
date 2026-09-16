@@ -7,6 +7,42 @@ from uk_address_matcher.cleaning.steps.regexes import (
 )
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
+_DISTINGUISHING_MARKER_VALUES = (
+    "ANNEXE",
+    "WORKSHOP",
+    "DEPOT",
+    "FARM",
+    "BUSINESS",
+    "CENTRE",
+    "CENTER",
+    "BUILDING",
+    "STUDIO",
+    "WAREHOUSE",
+    "OFFICE",
+    "UNIT",
+    "UNITS",
+    "SUITE",
+    "SUITES",
+    "ROOM",
+    "FLOOR",
+    "FLOORS",
+    "SHOP",
+    "KIOSK",
+    "PLOT",
+    "STALL",
+    "GARAGE",
+    "YARD",
+    "BAY",
+    "PARKING",
+    "CAR",
+    "PARK",
+    "SPACE",
+    "LOCK",
+    "LOCKUP",
+    "CONTAINER",
+    "FLAT",
+)
+
 
 @pipeline_stage(
     name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records",
@@ -856,13 +892,7 @@ def _parse_out_commercial_premise():
     tags=["token_analysis", "address_structure_parsing"],
 )
 def _derive_distinguishing_token_components():
-    marker_values = (
-        "'ANNEXE', 'WORKSHOP', 'DEPOT', 'FARM', 'BUSINESS', 'CENTRE', 'CENTER', "
-        "'BUILDING', 'STUDIO', 'WAREHOUSE', 'OFFICE', 'UNIT', 'UNITS', 'SUITE', "
-        "'SUITES', 'ROOM', 'FLOOR', 'FLOORS', 'SHOP', 'KIOSK', 'PLOT', 'STALL', "
-        "'GARAGE', 'YARD', 'BAY', 'PARKING', 'CAR', 'PARK', 'SPACE', 'LOCK', "
-        "'LOCKUP', 'CONTAINER', 'FLAT'"
-    )
+    marker_values = ", ".join(f"'{value}'" for value in _DISTINGUISHING_MARKER_VALUES)
     return f"""
     WITH marked AS (
         SELECT
@@ -893,11 +923,16 @@ def _derive_distinguishing_token_components():
             __structural_positions,
             position -> list_extract(distinguishing_adj_start_tokens, position)
         ) AS distinguishing_structural_tokens,
+        list_transform(
+            distinguishing_adj_start_tokens,
+            (token, position) -> struct_pack(
+                token := token,
+                is_lexical := NOT list_contains(__structural_positions, position)
+            )
+        ) AS distinguishing_token_parts,
         list_filter(
             distinguishing_adj_start_tokens,
-            (token, position) -> NOT list_contains(
-                __structural_positions, position
-            )
+            (token, position) -> NOT list_contains(__structural_positions, position)
         ) AS distinguishing_lexical_tokens
     FROM marked
     """

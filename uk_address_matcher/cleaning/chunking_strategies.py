@@ -66,6 +66,7 @@ DISTINGUISHING_FEATURE_COLUMNS = (
     "common_adj_start_tokens",
     "distinguishing_structural_tokens",
     "distinguishing_lexical_tokens",
+    "distinguishing_token_parts",
 )
 
 
@@ -86,27 +87,21 @@ def _materialise_relation_with_ukam_address_id(
     relation: DuckDBPyRelation,
     table_name: str,
 ) -> DuckDBPyRelation:
-    """Sort cleaned rows and assign matching public and private row IDs."""
+    """Order cleaned rows by storage keys and assign row IDs."""
     source_columns = tuple(
         column
         for column in relation.columns
         if column not in {"ukam_address_id", "__ukam_row_id"}
     )
     sort_columns = tuple(
-        column
-        for column in ("postcode", "unique_id", "clean_full_address", "filename")
-        if column in source_columns
+        column for column in ("postcode", "unique_id") if column in source_columns
     )
-    required_sort_columns = {"postcode", "unique_id", "clean_full_address"}
+    required_sort_columns = {"postcode", "unique_id"}
     if not required_sort_columns.issubset(sort_columns):
         missing = sorted(required_sort_columns.difference(sort_columns))
         raise ValueError(f"Cleaned relation is missing ordering columns: {missing}")
 
-    tie_breaker_columns = tuple(
-        column for column in source_columns if column not in sort_columns
-    )
-    order_columns = (*sort_columns, *tie_breaker_columns)
-    qualified_order = ", ".join(f'_ukam_src."{column}"' for column in order_columns)
+    qualified_order = ", ".join(f'_ukam_src."{column}"' for column in sort_columns)
     source_projection = ", ".join(f'_ukam_src."{column}"' for column in source_columns)
 
     _drop_table_and_registered_aliases(con, table_name)
@@ -123,7 +118,6 @@ def _materialise_relation_with_ukam_address_id(
             numbered.*,
             CAST(numbered.ukam_address_id AS BIGINT) AS __ukam_row_id
         FROM numbered
-        ORDER BY numbered.ukam_address_id
     """)
     return con.table(table_name)
 
