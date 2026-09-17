@@ -153,23 +153,23 @@ def improve_predictions_using_distinguishing_tokens(
             FROM grouped
         """).create(candidate_search_keys_table)
 
-    con.sql(f"""
-        SELECT prediction.*
+        con.sql(f"""
+            SELECT prediction.*
             FROM df_predict AS prediction
-        INNER JOIN candidate_search_keys AS candidate
-          ON candidate.unique_id_l = prediction.unique_id_l
-         AND candidate.unique_id_r = prediction.unique_id_r
-         AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
-         AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
-        WHERE prediction.match_weight > {match_weight_threshold}
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY prediction.unique_id_r, prediction.unique_id_l
-            ORDER BY
-                prediction.match_weight DESC,
-                prediction.ukam_address_id_r DESC,
-                prediction.ukam_address_id_l DESC
-        ) = 1
-    """).create("good_matches")
+            INNER JOIN {candidate_search_keys_table} AS candidate
+              ON candidate.unique_id_l = prediction.unique_id_l
+             AND candidate.unique_id_r = prediction.unique_id_r
+             AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
+             AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
+            WHERE prediction.match_weight > {match_weight_threshold}
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+                ORDER BY
+                    prediction.match_weight DESC,
+                    prediction.ukam_address_id_r DESC,
+                    prediction.ukam_address_id_l DESC
+            ) = 1
+        """).create(good_matches_table)
 
         reranker_source = ""
         range_intermediate_columns = ""
@@ -248,50 +248,7 @@ def improve_predictions_using_distinguishing_tokens(
             )
             SELECT
                 *,
-                COALESCE(
-                    common_end_tokens_r.list_transform(
-                        value -> COALESCE(
-                            struct_extract(
-                                TRY_CAST(value AS STRUCT(tok VARCHAR, rel_freq DOUBLE)),
-                                'tok'
-                            ),
-                            TRY_CAST(value AS VARCHAR)
-                        )
-                    ),
-                    CAST([] AS VARCHAR[])
-                ) AS common_end_tokens_tok
-            FROM intermediate
-        )
-        SELECT
-            *,
-            clean_full_address_l
-                .trim()
-                .upper()
-                .regexp_split_to_array('\\s+')
-                .list_reverse()
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_reverse()
-                .array_to_string(' ') AS __token_address_l,
-            clean_full_address_r
-                .trim()
-                .upper()
-                .regexp_split_to_array('\\s+')
-                .list_reverse()
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_reverse()
-                .array_to_string(' ') AS __token_address_r
-        FROM enriched
-    """).create("token_addresses")
-
-    con.sql(f"""
-        WITH source_tokens AS (
-            SELECT DISTINCT
-                ukam_address_id_r,
-                concat_ws(' ', __token_address_r, postcode_r)
+                clean_full_address_l
                     .trim()
                     .upper()
                     .regexp_split_to_array('\\s+')
