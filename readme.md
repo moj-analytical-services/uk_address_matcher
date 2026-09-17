@@ -29,8 +29,8 @@ The end-to-end process of matching 100,000 addresses to Ordnance Survey data, in
 
 <img src="docs/site/assets/images/uk_address_matcher_dfd.excalidraw.png" alt="Data flow diagram showing how uk_address_matcher cleans and matches addresses" width="100%">
 
-- **Input:** a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](https://moj-analytical-services.github.io/uk_address_matcher/get_started/#input-data-requirements).
-- **Optional canonical data build:** if you are using Ordnance Survey data, [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder) can download and transform NGD or AddressBase Premium data into canonical Parquet files for `uk_address_matcher`.
+- \[OPTIONAL\] - Construct Ordnance Survey canonical data using [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder). Skip this step if you already have a canonical dataset or are using another source.
+- **Input:** provide a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](https://moj-analytical-services.github.io/uk_address_matcher/get_started/#input-data-requirements).
 - **Preparation:** addresses are cleaned, standardised, and enriched with useful features such as postcodes. See the [canonical dataset preprocessing guidance](https://moj-analytical-services.github.io/uk_address_matcher/get_started/#choose-whether-to-pre-process-your-canonical-dataset).
 - **Matching:** configurable matching stages compare each messy address with candidate canonical addresses, from exact matches through to probabilistic matching with Splink. See [choosing a matching threshold](https://moj-analytical-services.github.io/uk_address_matcher/choosing_a_matching_threshold/#choosing-a-matching-threshold).
 - **Output:** the best match, together with the match reason, match weight, and distinguishability score. See [choosing a matching threshold](https://moj-analytical-services.github.io/uk_address_matcher/choosing_a_matching_threshold/) for how to interpret these scores.
