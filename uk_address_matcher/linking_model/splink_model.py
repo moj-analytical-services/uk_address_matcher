@@ -123,6 +123,25 @@ def _align_distinguishing_token_columns(
     return df_addresses_to_match, df_addresses_to_search_within
 
 
+def _align_clean_address_token_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Validate that both cleaned-address representations are available to Splink."""
+    required_columns = {"clean_full_address", "clean_full_address_tokens"}
+    for relation_name, relation in (
+        ("addresses_to_match", df_addresses_to_match),
+        ("addresses_to_search_within", df_addresses_to_search_within),
+    ):
+        missing_columns = sorted(required_columns - set(relation.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{relation_name} is missing required cleaned address columns: "
+                f"{', '.join(missing_columns)}"
+            )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
 def _align_sub_premise_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -392,6 +411,13 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_distinguishing_token_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_clean_address_token_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )

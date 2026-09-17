@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
+from duckdb import DuckDBPyRelation
+
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _DISTINGUISHING_MARKER_VALUES,
 )
+
+
+def _clean_full_address_tokens_expression(
+    address_column: str = "clean_full_address",
+    token_column: str = "clean_full_address_tokens",
+) -> str:
+    return f"regexp_split_to_array({address_column}, '\\s+')::VARCHAR[] AS {token_column}"
+
+
+def _clean_full_address_expression(
+    token_column: str = "clean_full_address_tokens",
+    address_column: str = "clean_full_address",
+) -> str:
+    return f"array_to_string({token_column}, ' ') AS {address_column}"
+
+
+def _ensure_clean_full_address_views(
+    relation: DuckDBPyRelation,
+) -> DuckDBPyRelation:
+    """Ensure the cleaned address string and token array are both available."""
+    columns = set(relation.columns)
+    has_address = "clean_full_address" in columns
+    has_tokens = "clean_full_address_tokens" in columns
+    if not has_address and not has_tokens:
+        return relation
+
+    if not has_address:
+        relation = relation.select(f"*, {_clean_full_address_expression()}")
+        columns = set(relation.columns)
+
+    if "clean_full_address_tokens" not in columns:
+        relation = relation.select(f"*, {_clean_full_address_tokens_expression()}")
+
+    return relation
 
 
 def _distinguishing_lexical_tokens_expression(

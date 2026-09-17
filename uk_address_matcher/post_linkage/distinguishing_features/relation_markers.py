@@ -31,7 +31,7 @@ def improve_predictions_using_relation_markers(
     """Prefer target-property evidence over relation-marker anchor evidence."""
 
     return con.sql(f"""
-        WITH normalised AS (
+        WITH source_addresses AS (
             SELECT
                 *,
                 trim(
@@ -39,13 +39,7 @@ def improve_predictions_using_relation_markers(
                         upper(clean_full_address_r), '[^A-Z0-9]+', ' ', 'g'
                     )
                 )
-                    AS source_address,
-                trim(
-                    regexp_replace(
-                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
-                    )
-                )
-                    AS candidate_address
+                        AS source_address
             FROM df_predict
         ),
         relation_parts AS (
@@ -56,14 +50,25 @@ def improve_predictions_using_relation_markers(
                     '(?:^| )({_RELATION_MARKERS_SQL})(?: |$)',
                     1
                 ) AS relation_marker
-            FROM normalised
+            FROM source_addresses
+        ),
+        normalised AS (
+            SELECT
+                *,
+                trim(
+                    regexp_replace(
+                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
+                    )
+                ) AS candidate_address
+            FROM relation_parts
+            WHERE relation_marker != ''
         ),
         split_addresses AS (
             SELECT
                 *,
                 trim(split_part(source_address, relation_marker, 1)) AS target_address,
                 trim(split_part(source_address, relation_marker, 2)) AS anchor_address
-            FROM relation_parts
+            FROM normalised
             WHERE relation_marker != ''
         ),
         tokenised AS (
@@ -196,12 +201,8 @@ def improve_predictions_using_relation_markers(
         UNION ALL
 
         SELECT
-            normalised.* EXCLUDE (source_address, candidate_address, match_weight),
+            relation_parts.* EXCLUDE (source_address, relation_marker, match_weight),
             match_weight
-        FROM normalised
-        WHERE regexp_extract(
-            source_address,
-            '(?:^| )({_RELATION_MARKERS_SQL})(?: |$)',
-            1
-        ) = ''
+        FROM relation_parts
+        WHERE relation_marker = ''
     """)

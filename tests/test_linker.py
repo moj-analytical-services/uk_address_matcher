@@ -13,6 +13,7 @@ from uk_address_matcher.linking_model.matching.stages.splink import (
 )
 from uk_address_matcher.linking_model.splink_model import (
     _align_address_structure_feature_columns,
+    _align_clean_address_token_columns,
     _align_distinguishing_token_columns,
     _align_numeric_range_columns,
     _get_linker,
@@ -62,6 +63,8 @@ def unresolved_matches(duck_con):
                     2::BIGINT,
                     'ADDRESS 2'::VARCHAR,
                     'POSTCODE 2'::VARCHAR,
+                    'ADDRESS 2'::VARCHAR,
+                    ['ADDRESS', '2']::VARCHAR[],
                     '{reason}'::VARCHAR,
                     NULL::BIGINT,
                     NULL::BIGINT
@@ -70,6 +73,8 @@ def unresolved_matches(duck_con):
             unique_id,
             original_address_concat,
             postcode,
+            clean_full_address,
+            clean_full_address_tokens,
             match_reason,
             resolved_canonical_id,
             canonical_ukam_address_id
@@ -113,8 +118,13 @@ def canonical_without_raw_address(duck_con):
         """
         SELECT *
         FROM (
-            VALUES (100::BIGINT, 'CANONICAL 1'::VARCHAR, 'POSTCODE 1'::VARCHAR)
-        ) AS t(unique_id, clean_full_address, postcode)
+            VALUES (
+                100::BIGINT,
+                'CANONICAL 1'::VARCHAR,
+                ['CANONICAL', '1']::VARCHAR[],
+                'POSTCODE 1'::VARCHAR
+            )
+        ) AS t(unique_id, clean_full_address, clean_full_address_tokens, postcode)
         """
     )
 
@@ -162,6 +172,27 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
     assert aligned_canonical.project("distinguishing_adj_start_tokens").fetchone() == (
         ["FLAT", "A"],
     )
+
+
+def test_align_clean_address_tokens_rejects_string_only_inputs(duck_con):
+    messy = duck_con.sql("SELECT 'FLAT A 1 HIGH STREET' AS clean_full_address")
+    canonical = duck_con.sql("SELECT 'HOUSE 2 HIGH STREET' AS clean_full_address")
+
+    with pytest.raises(ValueError, match="clean_full_address_tokens"):
+        _align_clean_address_token_columns(messy, canonical)
+
+
+def test_align_clean_address_tokens_rejects_token_only_inputs(duck_con):
+    messy = duck_con.sql(
+        "SELECT ['FLAT', 'A', '1', 'HIGH', 'STREET']::VARCHAR[] "
+        "AS clean_full_address_tokens"
+    )
+    canonical = duck_con.sql(
+        "SELECT ['HOUSE', '2', 'HIGH', 'STREET']::VARCHAR[] AS clean_full_address_tokens"
+    )
+
+    with pytest.raises(ValueError, match="clean_full_address"):
+        _align_clean_address_token_columns(messy, canonical)
 
 
 def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
@@ -380,6 +411,8 @@ def test_postcode_exact_safe_gap_level_matches_expected_rows(
             "distinguishing_adj_start_tokens_l": ["FLAT", "A"],
             "clean_full_address_l": "FLAT A 1 HIGH STREET CAMDEN LONDON",
             "clean_full_address_r": messy_address,
+            "clean_full_address_tokens_l": ("FLAT A 1 HIGH STREET CAMDEN LONDON".split()),
+            "clean_full_address_tokens_r": messy_address.split(),
         },
         DuckDBAPI(connection=duck_con),
     )
@@ -510,6 +543,8 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
         show_progress=False,
     )
 
+    assert "clean_full_address_tokens" in canonical_clean.columns
+    assert "clean_full_address_tokens" in messy_clean.columns
     assert canonical_clean.filter("unique_id = 'c_some'").project(
         "distinguishing_adj_start_tokens"
     ).fetchone() == (["OLD", "STATION", "HOUSE"],)

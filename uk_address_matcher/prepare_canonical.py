@@ -31,6 +31,7 @@ from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_m
 from uk_address_matcher.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
+    _ensure_clean_full_address_views,
 )
 from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
 
@@ -270,6 +271,7 @@ def _rehydrate_canonical_addresses(
     inverted-index stages derive address tokens inline and the linker adds a
     neutral common-token array for legacy schema alignment when required.
     """
+    addresses = _ensure_clean_full_address_views(addresses)
     columns = addresses.columns
     if "address_tokens" in columns:
         addresses = addresses.select("* EXCLUDE (address_tokens)")
@@ -301,6 +303,17 @@ def _rehydrate_canonical_addresses(
         and "distinguishing_adj_start_tokens" in columns
     ):
         addresses = addresses.select(f"*, {_distinguishing_lexical_tokens_expression()}")
+    return addresses
+
+
+def _canonical_storage_relation(
+    addresses: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    """Persist the token array while retaining the string only in memory."""
+    if "clean_full_address_tokens" not in addresses.columns:
+        raise ValueError("Canonical output must contain clean_full_address_tokens.")
+    if "clean_full_address" in addresses.columns:
+        addresses = addresses.select("* EXCLUDE (clean_full_address)")
     return addresses
 
 
@@ -670,6 +683,12 @@ def prepare_canonical_folder(
         roadlike_places = None
 
     canonical_output_relation = df_clean
+    canonical_storage_relation = _canonical_storage_relation(canonical_output_relation)
+    canonical_storage_columns = [
+        column
+        for column in canonical_storage_relation.columns
+        if column not in canonical_drop_columns
+    ]
     addr_count = df_clean.count("*").fetchone()[0]
 
     # Write parquet files
@@ -710,7 +729,7 @@ def prepare_canonical_folder(
         )
         _write_parquet_artefact(
             con,
-            canonical_output_relation,
+            canonical_storage_relation,
             addr_path,
             sort_columns=("ukam_address_id",),
             drop_columns=canonical_drop_columns,
@@ -737,7 +756,7 @@ def prepare_canonical_folder(
             )
             chunk_query = con.sql(f"""
                 SELECT *
-                FROM ({canonical_output_relation.sql_query()}) AS canonical
+                FROM ({canonical_storage_relation.sql_query()}) AS canonical
                 WHERE canonical.ukam_address_id BETWEEN {first_id} AND {last_id}
             """)
             chunk_path = (
@@ -798,7 +817,7 @@ def prepare_canonical_folder(
             else str(Path(canonical_path).relative_to(output_folder_path))
         )
         artefact_columns[relative_name] = [
-            c for c in df_clean.columns if c not in canonical_drop_columns
+            c for c in canonical_storage_columns if c not in canonical_drop_columns
         ]
 
     manifest_row_counts = {
