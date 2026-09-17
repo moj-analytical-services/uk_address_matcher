@@ -54,27 +54,52 @@ def _derive_numeric_context_roles():
             "UNIT|UNITS|SUITE|SUITES|OFFICE|ROOM|WORKSHOP|WAREHOUSE|STUDIO",
         ),
     ]
-    marker_sql = " ".join(
-        "WHEN regexp_matches(clean_full_address, concat("
-        f"'\\b({pattern})\\s+', regexp_escape(token), '\\b')) "
-        f"THEN '{marker}'"
+    marker_alternatives = [
+        (alternative, marker)
         for marker, pattern in marker_cases
+        for alternative in pattern.split("|")
+    ]
+    marker_pattern = "|".join(alternative for alternative, _ in marker_alternatives)
+    marker_sql = "\n".join(
+        "WHEN "
+        + " OR ".join(
+            f"list_contains(__numeric_marker_matches[index], '{alternative}')"
+            for alternative, alternative_marker in marker_alternatives
+            if alternative_marker == marker
+        )
+        + f" THEN '{marker}'"
+        for marker, _ in marker_cases
+    )
+    marker_matches_sql = (
+        "regexp_extract_all("
+        "clean_full_address, "
+        f"concat('\\b({marker_pattern})\\s+', regexp_escape(token), '\\b'), "
+        "1)"
     )
     return f"""
-    WITH marked AS (
+    WITH marker_matches AS (
         SELECT
             *,
             list_transform(
                 numeric_tokens,
-                token -> CASE
+                token -> {marker_matches_sql}
+            ) AS __numeric_marker_matches
+        FROM {{input}}
+    ),
+    marked AS (
+        SELECT
+            *,
+            list_transform(
+                numeric_tokens,
+                (token, index) -> CASE
                     {marker_sql}
                     ELSE 'ADDRESS_NUMBER'
                 END
             ) AS __numeric_specific_markers
-        FROM {{input}}
+        FROM marker_matches
     )
     SELECT
-        * EXCLUDE (__numeric_specific_markers),
+        * EXCLUDE (__numeric_marker_matches, __numeric_specific_markers),
         list_transform(
             numeric_tokens,
             (token, index) -> CASE
@@ -118,7 +143,9 @@ def _tokenise_address_without_numbers():
     select
         *,
         regexp_split_to_array(trim(address_without_numbers), '\\s+')
-            AS address_without_numbers_tokenised
+            AS address_without_numbers_tokenised,
+        regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]
+            AS clean_full_address_tokens
     from {input}
     """
     return sql

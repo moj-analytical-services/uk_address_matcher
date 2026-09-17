@@ -142,7 +142,7 @@ def improve_predictions_using_distinguishing_tokens(
 
     con.sql(f"""
         SELECT prediction.*
-        FROM df_predict AS prediction
+            FROM df_predict AS prediction
         INNER JOIN candidate_search_keys AS candidate
           ON candidate.unique_id_l = prediction.unique_id_l
          AND candidate.unique_id_r = prediction.unique_id_r
@@ -241,9 +241,6 @@ def improve_predictions_using_distinguishing_tokens(
                 .list_filter((token, position) -> NOT (
                     position = 1 AND common_end_tokens_tok.list_contains(token)
                 ))
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
                 .list_reverse()
                 .array_to_string(' ') AS __token_address_l,
             clean_full_address_r
@@ -251,9 +248,6 @@ def improve_predictions_using_distinguishing_tokens(
                 .upper()
                 .regexp_split_to_array('\\s+')
                 .list_reverse()
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
                 .list_filter((token, position) -> NOT (
                     position = 1 AND common_end_tokens_tok.list_contains(token)
                 ))

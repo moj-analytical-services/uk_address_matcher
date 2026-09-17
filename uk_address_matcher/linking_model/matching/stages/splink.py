@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 from uk_address_matcher.cleaning.steps.roadlike_places import (
@@ -166,7 +165,6 @@ class SplinkStage(MatchingStage):
     predictions_table: str | None = field(default=None, init=False, repr=False)
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
-    phase_timings: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
     def find_matches(
         self,
@@ -197,8 +195,6 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
-        self.phase_timings = {}
-        phase_started = perf_counter()
         df_unmatched, df_canonical = _prepare_inferred_road_scoring_features(
             con,
             df_unmatched,
@@ -231,12 +227,8 @@ class SplinkStage(MatchingStage):
         linker_columns.extend(self.additional_columns_to_retain or [])
         linker_columns.extend(range_input_columns)
         linker_columns = list(dict.fromkeys(linker_columns))
-        self.phase_timings["road_and_reranker_preparation"] = (
-            perf_counter() - phase_started
-        )
 
         # Step 1: Build linker
-        phase_started = perf_counter()
         linker = _get_linker(
             df_addresses_to_match=df_unmatched,
             df_addresses_to_search_within=df_canonical,
@@ -249,10 +241,8 @@ class SplinkStage(MatchingStage):
         )
 
         self.linker = linker
-        self.phase_timings["linker_setup"] = perf_counter() - phase_started
 
         # Step 2: Predict
-        phase_started = perf_counter()
         df_predict = linker.inference.predict(
             threshold_match_weight=self.predict_threshold_match_weight
         )
@@ -274,12 +264,10 @@ class SplinkStage(MatchingStage):
             + ")"
         )
         self.predictions_table = table_name
-        self.phase_timings["raw_prediction"] = perf_counter() - phase_started
         df_predict_ddb = con.table(table_name)
         df_predict_for_improvement = (
             raw_prediction_ddb if numeric_range_reranker is not None else df_predict_ddb
         )
-        phase_started = perf_counter()
         df_improved = improve_predictions_using_distinguishing_tokens(
             df_predict=df_predict_for_improvement,
             con=con,
@@ -312,21 +300,17 @@ class SplinkStage(MatchingStage):
         )
         self.improved_predictions_table = improved_table_name
         df_improved = con.table(improved_table_name)
-        self.phase_timings["post_linkage_reranking"] = perf_counter() - phase_started
 
         # Step 4: Compute distinguishability and select best match per record
         # This returns an unmaterialised relation
-        phase_started = perf_counter()
         df_best = best_matches_with_distinguishability(
             df_predict=df_improved,
             df_addresses_to_match=df_unmatched,
             con=con,
             best_match_only=False,
         )
-        self.phase_timings["best_match_relation_build"] = perf_counter() - phase_started
 
         df_best_name = f"__ukam__splink__best_matches__{_uid()}"
-        phase_started = perf_counter()
         con.execute(
             "CREATE OR REPLACE TEMP TABLE "
             + df_best_name
@@ -335,7 +319,6 @@ class SplinkStage(MatchingStage):
             + ")"
         )
         self.best_matches_table = df_best_name
-        self.phase_timings["best_match_materialisation"] = perf_counter() - phase_started
 
         # Step 5: Apply thresholds and project to standard columns
         splink_label = MatchReason.SPLINK.value
