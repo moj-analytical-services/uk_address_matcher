@@ -30,12 +30,14 @@ pip install uk_address_matcher
 
 ## What does it do?
 
-Given the following data:
+`uk_address_matcher` finds the best known address for each address in your dataset.
 
--  a "messy" dataset of addresses that you want to match
--  a "canonical" dataset of known addresses, often an Ordnance Survey dataset such as AddressBase or NGD.
+<img src="assets/images/uk_address_matcher_dfd.excalidraw.png" alt="Data flow diagram showing how uk_address_matcher cleans and matches addresses" width="100%">
 
-this package will find the best matching canonical address for each messy address.
+- **Input:** a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](get_started.md#input-data-requirements).
+- **Preparation:** addresses are cleaned, standardised, and enriched with useful features such as postcodes. See the [canonical dataset preprocessing guidance](get_started.md#choose-whether-to-pre-process-your-canonical-dataset).
+- **Matching:** configurable matching stages compare each messy address with candidate canonical addresses, from exact matches through to probabilistic matching with Splink. See [choosing a matching threshold](choosing_a_matching_threshold.md#choosing-a-matching-threshold).
+- **Output:** the best match, together with the match reason, match weight, and distinguishability score. The threshold guide explains [how to interpret these scores](choosing_a_matching_threshold.md#what-do-these-scores-mean).
 
 
 ## Example:
