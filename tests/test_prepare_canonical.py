@@ -415,7 +415,22 @@ def test_prepared_canonical_schema_matches_debug_option(
         "distinguishing_adj_start_tokens",
         "distinguishing_lexical_tokens",
     }.issubset(loaded_columns)
-    assert "clean_full_address" in columns
+    assert "clean_full_address_tokens" in columns
+    assert "clean_full_address" not in columns
+    expected_clean_address_views = (
+        canonical_relation.select(
+            "unique_id, array_to_string(clean_full_address_tokens, ' ') "
+            "AS clean_full_address"
+        )
+        .order("unique_id")
+        .fetchall()
+    )
+    actual_clean_address_views = (
+        loaded_relation.select("unique_id, clean_full_address")
+        .order("unique_id")
+        .fetchall()
+    )
+    assert actual_clean_address_views == expected_clean_address_views
     assert canonical_relation.count("*").fetchone()[0] == 3
     assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
 
@@ -434,6 +449,31 @@ def test_old_manifest_without_preparation_options_still_loads(con, prepared_fold
     loaded = load_prepared_canonical_data(prepared_folder, con=con)
 
     assert loaded.addresses.count("*").fetchone()[0] == 3
+
+
+def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
+    canonical_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    legacy_path = prepared_folder / "ukam_canonical_addresses.legacy.parquet"
+    con.execute(
+        f"""
+        COPY (
+            SELECT * EXCLUDE (clean_full_address_tokens),
+                array_to_string(clean_full_address_tokens, ' ')
+                    AS clean_full_address
+            FROM read_parquet('{canonical_path}')
+        ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+    canonical_path.unlink()
+    legacy_path.rename(canonical_path)
+
+    loaded = load_prepared_canonical_data(prepared_folder, con=con)
+
+    assert "clean_full_address" in loaded.addresses.columns
+    assert "clean_full_address_tokens" in loaded.addresses.columns
+    assert loaded.addresses.order("unique_id").select(
+        "clean_full_address_tokens"
+    ).fetchone() == (["1", "HIGH", "STREET", "LONDON"],)
 
 
 def test_prepare_show_progress_false_suppresses_live_output(
@@ -784,7 +824,13 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
+        columns=[
+            "unique_id",
+            "postcode",
+            "clean_full_address",
+            "clean_full_address_tokens",
+            "ukam_address_id",
+        ],
         row_count=3,
     )
     roadlike_places = _fake_relation(
@@ -894,7 +940,13 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     tf_relation = _fake_relation(columns=["token", "count"], row_count=4)
     inverted_relation = _fake_relation(columns=["token", "address_id"], row_count=5)
     clean_relation = _fake_relation(
-        columns=["unique_id", "postcode", "clean_full_address", "ukam_address_id"],
+        columns=[
+            "unique_id",
+            "postcode",
+            "clean_full_address",
+            "clean_full_address_tokens",
+            "ukam_address_id",
+        ],
         row_count=3,
     )
     roadlike_places = _fake_relation(

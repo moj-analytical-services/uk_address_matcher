@@ -496,6 +496,10 @@ def test_enabled_splink_path_collapses_intermediate_numeric_columns():
     assert "legacy_numeric_bits" not in prediction_columns
     assert "numeric_range_l" in prediction_columns
     assert "numeric_range_r" in prediction_columns
+    assert "numeric_tokens_l" in prediction_columns
+    assert "numeric_tokens_r" in prediction_columns
+    assert "flat_identity_l" in prediction_columns
+    assert "flat_identity_r" in prediction_columns
     assert not any(column.startswith("bf_") for column in prediction_columns)
     assert not any(column.startswith("gamma_") for column in prediction_columns)
     assert not any(column.startswith("tf_") for column in prediction_columns)

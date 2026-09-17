@@ -267,7 +267,10 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     con.execute(
         f"""
         COPY (
-            SELECT *, []::VARCHAR[] AS very_unusual_tokens_arr
+                SELECT * EXCLUDE (clean_full_address_tokens),
+                    array_to_string(clean_full_address_tokens, ' ')
+                        AS clean_full_address,
+                    []::VARCHAR[] AS very_unusual_tokens_arr
             FROM read_parquet('{canonical_path}')
         ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
