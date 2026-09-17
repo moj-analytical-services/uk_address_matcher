@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from duckdb import InvalidInputException
 
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     add_road_blocking_features,
@@ -166,6 +169,16 @@ class SplinkStage(MatchingStage):
     improved_predictions_table: str | None = field(default=None, init=False, repr=False)
     best_matches_table: str | None = field(default=None, init=False, repr=False)
 
+    _owned_splink_frames: tuple = field(default=(), init=False, repr=False)
+
+    def _release_splink_tables(self) -> None:
+        """Drop this run's Splink tables via Splink's public API."""
+        for frame in self._owned_splink_frames:
+            frame.drop_table_from_database_and_remove_from_cache(
+                force_non_splink_table=True
+            )
+        self._owned_splink_frames = ()
+
     def find_matches(
         self,
         con: duckdb.DuckDBPyConnection,
@@ -185,7 +198,10 @@ class SplinkStage(MatchingStage):
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
             improve_predictions_using_distinguishing_tokens,
         )
-        from uk_address_matcher.sql_pipeline.helpers import _uid
+        from uk_address_matcher.sql_pipeline.helpers import (
+            _drop_table_and_registered_aliases,
+            _uid,
+        )
         from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
         if explain:
@@ -320,46 +336,69 @@ class SplinkStage(MatchingStage):
         )
         self.best_matches_table = df_best_name
 
-        # Step 5: Apply thresholds and project to standard columns
-        splink_label = MatchReason.SPLINK.value
+            # Step 5: Apply thresholds and project to standard columns
+            splink_label = MatchReason.SPLINK.value
 
-        dist_filter = ""
-        if self.final_distinguishability_threshold is not None:
-            dist_filter = (
-                "AND (distinguishability IS NULL "
-                f"OR distinguishability >= {self.final_distinguishability_threshold})"
+            dist_filter = ""
+            if self.final_distinguishability_threshold is not None:
+                dist_filter = (
+                    "AND (distinguishability IS NULL "
+                    f"OR distinguishability >= {self.final_distinguishability_threshold})"
+                )
+
+            range_audit_projection = ""
+            range_audit_projection = "".join(
+                f", best_match.{column}"
+                for column in (
+                    "legacy_numeric_bits",
+                    "numeric_range_relationship",
+                    "numeric_range_guard_passed",
+                    "numeric_range_guard_reason",
+                    "numeric_range_base_bits",
+                    "numeric_range_tf_bits",
+                    "numeric_range_adjustment",
+                )
+                if column in df_best.columns
             )
 
-        range_audit_projection = ""
-        range_audit_projection = "".join(
-            f", best_match.{column}"
-            for column in (
-                "legacy_numeric_bits",
-                "numeric_range_relationship",
-                "numeric_range_guard_passed",
-                "numeric_range_guard_reason",
-                "numeric_range_base_bits",
-                "numeric_range_tf_bits",
-                "numeric_range_adjustment",
-            )
-            if column in df_best.columns
-        )
-
-        return con.sql(f"""
-            SELECT
-                best_match.ukam_address_id_r AS ukam_address_id,
-                best_match.unique_id_l AS resolved_canonical_id,
-                best_match.ukam_address_id_l AS canonical_ukam_address_id,
-                '{splink_label}' AS match_reason,
-                best_match.match_weight,
-                best_match.distinguishability
-                {range_audit_projection}
-            FROM (
-                SELECT *
-                FROM {df_best_name}
-                WHERE candidate_rank = 1
-            ) AS best_match
-            WHERE best_match.match_weight >= {self.final_match_weight_threshold}
-            {dist_filter}
-            AND best_match.unique_id_l IS NOT NULL
-        """)
+            result = con.sql(f"""
+                SELECT
+                    best_match.ukam_address_id_r AS ukam_address_id,
+                    best_match.unique_id_l AS resolved_canonical_id,
+                    best_match.ukam_address_id_l AS canonical_ukam_address_id,
+                    '{splink_label}' AS match_reason,
+                    best_match.match_weight,
+                    best_match.distinguishability
+                    {range_audit_projection}
+                FROM (
+                    SELECT *
+                    FROM {df_best_name}
+                    WHERE candidate_rank = 1
+                ) AS best_match
+                WHERE best_match.match_weight >= {self.final_match_weight_threshold}
+                {dist_filter}
+                AND best_match.unique_id_l IS NOT NULL
+            """)
+            completed = True
+            return result
+        finally:
+            # Unregister both aliases even if linker setup failed before registration.
+            for input_name in ("m_", "c_"):
+                with suppress(InvalidInputException):
+                    con.unregister(input_name)
+            self._owned_splink_frames = tuple(owned_frames)
+            if reranker_matches_table is not None:
+                _drop_table_and_registered_aliases(con, reranker_matches_table)
+            if not completed:
+                self._release_splink_tables()
+                for table_name in (
+                    self.predictions_table,
+                    self.improved_predictions_table,
+                    self.best_matches_table,
+                ):
+                    if table_name is not None:
+                        _drop_table_and_registered_aliases(con, table_name)
+                self.linker = None
+                self.predictions_table = None
+                self.improved_predictions_table = None
+                self.best_matches_table = None

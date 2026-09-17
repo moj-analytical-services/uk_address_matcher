@@ -4,7 +4,6 @@
   "retain_matching_columns": true,
   "retain_intermediate_calculation_columns": true,
   "sql_dialect": "duckdb",
-  "linker_uid": "e5bphl9c",
   "em_convergence": 0.0001,
   "max_iterations": 25,
   "bayes_factor_column_prefix": "bf_",
