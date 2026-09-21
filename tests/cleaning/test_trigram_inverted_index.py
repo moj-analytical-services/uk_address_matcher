@@ -148,6 +148,35 @@ class TestBigramGeneration:
 class TestIndexingStrategySqlExpressions:
     """Tests that the SQL expressions from IndexingStrategy produce correct results."""
 
+    def test_strategy_uses_precomputed_full_address_tokens(self, duck_con):
+        """Use the cleaned token array when the relation already provides it."""
+        from uk_address_matcher.cleaning.steps.inverted_index import (
+            TRIGRAM_INDEX,
+            _derive_keys_for_strategy,
+        )
+        from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
+
+        input_relation = duck_con.sql("""
+            SELECT
+                '1' AS unique_id,
+                'THIS STRING SHOULD NOT BE USED' AS clean_full_address,
+                ['9', 'LOVE', 'LANE', 'LONDON']::VARCHAR[]
+                    AS clean_full_address_tokens
+        """)
+        pipeline = create_sql_pipeline(
+            duck_con,
+            input_relation,
+            [_derive_keys_for_strategy(
+                TRIGRAM_INDEX,
+                token_column="clean_full_address_tokens",
+            )],
+        )
+
+        assert pipeline.run().fetchone()[1] == [
+            "9 LOVE LANE",
+            "LOVE LANE LONDON",
+        ]
+
     def test_trigram_strategy_sql(self, duck_con):
         """Test that the TRIGRAM_INDEX keys_sql_expr works correctly."""
         from uk_address_matcher.cleaning.steps.inverted_index import TRIGRAM_INDEX

@@ -348,6 +348,7 @@ def test_inferred_road_scoring_without_road_catalogue_still_matches(
         canonical_data,
         output_folder=prepared_folder,
         con=con,
+        _derive_road_catalogue=True,
         overwrite=True,
     )
 

@@ -5,6 +5,7 @@ import duckdb
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.steps import (
+    _derive_numeric_range,
     _parse_out_address_structure_premise,
     _parse_out_business_unit,
     _parse_out_flat_position_and_letter,
@@ -12,6 +13,7 @@ from uk_address_matcher.cleaning.steps import (
     _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
+    _split_numeric_tokens_to_cols,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
@@ -55,7 +57,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
             (3, 'B1', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'preserved-c'),
             (4, 'B2', 'NEW STATION RAINBOW LANE TAUNTON', 'preserved-d'),
             (5, 'C1', '9 SOLO ROAD YORK', 'preserved-e')
-        ) AS t(__ukam_row_id, unique_id, clean_full_address, source_marker)
+        ) AS t(ukam_address_id, unique_id, clean_full_address, source_marker)
         """
     )
 
@@ -64,7 +66,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
         input_relation,
         connection,
     )
-    assert result.columns.count("__ukam_row_id") == 1
+    assert result.columns.count("ukam_address_id") == 1
     actual = {
         unique_id: (distinguishing, common, source_marker)
         for unique_id, distinguishing, common, source_marker in result.project(
@@ -159,7 +161,7 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
             (2, 'U3', 'ALPHA RAINBOW LANE TAUNTON'),
             (3, 'U3', 'ALPHB RAINBOW LANE TAUNTON'),
             (4, 'U3', 'ALPHC RAINBOW LANE TAUNTON')
-        ) AS t(__ukam_row_id, unique_id, clean_full_address)
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
         """
     )
 
@@ -364,7 +366,8 @@ def test_parse_out_sub_premise_location():
     ]
 
     input_relation = connection.sql(
-        "SELECT * FROM (VALUES "
+        "SELECT *, regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[] "
+        "AS clean_full_address_tokens FROM (VALUES "
         + ",".join(f"('{address}', '{address}')" for address, _expected in test_cases)
         + ") AS t(clean_full_address, original_address_concat)"
     )
@@ -382,6 +385,83 @@ def test_parse_out_sub_premise_location():
             f"Address '{address}' expected location '{expected_location}' "
             f"but got '{row[location_idx]}'"
         )
+
+
+def test_split_numeric_tokens_to_cols_extracts_scalars_once():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (['1', '20A-22B', '20A-22B']::VARCHAR[]),
+            (['A5', '6', '7']::VARCHAR[]),
+            ([]::VARCHAR[]),
+            (NULL::VARCHAR[])
+        ) AS t(numeric_tokens)
+        """
+    )
+
+    result = (
+        _run_single_stage(
+            _split_numeric_tokens_to_cols,
+            input_relation,
+            connection,
+        )
+        .project("numeric_token_1, numeric_token_2, numeric_token_3")
+        .fetchall()
+    )
+
+    assert result == [
+        ("1", "20", "22"),
+        ("5", "6", "7"),
+        (None, None, None),
+        (None, None, None),
+    ]
+
+
+def test_derive_numeric_range_preserves_typed_flags_and_first_range():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            ('10-12', ['10-12']::VARCHAR[]),
+            ('12-10', ['12-10']::VARCHAR[]),
+            ('10-10', ['10-10']::VARCHAR[]),
+            ('10A-12B', ['10A-12B']::VARCHAR[]),
+            ('1-30', ['1-30']::VARCHAR[]),
+            ('REFERENCE 1-2', ['1-2']::VARCHAR[]),
+            ('30-40 50-60', ['30-40', '50-60']::VARCHAR[])
+        ) AS t(clean_full_address, numeric_tokens)
+        """
+    )
+
+    result = (
+        _run_single_stage(
+            _derive_numeric_range,
+            input_relation,
+            connection,
+        )
+        .project("numeric_range")
+        .fetchall()
+    )
+
+    assert result[0][0] == {
+        "raw": "10-12",
+        "lower": 10,
+        "upper": 12,
+        "width": 2,
+        "lower_suffix": None,
+        "upper_suffix": None,
+        "role": 1,
+        "flags": 0,
+        "lower_tf": None,
+    }
+    assert result[1][0]["flags"] == 1
+    assert result[2][0]["flags"] == 2
+    assert result[3][0]["flags"] == 4
+    assert result[4][0]["flags"] == 8
+    assert result[5][0]["role"] == 3
+    assert result[5][0]["flags"] == 16
+    assert result[6][0]["raw"] == "30-40"
 
 
 def test_remove_duplicate_end_tokens():

@@ -133,7 +133,9 @@ def test_chunking_yields_same_result_as_no_chunking(
 
     table_names = [name for (name,) in duck_con.execute("SHOW TABLES").fetchall()]
     leaked_chunk_tables = [
-        name for name in table_names if name.startswith("__ukam_chunk_input_")
+        name
+        for name in table_names
+        if name.startswith(("__ukam_chunk_input_", "__ukam_chunked_input_"))
     ]
     assert not leaked_chunk_tables, (
         "Chunk input tables should be cleaned by clean_data_pre_term_frequencies: "
@@ -164,17 +166,21 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         f"only_in_chunked={chunked_columns_excl_tf - set(no_chunk_rel.columns)}"
     )
 
-    ordered_columns = "postcode, unique_id, ukam_address_id"
+    ordered_columns = "postcode, unique_id"
+    comparison_columns = [
+        column for column in no_chunk_rel.columns if column != "ukam_address_id"
+    ]
     assert (
-        no_chunk_rel.order(ordered_columns).fetchall()
-        == chunked_rel.order(ordered_columns).fetchall()
-    )
-    assert [
-        row[0]
-        for row in no_chunk_rel.order(ordered_columns)
-        .select("ukam_address_id")
+        no_chunk_rel.order(ordered_columns)
+        .select(", ".join(comparison_columns))
         .fetchall()
-    ] == list(range(1, no_chunk_count + 1))
+        == chunked_rel.order(ordered_columns)
+        .select(", ".join(comparison_columns))
+        .fetchall()
+    )
+    for relation in (no_chunk_rel, chunked_rel):
+        ids = [row[0] for row in relation.select("ukam_address_id").fetchall()]
+        assert sorted(ids) == list(range(1, no_chunk_count + 1))
 
 
 @pytest.mark.parametrize("use_data_specific_tfs", [True, False])
