@@ -59,7 +59,10 @@ def improve_predictions_using_distinguishing_tokens(
     retained_column_names: list[str] = []
     if additional_columns_to_retain:
         for column in additional_columns_to_retain:
-            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns:
+            if (
+                f"{column}_l" in df_predict.columns
+                and f"{column}_r" in df_predict.columns
+            ):
                 retained_column_names.extend((f"{column}_l", f"{column}_r"))
     if "ukam_label_r" in df_predict.columns:
         retained_column_names.append("ukam_label_r")
@@ -103,9 +106,7 @@ def improve_predictions_using_distinguishing_tokens(
             )
         """
 
-    source_tokens_sql = tokens_with_postcode_sql(
-        "__token_address_tokens_r", "postcode_r"
-    )
+    source_tokens_sql = tokens_with_postcode_sql("__token_address_tokens_r", "postcode_r")
     candidate_tokens_sql = tokens_with_postcode_sql(
         "candidate.__token_address_tokens_l", "candidate.postcode_l"
     )
