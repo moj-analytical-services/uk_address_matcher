@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import shutil
-import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -71,8 +70,8 @@ INVERTED_INDEX_COMPRESSION_LEVEL = 22
 PARQUET_VERSION = "V2"
 PARQUET_ROW_GROUP_SIZE = 122_880
 
-# Sorting canonical rows by these columns improves compression locality. Any
-# remaining source columns provide deterministic tie-breakers before the ID.
+# Sorting canonical output by these columns improves Parquet compression locality.
+# ID assignment is deliberately independent of this storage ordering.
 CANONICAL_SORT_COLUMNS = (
     "postcode",
     "unique_id",
@@ -447,12 +446,6 @@ def _clear_stale_artefacts(folder: Path) -> None:
                 p.unlink()
 
 
-def _format_elapsed(elapsed_seconds: float) -> str:
-    total_seconds = int(round(max(0.0, elapsed_seconds)))
-    minutes, seconds = divmod(total_seconds, 60)
-    return f"{minutes}m {seconds:02d}s"
-
-
 def _chunk_file_name(chunk_index: int, total_chunks: int) -> str:
     return (
         "canonical_addresses_chunk_"
@@ -524,10 +517,10 @@ def prepare_canonical_folder(
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
-    derive_road_blocking_keys: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
+    _derive_road_catalogue: bool = False,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
 
@@ -557,9 +550,6 @@ def prepare_canonical_folder(
             `ukam_canonical_addresses_chunks/`.
         derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
             leading tokens that distinguish suffix-similar nearby records.
-        derive_road_blocking_keys: Whether to derive the canonical road key.
-            Disable only when no configured matching stage uses inferred-road
-            scoring or blocking.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -573,6 +563,9 @@ def prepare_canonical_folder(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
+        _derive_road_catalogue: Private opt-in to derive the road catalogue and
+            canonical road keys. Defaults to ``False`` because this adds substantial
+            compute cost and is intended for power users.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files
@@ -665,8 +658,8 @@ def prepare_canonical_folder(
         show_progress=progress_mode,
     )
 
-    if derive_road_blocking_keys:
-        logger.debug("Deriving canonical road blocking keys")
+    if _derive_road_catalogue:
+        logger.debug("Deriving canonical road catalogue and blocking keys")
         roadlike_places = derive_roadlike_places(
             df_clean,
             con,
@@ -731,7 +724,7 @@ def prepare_canonical_folder(
             con,
             canonical_storage_relation,
             addr_path,
-            sort_columns=("ukam_address_id",),
+            sort_columns=CANONICAL_SORT_COLUMNS,
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -748,7 +741,6 @@ def prepare_canonical_folder(
         output_chunk_size = (addr_count + output_chunk_count - 1) // output_chunk_count
         canonical_paths = []
         for chunk_index in range(output_chunk_count):
-            started_at = time.perf_counter()
             first_id = chunk_index * output_chunk_size + 1
             last_id = min(
                 (chunk_index + 1) * output_chunk_size,
@@ -771,18 +763,17 @@ def prepare_canonical_folder(
                 con,
                 chunk_query,
                 chunk_path,
-                sort_columns=("ukam_address_id",),
+                sort_columns=CANONICAL_SORT_COLUMNS,
                 drop_columns=canonical_drop_columns,
             )
             chunk_count = last_id - first_id + 1
             canonical_paths.append(chunk_path)
             logger.debug(
-                "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
+                "Wrote canonical output chunk %d/%d to '%s' (%d rows)",
                 chunk_index + 1,
                 output_chunk_count,
                 chunk_path,
                 chunk_count,
-                _format_elapsed(time.perf_counter() - started_at),
             )
 
     # Compute row counts once (avoids repeated full scans)
@@ -839,7 +830,9 @@ def prepare_canonical_folder(
             artefact_paths=[str(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
+            preparation_options={
+                "add_debug_features": add_debug_features,
+            },
         )
     else:
         _write_manifest_local(
@@ -848,7 +841,9 @@ def prepare_canonical_folder(
             artefact_paths=[Path(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
+            preparation_options={
+                "add_debug_features": add_debug_features,
+            },
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)

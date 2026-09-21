@@ -114,19 +114,28 @@ class Stage:
     # DuckDB-specific helpers
     registers: Optional[Dict[str, duckdb.DuckDBPyRelation]] = None
     checkpoint: bool = False
+    materialized: bool = False
     # Optional list of callables executed before the step (referenced in pipeline)
     preludes: Optional[List[Callable[[duckdb.DuckDBPyConnection], None]]] = None
 
     # Let dataclass generate eq; supply a hash consistent with eq but stable.
     def __hash__(self) -> int:
-        return hash((self.name, self.steps, self.output, self.checkpoint))
+        return hash(
+            (self.name, self.steps, self.output, self.checkpoint, self.materialized)
+        )
 
     @property
-    def fingerprint(self) -> Tuple[Tuple[str, ...], Optional[str], bool]:
-        """Stable identifier emphasising SQL content over human-readable names."""
+    def fingerprint(self) -> Tuple[str, Tuple[str, ...], Optional[str], bool, bool]:
+        """Stable identifier for a stage's ordered position and SQL content."""
 
         step_fingerprints = tuple(step.fingerprint for step in self.steps)
-        return (step_fingerprints, self.output, self.checkpoint)
+        return (
+            self.name,
+            step_fingerprints,
+            self.output,
+            self.checkpoint,
+            self.materialized,
+        )
 
     def _format_cte_steps(self) -> List[str]:
         """Return formatted plan lines detailing the queued CTE fragments."""
@@ -243,6 +252,7 @@ def pipeline_stage(
     tags: Optional[Union[str, Iterable[str]]] = None,
     depends_on: Optional[Union[str, Iterable[str]]] = None,
     checkpoint: bool = False,
+    materialized: bool = False,
     stage_output: Optional[str] = None,
     stage_registers: Optional[dict] = None,
     preludes: Optional[list] = None,
@@ -276,6 +286,7 @@ def pipeline_stage(
                 output=stage_output,
                 registers=dict(stage_registers) if stage_registers else None,
                 checkpoint=checkpoint,
+                materialized=materialized,
                 preludes=list(preludes) if preludes else None,
             )
 

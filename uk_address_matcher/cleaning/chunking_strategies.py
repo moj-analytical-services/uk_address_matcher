@@ -274,7 +274,6 @@ def derive_roadlike_places(
     *,
     postcode_districts_per_batch: int | None = None,
     debug_options: Optional[DebugOptions] = None,
-    include_commercial_roadlike_places: bool = False,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
     """Build a global roadlike-place catalogue from canonical addresses.
@@ -282,9 +281,8 @@ def derive_roadlike_places(
     The input must already be canonical-cleaned, including ``clean_full_address``
     and ``numeric_tokens``. Road-specific prepared fields are materialized once;
     candidate extraction is a single pass by default. When ``classificationcode``
-    is available, only top-level ``R`` rows contribute to the catalogue unless
-    commercial inclusion is explicitly requested. Postcode-district batching is
-    available only as a memory-constrained fallback.
+    is available, only top-level ``R`` rows contribute to the catalogue.
+    Postcode-district batching is available only as a memory-constrained fallback.
     """
     if postcode_districts_per_batch is not None and postcode_districts_per_batch < 1:
         raise ValueError("postcode_districts_per_batch must be at least 1")
@@ -297,34 +295,32 @@ def derive_roadlike_places(
             f"missing columns: {missing_columns}"
         )
 
-    include_commercial = include_commercial_roadlike_places
     road_catalogue_source = canonical_address_table
     road_catalogue_row_count: int | None = None
-    if not include_commercial:
-        if "classificationcode" not in canonical_address_table.columns:
-            logger.warning(
-                "Residential road catalogue filter requested, but "
-                "classificationcode is unavailable; processing all canonical rows"
+    if "classificationcode" not in canonical_address_table.columns:
+        logger.warning(
+            "Residential road catalogue filter requested, but "
+            "classificationcode is unavailable; processing all canonical rows"
+        )
+    else:
+        filtered_source = con.sql(f"""
+            SELECT *
+            FROM ({canonical_address_table.sql_query()}) AS canonical
+            WHERE substr(CAST(classificationcode AS VARCHAR), 1, 1) = 'R'
+        """)
+        filtered_row_count = filtered_source.count("*").fetchone()[0]
+        if filtered_row_count:
+            road_catalogue_source = filtered_source
+            road_catalogue_row_count = filtered_row_count
+            logger.info(
+                "Building residential road catalogue from %s canonical rows",
+                filtered_row_count,
             )
         else:
-            filtered_source = con.sql(f"""
-                SELECT *
-                FROM ({canonical_address_table.sql_query()}) AS canonical
-                WHERE substr(CAST(classificationcode AS VARCHAR), 1, 1) = 'R'
-            """)
-            filtered_row_count = filtered_source.count("*").fetchone()[0]
-            if filtered_row_count:
-                road_catalogue_source = filtered_source
-                road_catalogue_row_count = filtered_row_count
-                logger.info(
-                    "Building residential road catalogue from %s canonical rows",
-                    filtered_row_count,
-                )
-            else:
-                logger.warning(
-                    "No residential canonical rows matched classificationcode; "
-                    "processing all canonical rows"
-                )
+            logger.warning(
+                "No residential canonical rows matched classificationcode; "
+                "processing all canonical rows"
+            )
 
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()

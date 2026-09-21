@@ -284,6 +284,7 @@ class AddressMatcher:
                 self._roadlike_places = derive_roadlike_places(
                     self._canonical_clean,
                     self.con,
+                    debug_options=self.debug_options,
                     show_progress=self.show_progress,
                 )
                 self._canonical_clean = _add_canonical_road_blocking_keys(

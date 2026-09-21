@@ -43,7 +43,7 @@ def log_stage_start(
 def log_stage_complete(
     stage_label: str,
     total_records: int,
-    elapsed_seconds: float,
+    elapsed_seconds: float | None = None,
     *,
     progress_mode: ProgressMode,
 ) -> None:
@@ -51,12 +51,15 @@ def log_stage_complete(
     if progress_mode == "off":
         return
 
-    logger.info(
-        "%s completed: %s records in %s",
-        stage_label,
-        f"{total_records:,}",
-        _format_elapsed_brief(elapsed_seconds),
-    )
+    if elapsed_seconds is None:
+        logger.info("%s completed: %s records", stage_label, f"{total_records:,}")
+    else:
+        logger.info(
+            "%s completed: %s records in %s",
+            stage_label,
+            f"{total_records:,}",
+            _format_elapsed_brief(elapsed_seconds),
+        )
 
 
 def log_chunk_progress(
