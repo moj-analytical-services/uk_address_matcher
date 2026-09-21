@@ -15,7 +15,7 @@ Fast, simple address matching (geocoding) in Python.
 - **Simple.** Setup in seconds, runs on a laptop. No separate infrastructure of services needed.
 - **Fast.** Match 100,000 addresses in ~30 seconds.[^1]
 - **Proven accuracy.** We use public, labelled datasets to measure and document accuracy.
-- **Support for Ordnance Survey data.**  We provide a automated build pipeline for users wishing to match to Ordnance Survey data.  Matching to any other canonical dataset is also supported.
+- **\[OPTIONAL\] Support for Ordnance Survey data.** We provide an automated build pipeline for users wishing to match to Ordnance Survey data. Matching to any other canonical dataset is also supported.
 
 The end-to-end process of matching 100,000 addresses to Ordnance Survey data, including all software downloads and data processing takes:[^2]
 
@@ -34,7 +34,7 @@ pip install uk_address_matcher
 
 <img src="assets/images/uk_address_matcher_dfd.excalidraw.png" alt="Data flow diagram showing how uk_address_matcher cleans and matches addresses" width="100%">
 
-- **\[OPTIONAL\]** - Construct Ordnance Survey canonical data using [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder). Skip this step if you already have a canonical dataset or are using another source.
+- **\[OPTIONAL\]**: Construct Ordnance Survey canonical data using [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder). Skip this step if you already have a canonical dataset or are using another source.
 - **Input:** provide a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](get_started.md#input-data-requirements).
 - **Preparation:** addresses are cleaned, standardised, and enriched with useful features such as postcodes. See the [canonical dataset preprocessing guidance](get_started.md#choose-whether-to-pre-process-your-canonical-dataset).
 - **Matching:** configurable matching stages compare each messy address with candidate canonical addresses, from exact matches through to probabilistic matching with Splink. See [choosing a matching threshold](choosing_a_matching_threshold.md#choosing-a-matching-threshold).
