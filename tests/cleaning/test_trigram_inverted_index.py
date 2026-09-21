@@ -166,10 +166,12 @@ class TestIndexingStrategySqlExpressions:
         pipeline = create_sql_pipeline(
             duck_con,
             input_relation,
-            [_derive_keys_for_strategy(
-                TRIGRAM_INDEX,
-                token_column="clean_full_address_tokens",
-            )],
+            [
+                _derive_keys_for_strategy(
+                    TRIGRAM_INDEX,
+                    token_column="clean_full_address_tokens",
+                )
+            ],
         )
 
         assert pipeline.run().fetchone()[1] == [
