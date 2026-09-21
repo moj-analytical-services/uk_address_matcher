@@ -131,9 +131,7 @@ def test_packaged_settings_include_promoted_commercial_features():
 
     lexical_levels = {
         level["label_for_charts"]: level
-        for level in comparisons["distinguishing_lexical_tokens"][
-            "comparison_levels"
-        ]
+        for level in comparisons["distinguishing_lexical_tokens"]["comparison_levels"]
     }
     assert (
         lexical_levels["No lexical distinguishing tokens present (-2)"]["m_probability"]
@@ -193,9 +191,7 @@ def test_packaged_settings_include_promoted_commercial_features():
 
     numeric_context_conditions = [
         level["sql_condition"]
-        for level in comparisons["address_structure_numeric_context"][
-            "comparison_levels"
-        ]
+        for level in comparisons["address_structure_numeric_context"]["comparison_levels"]
         if "clean_full_address_l" in level["sql_condition"]
     ]
     assert len(numeric_context_conditions) == 3

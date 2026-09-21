@@ -271,8 +271,7 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"]
-        == "distinguishing_ordered_signature"
+        if comparison["output_column_name"] == "distinguishing_ordered_signature"
     )
     levels = comparison["comparison_levels"]
 
@@ -395,8 +394,7 @@ def test_postcode_exact_safe_gap_level_matches_expected_rows(
     comparison = next(
         comparison
         for comparison in settings["comparisons"]
-        if comparison["output_column_name"]
-        == "distinguishing_ordered_signature"
+        if comparison["output_column_name"] == "distinguishing_ordered_signature"
     )
     safe_gap_level = CustomLevel(
         comparison["comparison_levels"][1]["sql_condition"],
