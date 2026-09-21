@@ -70,6 +70,7 @@ def _prepare_inferred_road_scoring_features(
 SPLINK_POST_LINKAGE_COLUMNS = (
     "common_end_tokens_hist",
     "clean_full_address",
+    "postcode",
 )
 
 
@@ -264,6 +265,7 @@ class SplinkStage(MatchingStage):
                 retain_intermediate_calculation_columns=True,
                 settings=self.settings,
                 owned_splink_frames=owned_frames,
+                retain_matching_columns=False,
             )
 
             self.linker = linker
@@ -314,6 +316,8 @@ class SplinkStage(MatchingStage):
                 ]
                 or None,
                 numeric_range_reranker=numeric_range_reranker,
+                df_addresses_to_match=df_unmatched,
+                df_addresses_to_search_within=df_canonical,
             )
             reranker_matches_table = df_improved.alias
             df_improved = relation_markers.improve_predictions_using_relation_markers(
