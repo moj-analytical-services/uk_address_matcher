@@ -237,11 +237,18 @@ MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
 ]
 
 
+def _token_array_expression(token_column: str) -> str:
+    if token_column == "clean_full_address":
+        return "regexp_split_to_array(trim(clean_full_address), '\\s+')"
+    return token_column
+
+
 def _derive_keys_for_strategy(
     strategy: PhysicalIndexStrategy,
     *,
     num_of_chunks: int | None = None,
     chunk_index: int | None = None,
+    token_column: str = "clean_full_address",
 ):
     """Create a stage deriving canonical keys for one physical strategy."""
     chunked = num_of_chunks is not None and chunk_index is not None
@@ -262,6 +269,7 @@ def _derive_keys_for_strategy(
                 f"__k -> (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
                 ")"
             )
+        token_array_expression = _token_array_expression(token_column)
         return f"""
         SELECT
             unique_id,
@@ -269,8 +277,7 @@ def _derive_keys_for_strategy(
         FROM (
             SELECT
                 unique_id,
-                clean_full_address,
-                regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
+                {token_array_expression} AS __tokens
             FROM {{input}}
         ) AS tokenised
         """
@@ -350,6 +357,8 @@ def _build_inverted_index_from_scalar_keys(strategy: PhysicalIndexStrategy):
 
 def _lookup_keys_in_inverted_index(
     strategies: Sequence[InvertedIndexLookupStrategy] | None = None,
+    *,
+    token_column: str = "clean_full_address",
 ):
     """Create the transient source-key lookup stage."""
     lookup_strategies = tuple(strategies or DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES)
@@ -367,9 +376,16 @@ def _lookup_keys_in_inverted_index(
         tags="inverted_index",
     )
     def _stage():
+        token_array_expression = _token_array_expression(token_column)
         base_sql = """
-        SELECT *, regexp_split_to_array(trim(clean_full_address), '\\s+') AS __tokens
+        SELECT *
         FROM {input}
+        """
+        tokenised_sql = f"""
+        SELECT
+            unique_id,
+            {token_array_expression} AS __tokens
+        FROM {{base}}
         """
         union_parts = []
         for strategy in lookup_strategies:
@@ -387,7 +403,7 @@ def _lookup_keys_in_inverted_index(
                 f"{strategy.maximum_posting_size} AS __maximum_posting_size, "
                 f"{strategy.transformation_cost} AS __transformation_cost, "
                 f"{strategy.lookup_precedence} AS __lookup_precedence "
-                "FROM {base}"
+                "FROM {tokenised}"
             )
         unnested_keys_sql = " UNION ALL ".join(union_parts)
 
@@ -474,7 +490,7 @@ def _lookup_keys_in_inverted_index(
         """
         final_sql = """
         SELECT
-            base.* EXCLUDE (__tokens),
+            base.*,
             COALESCE(candidates.exploding_unique_ids, []) AS exploding_unique_ids,
             COALESCE(
                 scores.signature_score_map,
@@ -490,7 +506,10 @@ def _lookup_keys_in_inverted_index(
         LEFT JOIN {score_map} AS scores
           ON base.unique_id = scores.__messy_uid
         """
-        steps = [CTEStep("base", base_sql)]
+        steps = [
+            CTEStep("base", base_sql),
+            CTEStep("tokenised", tokenised_sql),
+        ]
         steps.extend(
             [
                 CTEStep("unnested_keys", unnested_keys_sql),

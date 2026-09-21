@@ -336,14 +336,102 @@ def roadlike_place_prepared_input_sql(
     """
 
 
+def roadlike_place_prepared_candidate_sources_sql(source_relation: str) -> str:
+    """Build the shared source rows used by terminal and fallback candidates."""
+    suffix_pattern = suffix_peel_regex_sql_literal()
+    raw_text_pattern = sql_text(AMBIGUOUS_ADDRESS_PATTERN)
+    facility_candidate_pattern = sql_text(FACILITY_CANDIDATE_PATTERN)
+    return f"""
+        WITH source_rows AS (
+            SELECT
+                CAST(unique_id AS VARCHAR) AS address_id,
+                clean_full_address,
+                regexp_replace(
+                    upper(coalesce(postcode, '')), '[^A-Z0-9]', '', 'g'
+                ) AS full_postcode,
+                postcode_district,
+                rightmost_numeric_value,
+                rightmost_numeric_position AS numeric_anchor,
+                peeled_tokens AS address_tokens,
+                numeric_tokens,
+                regexp_matches(
+                    upper(clean_full_address), {facility_candidate_pattern}
+                ) AS has_facility_clause
+            FROM {source_relation}
+            WHERE NOT regexp_matches(upper(clean_full_address), {raw_text_pattern})
+              AND rightmost_numeric_position IS NOT NULL
+        ), facility_addresses AS (
+            SELECT
+                address_id,
+                full_postcode,
+                postcode_district,
+                numeric_tokens,
+                string_split(
+                    trim(regexp_replace(
+                        {facility_clause_removal_sql("upper(clean_full_address)")},
+                        '{suffix_pattern}', ''
+                    )),
+                    ' '
+                ) AS address_tokens
+            FROM source_rows
+            WHERE has_facility_clause
+        ), facility_anchors AS (
+            SELECT
+                *,
+                list_max(list_transform(
+                    range(1, array_length(address_tokens) + 1),
+                    position -> CASE
+                        WHEN list_contains(
+                            numeric_tokens, list_extract(address_tokens, position)
+                        ) THEN position
+                    END
+                )) AS numeric_anchor
+            FROM facility_addresses
+        ), candidate_sources AS (
+            SELECT
+                address_id,
+                full_postcode,
+                postcode_district,
+                rightmost_numeric_value,
+                numeric_anchor,
+                address_tokens,
+                list_slice(
+                    address_tokens,
+                    numeric_anchor + 1,
+                    array_length(address_tokens)
+                ) AS road_tail_tokens,
+                true AS allow_truncated_windows
+            FROM source_rows
+            WHERE NOT has_facility_clause
+            UNION ALL
+            SELECT
+                address_id,
+                full_postcode,
+                postcode_district,
+                list_extract(address_tokens, numeric_anchor)
+                    AS rightmost_numeric_value,
+                numeric_anchor,
+                address_tokens,
+                list_slice(
+                    address_tokens,
+                    numeric_anchor + 1,
+                    array_length(address_tokens)
+                ) AS road_tail_tokens,
+                false AS allow_truncated_windows
+            FROM facility_anchors
+            WHERE numeric_anchor IS NOT NULL
+        )
+        SELECT * FROM candidate_sources
+    """
+
+
 def roadlike_place_prepared_candidate_sql(
     source_relation: str,
     *,
     catalogue_width_relation: str | None = None,
+    candidate_source_relation: str | None = None,
 ) -> str:
     """Build terminal-first candidates from prepared canonical rows."""
-    suffix_pattern = suffix_peel_regex_sql_literal()
-    raw_text_pattern = sql_text(AMBIGUOUS_ADDRESS_PATTERN)
     block_candidate_pattern = sql_text(BLOCK_CANDIDATE_PATTERN)
     facility_candidate_pattern = sql_text(FACILITY_CANDIDATE_PATTERN)
     road_terminal_pattern = sql_text(
@@ -418,84 +506,15 @@ def roadlike_place_prepared_candidate_sql(
             WHERE NOT regexp_matches(candidate_phrase, {block_candidate_pattern})
         )
         """
+    candidate_source_query = (
+        f"SELECT * FROM {candidate_source_relation}"
+        if candidate_source_relation is not None
+        else roadlike_place_prepared_candidate_sources_sql(source_relation)
+    )
     return f"""
-        WITH source_rows AS (
-            SELECT
-                CAST(unique_id AS VARCHAR) AS address_id,
-                clean_full_address,
-                regexp_replace(
-                    upper(coalesce(postcode, '')), '[^A-Z0-9]', '', 'g'
-                ) AS full_postcode,
-                postcode_district,
-                rightmost_numeric_value,
-                rightmost_numeric_position AS numeric_anchor,
-                peeled_tokens AS address_tokens,
-                numeric_tokens,
-                regexp_matches(
-                    upper(clean_full_address), {facility_candidate_pattern}
-                ) AS has_facility_clause
-            FROM {source_relation}
-            WHERE NOT regexp_matches(upper(clean_full_address), {raw_text_pattern})
-              AND rightmost_numeric_position IS NOT NULL
-        ), facility_addresses AS (
-            SELECT
-                address_id,
-                full_postcode,
-                postcode_district,
-                numeric_tokens,
-                string_split(
-                    trim(regexp_replace(
-                        {facility_clause_removal_sql("upper(clean_full_address)")},
-                        '{suffix_pattern}', ''
-                    )),
-                    ' '
-                ) AS address_tokens
-            FROM source_rows
-            WHERE has_facility_clause
-        ), facility_anchors AS (
-            SELECT
-                *,
-                list_max(list_transform(
-                    range(1, array_length(address_tokens) + 1),
-                    position -> CASE
-                        WHEN list_contains(
-                            numeric_tokens, list_extract(address_tokens, position)
-                        ) THEN position
-                    END
-                )) AS numeric_anchor
-            FROM facility_addresses
-        ), candidate_sources AS (
-            SELECT
-                address_id,
-                full_postcode,
-                postcode_district,
-                rightmost_numeric_value,
-                numeric_anchor,
-                address_tokens,
-                list_slice(
-                    address_tokens,
-                    numeric_anchor + 1,
-                    array_length(address_tokens)
-                ) AS road_tail_tokens,
-                true AS allow_truncated_windows
-            FROM source_rows
-            WHERE NOT has_facility_clause
-            UNION ALL
-            SELECT
-                address_id,
-                full_postcode,
-                postcode_district,
-                list_extract(address_tokens, numeric_anchor) AS rightmost_numeric_value,
-                numeric_anchor,
-                address_tokens,
-                list_slice(
-                    address_tokens,
-                    numeric_anchor + 1,
-                    array_length(address_tokens)
-                ) AS road_tail_tokens,
-                false AS allow_truncated_windows
-            FROM facility_anchors
-            WHERE numeric_anchor IS NOT NULL
+        WITH candidate_sources AS (
+            SELECT *
+            FROM ({candidate_source_query}) AS prepared_candidate_sources
         ){width_support_cte}, terminal_candidate_windows AS (
             SELECT
                 address_id,
@@ -516,7 +535,7 @@ def roadlike_place_prepared_candidate_sql(
                     ' '
                 ) AS candidate_phrase,
                 list_extract(address_tokens, ends.end_position) AS terminal_token
-                        FROM candidate_sources
+            FROM candidate_sources
             CROSS JOIN unnest(list_filter(
                 range(numeric_anchor + 2, array_length(address_tokens) + 1),
                 position -> regexp_matches(
@@ -564,10 +583,10 @@ def roadlike_place_prepared_candidate_sql(
             ) AS starts(start_position)
             CROSS JOIN (VALUES (2), (3)) AS widths(width)
             {fallback_width_join}
-            WHERE terminal_addresses.address_id IS NULL
+                        WHERE terminal_addresses.address_id IS NULL
                             AND (
-                                        allow_truncated_windows
-                                        OR starts.start_position + widths.width - 1
+                                    allow_truncated_windows
+                                    OR starts.start_position + widths.width - 1
                                                 <= array_length(address_tokens)
                             )
         {fallback_filter_ctes}

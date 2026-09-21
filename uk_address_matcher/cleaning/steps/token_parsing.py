@@ -56,22 +56,28 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     *,
     include_input_columns: bool = True,
     carry_neighbour_tokens: bool = True,
+    use_precomputed_tokens: bool = False,
 ):
     """Split each address around its longest suffix shared by a local neighbour."""
-    tokenised_addresses_sql = r"""
+    token_expression = (
+        "clean_full_address_tokens::VARCHAR[]"
+        if use_precomputed_tokens
+        else "regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]"
+    )
+    tokenised_addresses_sql = f"""
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         unique_id,
         clean_full_address,
-        regexp_split_to_array(clean_full_address, '\s+')::VARCHAR[] AS __tokens
-    FROM {input} AS input_address
+        {token_expression} AS __tokens
+    FROM {{input}} AS input_address
     """
 
     neighbour_value = "__tokens" if carry_neighbour_tokens else "clean_full_address"
     neighbour_suffix = "tokens" if carry_neighbour_tokens else "address"
     neighbouring_addresses_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         unique_id,
         __tokens,
         lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
@@ -91,7 +97,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         ORDER BY
             reverse(clean_full_address),
             CAST(unique_id AS VARCHAR),
-            __ukam_row_id
+            ukam_address_id
     )
     """.replace("{neighbour_value}", neighbour_value).replace(
         "{neighbour_suffix}", neighbour_suffix
@@ -135,7 +141,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
     suffix_lengths_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         __tokens,
         {suffix_length_expressions}
     FROM {neighbouring_addresses} AS neighbours
@@ -146,7 +152,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
     maximum_suffix_lengths_sql = """
     SELECT
-        suffix_lengths.__ukam_row_id,
+        suffix_lengths.ukam_address_id,
         suffix_lengths.__tokens,
         greatest(
             __lag_1_common_suffix_length,
@@ -160,12 +166,12 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     """
 
     output_columns_sql = (
-        "input_address.*," if include_input_columns else "maximums.__ukam_row_id,"
+        "input_address.*," if include_input_columns else "maximums.ukam_address_id,"
     )
     output_source_sql = (
         "FROM {input} AS input_address\n"
         "LEFT JOIN {maximum_suffix_lengths} AS maximums\n"
-        "  ON input_address.__ukam_row_id = maximums.__ukam_row_id"
+        "  ON input_address.ukam_address_id = maximums.ukam_address_id"
         if include_input_columns
         else "FROM {maximum_suffix_lengths} AS maximums"
     )
@@ -478,83 +484,56 @@ def _parse_out_sub_premise_location():
     positives from place names such as commercial centres later in the string.
     """
 
-    tokens_sql = r"""
-    SELECT
-        regexp_split_to_array(
-            i.clean_full_address, '\s+'
-        ) AS sub_premise_location_tokens,
-        i.*
-    FROM {input} i
-    """
-
     prefix_sql = r"""
     SELECT
         i.*,
-        array_to_string(
-            list_slice(
-                sub_premise_location_tokens,
+        list_slice(
+                i.clean_full_address_tokens,
                 1,
                 LEAST(
-                    len(sub_premise_location_tokens),
+                    len(i.clean_full_address_tokens),
                     GREATEST(
                         6,
                         CAST(
-                            CEIL(len(sub_premise_location_tokens) / 2.0)
+                            CEIL(len(i.clean_full_address_tokens) / 2.0)
                             AS BIGINT
                         )
                     )
                 )
-            ),
-            ' '
-        ) AS sub_premise_location_prefix
-    FROM {tokenised} i
+            ) AS sub_premise_location_prefix_tokens
+    FROM {input} i
     """
 
     final_sql = r"""
     SELECT
         * EXCLUDE (
-            sub_premise_location_tokens,
-            sub_premise_location_prefix
+            sub_premise_location_prefix_tokens
         ),
         CASE
             WHEN NOT (
                 flat_positional IS NOT NULL
                 OR flat_letter IS NOT NULL
                 OR flat_number IS NOT NULL
-                OR regexp_matches(clean_full_address, '\b(FLAT|MAISONETTE)\b')
+                OR list_contains(clean_full_address_tokens, 'FLAT')
+                OR list_contains(clean_full_address_tokens, 'MAISONETTE')
             ) THEN NULL
-            WHEN regexp_matches(
-                sub_premise_location_prefix, '\bRIGHT HAND SIDE\b'
-            )
-                OR regexp_matches(
-                    sub_premise_location_prefix, '\bRIGHT SIDE\b'
-                )
-                OR regexp_matches(sub_premise_location_prefix, '\bRIGHT\b')
+            WHEN list_contains(sub_premise_location_prefix_tokens, 'RIGHT')
                 THEN 'RIGHT'
-            WHEN regexp_matches(
-                sub_premise_location_prefix, '\bLEFT HAND SIDE\b'
-            )
-                OR regexp_matches(sub_premise_location_prefix, '\bLEFT SIDE\b')
-                OR regexp_matches(sub_premise_location_prefix, '\bLEFT\b')
+            WHEN list_contains(sub_premise_location_prefix_tokens, 'LEFT')
                 THEN 'LEFT'
-            WHEN regexp_matches(sub_premise_location_prefix, '\bCENTRE\b')
-                OR regexp_matches(sub_premise_location_prefix, '\bCENTER\b')
+            WHEN list_contains(sub_premise_location_prefix_tokens, 'CENTRE')
+                OR list_contains(sub_premise_location_prefix_tokens, 'CENTER')
                 THEN 'CENTRE'
-            WHEN regexp_matches(sub_premise_location_prefix, '\bFRONT\b')
+            WHEN list_contains(sub_premise_location_prefix_tokens, 'FRONT')
                 THEN 'FRONT'
-            WHEN regexp_matches(sub_premise_location_prefix, '\bREAR OF\b')
-                OR regexp_matches(sub_premise_location_prefix, '\bREAR\b')
+            WHEN list_contains(sub_premise_location_prefix_tokens, 'REAR')
                 THEN 'REAR'
             ELSE NULL
         END AS sub_premise_location
     FROM {with_prefix}
     """
 
-    return [
-        CTEStep("tokenised", tokens_sql),
-        CTEStep("with_prefix", prefix_sql),
-        CTEStep("final", final_sql),
-    ]
+    return [CTEStep("with_prefix", prefix_sql), CTEStep("final", final_sql)]
 
 
 @pipeline_stage(
@@ -744,6 +723,39 @@ def _clean_address_string_second_pass():
     from {{input}}
     """
     return sql
+
+
+@pipeline_stage(
+    name="clean_address_string_second_pass_and_tokenise",
+    description=("Clean address_without_numbers and derive its token array in one stage"),
+    tags=["cleaning", "tokenisation"],
+)
+def _clean_address_string_second_pass_and_tokenise():
+    fn_call = construct_nested_call(
+        "address_without_numbers",
+        [remove_multiple_spaces, trim],
+    )
+    return [
+        CTEStep(
+            "cleaned",
+            f"""
+            SELECT
+                * EXCLUDE (address_without_numbers),
+                {fn_call} AS address_without_numbers
+            FROM {{input}}
+            """,
+        ),
+        CTEStep(
+            "final",
+            r"""
+            SELECT
+                *,
+                regexp_split_to_array(address_without_numbers, '\s+')
+                    AS __address_without_numbers_tokenised
+            FROM {cleaned}
+            """,
+        ),
+    ]
 
 
 GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
