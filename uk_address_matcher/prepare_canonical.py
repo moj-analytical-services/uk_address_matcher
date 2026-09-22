@@ -63,6 +63,7 @@ _MANAGED_FILES = [
     f"{MANIFEST_FILENAME}.tmp",
 ]
 
+
 @dataclass(frozen=True)
 class _ParquetArtefactSettings:
     """Parquet format, compression, and ordering settings for one artefact."""
