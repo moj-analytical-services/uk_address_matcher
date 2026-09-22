@@ -24,6 +24,135 @@ def _run_single_stage(stage_factory, input_relation, connection):
     return pipeline.run(DebugOptions(pretty_print_sql=False))
 
 
+def _run_adjacent_stage(input_relation, connection, *, use_precomputed_tokens=False):
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+            use_precomputed_tokens=use_precomputed_tokens
+        )
+    )
+    return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def _run_legacy_adjacent_query(input_relation, connection):
+    neighbour_names = ("lag_1", "lag_2", "lag_3", "lead_1", "lead_2", "lead_3")
+    suffix_length_expressions = []
+    for neighbour_name in neighbour_names:
+        suffix_length_expressions.append(
+            f"""
+            CASE
+                WHEN __{neighbour_name}_unique_id IS NULL
+                    OR __{neighbour_name}_unique_id = unique_id
+                    THEN 0
+                ELSE COALESCE(
+                    list_position(
+                        list_transform(
+                            list_zip(
+                                list_reverse(__tokens),
+                                list_reverse(__{neighbour_name}_tokens),
+                                true
+                            ),
+                            token_pair -> token_pair[1] != token_pair[2]
+                        ),
+                        true
+                    ) - 1,
+                    least(
+                        len(__tokens),
+                        len(__{neighbour_name}_tokens)
+                    )
+                )
+            END AS __{neighbour_name}_common_suffix_length
+            """
+        )
+
+    input_query = input_relation.sql_query()
+    return connection.sql(
+        f"""
+        WITH tokenised_addresses AS (
+            SELECT
+                ukam_address_id,
+                unique_id,
+                clean_full_address,
+                string_split(clean_full_address, ' ')::VARCHAR[] AS __tokens
+            FROM ({input_query}) AS input_address
+        ),
+        neighbouring_addresses AS (
+            SELECT
+                ukam_address_id,
+                unique_id,
+                __tokens,
+                lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
+                lag(__tokens, 1) OVER address_order AS __lag_1_tokens,
+                lag(unique_id, 2) OVER address_order AS __lag_2_unique_id,
+                lag(__tokens, 2) OVER address_order AS __lag_2_tokens,
+                lag(unique_id, 3) OVER address_order AS __lag_3_unique_id,
+                lag(__tokens, 3) OVER address_order AS __lag_3_tokens,
+                lead(unique_id, 1) OVER address_order AS __lead_1_unique_id,
+                lead(__tokens, 1) OVER address_order AS __lead_1_tokens,
+                lead(unique_id, 2) OVER address_order AS __lead_2_unique_id,
+                lead(__tokens, 2) OVER address_order AS __lead_2_tokens,
+                lead(unique_id, 3) OVER address_order AS __lead_3_unique_id,
+                lead(__tokens, 3) OVER address_order AS __lead_3_tokens
+            FROM tokenised_addresses
+            WINDOW address_order AS (
+                ORDER BY
+                    reverse(clean_full_address),
+                    CAST(unique_id AS VARCHAR),
+                    ukam_address_id
+            )
+        ),
+        suffix_lengths AS (
+            SELECT
+                ukam_address_id,
+                __tokens,
+                {", ".join(suffix_length_expressions)}
+            FROM neighbouring_addresses
+        ),
+        maximum_suffix_lengths AS (
+            SELECT
+                ukam_address_id,
+                __tokens,
+                greatest(
+                    __lag_1_common_suffix_length,
+                    __lag_2_common_suffix_length,
+                    __lag_3_common_suffix_length,
+                    __lead_1_common_suffix_length,
+                    __lead_2_common_suffix_length,
+                    __lead_3_common_suffix_length
+                ) AS __max_common_suffix_length
+            FROM suffix_lengths
+        )
+        SELECT
+            ukam_address_id,
+            CASE
+                WHEN COALESCE(__max_common_suffix_length, 0) > 0
+                    THEN COALESCE(
+                        list_slice(
+                            __tokens,
+                            1,
+                            len(__tokens) - __max_common_suffix_length
+                        ),
+                        []::VARCHAR[]
+                    )
+                ELSE []::VARCHAR[]
+            END::VARCHAR[] AS distinguishing_adj_start_tokens,
+            CASE
+                WHEN COALESCE(__max_common_suffix_length, 0) > 0
+                    THEN COALESCE(
+                        list_slice(
+                            __tokens,
+                            len(__tokens) - __max_common_suffix_length + 1,
+                            len(__tokens)
+                        ),
+                        []::VARCHAR[]
+                    )
+                ELSE COALESCE(__tokens, []::VARCHAR[])
+            END::VARCHAR[] AS common_adj_start_tokens
+        FROM maximum_suffix_lengths
+        """
+    )
+
+
 def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():
     connection = duckdb.connect()
     input_relation = connection.sql("""
@@ -149,6 +278,154 @@ def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
     assert all(distinguishing for _, distinguishing, _ in rows)
     assert all(
         common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows
+    )
+    assert "clean_full_address_tokens" in result.columns
+
+
+def test_separate_distinguishing_tokens_matches_legacy_for_duplicate_ids():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT
+            *,
+            string_split(clean_full_address, ' ')::VARCHAR[]
+                AS clean_full_address_tokens
+        FROM (VALUES
+            (1, 'A', '1 ALPHA HIGH STREET LONDON'),
+            (2, 'A', '2 ALPHA HIGH STREET LONDON'),
+            (3, 'A', '3 ALPHA HIGH STREET LONDON'),
+            (4, 'B', '4 ALPHA HIGH STREET LONDON'),
+            (5, 'C', 'SAME ROAD'),
+            (6, 'D', 'SAME ROAD'),
+            (7, 'E', 'ORANGE'),
+            (8, 'F', 'PURPLE')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = _run_adjacent_stage(
+        input_relation,
+        connection,
+        use_precomputed_tokens=True,
+    ).project(
+        """
+        ukam_address_id,
+        distinguishing_adj_start_tokens,
+        common_adj_start_tokens
+        """
+    ).order("ukam_address_id").fetchall()
+    expected = _run_legacy_adjacent_query(
+        connection.sql(input_relation.sql_query()), connection
+    ).project(
+        """
+        ukam_address_id,
+        distinguishing_adj_start_tokens,
+        common_adj_start_tokens
+        """
+    ).order("ukam_address_id").fetchall()
+
+    assert actual == expected
+    assert actual[:4] == [
+        (1, ["1"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (2, ["2"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (3, ["3"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (4, ["4"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_handles_boundary_and_no_common_suffix():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'A', 'ORANGE'),
+            (2, 'B', 'PURPLE')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        input_relation,
+        connection,
+    ).project(
+        "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+    ).order("ukam_address_id").fetchall()
+
+    assert actual == [
+        (1, [], ["ORANGE"]),
+        (2, [], ["PURPLE"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_handles_whole_shared_address():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'A', 'SAME ROAD'),
+            (2, 'B', 'SAME ROAD')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        input_relation,
+        connection,
+    ).project(
+        "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+    ).order("ukam_address_id").fetchall()
+
+    assert actual == [
+        (1, [], ["SAME", "ROAD"]),
+        (2, [], ["SAME", "ROAD"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_can_choose_best_left_or_right_neighbour():
+    connection = duckdb.connect()
+    left_input = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'LEFT', '1 COMMON ROAD LONDON'),
+            (2, 'TARGET', '2 COMMON ROAD LONDON'),
+            (3, 'RIGHT', '3 ZZZ LONDON')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+    right_input = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'LEFT', '1 AAA LONDON'),
+            (2, 'TARGET', '2 COMMON ROAD LONDON'),
+            (3, 'RIGHT', '3 COMMON ROAD LONDON')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    left_target = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        left_input,
+        connection,
+    ).filter("ukam_address_id = 2").project(
+        "distinguishing_adj_start_tokens, common_adj_start_tokens"
+    ).fetchone()
+    right_target = _run_single_stage(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+        right_input,
+        connection,
+    ).filter("ukam_address_id = 2").project(
+        "distinguishing_adj_start_tokens, common_adj_start_tokens"
+    ).fetchone()
+
+    assert left_target == (
+        ["2"],
+        ["COMMON", "ROAD", "LONDON"],
+    )
+    assert right_target == (
+        ["2"],
+        ["COMMON", "ROAD", "LONDON"],
     )
 
 
