@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -124,6 +125,24 @@ def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
     num_of_chunks = max(1, min(num_of_chunks, max_chunks))
     chunk_size = (total_records + num_of_chunks - 1) // num_of_chunks
     return max(1, chunk_size)
+
+
+def _normalise_postcode_districts(
+    postcode_districts: Collection[str] | None,
+) -> tuple[str, ...] | None:
+    if postcode_districts is None:
+        return None
+    if any(
+        not isinstance(district, str) or not district.strip()
+        for district in postcode_districts
+    ):
+        raise ValueError("postcode_districts must contain non-empty strings")
+    normalised = tuple(
+        sorted({district.strip().upper() for district in postcode_districts})
+    )
+    if not normalised:
+        raise ValueError("postcode_districts must contain at least one district")
+    return normalised
 
 
 def _add_canonical_road_blocking_keys(
@@ -272,18 +291,23 @@ def derive_roadlike_places(
     con: DuckDBPyConnection,
     output_path: Path | str | None = None,
     *,
+    postcode_districts: Collection[str] | None = None,
     postcode_districts_per_batch: int | None = None,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
-    """Build a global roadlike-place catalogue from canonical addresses.
+    """Build a roadlike-place catalogue from canonical addresses.
 
     The input must already be canonical-cleaned, including ``clean_full_address``
     and ``numeric_tokens``. Road-specific prepared fields are materialized once;
-    candidate extraction is a single pass by default. When ``classificationcode``
-    is available, only top-level ``R`` rows contribute to the catalogue.
-    Postcode-district batching is available only as a memory-constrained fallback.
+    candidate extraction is a single pass by default. When ``postcode_districts``
+    is supplied, only those postcode districts contribute to the catalogue and
+    the filter is applied before road-specific preparation. When
+    ``classificationcode`` is available, only top-level ``R`` rows contribute
+    to the selected source. Postcode-district batching remains available as a
+    memory-constrained fallback within the selected districts.
     """
+    selected_postcode_districts = _normalise_postcode_districts(postcode_districts)
     if postcode_districts_per_batch is not None and postcode_districts_per_batch < 1:
         raise ValueError("postcode_districts_per_batch must be at least 1")
 
@@ -296,6 +320,31 @@ def derive_roadlike_places(
         )
 
     road_catalogue_source = canonical_address_table
+    if selected_postcode_districts is not None:
+        postcode_district_expression = (
+            "regexp_extract("
+            "upper(coalesce(postcode, '')), "
+            "'^\\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\\s+\\d', 1)"
+        )
+        district_values = ", ".join(
+            "'" + district.replace("'", "''") + "'"
+            for district in selected_postcode_districts
+        )
+        road_catalogue_source = con.sql(f"""
+            SELECT *
+            FROM ({canonical_address_table.sql_query()}) AS canonical
+            WHERE {postcode_district_expression} IN ({district_values})
+        """)
+        scoped_row_count = road_catalogue_source.count("*").fetchone()[0]
+        if scoped_row_count == 0:
+            raise ValueError(
+                "No canonical addresses matched the supplied postcode districts"
+            )
+        logger.info(
+            "Restricting road catalogue to %s postcode districts and %s rows",
+            len(selected_postcode_districts),
+            scoped_row_count,
+        )
     road_catalogue_row_count: int | None = None
     if "classificationcode" not in canonical_address_table.columns:
         logger.warning(
@@ -305,7 +354,7 @@ def derive_roadlike_places(
     else:
         filtered_source = con.sql(f"""
             SELECT *
-            FROM ({canonical_address_table.sql_query()}) AS canonical
+            FROM ({road_catalogue_source.sql_query()}) AS canonical
             WHERE substr(CAST(classificationcode AS VARCHAR), 1, 1) = 'R'
         """)
         filtered_row_count = filtered_source.count("*").fetchone()[0]
