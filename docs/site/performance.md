@@ -11,15 +11,14 @@ Note that runtimes depend on whether the canonical data covers a local council r
 | 1. Create data package and API key | 5 minutes | 5 minutes |
 | 2. Install Python, uv, and `uk_address_matcher` | 5 minutes | 5 minutes |
 | 3. Download and process OS data into a flat file | 5 seconds[^1] | 4 minutes[^2] |
-| 4. Pre-process indexes and features | Not necessary | 13 min 43 sec[^3] |
+| 4. Pre-process indexes, features, and road catalogue | Not necessary | 12 min 27 sec observed[^3] |
 | 5. Match 100,000 records | 18 seconds | 30 seconds |
-| Total one-off setup (steps 1-4) | About 10 min 20 sec[^4] | About 45 min 43 sec[^4] |
+| Total one-off setup (steps 1-4) | About 10 min 20 sec[^4] | About 44 min 27 sec[^4] |
 
 [^1]: Plus ~15 seconds to download the data.
 [^2]: Plus ~18 minutes to download the data.
 [^3]: See [Canonical preparation runtime](#canonical-preparation-runtime) for
-    the latest benchmark configuration, e2e timing breakdown, and comparison
-    with previous implementations.
+    the current full-build stage breakdown.
 [^4]: Approximate total from the component timings above, including download time
     and excluding the matching step.
 
@@ -40,11 +39,12 @@ In this section, we set out `uk_address_matcher`'s accuracy against these labell
 
 The Hackney Council dataset is available [here](https://www.datadaptive.com/addr/.)
 
-The latest run took 29.7 seconds in total against 114,166 labelled records
-(28.4 seconds for matching).
+The benchmark uses the prepared canonical data with a residential Hackney
+filter. The historical setup script below is retained as a reproducible example
+of the labelled-data workflow.
 
 <details>
-  <summary>Expand to see Hackney benchmarking script</summary>
+    <summary>Expand to see the historical Hackney benchmarking script</summary>
 
 ```python
 import duckdb
@@ -113,6 +113,9 @@ con.sql("select * from df").show(max_width=100000, max_rows=100000)
 
 
 </details>
+
+The script and figures in this collapsible block are retained as a historical
+local-canonical example.
 
 Note that we:
 
@@ -388,59 +391,13 @@ The full precision-recall curve is shown below:
 
 ## Canonical preparation runtime
 
-??? info "How the latest 13 min 43 sec timing was measured"
-    The latest rerun on 8 September 2026 completed the current production
-    `prepare_canonical_folder()` path in **823.349 seconds (13 min 43.3 sec)** for
-    71,438,939 national-scale NGD canonical rows. The complete performance script,
-    including the three labelled-data benchmarks, took **882.267 seconds
-    (14 min 42.3 sec)**.
-
-    The run used a MacBook Pro M4 Max, DuckDB 1.5.0, 14 DuckDB threads, a requested
-    16 GB DuckDB memory limit (14.9 GiB effective), 10 work chunks, and eight
-    canonical output shards. Road features were enabled. The fresh manifest records
-    481,747 roadlike-place rows and 1,931,943,019 bytes across 11 persisted
-    artefacts.
-
-    The preparation stages measured in that same production run were:
-
-    | Stage | Seconds | Share of preparation wall time | Cumulative seconds |
-    | --- | ---: | ---: | ---: |
-    | Preparation setup and input coercion | 0.041s | 0.0% | 0.041s |
-    | Foundational cleaning and deterministic ID assignment | 202.078s | 24.5% | 202.119s |
-    | Roadlike-place catalogue creation | 168.816s | 20.5% | 370.934s |
-    | Term-frequency aggregation | 2.487s | 0.3% | 373.421s |
-    | Adjacent distinguishing and term-frequency application | 180.420s | 21.9% | 553.841s |
-    | Inverted-index derivation | 84.149s | 10.2% | 637.990s |
-    | Road blocking enrichment | 78.425s | 9.5% | 716.416s |
-    | Canonical output planning | 0.001s | 0.0% | 716.417s |
-    | Term-frequency serialisation | 0.039s | 0.0% | 716.456s |
-    | Inverted-index serialisation | 38.926s | 4.7% | 755.382s |
-    | Roadlike-place serialisation | 0.094s | 0.0% | 755.476s |
-    | Canonical shard serialisation | 66.515s | 8.1% | 821.991s |
-    | Manifest metadata and finalisation | 1.342s | 0.2% | 823.333s |
-
-    **Foundational cleaning and deterministic ID assignment dominated the run** at
-    202.078 seconds, or 24.5% of preparation wall time. Adjacent distinguishing and
-    term-frequency application took 180.420 seconds (21.9%), followed by
-    roadlike-place catalogue creation at 168.816 seconds (20.5%).
-
-    The same run recorded a peak process RSS of **15.62 GiB**, peak DuckDB current
-    memory of **10.82 GiB**, and peak current DuckDB temporary-file usage of
-    **119.84 GiB** across 26 temporary files. The live temporary directory reached
-    **119.84 GiB**. DuckDB's current temporary-storage metric was 0 at the sampled
-    boundaries; the temporary-file byte counters are the relevant spill measure for
-    this run.
-
-    These figures are indicative rather than a hardware-independent guarantee.
-    Available memory, temporary-disk speed, source schema, enabled features, and
-    output-shard count can materially affect national-scale preparation time.
-
-    Since this benchmark, deterministic ID assignment has been changed to order
-    physical output by `postcode, unique_id`, avoiding the former full-feature sort
-    and redundant final ordering. A focused national preclean rerun completed its
-    ten cleaning chunks in **891.36 seconds (14 min 51 sec)**, compared with
-    **903.62 seconds** previously. The subsequent global ID materialisation did not
-    complete under the uncapped diagnostic configuration, so this result does not
-    replace the **823.349-second** end-to-end production benchmark. The detailed
-    investigation is recorded in the dated canonical storage and runtime trade-offs
-    experiment note in the repository.
+| Stage | Seconds | Share of wall time | Cumulative seconds |
+| --- | ---: | ---: | ---: |
+| Foundational cleaning and ID assignment | 276.011s | 37.0% | 276.011s |
+| Term-frequency aggregation | 1.634s | 0.2% | 277.644s |
+| Adjacent distinguishing and term-frequency application | 245.955s | 32.9% | 523.600s |
+| Inverted-index derivation | 94.188s | 12.6% | 617.788s |
+| Roadlike-place catalogue derivation | 3.872s | 0.5% | 621.659s |
+| Artefact serialisation | 122.854s | 16.5% | 744.514s |
+| Manifest finalisation | 2.237s | 0.3% | 746.750s |
+| Timing outside instrumented stages | 0.071s | 0.0% | 746.821s |

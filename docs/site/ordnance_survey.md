@@ -8,8 +8,8 @@ The steps are:
 |------|-------------------|
 | Create a data package in the Ordnance Survey Data Hub and obtain an API key | about 5 mins |
 | Install tooling | about 5 mins |
-| Build the canonical dataset | 5 mins for full UK |
-| Pre-process for matching (national-scale only) | 5 mins |
+| Build the canonical dataset | about 4 mins for full UK |
+| Pre-process for matching (national-scale only) | about 12 min 27 sec |
 | Match | Less than 1 minute |
 
 [^timings-m4]: Timings on a MacBook M4 Max.
