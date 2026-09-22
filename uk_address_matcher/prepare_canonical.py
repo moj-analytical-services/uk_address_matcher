@@ -63,6 +63,7 @@ _MANAGED_FILES = [
     f"{MANIFEST_FILENAME}.tmp",
 ]
 
+
 @dataclass(frozen=True)
 class _ParquetArtefactSettings:
     """Parquet format, compression, and ordering settings for one artefact."""
@@ -532,7 +533,7 @@ def prepare_canonical_folder(
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
-    _derive_road_catalogue: bool = False,
+    _derive_road_catalogue: bool = True,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
 
@@ -575,9 +576,8 @@ def prepare_canonical_folder(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
-        _derive_road_catalogue: Private opt-in to derive the road catalogue and
-            canonical road keys. Defaults to ``False`` because this adds substantial
-            compute cost and is intended for power users.
+        _derive_road_catalogue: Whether to derive the road catalogue and canonical
+            road keys. Defaults to ``True``; pass ``False`` to skip road artefacts.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files

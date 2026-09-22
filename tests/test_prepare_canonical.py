@@ -136,8 +136,8 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     }.isdisjoint(prepared.addresses.columns)
 
 
-def test_prepare_skips_road_blocking_keys_by_default(canonical_data, con, tmp_path):
-    output_folder = tmp_path / "default_without_road_keys"
+def test_prepare_derives_road_catalogue_by_default(canonical_data, con, tmp_path):
+    output_folder = tmp_path / "default_with_road_keys"
 
     prepare_canonical_folder(
         canonical_data,
@@ -146,9 +146,33 @@ def test_prepare_skips_road_blocking_keys_by_default(canonical_data, con, tmp_pa
     )
     prepared = load_prepared_canonical_data(output_folder, con)
 
-    assert not (output_folder / "roadlike_places.parquet").exists()
-    assert prepared.roadlike_places is None
-    assert {"road_1_norm"}.isdisjoint(prepared.addresses.columns)
+    assert (output_folder / "roadlike_places.parquet").exists()
+    assert prepared.roadlike_places is not None
+    assert "road_1_norm" in prepared.addresses.columns
+
+
+def test_prepare_derives_road_catalogue_for_all_canonical_districts(con, tmp_path):
+    source = con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD'),
+            ('2', '14 MAIN ROAD', 'TF1 1AA')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    output_folder = tmp_path / "all_districts_road_catalogue"
+
+    prepare_canonical_folder(
+        source,
+        output_folder=output_folder,
+        con=con,
+    )
+    prepared = load_prepared_canonical_data(output_folder, con)
+
+    assert prepared.roadlike_places is not None
+    assert sorted(prepared.roadlike_places.project("candidate_phrase").fetchall()) == [
+        ("HIGH STREET",),
+        ("MAIN ROAD",),
+    ]
+    assert "road_1_norm" in prepared.addresses.columns
 
 
 def test_prepare_filters_classified_road_catalogue_to_residential_rows(con, tmp_path):
