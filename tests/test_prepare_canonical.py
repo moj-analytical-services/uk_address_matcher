@@ -535,6 +535,20 @@ def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
     ).fetchone() == (["1", "HIGH", "STREET", "LONDON"],)
 
 
+def test_v1_2_0_prepared_canonical_rehydrates_sub_premise_location(con):
+    """Legacy prepared canonical data receives the current nullable field."""
+    with pytest.warns(UserWarning, match="v1.2.0"):
+        loaded = load_prepared_canonical_data(
+            Path(__file__).parent / "data" / "ukam_prepared_canonical",
+            con=con,
+        )
+
+    assert "sub_premise_location" in loaded.addresses.columns
+    assert loaded.addresses.filter("sub_premise_location IS NOT NULL").count(
+        "*"
+    ).fetchone() == (0,)
+
+
 def test_prepare_show_progress_false_suppresses_live_output(
     con, canonical_data, tmp_path, monkeypatch
 ):

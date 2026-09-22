@@ -301,6 +301,37 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
 
 
+def test_v1_2_0_prepared_canonical_matches(con):
+    prepared_folder = Path(__file__).parent / "data" / "ukam_prepared_canonical"
+    messy_data = (
+        con.read_parquet(str(prepared_folder / "ukam_canonical_addresses.parquet"))
+        .limit(1)
+        .select("unique_id, original_address_concat AS address_concat, postcode")
+    )
+
+    with pytest.warns(UserWarning, match="v1.2.0"):
+        result = AddressMatcher(
+            canonical_addresses=prepared_folder,
+            addresses_to_match=messy_data,
+            con=con,
+            stages=[
+                ExactMatchStage(),
+                PeeledAddressStage(),
+                SplinkStage(
+                    predict_threshold_match_weight=-20,
+                    final_match_weight_threshold=12,
+                    include_full_postcode_block=True,
+                    retain_intermediate_calculation_columns=True,
+                ),
+            ],
+        ).match()
+
+    assert result.matches().count("*").fetchone() == (1,)
+    assert result.matches().filter("resolved_canonical_id IS NOT NULL").count(
+        "*"
+    ).fetchone() == (1,)
+
+
 def test_prepared_canonical_without_numeric_range_still_matches(
     con, canonical_data, messy_data, tmp_path
 ):
