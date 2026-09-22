@@ -79,10 +79,10 @@ def improve_predictions_using_distinguishing_tokens(
         eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
 
     fallback_full_address_tokens_l_sql = (
-        "source.clean_full_address_l.trim().upper().regexp_split_to_array('\\s+')"
+        "string_split(trim(upper(source.clean_full_address_l)), ' ')"
     )
     fallback_full_address_tokens_r_sql = (
-        "source.clean_full_address_r.trim().upper().regexp_split_to_array('\\s+')"
+        "string_split(trim(upper(source.clean_full_address_r)), ' ')"
     )
     token_lookup_joins = ""
     full_address_tokens_l_sql = fallback_full_address_tokens_l_sql
@@ -97,7 +97,7 @@ def improve_predictions_using_distinguishing_tokens(
                         CASE
                             WHEN {postcode_column} IS NULL OR {postcode_column} = ''
                                 THEN CAST([] AS VARCHAR[])
-                            ELSE regexp_split_to_array(upper({postcode_column}), '\\s+')
+                            ELSE string_split(trim(upper({postcode_column})), ' ')
                         END
                     ),
                     token -> upper(token)
