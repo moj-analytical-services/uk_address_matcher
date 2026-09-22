@@ -75,14 +75,14 @@ def improve_predictions_using_relation_markers(
             SELECT
                 *,
                 list_filter(
-                    regexp_split_to_array(target_address, ' '),
+                    string_split(target_address, ' '),
                     token -> len(token) > 1
                         AND token NOT IN {_RELATION_STOP_TOKENS_SQL}
                 ) AS target_tokens,
-                regexp_split_to_array(candidate_address, ' ') AS candidate_tokens,
-                regexp_split_to_array(anchor_address, ' ') AS anchor_tokens,
+                string_split(candidate_address, ' ') AS candidate_tokens,
+                string_split(anchor_address, ' ') AS anchor_tokens,
                 list_filter(
-                    regexp_split_to_array(anchor_address, ' '),
+                    string_split(anchor_address, ' '),
                     token -> regexp_full_match(token, '[0-9]+')
                 ) AS anchor_number_tokens
             FROM split_addresses

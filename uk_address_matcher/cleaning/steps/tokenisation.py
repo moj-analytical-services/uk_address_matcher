@@ -1,6 +1,21 @@
 from __future__ import annotations
 
-from uk_address_matcher.sql_pipeline.steps import pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
+
+
+@pipeline_stage(
+    name="tokenise_clean_full_address",
+    description="Split the finalized clean address into reusable tokens",
+    tags="tokenisation",
+)
+def _tokenise_clean_full_address():
+    return """
+    SELECT
+        *,
+        string_split(clean_full_address, ' ')::VARCHAR[]
+            AS clean_full_address_tokens
+    FROM {input}
+    """
 
 
 @pipeline_stage(
@@ -12,24 +27,31 @@ from uk_address_matcher.sql_pipeline.steps import pipeline_stage
     tags="tokenisation",
 )
 def _split_numeric_tokens_to_cols():
-    sql = """
-    SELECT
-        *,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[1] as numeric_token_1,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[2] as numeric_token_2,
-        regexp_extract_all(
-            array_to_string(numeric_tokens, ' '),
-            '\\d+'
-        )[3] as numeric_token_3
-    FROM {input}
-    """
-    return sql
+    return [
+        CTEStep(
+            "with_numeric_scalars",
+            """
+            SELECT
+                *,
+                regexp_extract_all(
+                    array_to_string(numeric_tokens, ' '),
+                    '\\d+'
+                ) AS __numeric_scalar_tokens
+            FROM {input}
+            """,
+        ),
+        CTEStep(
+            "final",
+            """
+            SELECT
+                * EXCLUDE (__numeric_scalar_tokens),
+                __numeric_scalar_tokens[1] AS numeric_token_1,
+                __numeric_scalar_tokens[2] AS numeric_token_2,
+                __numeric_scalar_tokens[3] AS numeric_token_3
+            FROM {with_numeric_scalars}
+            """,
+        ),
+    ]
 
 
 @pipeline_stage(
@@ -54,52 +76,103 @@ def _derive_numeric_context_roles():
             "UNIT|UNITS|SUITE|SUITES|OFFICE|ROOM|WORKSHOP|WAREHOUSE|STUDIO",
         ),
     ]
-    marker_alternatives = [
-        (alternative, marker)
-        for marker, pattern in marker_cases
-        for alternative in pattern.split("|")
-    ]
-    marker_pattern = "|".join(alternative for alternative, _ in marker_alternatives)
-    marker_sql = "\n".join(
+
+    def context_field(alternative: str) -> str:
+        return {1: "one", 2: "two", 3: "three"}[len(alternative.split())]
+
+    marker_priority_sql = "\n".join(
         "WHEN "
         + " OR ".join(
-            f"list_contains(__numeric_marker_matches[index], '{alternative}')"
-            for alternative, alternative_marker in marker_alternatives
-            if alternative_marker == marker
+            f"context.previous_{context_field(alternative)} = '{alternative}'"
+            for alternative in pattern.split("|")
         )
-        + f" THEN '{marker}'"
-        for marker, _ in marker_cases
+        + f" THEN {priority}::UTINYINT"
+        for priority, (_marker, pattern) in enumerate(marker_cases, start=1)
     )
-    marker_matches_sql = (
-        "regexp_extract_all("
-        "clean_full_address, "
-        f"concat('\\b({marker_pattern})\\s+', regexp_escape(token), '\\b'), "
-        "1)"
+    marker_name_sql = "\n".join(
+        f"WHEN {priority} THEN '{marker}'"
+        for priority, (marker, _pattern) in enumerate(marker_cases, start=1)
     )
     return f"""
-    WITH marker_matches AS (
+    WITH address_token_contexts AS (
         SELECT
             *,
             list_transform(
-                numeric_tokens,
-                token -> {marker_matches_sql}
-            ) AS __numeric_marker_matches
+                range(1, len(clean_full_address_tokens) + 1),
+                pos -> struct_pack(
+                    token := list_extract(clean_full_address_tokens, pos),
+                    previous_one := CASE
+                        WHEN pos > 1 THEN list_extract(clean_full_address_tokens, pos - 1)
+                        ELSE NULL::VARCHAR
+                    END,
+                    previous_two := CASE
+                        WHEN pos > 2 THEN array_to_string(
+                            list_slice(clean_full_address_tokens, pos - 2, pos - 1), ' '
+                        )
+                        ELSE NULL::VARCHAR
+                    END,
+                    previous_three := CASE
+                        WHEN pos > 3 THEN array_to_string(
+                            list_slice(clean_full_address_tokens, pos - 3, pos - 1), ' '
+                        )
+                        ELSE NULL::VARCHAR
+                    END
+                )
+            ) AS __numeric_token_contexts
         FROM {{input}}
+    ),
+    address_marker_priorities AS (
+        SELECT
+            *,
+            list_transform(
+                __numeric_token_contexts,
+                context -> CASE
+                    {marker_priority_sql}
+                    ELSE NULL::UTINYINT
+                END
+            ) AS __numeric_marker_priorities
+        FROM address_token_contexts
+    ),
+    marker_entries AS (
+        SELECT
+            *,
+            list_transform(
+                list_filter(
+                    range(1, len(__numeric_token_contexts) + 1),
+                    pos -> list_extract(__numeric_marker_priorities, pos) IS NOT NULL
+                ),
+                pos -> struct_pack(
+                    token := list_extract(__numeric_token_contexts, pos).token,
+                    priority := list_extract(__numeric_marker_priorities, pos)
+                )
+            ) AS __numeric_marker_entries
+        FROM address_marker_priorities
     ),
     marked AS (
         SELECT
             *,
             list_transform(
                 numeric_tokens,
-                (token, index) -> CASE
-                    {marker_sql}
+                token -> CASE list_min(list_transform(
+                    list_filter(
+                        __numeric_marker_entries,
+                        entry -> entry.token = token
+                    ),
+                    entry -> entry.priority
+                ))
+                    {marker_name_sql}
                     ELSE 'ADDRESS_NUMBER'
                 END
             ) AS __numeric_specific_markers
-        FROM marker_matches
+        FROM marker_entries
     )
     SELECT
-        * EXCLUDE (__numeric_marker_matches, __numeric_specific_markers),
+        * EXCLUDE (
+            __numeric_token_contexts,
+            __numeric_marker_priorities,
+            __numeric_marker_entries,
+            __numeric_specific_markers
+        ),
         list_transform(
             numeric_tokens,
             (token, index) -> CASE
@@ -138,14 +211,19 @@ def _derive_numeric_context_roles():
     description="Split the address_without_numbers field into an array of tokens",
     tags="tokenisation",
 )
-def _tokenise_address_without_numbers():
+def _tokenise_address_without_numbers(*, use_precomputed_tokens: bool = False):
+    if use_precomputed_tokens:
+        return """
+        SELECT
+            * EXCLUDE (__address_without_numbers_tokenised),
+            __address_without_numbers_tokenised AS address_without_numbers_tokenised
+        FROM {input}
+        """
     sql = """
     select
         *,
-        regexp_split_to_array(trim(address_without_numbers), '\\s+')
-            AS address_without_numbers_tokenised,
-        regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]
-            AS clean_full_address_tokens
+        string_split(trim(address_without_numbers), ' ')
+            AS address_without_numbers_tokenised
     from {input}
     """
     return sql

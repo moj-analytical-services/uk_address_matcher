@@ -1,21 +1,17 @@
 import importlib.resources as pkg_resources
 import json
-import logging
-from contextlib import contextmanager
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation, InvalidInputException
 from splink import DuckDBAPI, Linker, SettingsCreator
 
-from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
-    ensure_numeric_range_struct,
-)
-from uk_address_matcher.rehydration.token_views import (
+from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
 )
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    ensure_numeric_range_struct,
+)
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
-
-_SPLINK_SETTINGS_LOGGER = "splink.internals.settings"
 
 
 def _get_model_settings_dict():
@@ -87,17 +83,6 @@ def _sanitise_null_comparison_levels(settings_as_dict: dict) -> dict:
             level.pop("u_probability", None)
 
     return settings_as_dict
-
-
-@contextmanager
-def _suppress_known_splink_warnings():
-    logger = logging.getLogger(_SPLINK_SETTINGS_LOGGER)
-    original_level = logger.level
-    logger.setLevel(logging.ERROR)
-    try:
-        yield
-    finally:
-        logger.setLevel(original_level)
 
 
 def _get_precomputed_numeric_tf_table(con: DuckDBPyConnection):
@@ -613,14 +598,13 @@ def _get_linker(
 
     db_api = DuckDBAPI(connection=con)
 
-    with _suppress_known_splink_warnings():
-        linker = Linker(
-            [messy_name, canonical_name],
-            settings=settings,
-            db_api=db_api,
-            input_table_aliases=[messy_name, canonical_name],
-            set_up_basic_logging=False,
-        )
+    linker = Linker(
+        [messy_name, canonical_name],
+        settings=settings,
+        db_api=db_api,
+        input_table_aliases=[messy_name, canonical_name],
+        set_up_basic_logging=False,
+    )
 
     for i in range(1, 4):
         df_sql = f"""

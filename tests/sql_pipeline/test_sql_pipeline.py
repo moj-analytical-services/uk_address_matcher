@@ -1,7 +1,11 @@
 import pytest
 
+from uk_address_matcher.cleaning.pipelines import (
+    QUEUE_PRE_TF,
+    QUEUE_PRE_TF_MATERIALIZED,
+)
 from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline
-from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage, pipeline_stage
 
 
 # ---------- Helpers ----------
@@ -86,6 +90,32 @@ def test_debug_materialise_matches_final(duck_con, base_rel, capsys):
     rel_run = pipe2.run()
     run_vals = rel_run.df().sort_values("id").val.tolist()
     assert debug_vals == run_vals
+
+
+def test_materialized_stage_emits_boundary_and_preserves_results(duck_con, base_rel):
+    @pipeline_stage(materialized=True)
+    def materialized_copy():
+        return "SELECT id, val + 1 AS val FROM {input}"
+
+    pipeline = DuckDBPipeline(duck_con, base_rel)
+    pipeline.add_step(materialized_copy())
+    sql = pipeline.generate_cte_pipeline_sql(mark_spent=False)
+
+    assert "AS MATERIALIZED" in sql
+    values = pipeline.run().df().sort_values("id").val.tolist()
+    assert values == [11, 21, 31]
+
+
+def test_default_pre_tf_queue_is_fused_with_explicit_materialized_variant():
+    def is_materialized(stage_spec):
+        return (
+            stage_spec.materialized
+            if isinstance(stage_spec, Stage)
+            else stage_spec().materialized
+        )
+
+    assert not any(is_materialized(stage) for stage in QUEUE_PRE_TF)
+    assert any(is_materialized(stage) for stage in QUEUE_PRE_TF_MATERIALIZED)
 
 
 def test_debug_logical_outputs_sql(duck_con, base_rel, capsys):

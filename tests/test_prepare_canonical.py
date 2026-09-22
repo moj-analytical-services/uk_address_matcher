@@ -90,7 +90,11 @@ def canonical_data(con):
 def prepared_folder(con, canonical_data, tmp_path):
     """A ready-made prepared folder for tests that only need to read."""
     prepare_canonical_folder(
-        canonical_data, output_folder=tmp_path, con=con, overwrite=True
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        _derive_road_catalogue=True,
+        overwrite=True,
     )
     return tmp_path
 
@@ -120,7 +124,7 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
         canonical_data,
         output_folder=output_folder,
         con=con,
-        derive_road_blocking_keys=False,
+        _derive_road_catalogue=False,
     )
     prepared = load_prepared_canonical_data(output_folder, con)
 
@@ -130,6 +134,44 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     assert {
         "road_1_norm",
     }.isdisjoint(prepared.addresses.columns)
+
+
+def test_prepare_skips_road_blocking_keys_by_default(canonical_data, con, tmp_path):
+    output_folder = tmp_path / "default_without_road_keys"
+
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=output_folder,
+        con=con,
+    )
+    prepared = load_prepared_canonical_data(output_folder, con)
+
+    assert not (output_folder / "roadlike_places.parquet").exists()
+    assert prepared.roadlike_places is None
+    assert {"road_1_norm"}.isdisjoint(prepared.addresses.columns)
+
+
+def test_prepare_filters_classified_road_catalogue_to_residential_rows(con, tmp_path):
+    source = con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', 'RD01'),
+            ('2', '14 COMMERCIAL ROAD', 'AB1 3CD', 'CI01')
+        ) AS rows(unique_id, address_concat, postcode, classificationcode)
+    """)
+    output_folder = tmp_path / "residential_roadlike_places"
+
+    prepare_canonical_folder(
+        source,
+        output_folder=output_folder,
+        con=con,
+        _derive_road_catalogue=True,
+    )
+
+    prepared = load_prepared_canonical_data(output_folder, con)
+    assert prepared.roadlike_places is not None
+    assert prepared.roadlike_places.project("candidate_phrase").fetchall() == [
+        ("HIGH STREET",)
+    ]
 
 
 def test_progress_bar_disabled_writes_nothing():
@@ -302,6 +344,23 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
     assert chunk_files[1].name == "canonical_addresses_chunk_00002_of_00003.parquet"
     assert chunk_files[2].name == "canonical_addresses_chunk_00003_of_00003.parquet"
     assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
+
+
+def test_prepare_sorts_canonical_parquet_for_compression(con, canonical_data, tmp_path):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        overwrite=True,
+    )
+
+    assert con.read_parquet(str(tmp_path / "ukam_canonical_addresses.parquet")).select(
+        "postcode, unique_id"
+    ).fetchall() == [
+        ("B1 1AA", "C3"),
+        ("M1 1AA", "C2"),
+        ("SW1A 1AA", "C1"),
+    ]
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 3])
@@ -873,6 +932,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         "s3://bucket/input/canonical.csv",
         "s3://bucket/output/prepared",
         con=con,
+        _derive_road_catalogue=True,
         add_debug_features=add_debug_features,
     )
 
@@ -1029,7 +1089,9 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     )
 
 
-def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, tmp_path):
+def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
+    con, tmp_path
+):
     canonical = con.sql("""
         SELECT * FROM (VALUES
             (2::BIGINT, '2 BETA STREET', 'B2 2BB', 'z.parquet'),
@@ -1052,12 +1114,13 @@ def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, 
     physical_ids = addresses.select("ukam_address_id").fetchall()
 
     assert addresses.count("*").fetchone()[0] == 4
-    assert physical_ids == [(1,), (2,), (3,), (4,)]
+    assert sorted(physical_ids) == [(1,), (2,), (3,), (4,)]
     assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
-    physical_keys = addresses.select("postcode, unique_id").fetchall()
-    assert physical_keys == sorted(physical_keys)
 
     for path in chunk_paths:
+        chunk_addresses = con.read_parquet(str(path))
+        physical_keys = chunk_addresses.select("postcode, unique_id").fetchall()
+        assert physical_keys == sorted(physical_keys)
         parquet_file = pyarrow_parquet.ParquetFile(path)
         assert parquet_file.metadata.format_version.startswith("2.")
         metadata = con.execute(
@@ -1070,9 +1133,6 @@ def test_prepared_canonical_chunks_are_globally_ordered_and_use_parquet_v2(con, 
         assert metadata
         assert {row[2] for row in metadata} == {"ZSTD"}
         assert max(row[0] for row in metadata) <= 122_880
-        id_encodings = [row[3] for row in metadata if row[1] == "ukam_address_id"]
-        assert id_encodings
-        assert all("DELTA_BINARY_PACKED" in encodings for encodings in id_encodings)
 
     id_type = con.execute(
         "DESCRIBE SELECT ukam_address_id FROM read_parquet(?)",

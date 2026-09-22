@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uk_address_matcher.sql_pipeline.steps import pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
@@ -10,110 +10,116 @@ from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 )
 def _derive_numeric_range(
     maximum_width: int = 25,
-) -> str:
+) -> list[CTEStep]:
     """Build typed range metadata from the existing numeric token list."""
-    return f"""
-    WITH classified_tokens AS (
-        SELECT
-            input.*,
-            list_filter(
-                numeric_tokens,
-                token -> regexp_matches(
-                    token,
-                    '^\\d{{1,5}}[A-Z]?-\\d{{1,5}}[A-Z]?$'
-                )
-            ) AS range_tokens
-        FROM {{input}} AS input
-    ),
-    range_attributes AS (
-        SELECT
-            classified_tokens.*,
-            list_transform(
-                range_tokens,
-                token -> struct_pack(
-                    raw := token,
-                    lower := TRY_CAST(
-                        regexp_extract(token, '^(\\d{{1,5}})', 1) AS UINTEGER
-                    ),
-                    upper := TRY_CAST(
-                        regexp_extract(token, '-(\\d{{1,5}})', 1) AS UINTEGER
-                    ),
-                    width := GREATEST(
-                        0,
-                        TRY_CAST(regexp_extract(
-                            token, '-(\\d{{1,5}})', 1
-                        ) AS BIGINT)
-                        - TRY_CAST(regexp_extract(
-                            token, '^(\\d{{1,5}})', 1
-                        ) AS BIGINT)
-                    )::UINTEGER,
-                    lower_suffix := NULLIF(
-                        regexp_extract(token, '^(\\d{{1,5}})([A-Z])?-', 2),
-                        ''
-                    ),
-                    upper_suffix := NULLIF(
-                        regexp_extract(token, '-\\d{{1,5}}([A-Z])?$', 1),
-                        ''
-                    ),
-                    role := CASE
-                        WHEN regexp_matches(clean_full_address, '\\b(REF|REFERENCE)\\b')
-                            THEN 3::UTINYINT
-                        ELSE 1::UTINYINT
-                    END,
-                    flags := (
-                        CASE
-                            WHEN TRY_CAST(regexp_extract(
-                                token, '^(\\d{{1,5}})', 1
-                            ) AS UINTEGER)
-                                > TRY_CAST(regexp_extract(
-                                    token, '-(\\d{{1,5}})', 1
-                                ) AS UINTEGER)
-                            THEN 1 ELSE 0
-                        END
-                        + CASE
-                            WHEN TRY_CAST(regexp_extract(
-                                token, '^(\\d{{1,5}})', 1
-                            ) AS UINTEGER)
-                                = TRY_CAST(regexp_extract(
-                                    token, '-(\\d{{1,5}})', 1
-                                ) AS UINTEGER)
-                            THEN 2 ELSE 0
-                        END
-                        + CASE
-                            WHEN regexp_matches(token, '^\\d{{1,5}}[A-Z]-')
-                                OR regexp_matches(token, '-\\d{{1,5}}[A-Z]$')
-                            THEN 4 ELSE 0
-                        END
-                        + CASE
-                            WHEN TRY_CAST(regexp_extract(
-                                token, '-(\\d{{1,5}})', 1
-                            ) AS BIGINT)
-                                - TRY_CAST(regexp_extract(
-                                    token, '^(\\d{{1,5}})', 1
-                                ) AS BIGINT) > {maximum_width}
-                            THEN 8 ELSE 0
-                        END
-                        + CASE
-                            WHEN regexp_matches(
-                                clean_full_address, '\\b(REF|REFERENCE)\\b'
-                            )
-                            THEN 16 ELSE 0
-                        END
-                    )::UTINYINT,
-                    lower_tf := NULL::DOUBLE
-                )
-            ) AS parsed_range_attributes
-        FROM classified_tokens
-    )
-    SELECT
-        * EXCLUDE (range_tokens, parsed_range_attributes),
-        CASE
-            WHEN len(parsed_range_attributes) > 0
-            THEN list_extract(parsed_range_attributes, 1)
-            ELSE NULL
-        END AS numeric_range
-    FROM range_attributes
-    """
+    return [
+        CTEStep(
+            "classified_tokens",
+            """
+            SELECT
+                input.*,
+                list_filter(
+                    numeric_tokens,
+                    token -> regexp_matches(
+                        token,
+                        '^\\d{1,5}[A-Z]?-\\d{1,5}[A-Z]?$'
+                    )
+                ) AS range_tokens,
+                regexp_matches(
+                    clean_full_address,
+                    '\\b(REF|REFERENCE)\\b'
+                ) AS __has_reference
+            FROM {input} AS input
+            """,
+        ),
+        CTEStep(
+            "range_endpoints",
+            """
+            SELECT
+                classified_tokens.*,
+                list_transform(
+                    range_tokens,
+                    token -> regexp_extract(
+                        token,
+                        '^(\\d{1,5})([A-Z]?)-(\\d{1,5})([A-Z]?)$',
+                        ['lower', 'lower_suffix', 'upper', 'upper_suffix']
+                    )
+                ) AS parsed_range_endpoints
+            FROM {classified_tokens} AS classified_tokens
+            """,
+        ),
+        CTEStep(
+            "range_attributes",
+            f"""
+            SELECT
+                range_endpoints.*,
+                list_transform(
+                    parsed_range_endpoints,
+                    endpoint -> struct_pack(
+                        raw := endpoint.lower || endpoint.lower_suffix || '-'
+                            || endpoint.upper || endpoint.upper_suffix,
+                        lower := TRY_CAST(endpoint.lower AS UINTEGER),
+                        upper := TRY_CAST(endpoint.upper AS UINTEGER),
+                        width := GREATEST(
+                            0,
+                            TRY_CAST(endpoint.upper AS BIGINT)
+                                - TRY_CAST(endpoint.lower AS BIGINT)
+                        )::UINTEGER,
+                        lower_suffix := NULLIF(endpoint.lower_suffix, ''),
+                        upper_suffix := NULLIF(endpoint.upper_suffix, ''),
+                        role := CASE
+                            WHEN __has_reference THEN 3::UTINYINT
+                            ELSE 1::UTINYINT
+                        END,
+                        flags := (
+                            CASE
+                                WHEN TRY_CAST(endpoint.lower AS UINTEGER)
+                                    > TRY_CAST(endpoint.upper AS UINTEGER)
+                                THEN 1 ELSE 0
+                            END
+                            + CASE
+                                WHEN TRY_CAST(endpoint.lower AS UINTEGER)
+                                    = TRY_CAST(endpoint.upper AS UINTEGER)
+                                THEN 2 ELSE 0
+                            END
+                            + CASE
+                                WHEN endpoint.lower_suffix != ''
+                                    OR endpoint.upper_suffix != ''
+                                THEN 4 ELSE 0
+                            END
+                            + CASE
+                                WHEN TRY_CAST(endpoint.upper AS BIGINT)
+                                    - TRY_CAST(endpoint.lower AS BIGINT)
+                                    > {maximum_width}
+                                THEN 8 ELSE 0
+                            END
+                            + CASE WHEN __has_reference THEN 16 ELSE 0 END
+                        )::UTINYINT,
+                        lower_tf := NULL::DOUBLE
+                    )
+                ) AS parsed_range_attributes
+            FROM {{range_endpoints}} AS range_endpoints
+            """,
+        ),
+        CTEStep(
+            "final",
+            """
+            SELECT
+                * EXCLUDE (
+                    range_tokens,
+                    __has_reference,
+                    parsed_range_endpoints,
+                    parsed_range_attributes
+                ),
+                CASE
+                    WHEN len(parsed_range_attributes) > 0
+                    THEN list_extract(parsed_range_attributes, 1)
+                    ELSE NULL
+                END AS numeric_range
+            FROM {range_attributes}
+            """,
+        ),
+    ]
 
 
 @pipeline_stage(

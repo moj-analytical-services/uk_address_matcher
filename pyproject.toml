@@ -74,6 +74,7 @@ include-package-data = true
 
 [tool.pytest.ini_options]
 python_files = "test_*.py"
+testpaths = ["tests"]
 pythonpath = [".", "src"]
 
 # log level settings used when running pytest

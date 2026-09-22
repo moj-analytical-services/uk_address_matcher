@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -9,7 +8,6 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
-    QUEUE_INVERTED_INDEX_LOOKUP,
     QUEUE_INVERTED_INDEX_SELF,
     QUEUE_ROADLIKE_PLACE_PREPARATION,
     _clean_data_pre_term_frequencies,
@@ -32,6 +30,7 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     derive_top_1_road_keys,
     roadlike_place_catalog_sql,
+    roadlike_place_prepared_candidate_sources_sql,
     roadlike_place_prepared_candidate_sql,
 )
 from uk_address_matcher.cleaning.steps.token_parsing import (
@@ -87,21 +86,10 @@ def _materialise_relation_with_ukam_address_id(
     relation: DuckDBPyRelation,
     table_name: str,
 ) -> DuckDBPyRelation:
-    """Order cleaned rows by storage keys and assign row IDs."""
+    """Assign contiguous unique public row IDs without imposing storage order."""
     source_columns = tuple(
-        column
-        for column in relation.columns
-        if column not in {"ukam_address_id", "__ukam_row_id"}
+        column for column in relation.columns if column != "ukam_address_id"
     )
-    sort_columns = tuple(
-        column for column in ("postcode", "unique_id") if column in source_columns
-    )
-    required_sort_columns = {"postcode", "unique_id"}
-    if not required_sort_columns.issubset(sort_columns):
-        missing = sorted(required_sort_columns.difference(sort_columns))
-        raise ValueError(f"Cleaned relation is missing ordering columns: {missing}")
-
-    qualified_order = ", ".join(f'_ukam_src."{column}"' for column in sort_columns)
     source_projection = ", ".join(f'_ukam_src."{column}"' for column in source_columns)
 
     _drop_table_and_registered_aliases(con, table_name)
@@ -109,15 +97,11 @@ def _materialise_relation_with_ukam_address_id(
         CREATE TABLE {table_name} AS
         WITH numbered AS (
             SELECT
-                CAST(ROW_NUMBER() OVER (ORDER BY {qualified_order}) AS INTEGER)
-                    AS ukam_address_id,
+                CAST(ROW_NUMBER() OVER () AS INTEGER) AS ukam_address_id,
                 {source_projection}
             FROM ({relation.sql_query()}) AS _ukam_src
         )
-        SELECT
-            numbered.*,
-            CAST(numbered.ukam_address_id AS BIGINT) AS __ukam_row_id
-        FROM numbered
+        SELECT * FROM numbered
     """)
     return con.table(table_name)
 
@@ -157,20 +141,6 @@ def _add_canonical_road_blocking_keys(
         # TODO(ThomasHepworth): remove in 2.0; keep legacy callers neutral.
         return canonical_addresses.select("*, NULL::VARCHAR AS road_1_norm")
 
-    preference_order = []
-    if "filename" in canonical_addresses.columns:
-        preference_order.append("""
-            CASE filename
-                WHEN 'add_gb_builtaddress.parquet' THEN 1
-                WHEN 'add_gb_royalmailaddress.parquet' THEN 2
-                ELSE 3
-            END
-        """)
-    preference_order.extend(
-        column
-        for column in ("clean_full_address", "postcode", "ukam_address_id")
-        if column in canonical_addresses.columns
-    )
     uid = _uid()
     preferred_table = f"__ukam_canonical_road_preferred_{uid}"
     road_keys_table = f"__ukam_canonical_road_keys_{uid}"
@@ -184,6 +154,26 @@ def _add_canonical_road_blocking_keys(
     ]
     if "rightmost_numeric_position" in canonical_addresses.columns:
         preferred_columns.append("rightmost_numeric_position")
+    preferred_value_fields = ", ".join(
+        f'"{column}" := source."{column}"'
+        for column in preferred_columns
+        if column != "unique_id"
+    )
+    preferred_order_fields = []
+    if "filename" in canonical_addresses.columns:
+        preferred_order_fields.append("""
+            file_rank := CASE source.filename
+                WHEN 'add_gb_builtaddress.parquet' THEN 1
+                WHEN 'add_gb_royalmailaddress.parquet' THEN 2
+                ELSE 3
+            END
+        """)
+    preferred_order_fields.extend(
+        f'"{column}" := source."{column}"'
+        for column in ("clean_full_address", "postcode", "ukam_address_id")
+        if column in canonical_addresses.columns
+    )
+    preferred_order = ", ".join(preferred_order_fields)
     preserve_insertion_order = bool(
         con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
     )
@@ -192,12 +182,26 @@ def _add_canonical_road_blocking_keys(
         _drop_table_and_registered_aliases(con, preferred_table)
         con.execute(f"""
             CREATE TEMPORARY TABLE {preferred_table} AS
-            SELECT {", ".join(preferred_columns)}
-            FROM ({canonical_addresses.sql_query()}) AS source
-            QUALIFY row_number() OVER (
-                PARTITION BY unique_id
-                ORDER BY {", ".join(preference_order)}
-            ) = 1
+            WITH grouped AS (
+                SELECT
+                    source.unique_id,
+                    min_by(
+                        struct_pack({preferred_value_fields}),
+                        struct_pack({preferred_order})
+                    ) AS preferred
+                FROM ({canonical_addresses.sql_query()}) AS source
+                GROUP BY source.unique_id
+            )
+            SELECT
+                unique_id,
+                {
+            ", ".join(
+                f'preferred."{column}" AS "{column}"'
+                for column in preferred_columns
+                if column != "unique_id"
+            )
+        }
+            FROM grouped
         """)
         preferred_addresses = con.table(preferred_table)
         preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])
@@ -276,8 +280,9 @@ def derive_roadlike_places(
 
     The input must already be canonical-cleaned, including ``clean_full_address``
     and ``numeric_tokens``. Road-specific prepared fields are materialized once;
-    candidate extraction is a single pass by default. Postcode-district batching
-    is available only as a memory-constrained fallback.
+    candidate extraction is a single pass by default. When ``classificationcode``
+    is available, only top-level ``R`` rows contribute to the catalogue.
+    Postcode-district batching is available only as a memory-constrained fallback.
     """
     if postcode_districts_per_batch is not None and postcode_districts_per_batch < 1:
         raise ValueError("postcode_districts_per_batch must be at least 1")
@@ -290,12 +295,43 @@ def derive_roadlike_places(
             f"missing columns: {missing_columns}"
         )
 
+    road_catalogue_source = canonical_address_table
+    road_catalogue_row_count: int | None = None
+    if "classificationcode" not in canonical_address_table.columns:
+        logger.warning(
+            "Residential road catalogue filter requested, but "
+            "classificationcode is unavailable; processing all canonical rows"
+        )
+    else:
+        filtered_source = con.sql(f"""
+            SELECT *
+            FROM ({canonical_address_table.sql_query()}) AS canonical
+            WHERE substr(CAST(classificationcode AS VARCHAR), 1, 1) = 'R'
+        """)
+        filtered_row_count = filtered_source.count("*").fetchone()[0]
+        if filtered_row_count:
+            road_catalogue_source = filtered_source
+            road_catalogue_row_count = filtered_row_count
+            logger.info(
+                "Building residential road catalogue from %s canonical rows",
+                filtered_row_count,
+            )
+        else:
+            logger.warning(
+                "No residential canonical rows matched classificationcode; "
+                "processing all canonical rows"
+            )
+
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     prepared_table = f"__ukam_roadlike_prepared_{uid}"
-    candidates_table = f"__ukam_roadlike_candidates_{uid}"
+    candidate_sources_table = f"__ukam_roadlike_candidate_sources_{uid}"
     catalogue_table = f"__ukam_roadlike_places_{uid}"
-    total_rows = canonical_address_table.count("*").fetchone()[0]
+    total_rows = (
+        road_catalogue_row_count
+        if road_catalogue_row_count is not None
+        else road_catalogue_source.count("*").fetchone()[0]
+    )
     if total_rows == 0:
         raise ValueError(
             "Supplied address table has no records. Please provide a non-empty table."
@@ -305,7 +341,6 @@ def derive_roadlike_places(
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
     stage_label = "Building roadlike-place catalogue"
-    started_at = time.perf_counter()
     log_stage_start(
         stage_label,
         total_rows,
@@ -314,7 +349,7 @@ def derive_roadlike_places(
     )
     preparation = create_sql_pipeline(
         con,
-        input_rel=canonical_address_table,
+        input_rel=road_catalogue_source,
         stage_specs=QUEUE_ROADLIKE_PLACE_PREPARATION,
         pipeline_name="Prepare roadlike-place input",
         pipeline_description=(
@@ -357,22 +392,25 @@ def derive_roadlike_places(
         total_units=total_batches,
         enabled=progress_mode == "auto",
     )
-    con.execute(f"DROP TABLE IF EXISTS {candidates_table}")
     processed_rows = 0
 
     try:
+        con.execute(f"DROP TABLE IF EXISTS {candidate_sources_table}")
         for batch_index, candidate_source in enumerate(candidate_sources, start=1):
-            batch_started_at = time.perf_counter()
             batch_input = con.sql(f"SELECT * FROM {candidate_source}")
             batch_rows = batch_input.count("*").fetchone()[0]
-            candidates = con.sql(roadlike_place_prepared_candidate_sql(candidate_source))
+            candidate_sources_sql = roadlike_place_prepared_candidate_sources_sql(
+                candidate_source
+            )
             if batch_index == 1:
                 con.execute(
-                    f"CREATE TEMPORARY TABLE {candidates_table} AS "
-                    f"SELECT * FROM ({candidates.sql_query()}) AS candidates"
+                    f"CREATE TEMPORARY TABLE {candidate_sources_table} AS "
+                    f"{candidate_sources_sql}"
                 )
             else:
-                candidates.insert_into(candidates_table)
+                con.execute(
+                    f"INSERT INTO {candidate_sources_table} {candidate_sources_sql}"
+                )
 
             processed_rows += batch_rows
             progress.update(processed_rows, completed_units=batch_index)
@@ -384,29 +422,30 @@ def derive_roadlike_places(
                 progress=progress,
                 chunk_index=batch_index - 1,
                 total_chunks=total_batches,
-                chunk_elapsed_seconds=time.perf_counter() - batch_started_at,
+            )
+        candidate_relation = roadlike_place_prepared_candidate_sql(
+            candidate_sources_table,
+            candidate_source_relation=candidate_sources_table,
+        )
+        con.execute(f"DROP TABLE IF EXISTS {catalogue_table}")
+        con.execute(
+            f"CREATE TABLE {catalogue_table} AS "
+            f"{roadlike_place_catalog_sql(f'({candidate_relation})')}"
+        )
+        if output_path is not None:
+            escaped_output_path = str(output_path).replace("'", "''")
+            con.execute(
+                f"COPY {catalogue_table} TO '{escaped_output_path}' "
+                "(FORMAT PARQUET, COMPRESSION ZSTD)"
             )
     finally:
         progress.close()
         _drop_table_and_registered_aliases(con, prepared_table)
+        _drop_table_and_registered_aliases(con, candidate_sources_table)
 
-    con.execute(f"ANALYZE {candidates_table}")
-    con.execute(f"DROP TABLE IF EXISTS {catalogue_table}")
-    con.execute(
-        f"CREATE TABLE {catalogue_table} AS "
-        f"{roadlike_place_catalog_sql(candidates_table)}"
-    )
-    if output_path is not None:
-        escaped_output_path = str(output_path).replace("'", "''")
-        con.execute(
-            f"COPY {catalogue_table} TO '{escaped_output_path}' "
-            "(FORMAT PARQUET, COMPRESSION ZSTD)"
-        )
-    _drop_table_and_registered_aliases(con, candidates_table)
     log_stage_complete(
         stage_label,
         total_rows,
-        time.perf_counter() - started_at,
         progress_mode=progress_mode,
     )
     return con.table(catalogue_table)
@@ -456,8 +495,9 @@ def clean_data_pre_term_frequencies(
     )
 
     con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}")
+    chunked_input_name = f"__ukam_chunked_input_{uid}"
+    chunk_index_column = f"__ukam_chunk_index_{uid}"
 
-    stage_started_at = time.perf_counter()
     log_stage_start(
         stage_label,
         total_rows,
@@ -466,12 +506,20 @@ def clean_data_pre_term_frequencies(
     )
 
     try:
+        con.execute(f"""
+            CREATE TABLE {chunked_input_name} AS
+            SELECT
+                *,
+                CAST(abs(hash(address_concat)) % {total_chunks} AS INTEGER)
+                    AS {chunk_index_column}
+            FROM {input_name}
+        """)
+
         for chunk_index in range(total_chunks):
-            chunk_started_at = time.perf_counter()
             chunk_query = con.sql(f"""
-            SELECT *
-                FROM {input_name}
-                WHERE (abs(hash(address_concat)) % {total_chunks}) = {chunk_index}
+            SELECT * EXCLUDE ({chunk_index_column})
+                FROM {chunked_input_name}
+                WHERE {chunk_index_column} = {chunk_index}
             """)
             chunk_table = f"__ukam_chunk_input_{uid}_{chunk_index}"
             chunk = _materialise_relation(
@@ -481,7 +529,6 @@ def clean_data_pre_term_frequencies(
             )
             chunk_row_count = chunk.count("*").fetchone()[0]
 
-            # Assign IDs only after all cleaned chunks have been combined.
             # Apply debug options only on the first iteration.
             processed_chunk = _clean_data_pre_term_frequencies(
                 chunk,
@@ -508,32 +555,31 @@ def clean_data_pre_term_frequencies(
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
-                chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
             )
 
             _drop_table_and_registered_aliases(con, chunk_table)
     finally:
         progress.close()
+        _drop_table_and_registered_aliases(con, chunked_input_name)
+        _drop_table_and_registered_aliases(con, input_name)
 
     log_stage_complete(
         stage_label,
         total_rows,
-        time.perf_counter() - stage_started_at,
         progress_mode=progress_mode,
     )
 
-    _drop_table_and_registered_aliases(con, input_name)
     _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
 
     chunked_table = f"__ukam_chunked_addresses_{uid}"
     cleaned_table = f"__ukam_cleaned_{uid}"
-    logger.debug("Assigning deterministic UKAM address IDs")
+    logger.debug("Assigning UKAM address IDs")
     _materialise_relation_with_ukam_address_id(
         con,
         con.table(chunked_table),
         cleaned_table,
     )
-    logger.debug("Deterministic UKAM address IDs assigned")
+    logger.debug("UKAM address IDs assigned")
     _drop_table_and_registered_aliases(con, chunked_table)
     return con.table(cleaned_table)
 
@@ -606,7 +652,6 @@ def derive_term_frequencies_table(
     con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
 
     # Process in chunks using minimal pipeline (clean + tokenise only)
-    stage_started_at = time.perf_counter()
     log_stage_start(
         stage_label,
         total_rows,
@@ -616,7 +661,6 @@ def derive_term_frequencies_table(
 
     try:
         for chunk_index in range(total_chunks):
-            chunk_started_at = time.perf_counter()
             chunk_query = con.sql(f"""
                 SELECT *
                 FROM {input_name}
@@ -660,7 +704,6 @@ def derive_term_frequencies_table(
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
-                chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
             )
 
             _drop_table_and_registered_aliases(con, chunk_table)
@@ -670,7 +713,6 @@ def derive_term_frequencies_table(
     log_stage_complete(
         stage_label,
         total_rows,
-        time.perf_counter() - stage_started_at,
         progress_mode=progress_mode,
     )
 
@@ -688,22 +730,27 @@ def _derive_term_frequencies_from_precleaned(
     con: DuckDBPyConnection,
 ) -> DuckDBPyRelation:
     """Aggregate corpus token frequencies from canonical pre-clean output."""
-    source_sql = (
-        cleaned_address_table
-        if isinstance(cleaned_address_table, str)
-        else f"({cleaned_address_table.sql_query()})"
+    if isinstance(cleaned_address_table, str):
+        source_sql = cleaned_address_table
+        source_columns = con.table(cleaned_address_table).columns
+    else:
+        source_sql = f"({cleaned_address_table.sql_query()})"
+        source_columns = cleaned_address_table.columns
+    token_expression = (
+        "clean_full_address_tokens"
+        if "clean_full_address_tokens" in source_columns
+        else "string_split(clean_full_address, ' ')"
     )
     tf_sql = f"""
     WITH unnested AS (
-        SELECT unnest(string_split(clean_full_address, ' ')) AS token
+        SELECT unnest({token_expression}) AS token
         FROM {source_sql}
     )
     SELECT
         token,
-        COUNT(*)::DOUBLE / (SELECT COUNT(*) FROM unnested) AS rel_freq
+        COUNT(*)::DOUBLE / SUM(COUNT(*)) OVER () AS rel_freq
     FROM unnested
     GROUP BY token
-    ORDER BY COUNT(*) DESC
     """
 
     result_table = "__ukam_derived_term_frequencies"
@@ -777,11 +824,15 @@ def derive_inverted_index(
     first_insert = True
 
     total_rows = cleaned_address_table.count("*").fetchone()[0]
+    token_column = (
+        "clean_full_address_tokens"
+        if "clean_full_address_tokens" in cleaned_address_table.columns
+        else "clean_full_address"
+    )
 
     for strategy in strategies:
         stage_label = f"Building inverted index ({strategy.name})"
         if num_of_chunks == 1:
-            stage_started_at = time.perf_counter()
             log_stage_start(
                 stage_label,
                 total_rows,
@@ -793,7 +844,7 @@ def derive_inverted_index(
                 con,
                 input_rel=cleaned_address_table,
                 stage_specs=[
-                    _derive_keys_for_strategy(strategy),
+                    _derive_keys_for_strategy(strategy, token_column=token_column),
                     _build_inverted_index_from_keys(strategy),
                 ],
                 pipeline_name=f"Build inverted index ({strategy.name})",
@@ -815,17 +866,14 @@ def derive_inverted_index(
                 progress_mode=progress_mode,
                 chunk_index=0,
                 total_chunks=1,
-                chunk_elapsed_seconds=time.perf_counter() - stage_started_at,
             )
             log_stage_complete(
                 stage_label,
                 total_rows,
-                time.perf_counter() - stage_started_at,
                 progress_mode=progress_mode,
             )
         else:
             # Chunked path for this strategy
-            stage_started_at = time.perf_counter()
             strategy_keys_table = f"__ukam_index_keys_{uid}_{strategy.name}"
             progress = _ProgressBar(
                 label=stage_label,
@@ -844,7 +892,12 @@ def derive_inverted_index(
                 key_pipeline = create_sql_pipeline(
                     con,
                     input_rel=cleaned_address_table,
-                    stage_specs=[_derive_keys_for_strategy(strategy)],
+                    stage_specs=[
+                        _derive_keys_for_strategy(
+                            strategy,
+                            token_column=token_column,
+                        )
+                    ],
                     pipeline_name=f"Stage inverted index keys ({strategy.name})",
                     pipeline_description=(
                         f"Derive {strategy.name} keys once before bucket aggregation"
@@ -871,7 +924,6 @@ def derive_inverted_index(
                 logger.debug("%s: keys staged", stage_label)
 
                 for chunk_index in range(num_of_chunks):
-                    chunk_started_at = time.perf_counter()
                     chunk_keys = con.sql(f"""
                         SELECT unique_id, key
                         FROM {strategy_keys_table}
@@ -913,7 +965,6 @@ def derive_inverted_index(
                         progress=progress,
                         chunk_index=chunk_index,
                         total_chunks=num_of_chunks,
-                        chunk_elapsed_seconds=(time.perf_counter() - chunk_started_at),
                     )
             finally:
                 progress.close()
@@ -922,7 +973,6 @@ def derive_inverted_index(
             log_stage_complete(
                 stage_label,
                 total_rows,
-                time.perf_counter() - stage_started_at,
                 progress_mode=progress_mode,
             )
 
@@ -1022,6 +1072,11 @@ def prepare_data_for_matching(
             show_progress=progress_mode,
         )
     cleaned_table_name = cleaned_address_table.alias
+    token_column = (
+        "clean_full_address_tokens"
+        if "clean_full_address_tokens" in cleaned_address_table.columns
+        else "clean_full_address"
+    )
 
     if derive_distinguishing_wrt_adjacent_records:
         logger.debug("Deriving adjacent-record distinguishing tokens")
@@ -1046,7 +1101,7 @@ def prepare_data_for_matching(
                 adjacent.common_adj_start_tokens
             FROM {cleaned_table_name} AS cleaned
             INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
-                ON adjacent.__ukam_row_id = cleaned.__ukam_row_id
+                ON adjacent.ukam_address_id = cleaned.ukam_address_id
         """)
         distinguishing_pipeline = create_sql_pipeline(
             con,
@@ -1091,11 +1146,12 @@ def prepare_data_for_matching(
         )
 
     inverted_index_stages = (
-        (
-            [_lookup_keys_in_inverted_index(lookup_strategies)]
-            if lookup_strategies != DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
-            else list(QUEUE_INVERTED_INDEX_LOOKUP)
-        )
+        [
+            _lookup_keys_in_inverted_index(
+                lookup_strategies,
+                token_column=token_column,
+            )
+        ]
         if inv_idx_table_name is not None
         else list(QUEUE_INVERTED_INDEX_SELF)
     )
@@ -1119,7 +1175,7 @@ def prepare_data_for_matching(
         )
         distinguishing_join_sql = f"""
             LEFT JOIN {distinguishing_table_name} AS distinguishing
-              ON cleaned.__ukam_row_id = distinguishing.__ukam_row_id
+                            ON cleaned.ukam_address_id = distinguishing.ukam_address_id
         """
 
     if dataset_role == "canonical":
@@ -1132,7 +1188,6 @@ def prepare_data_for_matching(
         raise ValueError("dataset_role must be one of: 'messy', 'canonical', or None.")
 
     # Apply term frequencies and trigram blocking to cleaned chunks
-    stage_started_at = time.perf_counter()
     log_stage_start(
         stage_label,
         total_rows,
@@ -1141,14 +1196,13 @@ def prepare_data_for_matching(
     )
     try:
         for chunk_index in range(total_chunks):
-            chunk_started_at = time.perf_counter()
             first_id = chunk_index * chunk_size + 1
             last_id = min((chunk_index + 1) * chunk_size, total_rows)
             chunk_query = con.sql(f"""
             SELECT cleaned.*{distinguishing_select_sql}
                 FROM {cleaned_table_name} AS cleaned
                 {distinguishing_join_sql}
-                WHERE cleaned.__ukam_row_id BETWEEN {first_id} AND {last_id}
+                WHERE cleaned.ukam_address_id BETWEEN {first_id} AND {last_id}
             """)
 
             # Process chunk: apply term frequencies + inverted index blocking in one pass
@@ -1158,6 +1212,7 @@ def prepare_data_for_matching(
                 pre_cleaned_addresses=True,
                 additional_stages=inverted_index_stages,
                 debug_options=debug_options if chunk_index == 0 else None,
+                narrow_post_tf=True,
             )
 
             if chunk_index == 0:
@@ -1179,7 +1234,6 @@ def prepare_data_for_matching(
                 progress=progress,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
-                chunk_elapsed_seconds=time.perf_counter() - chunk_started_at,
             )
     finally:
         progress.close()
@@ -1187,7 +1241,6 @@ def prepare_data_for_matching(
     log_stage_complete(
         stage_label,
         total_rows,
-        time.perf_counter() - stage_started_at,
         progress_mode=progress_mode,
     )
 
@@ -1200,7 +1253,6 @@ def prepare_data_for_matching(
     if inv_idx_table_name == "__ukam_inverted_index":
         _drop_table_and_registered_aliases(con, inv_idx_table_name)
 
-    con.execute(f"ALTER TABLE {processed_table} DROP COLUMN __ukam_row_id")
     logger.debug("Prepared address table finalized")
 
     return con.table(processed_table)

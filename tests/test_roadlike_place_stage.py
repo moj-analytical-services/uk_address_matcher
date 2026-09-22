@@ -10,6 +10,7 @@ from uk_address_matcher.cleaning.steps.roadlike_places import (
     derive_top_1_road_keys,
     roadlike_place_candidate_sql,
     roadlike_place_catalog_sql,
+    roadlike_place_prepared_candidate_sources_sql,
     roadlike_place_prepared_candidate_sql,
     roadlike_place_prepared_input_sql,
 )
@@ -62,6 +63,41 @@ def test_prepared_roadlike_candidates_match_generic_candidates(duck_con):
     ).order("address_id, candidate_phrase")
 
     assert prepared_candidates.fetchall() == generic_candidates.fetchall()
+
+
+def test_materialized_prepared_candidate_sources_match_inline_candidates(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('2', '29 SHERWOOD STREET TELFORD SHOPPING CENTRE TELFORD', 'TF1 1AA', ['29'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    duck_con.register("materialized_candidate_source", source)
+    prepared = duck_con.sql(
+        roadlike_place_prepared_input_sql("materialized_candidate_source")
+    )
+    duck_con.register("materialized_candidate_prepared", prepared)
+    duck_con.execute(
+        """
+        CREATE TEMPORARY TABLE materialized_candidate_sources AS
+        SELECT * FROM (
+            %s
+        ) AS candidate_sources
+    """
+        % roadlike_place_prepared_candidate_sources_sql("materialized_candidate_prepared")
+    )
+
+    inline = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("materialized_candidate_prepared")
+    ).order("address_id, candidate_phrase")
+    materialized = duck_con.sql(
+        roadlike_place_prepared_candidate_sql(
+            "materialized_candidate_prepared",
+            candidate_source_relation="materialized_candidate_sources",
+        )
+    ).order("address_id, candidate_phrase")
+
+    assert materialized.fetchall() == inline.fetchall()
 
 
 def test_precomputed_numeric_position_matches_inline_preparation(duck_con):
@@ -121,6 +157,40 @@ def test_derive_roadlike_places_batches_by_district_and_writes_parquet(
     assert written_catalogue.fetchall() == (
         catalogue.order("candidate_phrase").fetchall()
     )
+
+
+def test_roadlike_catalogue_filters_non_residential_rows(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12'], 'RD01'),
+            ('2', '14 COMMERCIAL ROAD', 'AB1 3CD', ['14'], 'CI01')
+        ) AS rows(
+            unique_id, clean_full_address, postcode, numeric_tokens, classificationcode
+        )
+    """)
+
+    catalogue = _catalogue_from_source(duck_con, source)
+    assert catalogue.project("candidate_phrase").fetchall() == [("HIGH STREET",)]
+
+
+def test_roadlike_catalogue_uses_all_rows_without_classificationcode(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('2', '14 COMMERCIAL ROAD', 'AB1 3CD', ['14'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+
+    catalogue = derive_roadlike_places(
+        source,
+        duck_con,
+        show_progress="off",
+    )
+
+    assert catalogue.project("candidate_phrase").order("candidate_phrase").fetchall() == [
+        ("COMMERCIAL ROAD",),
+        ("HIGH STREET",),
+    ]
 
 
 def test_add_top_1_road_features_uses_supplied_catalogue_and_packaged_scorecard(

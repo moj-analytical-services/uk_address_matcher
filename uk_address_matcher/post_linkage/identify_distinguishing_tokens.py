@@ -30,6 +30,8 @@ def improve_predictions_using_distinguishing_tokens(
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
     numeric_range_reranker: NumericRangeRerankerConfig | None = None,
+    df_addresses_to_match: DuckDBPyRelation | None = None,
+    df_addresses_to_search_within: DuckDBPyRelation | None = None,
 ) -> DuckDBPyRelation:
     run_id = _uid()
     matches_table = f"__ukam__tmp_distinguishability_matches_{run_id}"
@@ -39,6 +41,8 @@ def improve_predictions_using_distinguishing_tokens(
     top_n_matches_table = f"__ukam__tmp_top_n_matches_{run_id}"
     token_addresses_table = f"__ukam__tmp_token_addresses_{run_id}"
     block_statistics_table = f"__ukam__tmp_block_statistics_{run_id}"
+    canonical_token_lookup_table = f"__ukam__tmp_canonical_token_lookup_{run_id}"
+    messy_token_lookup_table = f"__ukam__tmp_messy_token_lookup_{run_id}"
 
     if numeric_range_reranker is not None:
         required_range_columns = {
@@ -52,15 +56,18 @@ def improve_predictions_using_distinguishing_tokens(
         if not required_range_columns.issubset(df_predict.columns):
             numeric_range_reranker = None
 
-    retained_columns = ""
+    retained_column_names: list[str] = []
     if additional_columns_to_retain:
-        retained_columns = "".join(
-            f"{column}_l, {column}_r, "
-            for column in additional_columns_to_retain
-            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns
-        )
+        for column in additional_columns_to_retain:
+            if (
+                f"{column}_l" in df_predict.columns
+                and f"{column}_r" in df_predict.columns
+            ):
+                retained_column_names.extend((f"{column}_l", f"{column}_r"))
     if "ukam_label_r" in df_predict.columns:
-        retained_columns += "ukam_label_r, "
+        retained_column_names.append("ukam_label_r")
+    retained_column_names = list(dict.fromkeys(retained_column_names))
+    retained_columns = "".join(f"{column}, " for column in retained_column_names)
 
     eligibility_filter = ""
     if histogram_eligibility_column is not None:
@@ -70,6 +77,42 @@ def improve_predictions_using_distinguishing_tokens(
                 f"{histogram_eligibility_column}"
             )
         eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
+
+    fallback_full_address_tokens_l_sql = (
+        "string_split(trim(upper(source.clean_full_address_l)), ' ')"
+    )
+    fallback_full_address_tokens_r_sql = (
+        "string_split(trim(upper(source.clean_full_address_r)), ' ')"
+    )
+    token_lookup_joins = ""
+    full_address_tokens_l_sql = fallback_full_address_tokens_l_sql
+    full_address_tokens_r_sql = fallback_full_address_tokens_r_sql
+
+    def tokens_with_postcode_sql(token_column: str, postcode_column: str) -> str:
+        return f"""
+            list_filter(
+                list_transform(
+                    list_concat(
+                        {token_column},
+                        CASE
+                            WHEN {postcode_column} IS NULL OR {postcode_column} = ''
+                                THEN CAST([] AS VARCHAR[])
+                            ELSE string_split(trim(upper({postcode_column})), ' ')
+                        END
+                    ),
+                    token -> upper(token)
+                ),
+                token -> token IS NOT NULL AND token != ''
+            )
+        """
+
+    source_tokens_sql = tokens_with_postcode_sql("__token_address_tokens_r", "postcode_r")
+    candidate_tokens_sql = tokens_with_postcode_sql(
+        "candidate.__token_address_tokens_l", "candidate.postcode_l"
+    )
+    candidate_tokens_l_sql = tokens_with_postcode_sql(
+        "__token_address_tokens_l", "postcode_l"
+    )
 
     candidate_token_lists_sql = """
         array_agg(candidate_tokens).
@@ -176,6 +219,7 @@ def improve_predictions_using_distinguishing_tokens(
         range_projection = ""
         range_adjustment_sql = ""
         token_adjustment_alias = "mw_adjustment"
+        range_source_column_names: list[str] = []
         if numeric_range_reranker is not None:
             reranked = build_numeric_range_candidate_pool(
                 con,
@@ -185,7 +229,6 @@ def improve_predictions_using_distinguishing_tokens(
                 numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
                 numeric_search_depth=numeric_range_reranker.numeric_search_depth,
             )
-            reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
             range_intermediate_columns = """
                 candidate.legacy_numeric_bits,
                 candidate.numeric_range_relationship,
@@ -206,6 +249,15 @@ def improve_predictions_using_distinguishing_tokens(
             """
             range_adjustment_sql = " + numeric_range_adjustment"
             token_adjustment_alias = "distinguishing_token_adjustment"
+            range_source_column_names = [
+                "legacy_numeric_bits",
+                "numeric_range_relationship",
+                "numeric_range_guard_passed",
+                "numeric_range_guard_reason",
+                "numeric_range_base_bits",
+                "numeric_range_tf_bits",
+                "numeric_range_adjustment",
+            ]
         else:
             con.sql(f"""
                 SELECT *
@@ -217,15 +269,107 @@ def improve_predictions_using_distinguishing_tokens(
             """).create(top_n_matches_table)
             reranker_source = top_n_matches_table
 
+        source_column_names = [
+            "match_weight",
+            "match_probability",
+            "unique_id_l",
+            "unique_id_r",
+            "clean_full_address_l",
+            "clean_full_address_r",
+            "ukam_address_id_l",
+            "ukam_address_id_r",
+            "postcode_l",
+            "postcode_r",
+            *range_source_column_names,
+            *retained_column_names,
+        ]
+        if "common_end_tokens_hist_r" in df_predict.columns:
+            source_column_names.append("common_end_tokens_hist_r")
+        source_column_names = list(dict.fromkeys(source_column_names))
+        source_projection = ", ".join(
+            f"source.{column}" for column in source_column_names
+        )
+        if numeric_range_reranker is not None:
+            con.sql(f"""
+                SELECT {source_projection}
+                FROM ({reranked.sql_query()}) AS source
+            """).create(top_n_matches_table)
+            reranker_source = top_n_matches_table
+
+        if (
+            "clean_full_address_tokens_l" not in df_predict.columns
+            and "clean_full_address_tokens_r" not in df_predict.columns
+            and df_addresses_to_match is not None
+            and df_addresses_to_search_within is not None
+            and "clean_full_address_tokens" in df_addresses_to_match.columns
+            and "clean_full_address_tokens" in df_addresses_to_search_within.columns
+        ):
+            canonical_tokens = df_addresses_to_search_within.select(
+                "ukam_address_id, clean_full_address_tokens"
+            )
+            con.sql(f"""
+                SELECT lookup.ukam_address_id, lookup.clean_full_address_tokens
+                FROM ({canonical_tokens.sql_query()}) AS lookup
+                INNER JOIN (
+                    SELECT DISTINCT ukam_address_id_l
+                    FROM {reranker_source}
+                ) AS candidate_keys
+                    ON candidate_keys.ukam_address_id_l = lookup.ukam_address_id
+            """).create(canonical_token_lookup_table)
+
+            messy_tokens = df_addresses_to_match.select(
+                "ukam_address_id, clean_full_address_tokens"
+            )
+            con.sql(f"""
+                SELECT lookup.ukam_address_id, lookup.clean_full_address_tokens
+                FROM ({messy_tokens.sql_query()}) AS lookup
+                INNER JOIN (
+                    SELECT DISTINCT ukam_address_id_r
+                    FROM {reranker_source}
+                ) AS candidate_keys
+                    ON candidate_keys.ukam_address_id_r = lookup.ukam_address_id
+            """).create(messy_token_lookup_table)
+
+            full_address_tokens_l_sql = (
+                "COALESCE(canonical_lookup.clean_full_address_tokens, "
+                f"{fallback_full_address_tokens_l_sql})"
+            )
+            full_address_tokens_r_sql = (
+                "COALESCE(messy_lookup.clean_full_address_tokens, "
+                f"{fallback_full_address_tokens_r_sql})"
+            )
+            token_lookup_joins = f"""
+                LEFT JOIN {canonical_token_lookup_table} AS canonical_lookup
+                    ON canonical_lookup.ukam_address_id = source.ukam_address_id_l
+                LEFT JOIN {messy_token_lookup_table} AS messy_lookup
+                    ON messy_lookup.ukam_address_id = source.ukam_address_id_r
+            """
+        else:
+            full_address_tokens_l_sql = (
+                "source.clean_full_address_tokens_l"
+                if "clean_full_address_tokens_l" in df_predict.columns
+                else fallback_full_address_tokens_l_sql
+            )
+            full_address_tokens_r_sql = (
+                "source.clean_full_address_tokens_r"
+                if "clean_full_address_tokens_r" in df_predict.columns
+                else fallback_full_address_tokens_r_sql
+            )
+
         common_end_tokens_expression = (
-            "map_keys(common_end_tokens_hist_r)"
+            "map_keys(source.common_end_tokens_hist_r)"
             if "common_end_tokens_hist_r" in df_predict.columns
             else "CAST([] AS VARCHAR[])"
         )
         con.sql(f"""
             WITH intermediate AS (
-                SELECT *, {common_end_tokens_expression} AS common_end_tokens_r
-                FROM {reranker_source}
+                SELECT
+                    {source_projection},
+                    {common_end_tokens_expression} AS common_end_tokens_r,
+                    {full_address_tokens_l_sql} AS __full_address_tokens_l,
+                    {full_address_tokens_r_sql} AS __full_address_tokens_r
+                FROM {reranker_source} AS source
+                {token_lookup_joins}
             ),
             enriched AS (
                 SELECT
@@ -248,10 +392,7 @@ def improve_predictions_using_distinguishing_tokens(
             )
             SELECT
                 *,
-                clean_full_address_l
-                    .trim()
-                    .upper()
-                    .regexp_split_to_array('\\s+')
+                __full_address_tokens_l
                     .list_reverse()
                     .list_filter((token, position) -> NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
@@ -259,12 +400,8 @@ def improve_predictions_using_distinguishing_tokens(
                     .list_filter((token, position) -> NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
-                    .list_reverse()
-                    .array_to_string(' ') AS __token_address_l,
-                clean_full_address_r
-                    .trim()
-                    .upper()
-                    .regexp_split_to_array('\\s+')
+                    .list_reverse() AS __token_address_tokens_l,
+                __full_address_tokens_r
                     .list_reverse()
                     .list_filter((token, position) -> NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
@@ -272,8 +409,7 @@ def improve_predictions_using_distinguishing_tokens(
                     .list_filter((token, position) -> NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
-                    .list_reverse()
-                    .array_to_string(' ') AS __token_address_r
+                    .list_reverse() AS __token_address_tokens_r
             FROM enriched
         """).create(token_addresses_table)
 
@@ -281,20 +417,14 @@ def improve_predictions_using_distinguishing_tokens(
             WITH source_tokens AS (
                 SELECT DISTINCT
                     ukam_address_id_r,
-                    concat_ws(' ', __token_address_r, postcode_r)
-                        .trim()
-                        .upper()
-                        .regexp_split_to_array('\\s+') AS tokens_r
+                    {source_tokens_sql} AS tokens_r
                 FROM {token_addresses_table}
             ),
             block_tokens AS (
                 SELECT
                     source.ukam_address_id_r,
                     source.tokens_r,
-                    concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
-                        .trim()
-                        .upper()
-                        .regexp_split_to_array('\\s+') AS candidate_tokens
+                    {candidate_tokens_sql} AS candidate_tokens
                 FROM {token_addresses_table} AS candidate
                 JOIN source_tokens AS source USING (ukam_address_id_r)
                 {eligibility_filter}
@@ -344,10 +474,7 @@ def improve_predictions_using_distinguishing_tokens(
                     candidate.ukam_address_id_r,
                     candidate.postcode_l,
                     candidate.postcode_r,
-                    concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
-                        .trim()
-                        .upper()
-                        .regexp_split_to_array('\\s+') AS tokens_l,
+                    {candidate_tokens_l_sql} AS tokens_l,
                     statistics.tokens_r,
                     statistics.hist_all_tokens_in_block_l,
                     statistics.hist_overlapping_tokens_r_block_l,
@@ -357,12 +484,7 @@ def improve_predictions_using_distinguishing_tokens(
                     {retained_columns}
                     list_distinct(
                         list_filter(
-                            concat_ws(
-                                ' ', candidate.__token_address_l, candidate.postcode_l
-                            )
-                                .trim()
-                                .upper()
-                                .regexp_split_to_array('\\s+'),
+                            {candidate_tokens_l_sql},
                                 token -> token IN {_POSITIONAL_TOKENS_SQL}
                         )
                     ) AS positional_tokens_l,
@@ -585,6 +707,8 @@ def improve_predictions_using_distinguishing_tokens(
             top_n_matches_table,
             token_addresses_table,
             block_statistics_table,
+            canonical_token_lookup_table,
+            messy_token_lookup_table,
         ):
             _drop_table_and_registered_aliases(con, table_name)
 

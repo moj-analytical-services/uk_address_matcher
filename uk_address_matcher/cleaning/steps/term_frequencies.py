@@ -16,6 +16,13 @@ def _add_term_frequencies_to_address_tokens():
     SELECT * FROM {input}
     """
 
+    token_input_sql = """
+    SELECT
+        ukam_address_id,
+        address_without_numbers_tokenised
+    FROM {base}
+    """
+
     rel_tok_freq_cte_sql = """
     SELECT
         token,
@@ -23,7 +30,7 @@ def _add_term_frequencies_to_address_tokens():
     FROM (
         SELECT
             unnest(address_without_numbers_tokenised) AS token
-        FROM {base}
+        FROM {token_input}
     )
     GROUP BY token
     """
@@ -31,17 +38,17 @@ def _add_term_frequencies_to_address_tokens():
     # 1. Explode to rows - we only need ID, Token, and Index
     exploded_tokens_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         UNNEST(address_without_numbers_tokenised) AS token,
         GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
-    FROM {base}
+    FROM {token_input}
     """
 
     # 2. Join to frequencies - we ONLY keep the Frequency (Float) and the Index (Int)
     # We drop the Token string here. It is dead weight for the sort.
     joined_scalars_sql = """
     SELECT
-        e.__ukam_row_id,
+        e.ukam_address_id,
         e.token_idx,
         COALESCE(f.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -58,13 +65,13 @@ def _add_term_frequencies_to_address_tokens():
     # is unique within a group). This is ~3x faster with identical output.
     reaggregated_freqs_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
             s -> s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY __ukam_row_id
+    GROUP BY ukam_address_id
     """
 
     # 4. Zip the sorted frequencies back to the ORIGINAL token list
@@ -79,11 +86,12 @@ def _add_term_frequencies_to_address_tokens():
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.__ukam_row_id = agg.__ukam_row_id
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
+        CTEStep("token_input", token_input_sql),
         CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
         CTEStep("exploded_tokens", exploded_tokens_sql),
         CTEStep("joined_scalars", joined_scalars_sql),
@@ -106,19 +114,26 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     SELECT * FROM {input}
     """
 
+    token_input_sql = """
+    SELECT
+        ukam_address_id,
+        address_without_numbers_tokenised
+    FROM {base}
+    """
+
     # 1. Explode to rows - we only need ID, Token, and Index
     exploded_tokens_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         UNNEST(address_without_numbers_tokenised) AS token,
         GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
-    FROM {base}
+    FROM {token_input}
     """
 
     # 2. Join to frequencies - keep only the frequency and token position.
     joined_scalars_sql = """
     SELECT
-        e.__ukam_row_id,
+        e.ukam_address_id,
         e.token_idx,
         COALESCE(__ukam__tmp_rel_tok_freq.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -129,13 +144,13 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     # 3. Aggregate frequencies back into each address's original token order.
     reaggregated_freqs_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
             s -> s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY __ukam_row_id
+    GROUP BY ukam_address_id
     """
 
     # 4. Zip the frequencies back to the original token list.
@@ -148,11 +163,12 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.__ukam_row_id = agg.__ukam_row_id
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
+        CTEStep("token_input", token_input_sql),
         CTEStep("exploded_tokens", exploded_tokens_sql),
         CTEStep("joined_scalars", joined_scalars_sql),
         CTEStep("reaggregated_freqs", reaggregated_freqs_sql),

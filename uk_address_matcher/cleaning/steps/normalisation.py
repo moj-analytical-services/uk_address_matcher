@@ -265,31 +265,50 @@ def _strip_country_suffix() -> str:
     ),
     tags=["cleaning"],
 )
-def _remove_duplicate_end_tokens() -> str:
+def _remove_duplicate_end_tokens() -> list[CTEStep]:
     """
-    Removes duplicated tokens at the end of the address.
-    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
+    Remove duplicated end tokens and retain the finalized token array.
+
+    The token array used to be rebuilt by the following pipeline stage. Keeping
+    the post-deduplication list here lets downstream feature stages reuse it.
     """
-    sql = r"""
-    WITH tokenised AS (
-        SELECT *, string_split(clean_full_address, ' ') AS cleaned_tokenised
-        FROM {input}
-    )
-    SELECT
-        * EXCLUDE (cleaned_tokenised, clean_full_address),
-        CASE
-            WHEN array_length(cleaned_tokenised) >= 2
-                 AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
-            THEN array_to_string(cleaned_tokenised[:-2], ' ')
-            WHEN array_length(cleaned_tokenised) >= 4
-                 AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
-                 AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
-            THEN array_to_string(cleaned_tokenised[:-3], ' ')
-            ELSE clean_full_address
-        END AS clean_full_address
-    FROM tokenised
-    """
-    return sql
+    return [
+        CTEStep(
+            "tokenised",
+            r"""
+            SELECT *, string_split(clean_full_address, ' ') AS cleaned_tokenised
+            FROM {input}
+            """,
+        ),
+        CTEStep(
+            "deduplicated",
+            r"""
+            SELECT
+                * EXCLUDE (cleaned_tokenised, clean_full_address),
+                CASE
+                    WHEN array_length(cleaned_tokenised) >= 2
+                         AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
+                    THEN cleaned_tokenised[:-2]
+                    WHEN array_length(cleaned_tokenised) >= 4
+                         AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
+                         AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
+                    THEN cleaned_tokenised[:-3]
+                    ELSE cleaned_tokenised
+                END AS deduplicated_tokens
+            FROM {tokenised}
+            """,
+        ),
+        CTEStep(
+            "final",
+            r"""
+            SELECT
+                * EXCLUDE (deduplicated_tokens),
+                array_to_string(deduplicated_tokens, ' ') AS clean_full_address,
+                deduplicated_tokens::VARCHAR[] AS clean_full_address_tokens
+            FROM {deduplicated}
+            """,
+        ),
+    ]
 
 
 @pipeline_stage(

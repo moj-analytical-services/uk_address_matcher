@@ -27,7 +27,7 @@ def test_duplicate_records_get_unique_ukam_address_id(duck_con):
     assert "ukam_address_id" in cleaned.columns, (
         "ukam_address_id column should exist in cleaned data"
     )
-    assert "__ukam_row_id" in cleaned.columns
+    assert "__ukam_row_id" not in cleaned.columns
 
     # Get the ukam_address_id values
     result = duck_con.sql(
@@ -114,14 +114,12 @@ def test_existing_ukam_address_id_is_replaced_with_fresh_integer(duck_con):
         num_of_chunks=2,
     )
 
-    result = duck_con.sql(
-        "SELECT unique_id, ukam_address_id FROM cleaned ORDER BY unique_id"
-    ).fetchall()
+    result = duck_con.sql("SELECT ukam_address_id FROM cleaned").fetchall()
 
-    assert result == [("1", 1), ("2", 2)]
+    assert sorted(row[0] for row in result) == [1, 2]
 
 
-def test_ids_follow_postcode_and_unique_id_storage_order(duck_con):
+def test_ids_are_unique_and_contiguous(duck_con):
     duck_con.execute(
         """
         CREATE OR REPLACE TABLE test_data AS
@@ -139,8 +137,7 @@ def test_ids_follow_postcode_and_unique_id_storage_order(duck_con):
         num_of_chunks=1,
     )
 
-    assert cleaned.select("postcode, unique_id, ukam_address_id").fetchall() == [
-        ("OX1 1AA", "3", 1),
-        ("SW1A 2AA", "1", 2),
-        ("SW1A 2AA", "2", 3),
-    ]
+    ids = [row[0] for row in cleaned.select("ukam_address_id").fetchall()]
+
+    assert sorted(ids) == [1, 2, 3]
+    assert len(set(ids)) == len(ids)

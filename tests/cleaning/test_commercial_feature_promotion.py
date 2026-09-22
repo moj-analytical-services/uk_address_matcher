@@ -15,7 +15,9 @@ def test_derives_lexical_residuals_and_numeric_roles():
     connection = duckdb.connect()
     input_relation = connection.sql(
         """
-        SELECT * FROM (VALUES
+        SELECT *, regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]
+            AS clean_full_address_tokens
+        FROM (VALUES
             (
                 'ACME UNIT 7',
                 ['ACME', 'UNIT', '7']::VARCHAR[],
@@ -58,6 +60,53 @@ def test_derives_lexical_residuals_and_numeric_roles():
     ]
 
 
+def test_numeric_roles_handle_repeated_tokens_and_ranges():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT *, regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]
+            AS clean_full_address_tokens
+        FROM (VALUES
+            (
+                'UNIT 7 UNIT 7',
+                ['7', '7']::VARCHAR[]
+            ),
+            (
+                'LEVEL 12-14 GARAGE 12-14',
+                ['12-14', '12-14']::VARCHAR[]
+            ),
+            (
+                'CAR PARK SPACE 20 BAY 20',
+                ['20', '20']::VARCHAR[]
+            )
+        ) AS t(clean_full_address, numeric_tokens)
+        """
+    )
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(_derive_numeric_context_roles())
+    result = pipeline.run(DebugOptions(pretty_print_sql=False))
+
+    assert result.project(
+        "numeric_role_keys, numeric_broad_roles, numeric_specific_markers"
+    ).fetchall() == [
+        (
+            ["unit|UNIT|7", "unit|UNIT|7"],
+            ["unit", "unit"],
+            ["UNIT", "UNIT"],
+        ),
+        (
+            ["asset|GARAGE|12-14", "asset|GARAGE|12-14"],
+            ["asset", "asset"],
+            ["GARAGE", "GARAGE"],
+        ),
+        (
+            ["asset|PARKING_SPACE|20", "asset|PARKING_SPACE|20"],
+            ["asset", "asset"],
+            ["PARKING_SPACE", "PARKING_SPACE"],
+        ),
+    ]
+
+
 def test_packaged_settings_include_promoted_commercial_features():
     settings = json.loads(
         (
@@ -82,9 +131,7 @@ def test_packaged_settings_include_promoted_commercial_features():
 
     lexical_levels = {
         level["label_for_charts"]: level
-        for level in comparisons["commercial_distinguishing_lexical_tokens"][
-            "comparison_levels"
-        ]
+        for level in comparisons["distinguishing_lexical_tokens"]["comparison_levels"]
     }
     assert (
         lexical_levels["No lexical distinguishing tokens present (-2)"]["m_probability"]
@@ -141,6 +188,22 @@ def test_packaged_settings_include_promoted_commercial_features():
         ]
         == 0.0625
     )
+
+    numeric_context_conditions = [
+        level["sql_condition"]
+        for level in comparisons["address_structure_numeric_context"]["comparison_levels"]
+        if "clean_full_address_l" in level["sql_condition"]
+    ]
+    assert len(numeric_context_conditions) == 3
+    assert all(
+        "numeric_tokens_r IS NOT NULL" in condition
+        for condition in numeric_context_conditions
+    )
+    assert all(
+        "lower(clean_full_address" not in condition
+        for condition in numeric_context_conditions
+    )
+    assert all("[^A-Z#]+" in condition for condition in numeric_context_conditions)
 
 
 def test_canonical_preparation_carries_distinguishing_lexical_tokens():
