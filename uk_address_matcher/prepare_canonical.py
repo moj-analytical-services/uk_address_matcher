@@ -277,6 +277,9 @@ def _rehydrate_canonical_addresses(
     if "exploding_unique_ids" not in columns and "unique_id" in columns:
         addresses = addresses.select("*, list_value(unique_id) AS exploding_unique_ids")
     columns = addresses.columns
+    if isinstance(columns, list) and "sub_premise_location" not in columns:
+        addresses = addresses.select("*, CAST(NULL AS VARCHAR) AS sub_premise_location")
+        columns = addresses.columns
     numeric_token_views = [
         f"list_extract(numeric_tokens, {position}) AS numeric_token_{position}"
         for position in (2, 3)
