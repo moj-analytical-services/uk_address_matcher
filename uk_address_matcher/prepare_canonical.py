@@ -63,26 +63,35 @@ _MANAGED_FILES = [
     f"{MANIFEST_FILENAME}.tmp",
 ]
 
-# Parquet write tuning for the prepared artefacts.
-PARQUET_COMPRESSION = "ZSTD"
-PARQUET_COMPRESSION_LEVEL = 6
-INVERTED_INDEX_COMPRESSION_LEVEL = 22
-PARQUET_VERSION = "V2"
-PARQUET_ROW_GROUP_SIZE = 122_880
+@dataclass(frozen=True)
+class _ParquetArtefactSettings:
+    """Parquet format, compression, and ordering settings for one artefact."""
 
-# Sorting canonical output by these columns improves Parquet compression locality.
-# ID assignment is deliberately independent of this storage ordering.
-CANONICAL_SORT_COLUMNS = (
-    "postcode",
-    "unique_id",
-    "clean_full_address",
-    "filename",
+    compression: str = "ZSTD"
+    compression_level: int = 6
+    version: str = "V2"
+    row_group_size: int = 122_880
+    sort_columns: tuple[str, ...] = ()
+    order_by: tuple[str, ...] = ()
+
+
+_STANDARD_PARQUET_SETTINGS = _ParquetArtefactSettings()
+_CANONICAL_PARQUET_SETTINGS = _ParquetArtefactSettings(
+    sort_columns=(
+        "postcode",
+        "unique_id",
+        "clean_full_address",
+        "filename",
+    ),
 )
-INVERTED_INDEX_ORDER_BY = (
-    "index_strategy",
-    "left(key, 1)",
-    "unique_ids",
-    "key",
+_INVERTED_INDEX_PARQUET_SETTINGS = _ParquetArtefactSettings(
+    compression_level=9,
+    order_by=(
+        "index_strategy",
+        "left(key, 1)",
+        "unique_ids",
+        "key",
+    ),
 )
 
 # Columns that are not needed after preparation and therefore not persisted.
@@ -142,10 +151,8 @@ def _write_parquet_artefact(
     relation: duckdb.DuckDBPyRelation,
     path: str | Path,
     *,
-    sort_columns: tuple[str, ...] = (),
-    order_by: tuple[str, ...] | None = None,
+    settings: _ParquetArtefactSettings = _STANDARD_PARQUET_SETTINGS,
     drop_columns: tuple[str, ...] = (),
-    compression_level: int = PARQUET_COMPRESSION_LEVEL,
 ) -> None:
     """Write a relation to a Parquet file using the prepared-data settings.
 
@@ -157,17 +164,19 @@ def _write_parquet_artefact(
     columns = relation.columns
     existing_drops = [c for c in drop_columns if c in columns]
     drop_clause = f" EXCLUDE ({', '.join(existing_drops)})" if existing_drops else ""
-    order_terms = order_by or tuple(c for c in sort_columns if c in columns)
+    order_terms = settings.order_by or tuple(
+        c for c in settings.sort_columns if c in columns
+    )
     order_clause = (" ORDER BY " + ", ".join(order_terms)) if order_terms else ""
     escaped_path = _escape_sql_string(str(path))
     con.execute(
         f"COPY (SELECT *{drop_clause} "
         f"FROM ({relation.sql_query()}) AS _ukam_src{order_clause}) "
         f"TO '{escaped_path}' "
-        f"(FORMAT PARQUET, PARQUET_VERSION {PARQUET_VERSION}, "
-        f"COMPRESSION {PARQUET_COMPRESSION}, "
-        f"COMPRESSION_LEVEL {compression_level}, "
-        f"ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE})"
+        f"(FORMAT PARQUET, PARQUET_VERSION {settings.version}, "
+        f"COMPRESSION {settings.compression}, "
+        f"COMPRESSION_LEVEL {settings.compression_level}, "
+        f"ROW_GROUP_SIZE {settings.row_group_size})"
     )
 
 
@@ -708,8 +717,7 @@ def prepare_canonical_folder(
         con,
         inverted_index,
         idx_path,
-        order_by=INVERTED_INDEX_ORDER_BY,
-        compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
+        settings=_INVERTED_INDEX_PARQUET_SETTINGS,
     )
     if roadlike_places is not None:
         _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
@@ -726,7 +734,7 @@ def prepare_canonical_folder(
             con,
             canonical_storage_relation,
             addr_path,
-            sort_columns=CANONICAL_SORT_COLUMNS,
+            settings=_CANONICAL_PARQUET_SETTINGS,
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -765,7 +773,7 @@ def prepare_canonical_folder(
                 con,
                 chunk_query,
                 chunk_path,
-                sort_columns=CANONICAL_SORT_COLUMNS,
+                settings=_CANONICAL_PARQUET_SETTINGS,
                 drop_columns=canonical_drop_columns,
             )
             chunk_count = last_id - first_id + 1

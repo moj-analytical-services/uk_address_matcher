@@ -996,7 +996,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         sql for sql in parquet_copies if "ukam_inverted_index.parquet" not in sql
     ]
     assert len(inverted_index_copies) == 1
-    assert "COMPRESSION_LEVEL 22" in inverted_index_copies[0]
+    assert "COMPRESSION_LEVEL 9" in inverted_index_copies[0]
     assert (
         "ORDER BY index_strategy, left(key, 1), unique_ids, key"
         in (inverted_index_copies[0])
