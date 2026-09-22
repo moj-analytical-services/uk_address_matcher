@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
+from uk_address_matcher.cleaning.rehydration.token_views import (
+    _distinguishing_lexical_tokens_expression,
+    _distinguishing_token_parts_view_expressions,
+    _ensure_clean_full_address_views,
+)
 from uk_address_matcher.cleaning.steps.inverted_index import (
     BASE_INDEX_PORTFOLIO,
 )
@@ -27,11 +32,6 @@ from uk_address_matcher.helpers.path_parsing import (
     relative_remote_path,
 )
 from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
-from uk_address_matcher.rehydration.token_views import (
-    _distinguishing_lexical_tokens_expression,
-    _distinguishing_token_parts_view_expressions,
-    _ensure_clean_full_address_views,
-)
 from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
 
 if TYPE_CHECKING:

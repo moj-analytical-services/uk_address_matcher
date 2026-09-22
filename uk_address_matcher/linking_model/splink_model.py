@@ -6,12 +6,12 @@ from contextlib import contextmanager
 from duckdb import DuckDBPyConnection, DuckDBPyRelation, InvalidInputException
 from splink import DuckDBAPI, Linker, SettingsCreator
 
-from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
-    ensure_numeric_range_struct,
-)
-from uk_address_matcher.rehydration.token_views import (
+from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
+)
+from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
+    ensure_numeric_range_struct,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
