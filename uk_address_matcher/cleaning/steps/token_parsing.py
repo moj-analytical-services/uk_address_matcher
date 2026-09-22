@@ -103,51 +103,87 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         "{neighbour_suffix}", neighbour_suffix
     )
 
-    neighbour_names = (
-        "lag_1",
-        "lag_2",
-        "lag_3",
-        "lead_1",
-        "lead_2",
-        "lead_3",
-    )
-    suffix_length_expressions = []
-    for neighbour_name in neighbour_names:
-        neighbour_id = f"__{neighbour_name}_unique_id"
-        neighbour_tokens = (
-            f"__{neighbour_name}_tokens"
-            if carry_neighbour_tokens
-            else f"string_split(__{neighbour_name}_address, ' ')::VARCHAR[]"
-        )
-        suffix_length_expressions.append(f"""
+    nearest_distinct_neighbours_sql = """
+    SELECT
+        *,
         CASE
-            WHEN {neighbour_id} IS NULL OR {neighbour_id} = unique_id THEN 0
+            WHEN __lag_1_unique_id IS NOT NULL
+             AND __lag_1_unique_id <> unique_id THEN __lag_1_{neighbour_suffix}
+            WHEN __lag_2_unique_id IS NOT NULL
+             AND __lag_2_unique_id <> unique_id THEN __lag_2_{neighbour_suffix}
+            WHEN __lag_3_unique_id IS NOT NULL
+             AND __lag_3_unique_id <> unique_id THEN __lag_3_{neighbour_suffix}
+            ELSE NULL
+        END AS __left_neighbour_{neighbour_suffix},
+        CASE
+            WHEN __lead_1_unique_id IS NOT NULL
+             AND __lead_1_unique_id <> unique_id THEN __lead_1_{neighbour_suffix}
+            WHEN __lead_2_unique_id IS NOT NULL
+             AND __lead_2_unique_id <> unique_id THEN __lead_2_{neighbour_suffix}
+            WHEN __lead_3_unique_id IS NOT NULL
+             AND __lead_3_unique_id <> unique_id THEN __lead_3_{neighbour_suffix}
+            ELSE NULL
+        END AS __right_neighbour_{neighbour_suffix}
+    FROM {neighbouring_addresses} AS neighbours
+    """.replace("{neighbour_suffix}", neighbour_suffix)
+
+    left_neighbour_value = f"__left_neighbour_{neighbour_suffix}"
+    right_neighbour_value = f"__right_neighbour_{neighbour_suffix}"
+    left_neighbour_tokens = (
+        left_neighbour_value
+        if carry_neighbour_tokens
+        else f"string_split({left_neighbour_value}, ' ')::VARCHAR[]"
+    )
+    right_neighbour_tokens = (
+        right_neighbour_value
+        if carry_neighbour_tokens
+        else f"string_split({right_neighbour_value}, ' ')::VARCHAR[]"
+    )
+
+    suffix_lengths_sql = (
+        """
+    SELECT
+        ukam_address_id,
+        __tokens,
+        CASE
+            WHEN {left_neighbour_value} IS NULL THEN 0
             ELSE COALESCE(
                 list_position(
                     list_transform(
                         list_zip(
                             list_reverse(__tokens),
-                            list_reverse({neighbour_tokens}),
+                            list_reverse({left_neighbour_tokens}),
                             true
                         ),
                         token_pair -> token_pair[1] != token_pair[2]
                     ),
                     true
                 ) - 1,
-                least(len(__tokens), len({neighbour_tokens}))
+                least(len(__tokens), len({left_neighbour_tokens}))
             )
-        END AS __{neighbour_name}_common_suffix_length
-        """)
-
-    suffix_lengths_sql = """
-    SELECT
-        ukam_address_id,
-        __tokens,
-        {suffix_length_expressions}
-    FROM {neighbouring_addresses} AS neighbours
-    """.replace(
-        "{suffix_length_expressions}",
-        ",\n".join(suffix_length_expressions),
+        END AS __left_common_suffix_length,
+        CASE
+            WHEN {right_neighbour_value} IS NULL THEN 0
+            ELSE COALESCE(
+                list_position(
+                    list_transform(
+                        list_zip(
+                            list_reverse(__tokens),
+                            list_reverse({right_neighbour_tokens}),
+                            true
+                        ),
+                        token_pair -> token_pair[1] != token_pair[2]
+                    ),
+                    true
+                ) - 1,
+                least(len(__tokens), len({right_neighbour_tokens}))
+            )
+        END AS __right_common_suffix_length
+    FROM {nearest_distinct_neighbours} AS neighbours
+    """.replace("{left_neighbour_value}", left_neighbour_value)
+        .replace("{right_neighbour_value}", right_neighbour_value)
+        .replace("{left_neighbour_tokens}", left_neighbour_tokens)
+        .replace("{right_neighbour_tokens}", right_neighbour_tokens)
     )
 
     maximum_suffix_lengths_sql = """
@@ -155,12 +191,8 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         suffix_lengths.ukam_address_id,
         suffix_lengths.__tokens,
         greatest(
-            __lag_1_common_suffix_length,
-            __lag_2_common_suffix_length,
-            __lag_3_common_suffix_length,
-            __lead_1_common_suffix_length,
-            __lead_2_common_suffix_length,
-            __lead_3_common_suffix_length
+            __left_common_suffix_length,
+            __right_common_suffix_length
         ) AS __max_common_suffix_length
     FROM {suffix_lengths} AS suffix_lengths
     """
@@ -216,6 +248,10 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     steps = [
         CTEStep("tokenised_addresses", tokenised_addresses_sql),
         CTEStep("neighbouring_addresses", neighbouring_addresses_sql),
+        CTEStep(
+            "nearest_distinct_neighbours",
+            nearest_distinct_neighbours_sql,
+        ),
         CTEStep("suffix_lengths", suffix_lengths_sql),
         CTEStep("maximum_suffix_lengths", maximum_suffix_lengths_sql),
         CTEStep("final", final_sql),
