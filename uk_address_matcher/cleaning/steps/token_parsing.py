@@ -62,7 +62,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     token_expression = (
         "clean_full_address_tokens::VARCHAR[]"
         if use_precomputed_tokens
-        else "regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]"
+        else "string_split(clean_full_address, ' ')::VARCHAR[]"
     )
     tokenised_addresses_sql = f"""
     SELECT
@@ -117,7 +117,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         neighbour_tokens = (
             f"__{neighbour_name}_tokens"
             if carry_neighbour_tokens
-            else f"regexp_split_to_array(__{neighbour_name}_address, '\\s+')::VARCHAR[]"
+            else f"string_split(__{neighbour_name}_address, ' ')::VARCHAR[]"
         )
         suffix_length_expressions.append(f"""
         CASE
@@ -750,7 +750,7 @@ def _clean_address_string_second_pass_and_tokenise():
             r"""
             SELECT
                 *,
-                regexp_split_to_array(address_without_numbers, '\s+')
+                string_split(address_without_numbers, ' ')
                     AS __address_without_numbers_tokenised
             FROM {cleaned}
             """,

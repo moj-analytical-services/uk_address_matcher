@@ -13,7 +13,7 @@ def _clean_full_address_tokens_expression(
     address_column: str = "clean_full_address",
     token_column: str = "clean_full_address_tokens",
 ) -> str:
-    return f"regexp_split_to_array({address_column}, '\\s+')::VARCHAR[] AS {token_column}"
+    return f"string_split({address_column}, ' ')::VARCHAR[] AS {token_column}"
 
 
 def _clean_full_address_expression(
