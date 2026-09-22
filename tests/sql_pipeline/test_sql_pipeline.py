@@ -5,7 +5,7 @@ from uk_address_matcher.cleaning.pipelines import (
     QUEUE_PRE_TF_MATERIALIZED,
 )
 from uk_address_matcher.sql_pipeline.runner import DuckDBPipeline
-from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage, pipeline_stage
 
 
 # ---------- Helpers ----------
@@ -107,8 +107,15 @@ def test_materialized_stage_emits_boundary_and_preserves_results(duck_con, base_
 
 
 def test_default_pre_tf_queue_is_fused_with_explicit_materialized_variant():
-    assert not any(stage().materialized for stage in QUEUE_PRE_TF)
-    assert any(stage().materialized for stage in QUEUE_PRE_TF_MATERIALIZED)
+    def is_materialized(stage_spec):
+        return (
+            stage_spec.materialized
+            if isinstance(stage_spec, Stage)
+            else stage_spec().materialized
+        )
+
+    assert not any(is_materialized(stage) for stage in QUEUE_PRE_TF)
+    assert any(is_materialized(stage) for stage in QUEUE_PRE_TF_MATERIALIZED)
 
 
 def test_debug_logical_outputs_sql(duck_con, base_rel, capsys):
