@@ -1,4 +1,4 @@
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # === Primary API ===
 from uk_address_matcher.address_matcher import AddressMatcher
