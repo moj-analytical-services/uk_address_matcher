@@ -186,7 +186,7 @@ def _prepare_addresses(
         ), tokenised AS (
             SELECT
                 *,
-                regexp_split_to_array(peeled_address, '\\s+') AS peeled_tokens
+                string_split(peeled_address, ' ') AS peeled_tokens
             FROM peeled
         ), numbered AS (
             SELECT

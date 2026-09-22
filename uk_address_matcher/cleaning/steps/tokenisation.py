@@ -12,7 +12,7 @@ def _tokenise_clean_full_address():
     return """
     SELECT
         *,
-        regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[]
+        string_split(clean_full_address, ' ')::VARCHAR[]
             AS clean_full_address_tokens
     FROM {input}
     """
@@ -222,7 +222,7 @@ def _tokenise_address_without_numbers(*, use_precomputed_tokens: bool = False):
     sql = """
     select
         *,
-        regexp_split_to_array(trim(address_without_numbers), '\\s+')
+        string_split(trim(address_without_numbers), ' ')
             AS address_without_numbers_tokenised
     from {input}
     """

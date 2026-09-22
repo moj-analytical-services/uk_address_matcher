@@ -239,7 +239,7 @@ MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
 
 def _token_array_expression(token_column: str) -> str:
     if token_column == "clean_full_address":
-        return "regexp_split_to_array(trim(clean_full_address), '\\s+')"
+        return "string_split(trim(clean_full_address), ' ')"
     return token_column
 
 
