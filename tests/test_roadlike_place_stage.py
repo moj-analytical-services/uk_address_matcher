@@ -159,6 +159,50 @@ def test_derive_roadlike_places_batches_by_district_and_writes_parquet(
     )
 
 
+def test_derive_roadlike_places_filters_before_district_batching(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD'),
+            ('2', '14 HIGH STREET', 'AB2 3CD'),
+            ('3', '29 MAIN ROAD', 'TF1 1AA')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    cleaned_source = clean_data_pre_term_frequencies(source, duck_con, num_of_chunks=1)
+
+    catalogue = derive_roadlike_places(
+        cleaned_source,
+        duck_con,
+        postcode_districts=["ab1", "AB2"],
+        postcode_districts_per_batch=1,
+        show_progress="off",
+    )
+
+    assert catalogue.project("candidate_phrase").fetchall() == [("HIGH STREET",)]
+    assert catalogue.select("phrase_support, distinct_districts").fetchone() == (2, 2)
+
+
+def test_derive_roadlike_places_composes_district_and_classification_filters(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12'], 'RD01'),
+            ('2', '14 HIGH STREET', 'AB2 3CD', ['14'], 'RD01'),
+            ('3', '29 MAIN ROAD', 'AB1 4CD', ['29'], 'CI01'),
+            ('4', '31 MAIN ROAD', 'TF1 1AA', ['31'], 'RD01')
+        ) AS rows(
+            unique_id, clean_full_address, postcode, numeric_tokens, classificationcode
+        )
+    """)
+
+    catalogue = derive_roadlike_places(
+        source,
+        duck_con,
+        postcode_districts=["AB1", "AB2"],
+        show_progress="off",
+    )
+
+    assert catalogue.project("candidate_phrase").fetchall() == [("HIGH STREET",)]
+
+
 def test_roadlike_catalogue_filters_non_residential_rows(duck_con):
     source = duck_con.sql("""
         SELECT * FROM (VALUES
