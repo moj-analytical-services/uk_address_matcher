@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+import uk_address_matcher.cleaning.chunking_strategies as chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     clean_data_pre_term_frequencies,
     derive_term_frequencies_table,
@@ -182,6 +183,13 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         ids = [row[0] for row in relation.select("ukam_address_id").fetchall()]
         assert sorted(ids) == list(range(1, no_chunk_count + 1))
 
+    chunked_ids = [row[0] for row in chunked_rel.select("ukam_address_id").fetchall()]
+    assert len(chunked_ids) == len(set(chunked_ids)) == chunked_count
+    assert sorted(chunked_ids) == list(range(1, chunked_count + 1))
+    assert sorted(chunked_rel.select("unique_id").fetchall()) == sorted(
+        fhrs_data.select("unique_id").fetchall()
+    )
+
 
 @pytest.mark.parametrize("use_data_specific_tfs", [True, False])
 def test_token_rel_freq_arr_hist_consistent_across_chunks(
@@ -241,3 +249,34 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
         "Token frequency histograms differ for "
         f"use_data_specific_tfs={use_data_specific_tfs}"
     )
+
+
+def test_prepare_failure_drops_generated_cleaning_relations(
+    duck_con, fhrs_data, mock_chunk_size_1k
+):
+    with patch(
+        "uk_address_matcher.cleaning.chunking_strategies._clean_data_using_precomputed_rel_tok_freq",
+        side_effect=RuntimeError("forced term-frequency failure"),
+    ):
+        with pytest.raises(RuntimeError, match="forced term-frequency failure"):
+            chunking_strategies.prepare_data_for_matching(
+                fhrs_data,
+                con=duck_con,
+                num_of_chunks=5,
+            )
+
+    relation_names = [name for (name,) in duck_con.execute("SHOW TABLES").fetchall()]
+    leaked_relations = [
+        name
+        for name in relation_names
+        if name.startswith(
+            (
+                "__ukam_chunk_input_",
+                "__ukam_chunked_input_",
+                "__ukam_cleaned_chunk_",
+                "__ukam_chunked_addresses_",
+                "__ukam__processed_",
+            )
+        )
+    ]
+    assert not leaked_relations

@@ -82,36 +82,21 @@ def _materialise_relation(
     return con.table(table_name)
 
 
-def _materialise_relation_with_ukam_address_id(
-    con: DuckDBPyConnection,
-    relation: DuckDBPyRelation,
-    table_name: str,
-) -> DuckDBPyRelation:
-    """Assign contiguous unique public row IDs without imposing storage order."""
-    source_columns = tuple(
-        column for column in relation.columns if column != "ukam_address_id"
-    )
-    source_projection = ", ".join(f'_ukam_src."{column}"' for column in source_columns)
-
-    _drop_table_and_registered_aliases(con, table_name)
-    con.execute(f"""
-        CREATE TABLE {table_name} AS
-        WITH numbered AS (
-            SELECT
-                CAST(ROW_NUMBER() OVER () AS INTEGER) AS ukam_address_id,
-                {source_projection}
-            FROM ({relation.sql_query()}) AS _ukam_src
-        )
-        SELECT * FROM numbered
-    """)
-    return con.table(table_name)
-
-
 def _drop_tables_with_prefix(con: DuckDBPyConnection, prefix: str) -> None:
     table_names = [name for (name,) in con.execute("SHOW TABLES").fetchall()]
     for table_name in table_names:
         if table_name.startswith(prefix):
             _drop_table_and_registered_aliases(con, table_name)
+
+
+def _drop_cleaned_chunk_relation(
+    con: DuckDBPyConnection,
+    relation_name: str,
+) -> None:
+    _drop_table_and_registered_aliases(con, relation_name)
+    if relation_name.startswith("__ukam_chunked_addresses_"):
+        uid = relation_name.removeprefix("__ukam_chunked_addresses_")
+        _drop_tables_with_prefix(con, f"__ukam_cleaned_chunk_{uid}_")
 
 
 def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
@@ -546,6 +531,7 @@ def clean_data_pre_term_frequencies(
     con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}")
     chunked_input_name = f"__ukam_chunked_input_{uid}"
     chunk_index_column = f"__ukam_chunk_index_{uid}"
+    cleaned_chunk_prefix = f"__ukam_cleaned_chunk_{uid}_"
 
     log_stage_start(
         stage_label,
@@ -564,11 +550,33 @@ def clean_data_pre_term_frequencies(
             FROM {input_name}
         """)
 
+        chunk_row_counts = dict(
+            con.execute(f"""
+            SELECT {chunk_index_column}, COUNT(*) AS row_count
+            FROM {chunked_input_name}
+            GROUP BY {chunk_index_column}
+            ORDER BY {chunk_index_column}
+        """).fetchall()
+        )
+        chunk_offsets = []
+        current_offset = 0
+        for chunk_index in range(total_chunks):
+            chunk_offsets.append(current_offset)
+            current_offset += chunk_row_counts.get(chunk_index, 0)
+
+        source_columns = tuple(
+            column for column in address_table.columns if column != "ukam_address_id"
+        )
+        source_projection = ", ".join(f'"{column}"' for column in source_columns)
+
         for chunk_index in range(total_chunks):
             chunk_query = con.sql(f"""
-            SELECT * EXCLUDE ({chunk_index_column})
-                FROM {chunked_input_name}
-                WHERE {chunk_index_column} = {chunk_index}
+            SELECT
+                CAST({chunk_offsets[chunk_index]} + ROW_NUMBER() OVER () AS INTEGER)
+                    AS ukam_address_id,
+                {source_projection}
+            FROM {chunked_input_name}
+            WHERE {chunk_index_column} = {chunk_index}
             """)
             chunk_table = f"__ukam_chunk_input_{uid}_{chunk_index}"
             chunk = _materialise_relation(
@@ -585,10 +593,7 @@ def clean_data_pre_term_frequencies(
                 debug_options=debug_options if chunk_index == 0 else None,
             )
 
-            if chunk_index == 0:
-                processed_chunk.create(f"__ukam_chunked_addresses_{uid}")
-            else:
-                processed_chunk.insert_into(f"__ukam_chunked_addresses_{uid}")
+            processed_chunk.create(f"{cleaned_chunk_prefix}{chunk_index}")
 
             processed_records += chunk_row_count
             progress.update(
@@ -607,30 +612,32 @@ def clean_data_pre_term_frequencies(
             )
 
             _drop_table_and_registered_aliases(con, chunk_table)
+    except BaseException:
+        _drop_tables_with_prefix(con, cleaned_chunk_prefix)
+        raise
     finally:
         progress.close()
+        _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
         _drop_table_and_registered_aliases(con, chunked_input_name)
         _drop_table_and_registered_aliases(con, input_name)
 
-    log_stage_complete(
-        stage_label,
-        total_rows,
-        progress_mode=progress_mode,
-    )
-
-    _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
-
     chunked_table = f"__ukam_chunked_addresses_{uid}"
-    cleaned_table = f"__ukam_cleaned_{uid}"
-    logger.debug("Assigning UKAM address IDs")
-    _materialise_relation_with_ukam_address_id(
-        con,
-        con.table(chunked_table),
-        cleaned_table,
-    )
-    logger.debug("UKAM address IDs assigned")
-    _drop_table_and_registered_aliases(con, chunked_table)
-    return con.table(cleaned_table)
+    try:
+        log_stage_complete(
+            stage_label,
+            total_rows,
+            progress_mode=progress_mode,
+        )
+
+        chunk_tables_sql = " UNION ALL ".join(
+            f"SELECT * FROM {cleaned_chunk_prefix}{chunk_index}"
+            for chunk_index in range(total_chunks)
+        )
+        con.execute(f"CREATE VIEW {chunked_table} AS {chunk_tables_sql}")
+        return con.table(chunked_table)
+    except BaseException:
+        _drop_cleaned_chunk_relation(con, chunked_table)
+        raise
 
 
 def derive_term_frequencies_table(
@@ -1109,6 +1116,23 @@ def prepare_data_for_matching(
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     distinguishing_table_name = None
+    cleaned_table_name = None
+    inv_idx_table_name = None
+    processed_table = None
+    progress = None
+
+    def cleanup_on_failure() -> None:
+        if cleaned_table_name is not None and (
+            not _precleaned_addresses
+            or cleaned_table_name.startswith("__ukam_chunked_addresses_")
+        ):
+            _drop_cleaned_chunk_relation(con, cleaned_table_name)
+        if distinguishing_table_name is not None:
+            _drop_table_and_registered_aliases(con, distinguishing_table_name)
+        if inv_idx_table_name == "__ukam_inverted_index":
+            _drop_table_and_registered_aliases(con, inv_idx_table_name)
+        if processed_table is not None:
+            _drop_table_and_registered_aliases(con, processed_table)
 
     if _precleaned_addresses:
         cleaned_address_table = address_table
@@ -1128,122 +1152,139 @@ def prepare_data_for_matching(
     )
 
     if derive_distinguishing_wrt_adjacent_records:
-        logger.debug("Deriving adjacent-record distinguishing tokens")
-        adjacent_pipeline = create_sql_pipeline(
-            con,
-            input_rel=cleaned_address_table,
-            stage_specs=[
-                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
-                    include_input_columns=False
-                )
-            ],
-            pipeline_name="Derive locally distinguishing canonical tokens",
-            pipeline_description=(
-                "Compare each canonical address with nearby suffix-similar records"
-            ),
-        )
-        adjacent_tokens = adjacent_pipeline.run(debug_options)
-        distinguishing_input = con.sql(f"""
-            SELECT
-                cleaned.*,
-                adjacent.distinguishing_adj_start_tokens,
-                adjacent.common_adj_start_tokens
-            FROM {cleaned_table_name} AS cleaned
-            INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
-                ON adjacent.ukam_address_id = cleaned.ukam_address_id
-        """)
-        distinguishing_pipeline = create_sql_pipeline(
-            con,
-            input_rel=distinguishing_input,
-            stage_specs=[_derive_distinguishing_token_components],
-            pipeline_name="Derive address-structure distinguishing tokens",
-            pipeline_description=(
-                "Split distinguishing prefixes into structural and lexical tokens"
-            ),
-        )
-        distinguishing_tokens = distinguishing_pipeline.run(debug_options)
-        distinguishing_columns = [
-            column
-            for column in distinguishing_tokens.columns
-            if column not in DISTINGUISHING_FEATURE_COLUMNS
-        ]
-        distinguishing_columns.extend(DISTINGUISHING_FEATURE_COLUMNS)
-        distinguishing_tokens = distinguishing_tokens.project(
-            ", ".join(distinguishing_columns)
-        )
-        distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
-        _materialise_relation(
-            con,
-            distinguishing_tokens,
-            distinguishing_table_name,
-        )
-        logger.debug("Adjacent-record distinguishing tokens derived")
-
-    total_rows = cleaned_address_table.count("*").fetchone()[0]
-    _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
-
-    inv_idx_table_name = _register_inverted_index_table(
-        con, inverted_index, inverted_index_n
-    )
-
-    lookup_strategies = _inverted_index_strategies
-    if lookup_strategies is None:
-        lookup_strategies = (
-            MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES
-            if dataset_role == "messy"
-            else DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
-        )
-
-    inverted_index_stages = (
-        [
-            _lookup_keys_in_inverted_index(
-                lookup_strategies,
-                token_column=token_column,
+        try:
+            logger.debug("Deriving adjacent-record distinguishing tokens")
+            adjacent_pipeline = create_sql_pipeline(
+                con,
+                input_rel=cleaned_address_table,
+                stage_specs=[
+                    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+                        include_input_columns=False
+                    )
+                ],
+                pipeline_name="Derive locally distinguishing canonical tokens",
+                pipeline_description=(
+                    "Compare each canonical address with nearby suffix-similar records"
+                ),
             )
-        ]
-        if inv_idx_table_name is not None
-        else list(QUEUE_INVERTED_INDEX_SELF)
-    )
+            adjacent_tokens = adjacent_pipeline.run(debug_options)
+            distinguishing_input = con.sql(f"""
+                SELECT
+                    cleaned.*,
+                    adjacent.distinguishing_adj_start_tokens,
+                    adjacent.common_adj_start_tokens
+                FROM {cleaned_table_name} AS cleaned
+                INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
+                    ON adjacent.ukam_address_id = cleaned.ukam_address_id
+            """)
+            distinguishing_pipeline = create_sql_pipeline(
+                con,
+                input_rel=distinguishing_input,
+                stage_specs=[_derive_distinguishing_token_components],
+                pipeline_name="Derive address-structure distinguishing tokens",
+                pipeline_description=(
+                    "Split distinguishing prefixes into structural and lexical tokens"
+                ),
+            )
+            distinguishing_tokens = distinguishing_pipeline.run(debug_options)
+            distinguishing_columns = [
+                column
+                for column in distinguishing_tokens.columns
+                if column not in DISTINGUISHING_FEATURE_COLUMNS
+            ]
+            distinguishing_columns.extend(DISTINGUISHING_FEATURE_COLUMNS)
+            distinguishing_tokens = distinguishing_tokens.project(
+                ", ".join(distinguishing_columns)
+            )
+            distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
+            _materialise_relation(
+                con,
+                distinguishing_tokens,
+                distinguishing_table_name,
+            )
+            logger.debug("Adjacent-record distinguishing tokens derived")
+        except BaseException:
+            cleanup_on_failure()
+            raise
 
-    chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
-    total_chunks = (total_rows + chunk_size - 1) // chunk_size
-    stage_label = "Applying term frequencies"
-    progress = _ProgressBar(
-        label=stage_label,
-        total=total_rows,
-        total_units=total_chunks,
-        enabled=progress_mode == "auto",
-    )
+    try:
+        total_rows = cleaned_address_table.count("*").fetchone()[0]
+        _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
 
-    if distinguishing_table_name is None:
-        distinguishing_select_sql = ""
-        distinguishing_join_sql = ""
-    else:
-        distinguishing_select_sql = ",\n                " + ",\n                ".join(
-            f"distinguishing.{column}" for column in DISTINGUISHING_FEATURE_COLUMNS
+        inv_idx_table_name = _register_inverted_index_table(
+            con, inverted_index, inverted_index_n
         )
-        distinguishing_join_sql = f"""
-            LEFT JOIN {distinguishing_table_name} AS distinguishing
-                            ON cleaned.ukam_address_id = distinguishing.ukam_address_id
-        """
 
-    if dataset_role == "canonical":
-        processed_table = f"__ukam__processed_canonical_{uid}"
-    elif dataset_role == "messy":
-        processed_table = f"__ukam__processed_messy_{uid}"
-    elif dataset_role is None:
-        processed_table = f"__ukam__processed_{uid}"
-    else:
-        raise ValueError("dataset_role must be one of: 'messy', 'canonical', or None.")
+        lookup_strategies = _inverted_index_strategies
+        if lookup_strategies is None:
+            lookup_strategies = (
+                MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES
+                if dataset_role == "messy"
+                else DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES
+            )
+
+        inverted_index_stages = (
+            [
+                _lookup_keys_in_inverted_index(
+                    lookup_strategies,
+                    token_column=token_column,
+                )
+            ]
+            if inv_idx_table_name is not None
+            else list(QUEUE_INVERTED_INDEX_SELF)
+        )
+
+        chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
+        total_chunks = (total_rows + chunk_size - 1) // chunk_size
+        stage_label = "Applying term frequencies"
+        progress = _ProgressBar(
+            label=stage_label,
+            total=total_rows,
+            total_units=total_chunks,
+            enabled=progress_mode == "auto",
+        )
+
+        if distinguishing_table_name is None:
+            distinguishing_select_sql = ""
+            distinguishing_join_sql = ""
+        else:
+            distinguishing_select_sql = (
+                ",\n                "
+                + ",\n                ".join(
+                    f"distinguishing.{column}"
+                    for column in DISTINGUISHING_FEATURE_COLUMNS
+                )
+            )
+            distinguishing_join_sql = f"""
+                LEFT JOIN {distinguishing_table_name} AS distinguishing
+                                ON cleaned.ukam_address_id =
+                                    distinguishing.ukam_address_id
+            """
+
+        if dataset_role == "canonical":
+            processed_table = f"__ukam__processed_canonical_{uid}"
+        elif dataset_role == "messy":
+            processed_table = f"__ukam__processed_messy_{uid}"
+        elif dataset_role is None:
+            processed_table = f"__ukam__processed_{uid}"
+        else:
+            raise ValueError(
+                "dataset_role must be one of: 'messy', 'canonical', or None."
+            )
+    except BaseException:
+        if progress is not None:
+            progress.close()
+        cleanup_on_failure()
+        raise
 
     # Apply term frequencies and trigram blocking to cleaned chunks
-    log_stage_start(
-        stage_label,
-        total_rows,
-        total_chunks,
-        progress_mode=progress_mode,
-    )
     try:
+        log_stage_start(
+            stage_label,
+            total_rows,
+            total_chunks,
+            progress_mode=progress_mode,
+        )
         for chunk_index in range(total_chunks):
             first_id = chunk_index * chunk_size + 1
             last_id = min((chunk_index + 1) * chunk_size, total_rows)
@@ -1284,23 +1325,29 @@ def prepare_data_for_matching(
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
             )
+        log_stage_complete(
+            stage_label,
+            total_rows,
+            progress_mode=progress_mode,
+        )
+    except BaseException:
+        cleanup_on_failure()
+        raise
     finally:
         progress.close()
 
-    log_stage_complete(
-        stage_label,
-        total_rows,
-        progress_mode=progress_mode,
-    )
+    try:
+        logger.debug("Finalizing prepared address table")
+        _drop_cleaned_chunk_relation(con, cleaned_table_name)
+        if distinguishing_table_name is not None:
+            con.execute(f"DROP TABLE IF EXISTS {distinguishing_table_name}")
 
-    logger.debug("Finalizing prepared address table")
-    con.execute(f"DROP TABLE IF EXISTS {cleaned_table_name}")
-    if distinguishing_table_name is not None:
-        con.execute(f"DROP TABLE IF EXISTS {distinguishing_table_name}")
-
-    # Clean up inverted index table if it was registered
-    if inv_idx_table_name == "__ukam_inverted_index":
-        _drop_table_and_registered_aliases(con, inv_idx_table_name)
+        # Clean up inverted index table if it was registered
+        if inv_idx_table_name == "__ukam_inverted_index":
+            _drop_table_and_registered_aliases(con, inv_idx_table_name)
+    except BaseException:
+        cleanup_on_failure()
+        raise
 
     logger.debug("Prepared address table finalized")
 
