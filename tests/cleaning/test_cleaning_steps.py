@@ -303,26 +303,34 @@ def test_separate_distinguishing_tokens_matches_legacy_for_duplicate_ids():
         """
     )
 
-    actual = _run_adjacent_stage(
-        input_relation,
-        connection,
-        use_precomputed_tokens=True,
-    ).project(
-        """
+    actual = (
+        _run_adjacent_stage(
+            input_relation,
+            connection,
+            use_precomputed_tokens=True,
+        )
+        .project(
+            """
         ukam_address_id,
         distinguishing_adj_start_tokens,
         common_adj_start_tokens
         """
-    ).order("ukam_address_id").fetchall()
-    expected = _run_legacy_adjacent_query(
-        connection.sql(input_relation.sql_query()), connection
-    ).project(
-        """
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
+    expected = (
+        _run_legacy_adjacent_query(connection.sql(input_relation.sql_query()), connection)
+        .project(
+            """
         ukam_address_id,
         distinguishing_adj_start_tokens,
         common_adj_start_tokens
         """
-    ).order("ukam_address_id").fetchall()
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
 
     assert actual == expected
     assert actual[:4] == [
@@ -344,13 +352,18 @@ def test_separate_distinguishing_tokens_handles_boundary_and_no_common_suffix():
         """
     )
 
-    actual = _run_single_stage(
-        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-        input_relation,
-        connection,
-    ).project(
-        "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
-    ).order("ukam_address_id").fetchall()
+    actual = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            input_relation,
+            connection,
+        )
+        .project(
+            "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
 
     assert actual == [
         (1, [], ["ORANGE"]),
@@ -369,13 +382,18 @@ def test_separate_distinguishing_tokens_handles_whole_shared_address():
         """
     )
 
-    actual = _run_single_stage(
-        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-        input_relation,
-        connection,
-    ).project(
-        "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
-    ).order("ukam_address_id").fetchall()
+    actual = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            input_relation,
+            connection,
+        )
+        .project(
+            "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
 
     assert actual == [
         (1, [], ["SAME", "ROAD"]),
@@ -404,20 +422,26 @@ def test_separate_distinguishing_tokens_can_choose_best_left_or_right_neighbour(
         """
     )
 
-    left_target = _run_single_stage(
-        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-        left_input,
-        connection,
-    ).filter("ukam_address_id = 2").project(
-        "distinguishing_adj_start_tokens, common_adj_start_tokens"
-    ).fetchone()
-    right_target = _run_single_stage(
-        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-        right_input,
-        connection,
-    ).filter("ukam_address_id = 2").project(
-        "distinguishing_adj_start_tokens, common_adj_start_tokens"
-    ).fetchone()
+    left_target = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            left_input,
+            connection,
+        )
+        .filter("ukam_address_id = 2")
+        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+        .fetchone()
+    )
+    right_target = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            right_input,
+            connection,
+        )
+        .filter("ukam_address_id = 2")
+        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+        .fetchone()
+    )
 
     assert left_target == (
         ["2"],
