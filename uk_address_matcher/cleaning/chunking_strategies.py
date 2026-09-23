@@ -1159,7 +1159,8 @@ def prepare_data_for_matching(
                 input_rel=cleaned_address_table,
                 stage_specs=[
                     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
-                        include_input_columns=False
+                        include_input_columns=False,
+                        use_precomputed_tokens=True,
                     )
                 ],
                 pipeline_name="Derive locally distinguishing canonical tokens",
