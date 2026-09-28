@@ -94,6 +94,8 @@ class MatchResult:
             return self.con.sql(base_relation_sql)
         preferred = [
             "unique_id",
+            "postcode",
+            "postcode_canonical",
             "resolved_canonical_id",
             "ukam_label",
             "original_address_concat",
