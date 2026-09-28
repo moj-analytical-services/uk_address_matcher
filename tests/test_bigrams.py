@@ -124,6 +124,7 @@ def test_distinguishing_reranker_joins_cached_tokens_from_cleaned_inputs():
             df_predict=predictions,
             con=con,
             match_weight_threshold=-100,
+            use_bigrams=False,
             df_addresses_to_match=messy,
             df_addresses_to_search_within=canonical,
         )

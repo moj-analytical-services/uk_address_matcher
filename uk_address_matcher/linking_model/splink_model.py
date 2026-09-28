@@ -13,6 +13,10 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
+_ADDRESS_WITHOUT_NUMBERS_PATTERN_SQL = (
+    r"\b(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)\b"
+)
+
 
 def _get_model_settings_dict():
     with (
@@ -125,6 +129,54 @@ def _align_clean_address_token_columns(
                 f"{', '.join(missing_columns)}"
             )
     return df_addresses_to_match, df_addresses_to_search_within
+
+
+def _derive_clean_address_signatures(
+    relation: DuckDBPyRelation,
+) -> DuckDBPyRelation:
+    signature_columns = (
+        "clean_full_address_compact",
+        "clean_full_address_numeric_context",
+        "clean_full_address_without_numbers",
+        "clean_full_address_without_numbers_compact",
+    )
+    existing_signature_columns = sorted(
+        set(signature_columns).intersection(relation.columns)
+    )
+    if existing_signature_columns:
+        relation = relation.select(
+            f"* EXCLUDE ({', '.join(existing_signature_columns)})"
+        )
+
+    address_text_sql = "array_to_string(clean_full_address_tokens, ' ')"
+    without_numbers_sql = (
+        f"nullif(trim(regexp_replace(regexp_replace({address_text_sql}, "
+        f"'{_ADDRESS_WITHOUT_NUMBERS_PATTERN_SQL}', '', 'g'), "
+        "'\\s+', ' ', 'g')), '')"
+    )
+    relation = relation.select(
+        f"""
+        *,
+        regexp_replace({address_text_sql}, '[^A-Z0-9]', '', 'g')
+            AS clean_full_address_compact,
+        regexp_replace(
+            regexp_replace({address_text_sql}, '[0-9]+', '#', 'g'),
+            '[^A-Z#]+', ' ', 'g'
+        ) AS clean_full_address_numeric_context,
+        {without_numbers_sql} AS clean_full_address_without_numbers
+        """
+    )
+    return relation.select(
+        """
+        *,
+        regexp_replace(
+            clean_full_address_without_numbers,
+            '[^A-Za-z0-9]',
+            '',
+            'g'
+        ) AS clean_full_address_without_numbers_compact
+        """
+    )
 
 
 def _align_sub_premise_columns(
@@ -405,6 +457,12 @@ def _get_linker(
     ) = _align_clean_address_token_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
+    )
+    df_addresses_to_match = _derive_clean_address_signatures(
+        df_addresses_to_match
+    )
+    df_addresses_to_search_within = _derive_clean_address_signatures(
+        df_addresses_to_search_within
     )
     (
         df_addresses_to_match,

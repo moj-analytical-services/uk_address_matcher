@@ -16,6 +16,7 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_clean_address_token_columns,
     _align_distinguishing_token_columns,
     _align_numeric_range_columns,
+    _derive_clean_address_signatures,
     _get_linker,
     _get_model_settings_dict,
     _sanitise_null_comparison_levels,
@@ -195,6 +196,27 @@ def test_align_clean_address_tokens_rejects_token_only_inputs(duck_con):
         _align_clean_address_token_columns(messy, canonical)
 
 
+def test_derived_clean_address_signatures_preserve_range_semantics(duck_con):
+    addresses = duck_con.sql("""
+        SELECT
+            '59A-59B HIGH-STREET' AS clean_full_address,
+            ['59A-59B', 'HIGH-STREET']::VARCHAR[] AS clean_full_address_tokens
+    """)
+
+    signatures = _derive_clean_address_signatures(addresses)
+
+    assert signatures.project(
+        "clean_full_address_compact, clean_full_address_numeric_context, "
+        "clean_full_address_without_numbers, "
+        "clean_full_address_without_numbers_compact"
+    ).fetchone() == (
+        "59A59BHIGHSTREET",
+        "#A #B HIGH STREET",
+        "- HIGH-STREET",
+        "HIGHSTREET",
+    )
+
+
 def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
     parts = "[struct_pack(token := 'FLAT', is_lexical := false)]"
     messy = duck_con.sql(f"SELECT 1 AS unique_id, {parts} AS distinguishing_token_parts")
@@ -367,6 +389,49 @@ def test_packaged_numberless_comparison_omits_reordered_token_level():
     assert all(
         level["label_for_charts"] != "Exact alphabetic token set, reordered"
         for level in comparison["comparison_levels"]
+    )
+
+
+def test_packaged_address_model_uses_precomputed_signatures():
+    settings = _get_model_settings_dict()
+    blocking_rules = settings["blocking_rules_to_generate_predictions"]
+    assert any(
+        rule["blocking_rule"]
+        == "l.clean_full_address_compact = r.clean_full_address_compact"
+        for rule in blocking_rules
+    )
+
+    numeric_context = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_structure_numeric_context"
+    )
+    numeric_conditions = [
+        level["sql_condition"]
+        for level in numeric_context["comparison_levels"]
+        if "clean_full_address_numeric_context_l" in level["sql_condition"]
+    ]
+    assert all("regexp_replace" not in condition for condition in numeric_conditions)
+    assert all(
+        "clean_full_address_numeric_context_l = "
+        "clean_full_address_numeric_context_r" in condition
+        for condition in numeric_conditions
+    )
+
+    numberless = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_without_numbers"
+    )
+    numberless_conditions = [
+        level["sql_condition"]
+        for level in numberless["comparison_levels"]
+        if level["sql_condition"] != "ELSE"
+    ]
+    assert all("regexp_replace" not in condition for condition in numberless_conditions)
+    assert all(
+        "clean_full_address_without_numbers" in condition
+        for condition in numberless_conditions
     )
 
 

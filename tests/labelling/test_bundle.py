@@ -190,11 +190,13 @@ def test_exports_reranked_splink_candidates(tmp_path):
                 improve_threshold_match_weight=-50,
                 final_match_weight_threshold=-50,
                 final_distinguishability_threshold=None,
+                use_relation_marker_reranker=True,
             ),
         ],
     ).match()
 
     bundle_path = result._export_labelling_bundle_beta(tmp_path / "splink_bundle")
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
     with duckdb.connect() as fresh_con:
         candidate_count, candidates = fresh_con.execute(
             """
@@ -205,6 +207,7 @@ def test_exports_reranked_splink_candidates(tmp_path):
         ).fetchone()
 
     assert candidate_count >= len(candidates) > 0
+    assert manifest["splink"]["use_relation_marker_reranker"] is True
     first_candidate = candidates[0]
     assert first_candidate["source"] == "splink"
     assert first_candidate["splink_match_weight"] is not None
