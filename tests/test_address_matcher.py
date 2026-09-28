@@ -168,6 +168,8 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
 
     assert "unique_id_l" in cols or "unique_id" in cols
     assert "match_reason" in cols
+    assert "postcode" in cols
+    assert "postcode_canonical" in cols
 
 
 def test_lean_and_debug_prepared_canonical_matching_is_identical(
