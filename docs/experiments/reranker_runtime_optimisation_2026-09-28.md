@@ -42,6 +42,8 @@ The locally computed SHA-256 for normalised, sorted, all-column final result row
 
 ## Validation
 
+- Ruff lint: passed; Ruff format check: all 164 files already formatted.
+- `uv run pytest tests/ --ignore=tests/labelling -q -o log_cli=false --tb=short`: 453 passed, 4 warnings.
 - `uv run pytest tests/test_bigrams.py tests/test_numeric_range_reranker.py -q`: 15 passed.
 - `tests/test_linker.py`: 29 passed; focused stage and manifest checks passed.
 - `git diff --check`: passed.

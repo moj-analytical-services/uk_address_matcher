@@ -324,11 +324,9 @@ class SplinkStage(MatchingStage):
             )
             reranker_matches_table = df_improved.alias
             if self.use_relation_marker_reranker:
-                df_improved = (
-                    relation_markers.improve_predictions_using_relation_markers(
-                        df_predict=df_improved,
-                        con=con,
-                    )
+                df_improved = relation_markers.improve_predictions_using_relation_markers(
+                    df_predict=df_improved,
+                    con=con,
                 )
             improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
             con.execute(

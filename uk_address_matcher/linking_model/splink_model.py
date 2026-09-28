@@ -13,9 +13,7 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
 
-_ADDRESS_WITHOUT_NUMBERS_PATTERN_SQL = (
-    r"\b(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)\b"
-)
+_ADDRESS_WITHOUT_NUMBERS_PATTERN_SQL = r"\b(\d{1,5}-\d{1,5}|[A-Za-z]?\d{1,5}[A-Za-z]?)\b"
 
 
 def _get_model_settings_dict():
@@ -144,9 +142,7 @@ def _derive_clean_address_signatures(
         set(signature_columns).intersection(relation.columns)
     )
     if existing_signature_columns:
-        relation = relation.select(
-            f"* EXCLUDE ({', '.join(existing_signature_columns)})"
-        )
+        relation = relation.select(f"* EXCLUDE ({', '.join(existing_signature_columns)})")
 
     address_text_sql = "array_to_string(clean_full_address_tokens, ' ')"
     without_numbers_sql = (
@@ -458,9 +454,7 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )
-    df_addresses_to_match = _derive_clean_address_signatures(
-        df_addresses_to_match
-    )
+    df_addresses_to_match = _derive_clean_address_signatures(df_addresses_to_match)
     df_addresses_to_search_within = _derive_clean_address_signatures(
         df_addresses_to_search_within
     )
