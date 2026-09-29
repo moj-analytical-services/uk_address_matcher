@@ -192,7 +192,7 @@ def test_packaged_settings_include_promoted_commercial_features():
     numeric_context_conditions = [
         level["sql_condition"]
         for level in comparisons["address_structure_numeric_context"]["comparison_levels"]
-        if "clean_full_address_numeric_context_l" in level["sql_condition"]
+        if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
     ]
     assert len(numeric_context_conditions) == 3
     assert all(
@@ -203,11 +203,8 @@ def test_packaged_settings_include_promoted_commercial_features():
         "lower(clean_full_address" not in condition
         for condition in numeric_context_conditions
     )
-    assert all(
-        "clean_full_address_numeric_context_l = "
-        "clean_full_address_numeric_context_r" in condition
-        for condition in numeric_context_conditions
-    )
+    assert all("clean_full_address_numeric_context" not in condition for condition in numeric_context_conditions)
+    assert all("clean_full_address_r" in condition for condition in numeric_context_conditions)
 
 
 def test_canonical_preparation_carries_distinguishing_lexical_tokens():
