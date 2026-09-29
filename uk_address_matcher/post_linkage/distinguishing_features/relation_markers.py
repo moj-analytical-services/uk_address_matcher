@@ -32,25 +32,51 @@ def improve_predictions_using_relation_markers(
 
     return con.sql(f"""
         WITH source_addresses AS (
+            SELECT DISTINCT
+                unique_id_r,
+                clean_full_address_r
+            FROM df_predict
+        ),
+        possible_relation_sources AS (
             SELECT
-                *,
+                unique_id_r,
+                clean_full_address_r
+            FROM source_addresses
+            WHERE regexp_matches(
+                upper(clean_full_address_r),
+                'ADJ|OPP|REAR|BEHIND|NEXT|R[^A-Z0-9]*O'
+            )
+        ),
+        normalised_relation_sources AS (
+            SELECT
+                unique_id_r,
+                clean_full_address_r,
                 trim(
                     regexp_replace(
                         upper(clean_full_address_r), '[^A-Z0-9]+', ' ', 'g'
                     )
-                )
-                        AS source_address
-            FROM df_predict
+                ) AS source_address
+            FROM possible_relation_sources
         ),
-        relation_parts AS (
+        source_relation_parts AS (
             SELECT
-                *,
+                unique_id_r,
+                clean_full_address_r,
+                source_address,
                 regexp_extract(
                     source_address,
                     '(?:^| )({_RELATION_MARKERS_SQL})(?: |$)',
                     1
                 ) AS relation_marker
-            FROM source_addresses
+            FROM normalised_relation_sources
+        ),
+        relation_parts AS (
+            SELECT
+                candidates.*,
+                source_relation_parts.source_address,
+                COALESCE(source_relation_parts.relation_marker, '') AS relation_marker
+            FROM df_predict AS candidates
+            LEFT JOIN source_relation_parts USING (unique_id_r, clean_full_address_r)
         ),
         normalised AS (
             SELECT

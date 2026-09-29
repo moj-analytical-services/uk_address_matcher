@@ -118,19 +118,38 @@ def improve_predictions_using_distinguishing_tokens(
         array_agg(candidate_tokens).
         list_transform(candidate_tokens -> list_distinct(candidate_tokens))
     """
-    canonical_bigrams_sql = """
-        list_transform(
-            array_agg(candidate_tokens),
-            candidate_tokens -> list_distinct(
-                list_transform(
-                    list_zip(
-                        list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
-                        list_slice(candidate_tokens, 2, length(candidate_tokens))
-                    ),
-                    pair -> ARRAY[pair[1], pair[2]]
+    if use_bigrams:
+        canonical_bigrams_sql = """
+            list_transform(
+                array_agg(candidate_tokens),
+                candidate_tokens -> list_distinct(
+                    list_transform(
+                        list_zip(
+                            list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
+                            list_slice(candidate_tokens, 2, length(candidate_tokens))
+                        ),
+                        pair -> ARRAY[pair[1], pair[2]]
+                    )
                 )
-            )
-        ).flatten() AS bigrams_in_block_l,
+            ).flatten() AS bigrams_in_block_l,
+            """
+        block_bigrams_sql = """
+            list_aggregate(bigrams_in_block_l, 'histogram')
+                AS hist_all_bigrams_in_block_l,
+            list_transform(
+                list_zip(
+                    list_slice(tokens_r, 1, length(tokens_r) - 1),
+                    list_slice(tokens_r, 2, length(tokens_r))
+                ),
+                pair -> ARRAY[pair[1], pair[2]]
+            ) AS bigrams_r
+        """
+    else:
+        canonical_bigrams_sql = "CAST([] AS VARCHAR[][]) AS bigrams_in_block_l,"
+        block_bigrams_sql = """
+            MAP([]::VARCHAR[][], []::UBIGINT[])
+                AS hist_all_bigrams_in_block_l,
+            CAST([] AS VARCHAR[][]) AS bigrams_r
         """
 
     completed = False
@@ -440,25 +459,28 @@ def improve_predictions_using_distinguishing_tokens(
                     {canonical_bigrams_sql}
                 FROM block_tokens
                 GROUP BY ukam_address_id_r
+            ),
+            block_overlap_statistics AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_all_tokens_in_block_l),
+                            entry -> list_contains(tokens_r, entry.key)
+                        )
+                    ) AS hist_overlapping_tokens_r_block_l,
+                    {block_bigrams_sql}
+                FROM block_histograms
             )
             SELECT
                 *,
                 map_from_entries(
                     list_filter(
-                        map_entries(hist_all_tokens_in_block_l),
-                        entry -> list_contains(tokens_r, entry.key)
+                        map_entries(hist_all_bigrams_in_block_l),
+                        entry -> list_contains(bigrams_r, entry.key)
                     )
-                ) AS hist_overlapping_tokens_r_block_l,
-                list_aggregate(bigrams_in_block_l, 'histogram')
-                    AS hist_all_bigrams_in_block_l,
-                list_transform(
-                    list_zip(
-                        list_slice(tokens_r, 1, length(tokens_r) - 1),
-                        list_slice(tokens_r, 2, length(tokens_r))
-                    ),
-                    pair -> ARRAY[pair[1], pair[2]]
-                ) AS bigrams_r
-            FROM block_histograms
+                ) AS hist_overlapping_bigrams_r_block_l
+            FROM block_overlap_statistics
         """).create(block_statistics_table)
 
         con.sql(f"""
@@ -479,6 +501,7 @@ def improve_predictions_using_distinguishing_tokens(
                     statistics.hist_all_tokens_in_block_l,
                     statistics.hist_overlapping_tokens_r_block_l,
                     statistics.hist_all_bigrams_in_block_l,
+                    statistics.hist_overlapping_bigrams_r_block_l,
                     statistics.bigrams_r,
                     {range_intermediate_columns}
                     {retained_columns}
@@ -545,12 +568,6 @@ def improve_predictions_using_distinguishing_tokens(
             adjusted_evidence AS (
                 SELECT
                     *,
-                    map_from_entries(
-                        list_filter(
-                            map_entries(hist_all_bigrams_in_block_l),
-                            entry -> list_contains(bigrams_r, entry.key)
-                        )
-                    ) AS hist_overlapping_bigrams_r_block_l,
                     map_from_entries(
                         list_filter(
                             map_entries(hist_all_bigrams_in_block_l),

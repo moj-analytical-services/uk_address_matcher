@@ -370,6 +370,51 @@ def test_packaged_numberless_comparison_omits_reordered_token_level():
     )
 
 
+def test_packaged_address_model_uses_inline_address_signatures():
+    settings = _get_model_settings_dict()
+    blocking_rules = settings["blocking_rules_to_generate_predictions"]
+    assert any(
+        rule["blocking_rule"]
+        == "regexp_replace(l.clean_full_address, '[^A-Z0-9]', '', 'g') = "
+        "regexp_replace(r.clean_full_address, '[^A-Z0-9]', '', 'g')"
+        for rule in blocking_rules
+    )
+
+    numeric_context = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_structure_numeric_context"
+    )
+    numeric_conditions = [
+        level["sql_condition"]
+        for level in numeric_context["comparison_levels"]
+        if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
+    ]
+    assert len(numeric_conditions) == 3
+    assert all(
+        "clean_full_address_numeric_context" not in condition
+        for condition in numeric_conditions
+    )
+    assert all("clean_full_address_r" in condition for condition in numeric_conditions)
+
+    numberless = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "address_without_numbers"
+    )
+    numberless_conditions = [
+        level["sql_condition"]
+        for level in numberless["comparison_levels"]
+        if level["sql_condition"] != "ELSE"
+    ]
+    assert len(numberless_conditions) == 6
+    assert all("regexp_replace" in condition for condition in numberless_conditions)
+    assert all(
+        "clean_full_address_without_numbers" not in condition
+        for condition in numberless_conditions
+    )
+
+
 @pytest.mark.parametrize(
     ("messy_address", "messy_postcode", "expected"),
     [

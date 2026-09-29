@@ -565,12 +565,21 @@ def test_match_with_custom_splink_stage(con, canonical_data, messy_data):
             SplinkStage(
                 final_match_weight_threshold=5.0,
                 retain_intermediate_calculation_columns=True,
+                use_relation_marker_reranker=True,
             ),
         ],
     )
     result = matcher.match()
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
+
+
+def test_splink_reranker_defaults_align_thresholds_and_disable_relation_markers():
+    stage = SplinkStage()
+
+    assert stage.predict_threshold_match_weight == -20
+    assert stage.improve_threshold_match_weight == -20
+    assert stage.use_relation_marker_reranker is False
 
 
 def test_sequential_matchers_share_connection_with_splink(

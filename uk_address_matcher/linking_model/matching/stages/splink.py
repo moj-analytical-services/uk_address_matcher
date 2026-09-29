@@ -108,6 +108,8 @@ class SplinkStage(MatchingStage):
             to retain for the token-based score adjustment step.
         improve_use_bigrams: Whether the token-based improvement step should
             use bigrams as well as single tokens.
+        use_relation_marker_reranker: Whether to apply the optional relation-
+            marker score adjustment after token-based reranking.
         reranker_token_reward_multiplier: Multiplier for distinctive token
             agreement in the local reranker.
         reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
@@ -130,12 +132,13 @@ class SplinkStage(MatchingStage):
     """
 
     # Prediction threshold for initial Splink predict() call
-    predict_threshold_match_weight: float = -50
+    predict_threshold_match_weight: float = -20
 
     # Threshold for improve_predictions_using_distinguishing_tokens
     improve_threshold_match_weight: float = -20
     improve_top_n_matches: int = 5
     improve_use_bigrams: bool = True
+    use_relation_marker_reranker: bool = False
     reranker_token_reward_multiplier: float = 3.0
     reranker_bigram_reward_multiplier: float = 2.2
 
@@ -320,10 +323,11 @@ class SplinkStage(MatchingStage):
                 df_addresses_to_search_within=df_canonical,
             )
             reranker_matches_table = df_improved.alias
-            df_improved = relation_markers.improve_predictions_using_relation_markers(
-                df_predict=df_improved,
-                con=con,
-            )
+            if self.use_relation_marker_reranker:
+                df_improved = relation_markers.improve_predictions_using_relation_markers(
+                    df_predict=df_improved,
+                    con=con,
+                )
             improved_table_name = f"__ukam__splink__improved_predictions__{_uid()}"
             con.execute(
                 "CREATE OR REPLACE TEMP TABLE "
