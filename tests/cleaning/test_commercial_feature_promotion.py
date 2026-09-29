@@ -203,8 +203,13 @@ def test_packaged_settings_include_promoted_commercial_features():
         "lower(clean_full_address" not in condition
         for condition in numeric_context_conditions
     )
-    assert all("clean_full_address_numeric_context" not in condition for condition in numeric_context_conditions)
-    assert all("clean_full_address_r" in condition for condition in numeric_context_conditions)
+    assert all(
+        "clean_full_address_numeric_context" not in condition
+        for condition in numeric_context_conditions
+    )
+    assert all(
+        "clean_full_address_r" in condition for condition in numeric_context_conditions
+    )
 
 
 def test_canonical_preparation_carries_distinguishing_lexical_tokens():

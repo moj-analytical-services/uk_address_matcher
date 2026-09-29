@@ -391,7 +391,10 @@ def test_packaged_address_model_uses_inline_address_signatures():
         if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
     ]
     assert len(numeric_conditions) == 3
-    assert all("clean_full_address_numeric_context" not in condition for condition in numeric_conditions)
+    assert all(
+        "clean_full_address_numeric_context" not in condition
+        for condition in numeric_conditions
+    )
     assert all("clean_full_address_r" in condition for condition in numeric_conditions)
 
     numberless = next(
@@ -406,7 +409,10 @@ def test_packaged_address_model_uses_inline_address_signatures():
     ]
     assert len(numberless_conditions) == 6
     assert all("regexp_replace" in condition for condition in numberless_conditions)
-    assert all("clean_full_address_without_numbers" not in condition for condition in numberless_conditions)
+    assert all(
+        "clean_full_address_without_numbers" not in condition
+        for condition in numberless_conditions
+    )
 
 
 @pytest.mark.parametrize(
