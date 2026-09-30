@@ -107,6 +107,29 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_manifest.json").exists()
 
 
+def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
+    records = CANONICAL_RECORDS + [
+        {
+            "unique_id": "C-DASH",
+            "address_concat": "PEN-Y-GRAIG TONYPANDY",
+            "postcode": "CF40 2EL",
+        }
+    ]
+    canonical_data = con.from_arrow(pyarrow.Table.from_pylist(records))
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        _derive_road_catalogue=False,
+    )
+    prepared = load_prepared_canonical_data(tmp_path, con)
+    tokens = prepared.addresses.filter("unique_id = 'C-DASH'").project(
+        "clean_full_address_tokens"
+    ).fetchone()[0]
+
+    assert tokens == ["PEN", "Y", "GRAIG", "TONYPANDY"]
+
+
 def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con):
     prepared = load_prepared_canonical_data(prepared_folder, con)
 

@@ -3,7 +3,10 @@ import logging
 import duckdb
 
 from uk_address_matcher.cleaning import chunking_strategies
-from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
+from uk_address_matcher.cleaning.chunking_strategies import (
+    DISTINGUISHING_FEATURE_COLUMNS,
+    prepare_data_for_matching,
+)
 from uk_address_matcher.cleaning.steps import (
     _derive_numeric_range,
     _parse_out_address_structure_premise,
@@ -280,6 +283,70 @@ def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
         common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows
     )
     assert "clean_full_address_tokens" in result.columns
+
+
+def test_raw_canonical_preparation_preserves_distinguishing_features():
+    connection = duckdb.connect()
+    canonical = connection.sql("""
+        SELECT * FROM (VALUES
+            ('flat', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('house', '1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('old', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'TA1 1AA'),
+            ('new', 'NEW RAINBOW LANE TAUNTON', 'TA1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+
+    prepared = prepare_data_for_matching(
+        canonical,
+        con=connection,
+        num_of_chunks=2,
+        derive_distinguishing_wrt_adjacent_records=True,
+        dataset_role="canonical",
+        show_progress=False,
+    )
+
+    assert set(DISTINGUISHING_FEATURE_COLUMNS) <= set(prepared.columns)
+    rows = {
+        unique_id: (distinguishing, common, structural, lexical, parts)
+        for unique_id, distinguishing, common, structural, lexical, parts in (
+            prepared.project(
+                "unique_id, " + ", ".join(DISTINGUISHING_FEATURE_COLUMNS)
+            ).fetchall()
+        )
+    }
+    assert rows == {
+        "flat": (
+            ["FLAT", "A"],
+            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
+            ["FLAT", "A"],
+            [],
+            [{"token": "FLAT", "is_lexical": False}, {"token": "A", "is_lexical": False}],
+        ),
+        "house": (
+            [],
+            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
+            [],
+            [],
+            [],
+        ),
+        "old": (
+            ["OLD", "STATION", "HOUSE"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            [],
+            ["OLD", "STATION", "HOUSE"],
+            [
+                {"token": token, "is_lexical": True}
+                for token in ("OLD", "STATION", "HOUSE")
+            ],
+        ),
+        "new": (
+            ["NEW"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            [],
+            ["NEW"],
+            [{"token": "NEW", "is_lexical": True}],
+        ),
+    }
 
 
 def test_separate_distinguishing_tokens_matches_legacy_for_duplicate_ids():
