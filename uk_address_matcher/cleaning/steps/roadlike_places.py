@@ -583,18 +583,17 @@ def roadlike_place_prepared_candidate_sql(
                     address_tokens, starts.start_position + widths.width - 1
                 ) AS terminal_token
             FROM candidate_sources
-            LEFT JOIN terminal_addresses USING (address_id)
+            ANTI JOIN terminal_addresses USING (address_id)
             CROSS JOIN range(
                 numeric_anchor + 1, array_length(address_tokens) + 1
             ) AS starts(start_position)
             CROSS JOIN (VALUES (2), (3)) AS widths(width)
             {fallback_width_join}
-                        WHERE terminal_addresses.address_id IS NULL
-                            AND (
-                                    allow_truncated_windows
-                                    OR starts.start_position + widths.width - 1
-                                                <= array_length(address_tokens)
-                            )
+            WHERE (
+                allow_truncated_windows
+                OR starts.start_position + widths.width - 1
+                    <= array_length(address_tokens)
+            )
         {fallback_filter_ctes}
         {candidate_union}
     """

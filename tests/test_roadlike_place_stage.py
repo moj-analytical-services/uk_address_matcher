@@ -513,6 +513,35 @@ def test_terminal_templates_include_the_numeric_anchor(duck_con):
     ]
 
 
+def test_fallback_exclusion_preserves_duplicate_and_null_ids(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('1', '14 GREEN MEADOW', 'AB1 2CD', ['14']),
+            (NULL, '16 HIGH STREET', 'AB1 2CD', ['16']),
+            (NULL, '18 GREEN MEADOW', 'AB1 2CD', ['18']),
+            ('2', '20 GREEN MEADOW', 'AB1 2CD', ['20'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    duck_con.register("fallback_exclusion_source", source)
+    duck_con.sql(roadlike_place_prepared_input_sql("fallback_exclusion_source")).create(
+        "fallback_exclusion_prepared"
+    )
+    candidates = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("fallback_exclusion_prepared")
+    )
+    assert candidates.aggregate(
+        "address_id, rightmost_numeric_value, count(*) AS candidates",
+        "address_id, rightmost_numeric_value",
+    ).order("rightmost_numeric_value").fetchall() == [
+        ("1", "12", 2),
+        (None, "16", 5),
+        (None, "18", 4),
+        ("2", "20", 4),
+    ]
+
+
 @pytest.mark.parametrize("preserve_order", [True, False])
 def test_canonical_road_keys_restore_order_after_materialisation_error(
     duck_con, monkeypatch, preserve_order
