@@ -123,9 +123,11 @@ def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
         _derive_road_catalogue=False,
     )
     prepared = load_prepared_canonical_data(tmp_path, con)
-    tokens = prepared.addresses.filter("unique_id = 'C-DASH'").project(
-        "clean_full_address_tokens"
-    ).fetchone()[0]
+    tokens = (
+        prepared.addresses.filter("unique_id = 'C-DASH'")
+        .project("clean_full_address_tokens")
+        .fetchone()[0]
+    )
 
     assert tokens == ["PEN", "Y", "GRAIG", "TONYPANDY"]
 
