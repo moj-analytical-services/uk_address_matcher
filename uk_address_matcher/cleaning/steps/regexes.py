@@ -56,6 +56,13 @@ def replace_fwd_slash_with_dash(input: str):
     return f"regexp_replace({input}, '/', '-', 'g')"
 
 
+def split_letter_dash_letter(input: str):
+    pattern = r"([A-Z])-([A-Z])"
+    replacement = r"\1 \2"
+    first_pass = f"regexp_replace({input}, '{pattern}', '{replacement}', 'g')"
+    return f"regexp_replace({first_pass}, '{pattern}', '{replacement}', 'g')"
+
+
 # TODO:  PROBABLY NO LONGER NEEDED
 def remove_repeated_tokens(input: str):
     """

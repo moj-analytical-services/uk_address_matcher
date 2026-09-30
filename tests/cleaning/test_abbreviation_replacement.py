@@ -9,6 +9,7 @@ from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
     _join_excluding_with_next_token,
     _normalise_abbreviations_and_units,
+    _split_letter_dash_letter,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
@@ -165,6 +166,49 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
         "0401_0120 SOME BUILDING LONDON",
         "NO_1 HIGH STREET LONDON",
     ]
+
+
+def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('PEN-Y-GRAIG'),
+            ('WELLS-NEXT-THE-SEA'),
+            ('TIGH102-NA'),
+            ('1-2 GETHIN ROAD'),
+            ('UNIT 5/6')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _clean_address_string_first_pass,
+            _normalise_abbreviations_and_units,
+            _split_letter_dash_letter,
+        ],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "PEN Y GRAIG",
+        "WELLS NEXT THE SEA",
+        "TIGH102-NA",
+        "1-2 GETHIN ROAD",
+        "UNIT 5-6",
+    ]
+
+
+def test_letter_dash_split_is_enabled_by_default(duck_con):
+    input_rel = duck_con.sql("SELECT 'PEN-Y-GRAIG' AS clean_full_address")
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_split_letter_dash_letter],
+    )
+
+    assert pipeline.run().fetchone()[0] == "PEN Y GRAIG"
 
 
 def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_con):

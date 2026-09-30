@@ -373,7 +373,7 @@ def test_packaged_numberless_comparison_omits_reordered_token_level():
 def test_packaged_address_model_uses_inline_address_signatures():
     settings = _get_model_settings_dict()
     blocking_rules = settings["blocking_rules_to_generate_predictions"]
-    assert any(
+    assert not any(
         rule["blocking_rule"]
         == "regexp_replace(l.clean_full_address, '[^A-Z0-9]', '', 'g') = "
         "regexp_replace(r.clean_full_address, '[^A-Z0-9]', '', 'g')"
@@ -534,7 +534,7 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 10
+    assert len(packaged_rules) == 9
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules

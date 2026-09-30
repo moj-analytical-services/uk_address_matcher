@@ -20,6 +20,7 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _preserve_original_address_concat,
     _remove_duplicate_end_tokens,
     _rename_and_select_columns,
+    _split_letter_dash_letter,
     _strip_country_suffix,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
@@ -88,6 +89,7 @@ __all__ = [
     "_remove_duplicate_end_tokens",
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
+    "_split_letter_dash_letter",
     "_join_excluding_with_next_token",
     "_preserve_original_address_concat",
     # numeric_ranges
