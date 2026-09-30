@@ -1189,11 +1189,9 @@ def prepare_data_for_matching(
             )
             distinguishing_tokens = distinguishing_pipeline.run(debug_options)
             distinguishing_columns = [
-                column
-                for column in distinguishing_tokens.columns
-                if column not in DISTINGUISHING_FEATURE_COLUMNS
+                "ukam_address_id",
+                *DISTINGUISHING_FEATURE_COLUMNS,
             ]
-            distinguishing_columns.extend(DISTINGUISHING_FEATURE_COLUMNS)
             distinguishing_tokens = distinguishing_tokens.project(
                 ", ".join(distinguishing_columns)
             )

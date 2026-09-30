@@ -12,6 +12,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     replace_fwd_slash_with_dash,
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
+    split_letter_dash_letter,
     standarise_num_letter,
     trim,
 )
@@ -424,6 +425,20 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
         CTEStep("with_cleaned_address", cleaned_sql),
     ]
     return steps
+
+
+@pipeline_stage(
+    name="split_letter_dash_letter",
+    description="Split letter-only dashes after abbreviation normalisation",
+    tags=["normalisation", "cleaning"],
+)
+def _split_letter_dash_letter() -> str:
+    cleaned = split_letter_dash_letter("clean_full_address")
+    return f"""
+    SELECT * EXCLUDE (clean_full_address),
+        {cleaned} AS clean_full_address
+    FROM {{input}}
+    """
 
 
 @pipeline_stage(
