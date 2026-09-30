@@ -268,7 +268,14 @@ def _add_canonical_road_blocking_keys(
         FROM ({canonical_addresses.sql_query()}) AS canonical
         LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
     """)
-    return _materialise_relation(con, enriched, enriched_table)
+    con.execute("SET preserve_insertion_order = false")
+    try:
+        return _materialise_relation(con, enriched, enriched_table)
+    finally:
+        _drop_table_and_registered_aliases(con, road_keys_table)
+        con.execute(
+            f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
+        )
 
 
 def derive_roadlike_places(
@@ -436,6 +443,13 @@ def derive_roadlike_places(
             candidate_sources_sql = roadlike_place_prepared_candidate_sources_sql(
                 candidate_source
             )
+            # Catalogue evidence only needs positions relative to the road tail.
+            candidate_sources_sql = (
+                "SELECT address_id, full_postcode, postcode_district, "
+                "rightmost_numeric_value, 0::INTEGER AS numeric_anchor, "
+                "road_tail_tokens AS address_tokens, allow_truncated_windows "
+                f"FROM ({candidate_sources_sql}) AS candidate_sources"
+            )
             if batch_index == 1:
                 con.execute(
                     f"CREATE TEMPORARY TABLE {candidate_sources_table} AS "
@@ -457,6 +471,8 @@ def derive_roadlike_places(
                 chunk_index=batch_index - 1,
                 total_chunks=total_batches,
             )
+        # Candidate sources own everything needed by the catalogue query.
+        _drop_table_and_registered_aliases(con, prepared_table)
         candidate_relation = roadlike_place_prepared_candidate_sql(
             candidate_sources_table,
             candidate_source_relation=candidate_sources_table,

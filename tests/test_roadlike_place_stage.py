@@ -1,3 +1,5 @@
+import pytest
+
 from uk_address_matcher.cleaning.chunking_strategies import (
     _add_canonical_road_blocking_keys,
     clean_data_pre_term_frequencies,
@@ -377,3 +379,168 @@ def test_road_features_without_catalogue_are_neutral(duck_con):
         "road_1_norm, road_1_confidence, road_1_token_count, "
         "road_1_margin, road_1_distinctive_tokens"
     ).fetchone() == (None, None, None, None, None)
+
+
+def test_prepared_candidate_expansion_preserves_fallbacks_and_duplicate_ids(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 HIGH STREET LONDON', 'AB1 2CD', ['12']),
+            ('1', '12 LONG HIGH STREET', 'AB1 2CD', ['12']),
+            ('1', '12 GREEN MEADOW', 'AB1 2CD', ['12']),
+            ('2', '14 OAK LANE', 'AB1 3CD', ['14']),
+            ('3', '29 SHERWOOD STREET TELFORD SHOPPING CENTRE TELFORD',
+             'TF1 1AA', ['29']),
+            ('4', '7 GREEN MEADOW', 'AB1 2CD', ['7']),
+            ('4', '9 GREEN', 'AB1 2CD', ['9']),
+            ('5', '9 GREEN', 'AB1 2CD', ['9']),
+            ('6', '11', 'AB1 2CD', ['11']),
+            ('7', '13 HIGH STREET UNIT 2', 'AB1 2CD', ['13', '2']),
+            ('8', '15 HIGH ROAD LOW STREET', NULL, ['15'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    duck_con.register("candidate_expansion_source", source)
+    generic = duck_con.sql(roadlike_place_candidate_sql("candidate_expansion_source"))
+    prepared = duck_con.sql(
+        roadlike_place_prepared_input_sql("candidate_expansion_source")
+    )
+    duck_con.register("candidate_expansion_prepared", prepared)
+    actual = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("candidate_expansion_prepared")
+    )
+    assert actual.filter("address_id != '4'").order("ALL").fetchall() == (
+        generic.filter("address_id != '4'").order("ALL").fetchall()
+    )
+    # Prepared extraction intentionally retains truncated fallback windows.
+    assert actual.filter("address_id = '4'").select(
+        "candidate_phrase, candidate_width, terminal_token"
+    ).order("ALL").fetchall() == [
+        ("GREEN", 2, None),
+        ("GREEN", 3, None),
+        ("GREEN MEADOW", 2, "MEADOW"),
+        ("GREEN MEADOW", 3, None),
+        ("MEADOW", 2, None),
+        ("MEADOW", 3, None),
+    ]
+    duck_con.sql(
+        roadlike_place_prepared_candidate_sources_sql("candidate_expansion_prepared")
+    ).create("candidate_expansion_sources")
+    reused = duck_con.sql(
+        roadlike_place_prepared_candidate_sql(
+            "candidate_expansion_prepared",
+            candidate_source_relation="candidate_expansion_sources",
+        )
+    )
+    assert reused.order("ALL").fetchall() == actual.order("ALL").fetchall()
+
+
+@pytest.mark.parametrize("id_type", ["VARCHAR", "BIGINT"])
+def test_catalogue_road_tails_preserve_variant_support(duck_con, id_type):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', 'FLAT 2 14 HIGH STREET', 'AB1 2CD', ['2', '14']),
+            ('1', '14 HIGH STREET', 'AB1 2CD', ['14']),
+            ('2', '16 HIGH STREET', 'AB1 3CD', ['16']),
+            ('3', '18 GREEN MEADOW', 'AB2 4CD', ['18']),
+            ('3', '18 GREEN MEADOW', 'AB2 4CD', ['18'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    source = source.select(f"* REPLACE (CAST(unique_id AS {id_type}) AS unique_id)")
+    duck_con.register("duplicate_tail_source", source)
+    duck_con.sql(roadlike_place_prepared_input_sql("duplicate_tail_source")).create(
+        "duplicate_tail_prepared"
+    )
+    candidates = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("duplicate_tail_prepared")
+    )
+    duck_con.register("duplicate_tail_candidates", candidates)
+    expected = duck_con.sql(roadlike_place_catalog_sql("duplicate_tail_candidates"))
+    actual = derive_roadlike_places(source, duck_con, show_progress="off")
+    assert actual.types == expected.types
+    assert actual.order("ALL").fetchall() == expected.order("ALL").fetchall()
+    assert actual.filter("candidate_phrase = 'HIGH STREET'").select(
+        "phrase_support, phrase_addresses"
+    ).fetchone() == (3, 2)
+
+
+def test_fallback_validity_is_shared_across_null_identifiers(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            (NULL::VARCHAR, '18 GREEN MEADOW', 'AB1 2CD', ['18']),
+            (NULL::VARCHAR, '20 GREEN', 'AB1 2CD', ['20'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    duck_con.register("null_fallback_source", source)
+    duck_con.sql(roadlike_place_prepared_input_sql("null_fallback_source")).create(
+        "null_fallback_prepared"
+    )
+    candidates = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("null_fallback_prepared")
+    )
+    assert candidates.select(
+        "address_id, rightmost_numeric_value, candidate_phrase, "
+        "candidate_width, terminal_token"
+    ).order("rightmost_numeric_value, candidate_phrase, candidate_width").fetchall() == [
+        (None, "18", "GREEN MEADOW", 2, "MEADOW"),
+        (None, "18", "GREEN MEADOW", 3, None),
+        (None, "18", "MEADOW", 2, None),
+        (None, "18", "MEADOW", 3, None),
+        (None, "20", "GREEN", 2, None),
+        (None, "20", "GREEN", 3, None),
+    ]
+
+
+def test_terminal_templates_include_the_numeric_anchor(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('1', '12 14 HIGH STREET', 'AB1 2CD', ['12']),
+            ('2', '12 14 HIGH STREET', 'AB1 2CD', ['14'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    duck_con.register("anchor_template_source", source)
+    duck_con.sql(roadlike_place_prepared_input_sql("anchor_template_source")).create(
+        "anchor_template_prepared"
+    )
+    candidates = duck_con.sql(
+        roadlike_place_prepared_candidate_sql("anchor_template_prepared")
+    )
+    assert candidates.select(
+        "address_id, rightmost_numeric_value, numeric_anchor, "
+        "candidate_phrase, candidate_width"
+    ).order("address_id, candidate_phrase").fetchall() == [
+        ("1", "12", 1, "14 HIGH STREET", 3),
+        ("1", "12", 1, "HIGH STREET", 2),
+        ("2", "14", 2, "HIGH STREET", 2),
+    ]
+
+
+@pytest.mark.parametrize("preserve_order", [True, False])
+def test_canonical_road_keys_restore_order_after_materialisation_error(
+    duck_con, monkeypatch, preserve_order
+):
+    duck_con.execute(f"SET preserve_insertion_order = {str(preserve_order).lower()}")
+    source = duck_con.sql("""
+        SELECT '1' AS unique_id, 1 AS ukam_address_id,
+            '12 HIGH STREET' AS clean_full_address, 'AB1 2CD' AS postcode,
+            ['12'] AS numeric_tokens
+    """)
+    catalogue = _catalogue_from_source(duck_con, source)
+
+    def fail_materialisation(*args):
+        assert duck_con.sql(
+            "SELECT current_setting('preserve_insertion_order')"
+        ).fetchone() == (False,)
+        raise RuntimeError("materialisation failed")
+
+    monkeypatch.setattr(
+        "uk_address_matcher.cleaning.chunking_strategies._materialise_relation",
+        fail_materialisation,
+    )
+    with pytest.raises(RuntimeError, match="materialisation failed"):
+        _add_canonical_road_blocking_keys(source, duck_con, roadlike_places=catalogue)
+    assert duck_con.sql(
+        "SELECT current_setting('preserve_insertion_order')"
+    ).fetchone() == (preserve_order,)
+    assert duck_con.sql("""
+        SELECT count(*) FROM duckdb_tables()
+        WHERE starts_with(table_name, '__ukam_canonical_road_')
+    """).fetchone() == (0,)

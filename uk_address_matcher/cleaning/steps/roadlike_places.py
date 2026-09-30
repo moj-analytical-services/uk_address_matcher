@@ -452,19 +452,18 @@ def roadlike_place_prepared_candidate_sql(
             SELECT
                 *,
                 NOT regexp_matches(candidate_phrase, {facility_candidate_pattern})
-                    AS phrase_allowed,
-                max((
-                    terminal_token IS NOT NULL
-                    AND NOT regexp_matches(
-                        candidate_phrase, {facility_candidate_pattern}
-                    )
-                )::INTEGER) OVER (PARTITION BY address_id) AS has_valid_candidate
+                    AS phrase_allowed
             FROM fallback_candidate_windows
-        ), fallback_candidates AS (
-            SELECT * EXCLUDE (phrase_allowed, has_valid_candidate)
+        ), valid_fallback_addresses AS (
+            SELECT DISTINCT address_id
             FROM fallback_candidate_flags
-            WHERE has_valid_candidate = 1
-              AND phrase_allowed
+            WHERE terminal_token IS NOT NULL AND phrase_allowed
+        ), fallback_candidates AS (
+            SELECT flags.* EXCLUDE (phrase_allowed)
+            FROM fallback_candidate_flags AS flags
+            SEMI JOIN valid_fallback_addresses AS valid
+                ON flags.address_id IS NOT DISTINCT FROM valid.address_id
+            WHERE phrase_allowed
               AND NOT regexp_matches(candidate_phrase, {block_candidate_pattern})
         )
     """
@@ -511,17 +510,18 @@ def roadlike_place_prepared_candidate_sql(
         if candidate_source_relation is not None
         else roadlike_place_prepared_candidate_sources_sql(source_relation)
     )
+    source_cte_hint = "NOT MATERIALIZED" if candidate_source_relation is not None else ""
     return f"""
-        WITH candidate_sources AS (
+        WITH candidate_sources AS {source_cte_hint} (
             SELECT *
             FROM ({candidate_source_query}) AS prepared_candidate_sources
-        ){width_support_cte}, terminal_candidate_windows AS (
+        ){width_support_cte}, terminal_shapes AS (
+            SELECT DISTINCT numeric_anchor, address_tokens
+            FROM candidate_sources
+        ), terminal_candidate_windows AS (
             SELECT
-                address_id,
-                full_postcode,
-                postcode_district,
-                rightmost_numeric_value,
                 numeric_anchor,
+                address_tokens,
                 array_length(address_tokens) - numeric_anchor AS tail_length,
                 ends.end_position - widths.width + 1 AS candidate_start_position,
                 widths.width AS candidate_width,
@@ -535,7 +535,7 @@ def roadlike_place_prepared_candidate_sql(
                     ' '
                 ) AS candidate_phrase,
                 list_extract(address_tokens, ends.end_position) AS terminal_token
-            FROM candidate_sources
+            FROM terminal_shapes
             CROSS JOIN unnest(list_filter(
                 range(numeric_anchor + 2, array_length(address_tokens) + 1),
                 position -> regexp_matches(
@@ -548,8 +548,14 @@ def roadlike_place_prepared_candidate_sql(
             WHERE ends.end_position - widths.width + 1 > numeric_anchor
         ), terminal_candidates AS (
             SELECT
-                *
-            FROM terminal_candidate_windows
+                source.address_id,
+                source.full_postcode,
+                source.postcode_district,
+                source.rightmost_numeric_value,
+                windows.* EXCLUDE (address_tokens)
+            FROM candidate_sources AS source
+            JOIN terminal_candidate_windows AS windows
+                USING (numeric_anchor, address_tokens)
             WHERE NOT regexp_matches(candidate_phrase, {facility_candidate_pattern})
         ), terminal_addresses AS (
             SELECT DISTINCT address_id
