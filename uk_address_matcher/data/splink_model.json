@@ -37,10 +37,6 @@
       "sql_dialect": "duckdb"
     },
     {
-      "blocking_rule": "regexp_replace(l.clean_full_address, '[^A-Z0-9]', '', 'g') = regexp_replace(r.clean_full_address, '[^A-Z0-9]', '', 'g')",
-      "sql_dialect": "duckdb"
-    },
-    {
       "blocking_rule": "l.postcode = r.postcode AND l.numeric_range IS NOT NULL AND r.numeric_range IS NOT NULL AND l.numeric_range_lower = r.numeric_range_lower AND l.numeric_range_upper = r.numeric_range_upper",
       "sql_dialect": "duckdb"
     },
