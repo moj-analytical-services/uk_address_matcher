@@ -207,7 +207,7 @@ def test_exports_reranked_splink_candidates(tmp_path):
         ).fetchone()
 
     assert candidate_count >= len(candidates) > 0
-    assert manifest["splink"]["use_relation_marker_reranker"] is True
+    assert "use_relation_marker_reranker" not in manifest["splink"]
     first_candidate = candidates[0]
     assert first_candidate["source"] == "splink"
     assert first_candidate["splink_match_weight"] is not None

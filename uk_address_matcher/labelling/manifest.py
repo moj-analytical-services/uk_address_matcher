@@ -74,7 +74,6 @@ def _splink_configuration(match_result: MatchResult) -> dict[str, object]:
         "predict_threshold_match_weight": float(stage.predict_threshold_match_weight),
         "improve_threshold_match_weight": float(stage.improve_threshold_match_weight),
         "improve_top_n_matches": int(stage.improve_top_n_matches),
-        "use_relation_marker_reranker": bool(stage.use_relation_marker_reranker),
         "final_match_weight_threshold": float(stage.final_match_weight_threshold),
         "final_distinguishability_threshold": (
             None
