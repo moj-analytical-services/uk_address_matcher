@@ -76,6 +76,17 @@ def _derive_numeric_context_roles():
             "UNIT|UNITS|SUITE|SUITES|OFFICE|ROOM|WORKSHOP|WAREHOUSE|STUDIO",
         ),
     ]
+    marker_tokens = sorted(
+        {
+            token
+            for _marker, pattern in marker_cases
+            for alternative in pattern.split("|")
+            for token in alternative.split()
+        }
+    )
+    marker_tokens_sql = ", ".join(
+        "'" + token.replace("'", "''") + "'" for token in marker_tokens
+    )
 
     def context_field(alternative: str) -> str:
         return {1: "one", 2: "two", 3: "three"}[len(alternative.split())]
@@ -97,28 +108,47 @@ def _derive_numeric_context_roles():
     WITH address_token_contexts AS (
         SELECT
             *,
-            list_transform(
-                range(1, len(clean_full_address_tokens) + 1),
-                pos -> struct_pack(
-                    token := list_extract(clean_full_address_tokens, pos),
-                    previous_one := CASE
-                        WHEN pos > 1 THEN list_extract(clean_full_address_tokens, pos - 1)
-                        ELSE NULL::VARCHAR
-                    END,
-                    previous_two := CASE
-                        WHEN pos > 2 THEN array_to_string(
-                            list_slice(clean_full_address_tokens, pos - 2, pos - 1), ' '
-                        )
-                        ELSE NULL::VARCHAR
-                    END,
-                    previous_three := CASE
-                        WHEN pos > 3 THEN array_to_string(
-                            list_slice(clean_full_address_tokens, pos - 3, pos - 1), ' '
-                        )
-                        ELSE NULL::VARCHAR
-                    END
+            CASE
+                WHEN list_has_any(
+                    clean_full_address_tokens,
+                    [{marker_tokens_sql}]::VARCHAR[]
                 )
-            ) AS __numeric_token_contexts
+                THEN list_transform(
+                    range(1, len(clean_full_address_tokens) + 1),
+                    pos -> struct_pack(
+                        token := list_extract(clean_full_address_tokens, pos),
+                        previous_one := CASE
+                            WHEN pos > 1 THEN
+                                list_extract(clean_full_address_tokens, pos - 1)
+                            ELSE NULL::VARCHAR
+                        END,
+                        previous_two := CASE
+                            WHEN pos > 2 THEN array_to_string(
+                                list_slice(
+                                    clean_full_address_tokens, pos - 2, pos - 1
+                                ),
+                                ' '
+                            )
+                            ELSE NULL::VARCHAR
+                        END,
+                        previous_three := CASE
+                            WHEN pos > 3 THEN array_to_string(
+                                list_slice(
+                                    clean_full_address_tokens, pos - 3, pos - 1
+                                ),
+                                ' '
+                            )
+                            ELSE NULL::VARCHAR
+                        END
+                    )
+                )
+                ELSE []::STRUCT(
+                    token VARCHAR,
+                    previous_one VARCHAR,
+                    previous_two VARCHAR,
+                    previous_three VARCHAR
+                )[]
+            END AS __numeric_token_contexts
         FROM {{input}}
     ),
     address_marker_priorities AS (
