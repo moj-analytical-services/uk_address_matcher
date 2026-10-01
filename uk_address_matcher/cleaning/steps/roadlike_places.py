@@ -88,6 +88,7 @@ def _road_candidate_feature_sql(
     catalogue_view: str,
     *,
     require_catalogue_support: bool = False,
+    catalogue_has_district: bool = False,
 ) -> str:
     policy = token_policy()
     residence_pattern = sql_text(
@@ -96,6 +97,9 @@ def _road_candidate_feature_sql(
     road_pattern = sql_text(token_pattern(tuple(policy["road_syntax_terminal_tokens"])))
     business_pattern = sql_text("(^| )(BUSINESS|ESTATE|PARK)( |$)")
     catalogue_join = "INNER JOIN" if require_catalogue_support else "LEFT JOIN"
+    catalogue_keys = "candidate_phrase, terminal_token"
+    if catalogue_has_district:
+        catalogue_keys += ", postcode_district"
     return f"""
         WITH candidates AS (SELECT * FROM {candidate_relation})
         SELECT
@@ -125,7 +129,7 @@ def _road_candidate_feature_sql(
                 AS terminal_right_context_diversity
         FROM candidates
         {catalogue_join} {catalogue_view} AS catalogue
-            USING (candidate_phrase, terminal_token)
+            USING ({catalogue_keys})
     """
 
 
@@ -200,6 +204,7 @@ def _score_road_candidates(
     scorecard: dict[str, object],
     output_table: str,
     require_catalogue_support: bool = False,
+    catalogue_has_district: bool = False,
 ) -> None:
     coefficients = scorecard.get("coefficients")
     feature_columns = scorecard.get("feature_columns")
@@ -222,6 +227,7 @@ def _score_road_candidates(
                 candidate_relation,
                 catalogue_view,
                 require_catalogue_support=require_catalogue_support,
+                catalogue_has_district=catalogue_has_district,
             )
         }
         ), scorecard_features AS (
@@ -430,6 +436,7 @@ def roadlike_place_prepared_candidate_sql(
     *,
     catalogue_width_relation: str | None = None,
     candidate_source_relation: str | None = None,
+    catalogue_has_district: bool = False,
 ) -> str:
     """Build terminal-first candidates from prepared canonical rows."""
     block_candidate_pattern = sql_text(BLOCK_CANDIDATE_PATTERN)
@@ -468,23 +475,36 @@ def roadlike_place_prepared_candidate_sql(
         )
     """
     if catalogue_width_relation is not None:
+        district_projection = "postcode_district, " if catalogue_has_district else ""
+        width_district_join = (
+            "AND supported_widths.postcode_district = candidate_sources.postcode_district"
+            if catalogue_has_district
+            else ""
+        )
+        phrase_district_join = (
+            "AND supported_phrases.postcode_district = "
+            "candidate_sources.postcode_district"
+            if catalogue_has_district
+            else ""
+        )
         width_support_cte = f""", supported_widths AS (
             SELECT DISTINCT
-                terminal_token,
+                {district_projection}terminal_token,
                 array_length(string_split(candidate_phrase, ' ')) AS candidate_width
             FROM {catalogue_width_relation}
         ), supported_phrases AS (
-            SELECT candidate_phrase, terminal_token
+            SELECT {district_projection}candidate_phrase, terminal_token
             FROM {catalogue_width_relation}
         )"""
-        terminal_width_join = """
+        terminal_width_join = f"""
             INNER JOIN supported_widths
                 ON supported_widths.terminal_token = list_extract(
                     address_tokens, ends.end_position
                 )
                AND supported_widths.candidate_width = widths.width
+               {width_district_join}
         """
-        fallback_width_join = """
+        fallback_width_join = f"""
             INNER JOIN supported_phrases
                 ON supported_phrases.candidate_phrase = array_to_string(
                     list_slice(
@@ -497,6 +517,7 @@ def roadlike_place_prepared_candidate_sql(
                AND supported_phrases.terminal_token = list_extract(
                     address_tokens, starts.start_position + widths.width - 1
                 )
+               {phrase_district_join}
         """
         fallback_filter_ctes = f"""
         ), fallback_candidates AS (
@@ -511,15 +532,23 @@ def roadlike_place_prepared_candidate_sql(
         else roadlike_place_prepared_candidate_sources_sql(source_relation)
     )
     source_cte_hint = "NOT MATERIALIZED" if candidate_source_relation is not None else ""
+    district_scoped_templates = (
+        catalogue_width_relation is not None and catalogue_has_district
+    )
+    template_district_key = ", postcode_district" if district_scoped_templates else ""
+    template_district_projection = (
+        "candidate_sources.postcode_district, " if district_scoped_templates else ""
+    )
     return f"""
         WITH candidate_sources AS {source_cte_hint} (
             SELECT *
             FROM ({candidate_source_query}) AS prepared_candidate_sources
         ){width_support_cte}, terminal_shapes AS (
-            SELECT DISTINCT numeric_anchor, address_tokens
+            SELECT DISTINCT numeric_anchor, address_tokens{template_district_key}
             FROM candidate_sources
         ), terminal_candidate_windows AS (
             SELECT
+                {template_district_projection}
                 numeric_anchor,
                 address_tokens,
                 array_length(address_tokens) - numeric_anchor AS tail_length,
@@ -535,7 +564,7 @@ def roadlike_place_prepared_candidate_sql(
                     ' '
                 ) AS candidate_phrase,
                 list_extract(address_tokens, ends.end_position) AS terminal_token
-            FROM terminal_shapes
+            FROM terminal_shapes AS candidate_sources
             CROSS JOIN unnest(list_filter(
                 range(numeric_anchor + 2, array_length(address_tokens) + 1),
                 position -> regexp_matches(
@@ -552,10 +581,10 @@ def roadlike_place_prepared_candidate_sql(
                 source.full_postcode,
                 source.postcode_district,
                 source.rightmost_numeric_value,
-                windows.* EXCLUDE (address_tokens)
+                windows.* EXCLUDE (address_tokens{template_district_key})
             FROM candidate_sources AS source
             JOIN terminal_candidate_windows AS windows
-                USING (numeric_anchor, address_tokens)
+                USING (numeric_anchor, address_tokens{template_district_key})
             WHERE NOT regexp_matches(candidate_phrase, {facility_candidate_pattern})
         ), terminal_addresses AS (
             SELECT DISTINCT address_id
@@ -564,7 +593,7 @@ def roadlike_place_prepared_candidate_sql(
             SELECT
                 candidate_sources.address_id,
                 full_postcode,
-                postcode_district,
+                candidate_sources.postcode_district AS postcode_district,
                 rightmost_numeric_value,
                 numeric_anchor,
                 array_length(address_tokens) - numeric_anchor AS tail_length,
@@ -616,6 +645,7 @@ def _road_tail_signature_sql(source_relation: str) -> str:
         ), ordinary_tails AS (
             SELECT
                 CAST(unique_id AS VARCHAR) AS unique_id,
+                postcode_district,
                 list_slice(
                     peeled_tokens,
                     rightmost_numeric_position + 1,
@@ -627,6 +657,7 @@ def _road_tail_signature_sql(source_relation: str) -> str:
         ), facility_addresses AS (
             SELECT
                 CAST(unique_id AS VARCHAR) AS unique_id,
+                postcode_district,
                 numeric_tokens,
                 string_split(
                     trim(regexp_replace(
@@ -655,6 +686,7 @@ def _road_tail_signature_sql(source_relation: str) -> str:
         UNION ALL
         SELECT
             unique_id,
+            postcode_district,
             list_slice(
                 address_tokens,
                 numeric_anchor + 1,
@@ -778,11 +810,18 @@ def roadlike_place_candidate_sql(source_relation: str) -> str:
     """
 
 
-def roadlike_place_catalog_sql(candidate_relation: str) -> str:
+def roadlike_place_catalog_sql(
+    candidate_relation: str, *, by_postcode_district: bool = False
+) -> str:
     """Aggregate candidate recurrence evidence required by the road scorer."""
+    district_column = "postcode_district," if by_postcode_district else ""
+    terminal_partition = (
+        "postcode_district, terminal_token" if by_postcode_district else "terminal_token"
+    )
     return f"""
         WITH candidate_stats AS (
             SELECT
+                {district_column}
                 candidate_phrase,
                 terminal_token,
                 count(*) AS phrase_support,
@@ -791,9 +830,10 @@ def roadlike_place_catalog_sql(candidate_relation: str) -> str:
                 approx_count_distinct(full_postcode) AS distinct_postcodes,
                 approx_count_distinct(postcode_district) AS distinct_districts
             FROM {candidate_relation}
-            GROUP BY candidate_phrase, terminal_token
+            GROUP BY {district_column} candidate_phrase, terminal_token
         )
         SELECT
+            {district_column}
             candidate_phrase,
             terminal_token,
             phrase_support,
@@ -801,8 +841,10 @@ def roadlike_place_catalog_sql(candidate_relation: str) -> str:
             distinct_numbers,
             distinct_postcodes,
             distinct_districts,
-            sum(phrase_support) OVER (PARTITION BY terminal_token) AS terminal_support,
-            count(*) OVER (PARTITION BY terminal_token) AS terminal_distinct_phrases
+            sum(phrase_support) OVER (PARTITION BY {terminal_partition})
+                AS terminal_support,
+            count(*) OVER (PARTITION BY {terminal_partition})
+                AS terminal_distinct_phrases
         FROM candidate_stats
     """
 
@@ -829,6 +871,7 @@ def _materialized_road_scores(
     signatures_table = f"__ukam_road_feature_signatures_{uid}"
     con.register(input_name, address_table)
     con.register(catalogue_view, roadlike_places)
+    catalogue_has_district = "postcode_district" in roadlike_places.columns
     try:
         prepared_input_sql = roadlike_place_prepared_input_sql(
             input_name,
@@ -848,6 +891,9 @@ def _materialized_road_scores(
             scorecard = json.loads(model_path.read_text(encoding="utf-8"))
             candidate_source = prepared_table
             if deduplicate_tails:
+                signature_district = (
+                    ", postcode_district" if catalogue_has_district else ""
+                )
                 con.execute(
                     f"CREATE TEMPORARY TABLE {tails_table} AS "
                     f"{_road_tail_signature_sql(prepared_table)}"
@@ -856,11 +902,12 @@ def _materialized_road_scores(
                     CREATE TEMPORARY TABLE {signatures_table} AS
                     SELECT
                         min(unique_id) AS address_id,
-                        road_tail_tokens,
+                        road_tail_tokens{signature_district},
                         allow_truncated_windows
                     FROM {tails_table}
                     WHERE array_length(road_tail_tokens) >= 2
                     GROUP BY road_tail_tokens, allow_truncated_windows
+                        {signature_district}
                 """)
                 candidate_source = f"""(
                     SELECT
@@ -869,7 +916,9 @@ def _materialized_road_scores(
                             list_prepend('0', road_tail_tokens), ' '
                         ) AS clean_full_address,
                         '' AS postcode,
-                        '' AS postcode_district,
+                        {
+                    "postcode_district" if catalogue_has_district else "''"
+                } AS postcode_district,
                         '0' AS rightmost_numeric_value,
                         1 AS rightmost_numeric_position,
                         list_prepend('0', road_tail_tokens) AS peeled_tokens,
@@ -896,6 +945,7 @@ def _materialized_road_scores(
                 catalogue_width_relation=(
                     catalogue_view if require_catalogue_support else None
                 ),
+                catalogue_has_district=catalogue_has_district,
             )
             _score_road_candidates(
                 con,
@@ -904,6 +954,7 @@ def _materialized_road_scores(
                 catalogue_view=catalogue_view,
                 scorecard=scorecard,
                 require_catalogue_support=require_catalogue_support,
+                catalogue_has_district=catalogue_has_district,
             )
         yield (
             input_name,
@@ -952,6 +1003,9 @@ def derive_top_1_road_keys(
     ) as (_, scores_table, tails_table, signatures_table):
         assert tails_table is not None
         assert signatures_table is not None
+        signature_keys = "road_tail_tokens, allow_truncated_windows"
+        if "postcode_district" in roadlike_places.columns:
+            signature_keys += ", postcode_district"
         con.execute(f"""
             CREATE TEMPORARY TABLE {keys_table} AS
             WITH winners AS (
@@ -972,7 +1026,7 @@ def derive_top_1_road_keys(
             SELECT tails.unique_id, winners.road_1_norm
             FROM {tails_table} AS tails
             JOIN {signatures_table} AS signatures
-                USING (road_tail_tokens, allow_truncated_windows)
+                USING ({signature_keys})
             JOIN winners ON signatures.address_id = winners.address_id
         """)
     return con.table(keys_table)

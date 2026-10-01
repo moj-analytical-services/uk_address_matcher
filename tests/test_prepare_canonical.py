@@ -136,6 +136,38 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     }.isdisjoint(prepared.addresses.columns)
 
 
+@pytest.mark.parametrize(
+    "source_postcode",
+    [None, "NOT A POSTCODE"],
+    ids=["missing", "invalid"],
+)
+def test_prepare_uses_roads_without_valid_postcode(con, tmp_path, source_postcode):
+    postcode_projection = (
+        "" if source_postcode is None else f", '{source_postcode}'::VARCHAR AS postcode"
+    )
+    source = con.sql(f"""
+        SELECT
+            '1'::VARCHAR AS unique_id,
+            '12 HIGH STREET'::VARCHAR AS address_concat
+            {postcode_projection}
+    """)
+    output_folder = tmp_path / "road_fallback_without_valid_postcode"
+
+    prepare_canonical_folder(
+        source,
+        output_folder=output_folder,
+        con=con,
+    )
+    prepared = load_prepared_canonical_data(output_folder, con)
+
+    assert prepared.roadlike_places is not None
+    assert (output_folder / "roadlike_places.parquet").exists()
+    assert prepared.roadlike_places.project("postcode_district").fetchone() == ("",)
+    assert "postcode_district" not in prepared.addresses.columns
+    assert prepared.addresses.project("road_1_norm").fetchone() == ("HIGH STREET",)
+    assert prepared.addresses.project("postcode").fetchone() == (source_postcode,)
+
+
 def test_prepare_derives_road_catalogue_by_default(canonical_data, con, tmp_path):
     output_folder = tmp_path / "default_with_road_keys"
 
