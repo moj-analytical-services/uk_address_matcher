@@ -47,7 +47,7 @@ def _marker_alternatives():
         pytest.param(
             marker,
             alternative,
-            id=f"{marker.lower()}-{alternative.lower().replace(' ', '-')}"
+            id=f"{marker.lower()}-{alternative.lower().replace(' ', '-')}",
         )
         for marker, pattern in _marker_cases_from_stage()
         for alternative in pattern.split("|")
@@ -102,15 +102,15 @@ def test_numeric_role_gate_covers_every_marker_alternative(marker, alternative):
         input_relation = connection.table("numeric_marker_input")
         result = DuckDBPipeline(connection, input_relation)
         result.add_step(_derive_numeric_context_roles())
-        rows = result.run(DebugOptions(pretty_print_sql=False)).project(
-            "numeric_role_keys, numeric_broad_roles, numeric_specific_markers"
-        ).fetchall()
+        rows = (
+            result.run(DebugOptions(pretty_print_sql=False))
+            .project("numeric_role_keys, numeric_broad_roles, numeric_specific_markers")
+            .fetchall()
+        )
     finally:
         connection.close()
 
-    assert rows == [
-        ([f"{role_prefix}|20"], [broad_role], [specific_marker])
-    ]
+    assert rows == [([f"{role_prefix}|20"], [broad_role], [specific_marker])]
 
 
 def test_numeric_role_gate_preserves_null_empty_and_nonmatching_outputs():
