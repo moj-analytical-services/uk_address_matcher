@@ -1,6 +1,6 @@
 import pytest
 
-from uk_address_matcher import AddressMatcher, AddressRecord, ExactMatchStage
+from uk_address_matcher import AddressMatcher, AddressRecord, ExactMatchStage, SplinkStage
 from uk_address_matcher.cleaning.chunking_strategies import (
     clean_data_pre_term_frequencies,
 )
@@ -78,6 +78,40 @@ def test_addresses_to_match_without_postcode_column(duck_con, canonical_relation
         """
     )
     _run_matcher(duck_con, canonical_relation, messy_relation)
+
+
+@pytest.mark.parametrize(
+    "source_postcode",
+    [None, "NOT A POSTCODE"],
+    ids=["missing", "invalid"],
+)
+def test_canonical_without_valid_postcode_still_uses_roads(duck_con, source_postcode):
+    postcode_projection = (
+        "" if source_postcode is None else f", '{source_postcode}'::VARCHAR AS postcode"
+    )
+    canonical_relation = duck_con.sql(f"""
+        SELECT
+            1::BIGINT AS unique_id,
+            '12 HIGH STREET'::VARCHAR AS address_concat
+            {postcode_projection}
+    """)
+    messy_relation = duck_con.sql("""
+        SELECT
+            10::BIGINT AS unique_id,
+            '12 HIGH STREET'::VARCHAR AS address_concat
+    """)
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_relation,
+        addresses_to_match=messy_relation,
+        con=duck_con,
+        stages=[SplinkStage()],
+        show_progress="off",
+    )
+
+    matcher._resolve_canonical_data()
+
+    assert matcher._roadlike_places is not None
+    assert matcher._canonical_clean.project("road_1_norm").fetchone() == ("HIGH STREET",)
 
 
 @pytest.mark.parametrize("missing_column", ["unique_id", "address_concat"])
