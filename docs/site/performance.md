@@ -11,9 +11,9 @@ Note that runtimes depend on whether the canonical data covers a local council r
 | 1. Create data package and API key | 5 minutes | 5 minutes |
 | 2. Install Python, uv, and `uk_address_matcher` | 5 minutes | 5 minutes |
 | 3. Download and process OS data into a flat file | 5 seconds[^1] | 4 minutes[^2] |
-| 4. Pre-process indexes, features, and road catalogue | Not necessary | 12 min 27 sec observed[^3] |
+| 4. Pre-process indexes, features, road catalogue, and road keys | Not necessary | 11 min 32 sec observed[^3] |
 | 5. Match 100,000 records | 18 seconds | 30 seconds |
-| Total one-off setup (steps 1-4) | About 10 min 20 sec[^4] | About 44 min 27 sec[^4] |
+| Total one-off setup (steps 1-4) | About 10 min 20 sec[^4] | About 43 min 32 sec[^4] |
 
 [^1]: Plus ~15 seconds to download the data.
 [^2]: Plus ~18 minutes to download the data.
@@ -391,13 +391,29 @@ The full precision-recall curve is shown below:
 
 ## Canonical preparation runtime
 
-| Stage | Seconds | Share of wall time | Cumulative seconds |
+<details markdown="1">
+<summary>Show full canonical preparation runtime</summary>
+
+This end-to-end precleaning run processed 71,438,939 canonical rows on 2 October 2026. It used Python 3.12.13, DuckDB 1.5.0, 12 threads, a 28GB memory limit, a 190GB temporary-directory cap, 10 preparation chunks, and one output chunk. Adjacent distinguishing, road-catalogue derivation, and road-key enrichment were enabled.
+
+The harness timer, started before DuckDB connection setup, recorded 691.830s. The `prepare_canonical_folder` call took 691.797s (11 min 31.797 sec), as broken down below. The source DuckDB database was attached read-only; its lazily evaluated input projection, preparation, Parquet writes, and manifest finalisation are included in the call timing. Downloading and constructing the source database are excluded. Timings were measured on a MacBook Pro M4 Max with 36GiB RAM.
+
+| Stage | Seconds | Share of preclean wall time | Cumulative seconds |
 | --- | ---: | ---: | ---: |
-| Foundational cleaning and ID assignment | 276.011s | 37.0% | 276.011s |
-| Term-frequency aggregation | 1.634s | 0.2% | 277.644s |
-| Adjacent distinguishing and term-frequency application | 245.955s | 32.9% | 523.600s |
-| Inverted-index derivation | 94.188s | 12.6% | 617.788s |
-| Roadlike-place catalogue derivation | 3.872s | 0.5% | 621.659s |
-| Artefact serialisation | 122.854s | 16.5% | 744.514s |
-| Manifest finalisation | 2.237s | 0.3% | 746.750s |
-| Timing outside instrumented stages | 0.071s | 0.0% | 746.821s |
+| Input coercion | 0.229s | 0.03% | 0.229s |
+| Foundational cleaning and ID assignment | 146.700s | 21.21% | 146.930s |
+| Term-frequency aggregation | 2.223s | 0.32% | 149.153s |
+| Adjacent distinguishing and term-frequency application | 199.224s | 28.80% | 348.376s |
+| Inverted-index derivation | 84.296s | 12.19% | 432.672s |
+| Roadlike-place catalogue derivation | 50.559s | 7.31% | 483.231s |
+| Road blocking-key enrichment | 79.815s | 11.54% | 563.047s |
+| Term-frequency Parquet write | 0.034s | 0.00% | 563.081s |
+| Inverted-index Parquet write | 12.496s | 1.81% | 575.577s |
+| Road-catalogue Parquet write | 0.151s | 0.02% | 575.728s |
+| Canonical-address Parquet write | 114.701s | 16.58% | 690.430s |
+| Manifest finalisation | 1.348s | 0.19% | 691.777s |
+| Timing outside instrumented stages | 0.020s | 0.00% | 691.797s |
+| Total `prepare_canonical_folder` | 691.797s | 100.00% | 691.797s |
+
+The manifest was verified at 71,438,939 canonical addresses, 926,832 term-frequency rows, 61,562,885 inverted-index rows, and 1,977,197 roadlike places. The spill directory reached 134GB in a sampled check and was empty after DuckDB closed; this sampled size is not a continuous peak measurement.
+</details>
