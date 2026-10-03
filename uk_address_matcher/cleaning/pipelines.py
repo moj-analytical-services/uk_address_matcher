@@ -322,8 +322,13 @@ def _clean_data_using_precomputed_rel_tok_freq(
         else QUEUE_PRE_TF
     )
 
+    use_enum_lookup = con.sql(
+        "SELECT use_enum_lookup FROM __ukam__tmp_dense_rel_tok_freq"
+    ).fetchone()[0]
     tf_and_post = [
-        _add_term_frequencies_to_address_tokens_using_registered_df,
+        _add_term_frequencies_to_address_tokens_using_registered_df(
+            use_enum_lookup=use_enum_lookup
+        ),
         _add_numeric_term_frequencies_using_registered_df,
     ] + QUEUE_POST_TF
     if not pre_cleaned_addresses or "numeric_range" in address_table.columns:
@@ -483,6 +488,26 @@ def _create_term_frequency_tables(
     # when the underlying data is modified or dropped
     con.sql("DROP TABLE IF EXISTS __ukam__tmp_rel_tok_freq")
     address_token_frequencies_rel.create("__ukam__tmp_rel_tok_freq")
+    # Both dictionary codes and array positions use the same token ordering.
+    # Retain the join-based stage for duplicate tokens or non-binary collations.
+    con.execute("""
+        CREATE OR REPLACE TYPE __ukam__tf_token AS ENUM (
+            SELECT DISTINCT token FROM __ukam__tmp_rel_tok_freq
+            WHERE token IS NOT NULL ORDER BY token
+        );
+        CREATE OR REPLACE TEMP TABLE __ukam__tmp_dense_rel_tok_freq AS
+        SELECT
+            list(rel_freq ORDER BY token) FILTER (WHERE token IS NOT NULL) AS frequencies,
+            count(token) = count(DISTINCT token)
+                AND current_setting('default_collation') = ''
+                AND NOT contains((
+                    SELECT sql FROM duckdb_tables()
+                    WHERE database_name = current_database()
+                        AND schema_name = current_schema()
+                        AND table_name = '__ukam__tmp_rel_tok_freq'
+                ), 'COLLATE') AS use_enum_lookup
+        FROM __ukam__tmp_rel_tok_freq;
+    """)
 
     # Always load pre-baked NUMERIC term frequencies (see docstring)
     read_numeric_tf_sql = package_resource_read_sql(
