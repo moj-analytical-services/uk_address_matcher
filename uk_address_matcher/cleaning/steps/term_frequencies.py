@@ -107,8 +107,38 @@ def _add_term_frequencies_to_address_tokens():
     description=("Attach precomputed token frequencies"),
     tags="term_frequency_analysis",
 )
-def _add_term_frequencies_to_address_tokens_using_registered_df():
+def _add_term_frequencies_to_address_tokens_using_registered_df(
+    *, use_enum_lookup: bool = False
+):
     """Attach precomputed token frequencies from ``__ukam__tmp_rel_tok_freq``."""
+    if use_enum_lookup:
+        # An enum code indexes the aligned frequency array without exploding,
+        # joining and regrouping every address's token list.
+        return [
+            CTEStep(
+                "final",
+                """
+            SELECT
+                base.* EXCLUDE (address_without_numbers_tokenised),
+                list_transform(
+                    address_without_numbers_tokenised,
+                    token -> struct_pack(
+                        tok := token,
+                        rel_freq := COALESCE(
+                            dense.frequencies[
+                                enum_code(try_cast(token AS __ukam__tf_token))::BIGINT + 1
+                            ],
+                            5e-5
+                        )
+                    )
+                ) AS token_rel_freq_arr
+            FROM {input} AS base
+            CROSS JOIN __ukam__tmp_dense_rel_tok_freq AS dense
+            WHERE length(address_without_numbers_tokenised) > 0
+                AND ukam_address_id IS NOT NULL
+        """,
+            )
+        ]
 
     base_sql = """
     SELECT * FROM {input}
