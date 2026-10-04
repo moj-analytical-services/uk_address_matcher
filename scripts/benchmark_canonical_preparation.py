@@ -16,6 +16,7 @@ from pathlib import Path
 
 import duckdb
 
+import uk_address_matcher
 from uk_address_matcher import prepare_canonical_folder
 
 
@@ -39,7 +40,11 @@ def main() -> None:
         args.work_dir.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     checkout = Path(__file__).resolve().parents[1]
+    module_path = Path(uk_address_matcher.__file__).resolve()
+    if not module_path.is_relative_to(checkout):
+        parser.error("Run with uv from this checkout so its code is imported")
     report = {
+        "matcher_module": str(module_path),
         "commit": subprocess.check_output(
             ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
         ).strip(),
