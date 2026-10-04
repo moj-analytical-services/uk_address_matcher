@@ -10,6 +10,42 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 )
 
 
+def test_adjacent_window_materialises_only_its_inputs(duck_con, monkeypatch):
+    original = chunking_strategies.create_sql_pipeline
+    captured = []
+
+    def pipeline(con, input_rel, stage_specs, **kwargs):
+        if (
+            kwargs.get("pipeline_name")
+            == "Derive locally distinguishing canonical tokens"
+        ):
+            captured.append(input_rel.columns)
+            assert "MATERIALIZED" in input_rel.sql_query().upper()
+        return original(con, input_rel, stage_specs, **kwargs)
+
+    monkeypatch.setattr(chunking_strategies, "create_sql_pipeline", pipeline)
+    source = duck_con.sql("""
+        SELECT i AS unique_id, i || ' EXAMPLE ROAD' AS address_concat,
+            'AA1 1AA' AS postcode FROM range(6) AS t(i)
+    """)
+    result = prepare_data_for_matching(
+        source,
+        duck_con,
+        num_of_chunks=3,
+        derive_distinguishing_wrt_adjacent_records=True,
+        show_progress="off",
+    )
+    assert result.count("*").fetchone()[0] == 6
+    assert captured == [
+        [
+            "ukam_address_id",
+            "unique_id",
+            "clean_full_address",
+            "clean_full_address_tokens",
+        ]
+    ]
+
+
 @pytest.fixture
 def fhrs_data(duck_con):
     """Load FHRS example data for testing."""
