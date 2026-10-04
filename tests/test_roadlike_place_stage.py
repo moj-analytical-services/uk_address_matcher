@@ -438,7 +438,8 @@ def test_top_1_road_keys_reuse_equivalent_post_number_tails(duck_con):
     assert keys.fetchall() == [("1", "HIGH STREET"), ("2", "HIGH STREET")]
 
 
-def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con):
+@pytest.mark.parametrize("stored_ids", [False, True])
+def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con, stored_ids):
     duck_con.execute("SET preserve_insertion_order = true")
     source = duck_con.sql("""
         SELECT * FROM (VALUES
@@ -465,6 +466,7 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con):
             duck_con,
             num_of_chunks=2,
             roadlike_places=_catalogue_from_source(duck_con, source),
+            _stored_unique_address_ids=stored_ids,
         )
         .order("ukam_address_id")
         .fetchall()
@@ -475,6 +477,23 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con):
     assert duck_con.execute(
         "SELECT current_setting('preserve_insertion_order')"
     ).fetchone() == (True,)
+
+
+@pytest.mark.parametrize("id_projection", ["", ", NULL::INTEGER AS ukam_address_id"])
+def test_canonical_road_keys_do_not_require_valid_internal_ids(duck_con, id_projection):
+    source = duck_con.sql(f"""
+        SELECT * {id_projection} FROM (VALUES
+            ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('2', '14 OAK LANE', 'AB1 3CD', ['14'])
+        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
+    """)
+    result = _add_canonical_road_blocking_keys(
+        source, duck_con, roadlike_places=_catalogue_from_source(duck_con, source)
+    )
+    assert result.select("unique_id, road_1_norm").order("unique_id").fetchall() == [
+        ("1", "HIGH STREET"),
+        ("2", "OAK LANE"),
+    ]
 
 
 def test_road_features_without_catalogue_are_neutral(duck_con):
