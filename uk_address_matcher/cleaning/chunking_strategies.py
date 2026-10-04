@@ -233,6 +233,12 @@ def _add_canonical_road_blocking_keys(
         (preferred_row_count + ROAD_SCORING_CHUNK_ROWS - 1) // ROAD_SCORING_CHUNK_ROWS,
     )
     road_chunk_count = min(max(1, num_of_chunks), required_chunks)
+    road_chunk_key = "CAST(unique_id AS VARCHAR)"
+    if "postcode_district" in roadlike_places.columns:
+        road_chunk_key = r"""regexp_extract(
+            upper(coalesce(postcode, '')),
+            '^\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s+\d', 1
+        )"""
     _drop_table_and_registered_aliases(con, road_keys_table)
     try:
         for chunk_index in range(road_chunk_count):
@@ -242,7 +248,7 @@ def _add_canonical_road_blocking_keys(
                 chunk = con.sql(f"""
                     SELECT *
                     FROM {preferred_table}
-                    WHERE hash(CAST(unique_id AS VARCHAR)) % {road_chunk_count}
+                    WHERE hash({road_chunk_key}) % {road_chunk_count}
                         = {chunk_index}
                 """)
             chunk_keys = derive_top_1_road_keys(
