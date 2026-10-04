@@ -1747,6 +1747,7 @@ def test_folder_intermediates_live_until_export_and_are_removed(
             raise RuntimeError("expected export failure")
         return original_write(*args, **kwargs)
 
+    monkeypatch.setattr(chunking_strategies, "_CANONICAL_ADJACENT_BATCH_ROWS", 2)
     monkeypatch.setattr(module, "_CanonicalIntermediates", owner)
     monkeypatch.setattr(module, "_write_parquet_artefact", write)
     if fail_export:

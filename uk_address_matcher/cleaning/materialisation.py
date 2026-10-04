@@ -9,6 +9,7 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _quote_identifier,
+    _relation_from_registered_alias,
     _uid,
 )
 
@@ -144,12 +145,12 @@ class _CanonicalIntermediates:
             else:
                 relation.create(name)
                 self._native.add(name)
-            return self.con.table(name)
+            return _relation_from_registered_alias(self.con, name)
         if append and name not in self._files:
             raise ValueError("Cannot append to an unowned Parquet intermediate")
         if append and (
-            relation.columns != self.con.table(name).columns
-            or relation.types != self.con.table(name).types
+            relation.columns != _relation_from_registered_alias(self.con, name).columns
+            or relation.types != _relation_from_registered_alias(self.con, name).types
         ):
             raise TypeError("Intermediate append schema differs")
         directory = self.directory / name
@@ -197,7 +198,7 @@ class _CanonicalIntermediates:
                 f"{_quote_identifier(name)} AS {stored.sql_query()}"
             )
             self._files[name] = files
-            return self.con.table(name)
+            return _relation_from_registered_alias(self.con, name)
         except BaseException:
             if append:
                 destination.unlink(missing_ok=True)
