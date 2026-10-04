@@ -138,8 +138,9 @@ def _add_canonical_road_blocking_keys(
     num_of_chunks: int = 1,
     roadlike_places: DuckDBPyRelation | None = None,
     require_catalogue_support: bool = True,
+    _stored_unique_address_ids: bool = False,
 ) -> DuckDBPyRelation:
-    """Add one derived road key per canonical address identifier."""
+    """Add road keys; the ID fast path requires stored, unique, non-null IDs."""
     if "road_1_norm" in canonical_addresses.columns:
         return canonical_addresses
     if roadlike_places is None:
@@ -179,6 +180,17 @@ def _add_canonical_road_blocking_keys(
         if column in canonical_addresses.columns
     )
     preferred_order = ", ".join(preferred_order_fields)
+    preferred_value = f"struct_pack({preferred_value_fields})"
+    preferred_source = "preferred"
+    preferred_join = ""
+    if _stored_unique_address_ids:
+        # Keep text/lists out of aggregate state; recover the winning row by ID.
+        preferred_value = "source.ukam_address_id"
+        preferred_source = "chosen"
+        preferred_join = f"""
+            INNER JOIN ({canonical_addresses.sql_query()}) AS chosen
+                ON chosen.ukam_address_id = grouped.preferred
+        """
     preserve_insertion_order = bool(
         con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
     )
@@ -191,22 +203,23 @@ def _add_canonical_road_blocking_keys(
                 SELECT
                     source.unique_id,
                     min_by(
-                        struct_pack({preferred_value_fields}),
+                        {preferred_value},
                         struct_pack({preferred_order})
                     ) AS preferred
                 FROM ({canonical_addresses.sql_query()}) AS source
                 GROUP BY source.unique_id
             )
             SELECT
-                unique_id,
+                grouped.unique_id,
                 {
             ", ".join(
-                f'preferred."{column}" AS "{column}"'
+                f'{preferred_source}."{column}" AS "{column}"'
                 for column in preferred_columns
                 if column != "unique_id"
             )
         }
             FROM grouped
+            {preferred_join}
         """)
         preferred_addresses = con.table(preferred_table)
         preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])

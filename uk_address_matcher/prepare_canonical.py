@@ -682,6 +682,8 @@ def prepare_canonical_folder(
             con,
             num_of_chunks=num_of_chunks,
             roadlike_places=roadlike_places,
+            # Precleaning assigned and stored one unique ID per canonical row.
+            _stored_unique_address_ids=True,
         )
         logger.debug("Canonical road blocking keys derived")
     else:
