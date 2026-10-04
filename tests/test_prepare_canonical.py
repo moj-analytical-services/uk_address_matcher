@@ -12,6 +12,11 @@ import pytest
 
 from uk_address_matcher import prepare_canonical_folder
 from uk_address_matcher.cleaning import chunking_strategies
+from uk_address_matcher.cleaning.materialisation import (
+    _CanonicalIntermediates,
+    _input_has_collation,
+    _parquet_preserves_type,
+)
 from uk_address_matcher.logging import progress as progress_helpers
 from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
@@ -1050,7 +1055,9 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     monkeypatch.setattr(
         chunking_strategies,
         "derive_inverted_index",
-        lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
+        lambda df_clean, con, num_of_chunks, show_progress=True, **kwargs: (
+            inverted_relation
+        ),
     )
 
     prepare_canonical_folder(
@@ -1176,7 +1183,9 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     monkeypatch.setattr(
         chunking_strategies,
         "derive_inverted_index",
-        lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
+        lambda df_clean, con, num_of_chunks, show_progress=True, **kwargs: (
+            inverted_relation
+        ),
     )
 
     prepare_canonical_folder(
@@ -1660,3 +1669,130 @@ def test_load_remote_folder_permission_error_raises_permissionerror():
 
     with pytest.raises(PermissionError, match="Cannot access prepared canonical data"):
         load_prepared_canonical_data(folder_uri, con=con)
+
+
+@pytest.mark.parametrize(
+    "expression,native",
+    [
+        (
+            "struct_pack(tokens := ['EXAMPLE'], counts := MAP {'x': 2::BIGINT}, "
+            "amount := 1.25::DECIMAL(20, 4))",
+            False,
+        ),
+        (
+            "struct_pack(payload := [170141183460469231731687303715884105727::HUGEINT])",
+            True,
+        ),
+        ("[1, 2]::INTEGER[2]", True),
+        ("'left'::ENUM('left', 'right')", True),
+        ("TIMESTAMP '2020-01-01'::TIMESTAMP_S", True),
+        ("NULL", False),
+    ],
+)
+def test_canonical_intermediate_types_and_cleanup(con, expression, native):
+    source = con.sql(f"SELECT {expression} AS value, 1::INTEGER AS part")
+    source.create("caller_owned_type_reference")
+    expected = con.table("caller_owned_type_reference")
+    with _CanonicalIntermediates(con) as storage:
+        result = storage.write(source, "intermediate", partition_by="part")
+        assert result.types == expected.types
+        assert result.fetchall() == expected.fetchall()
+        assert ("intermediate" in storage._native) == native
+        storage.write(source, "intermediate", append=True)
+        assert con.table("intermediate").count("*").fetchone()[0] == 2
+        storage.drop("intermediate")
+        assert not list(storage.directory.iterdir())
+    assert not storage.directory.exists()
+    assert con.table("caller_owned_type_reference").count("*").fetchone()[0] == 1
+
+
+def test_canonical_intermediate_empty_and_failed_append(con):
+    with _CanonicalIntermediates(con) as storage:
+        source = con.sql("SELECT 1::INTEGER AS part WHERE false")
+        result = storage.write(source, "empty", partition_by="part")
+        assert result.types == source.types and result.count("*").fetchone()[0] == 0
+        paths = list(storage.directory.rglob("*.parquet"))
+        with pytest.raises(duckdb.InvalidInputException):
+            storage.write(
+                con.sql("SELECT error('expected')::INTEGER AS part"), "empty", append=True
+            )
+        assert list(storage.directory.rglob("*.parquet")) == paths
+        assert con.table("empty").count("*").fetchone()[0] == 0
+    assert not storage.directory.exists()
+
+
+@pytest.mark.parametrize("fail_export", [False, True])
+def test_folder_intermediates_live_until_export_and_are_removed(
+    con,
+    canonical_data,
+    tmp_path,
+    monkeypatch,
+    fail_export,
+):
+    import importlib
+
+    module = importlib.import_module("uk_address_matcher.prepare_canonical")
+    owners = []
+    original_write = module._write_parquet_artefact
+
+    def owner(connection):
+        storage = _CanonicalIntermediates(connection)
+        owners.append(storage)
+        return storage
+
+    def write(*args, **kwargs):
+        assert owners[0].directory.exists()
+        assert list(owners[0].directory.rglob("*.parquet"))
+        if fail_export:
+            raise RuntimeError("expected export failure")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_CanonicalIntermediates", owner)
+    monkeypatch.setattr(module, "_write_parquet_artefact", write)
+    if fail_export:
+        with pytest.raises(RuntimeError, match="expected export failure"):
+            prepare_canonical_folder(
+                canonical_data, tmp_path, con=con, show_progress="off"
+            )
+    else:
+        prepare_canonical_folder(canonical_data, tmp_path, con=con, show_progress="off")
+        assert (tmp_path / "ukam_manifest.json").exists()
+    assert not owners[0].directory.exists()
+    assert not owners[0]._files and not owners[0]._native
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "'Aa' COLLATE NOCASE",
+        "struct_pack(label := 'Aa' COLLATE NOCASE)",
+        "row('Aa' COLLATE NOCASE, 1)",
+        "['Aa' COLLATE NOCASE]",
+        "map(['Aa' COLLATE NOCASE], ['B'])",
+        "map(['B'], ['Aa' COLLATE NOCASE])",
+    ],
+)
+def test_collation_guard_checks_nested_bound_types(con, expression):
+    source = con.sql(f"SELECT {expression} AS metadata")
+    assert _input_has_collation(con, source)
+    assert not _input_has_collation(con, con.sql("SELECT ['Aa'] AS metadata"))
+    unnamed = con.sql("SELECT row('Aa', 1) AS metadata")
+    assert not _input_has_collation(con, unnamed)
+    assert not _parquet_preserves_type(unnamed.types[0])
+    assert not any(
+        name.startswith("__ukam_collation_check_")
+        for (name,) in con.execute("SHOW TABLES").fetchall()
+    )
+
+
+def test_collated_folder_input_uses_native_storage(
+    con, canonical_data, tmp_path, monkeypatch
+):
+    source = canonical_data.select("*, ['Aa' COLLATE NOCASE] AS metadata")
+
+    def unexpected_parquet(*args, **kwargs):
+        pytest.fail("Collated input must retain native intermediate semantics")
+
+    monkeypatch.setattr(_CanonicalIntermediates, "write", unexpected_parquet)
+    prepare_canonical_folder(source, tmp_path, con=con, show_progress="off")
+    assert (tmp_path / "ukam_manifest.json").exists()
