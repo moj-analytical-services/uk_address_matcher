@@ -1176,9 +1176,18 @@ def prepare_data_for_matching(
     if derive_distinguishing_wrt_adjacent_records:
         try:
             logger.debug("Deriving adjacent-record distinguishing tokens")
+            # Consolidate UNION branches before sorting the narrow window input.
+            adjacent_input = con.sql(f"""
+                WITH adjacent_input AS MATERIALIZED (
+                    SELECT ukam_address_id, unique_id, clean_full_address,
+                        clean_full_address_tokens
+                    FROM ({cleaned_address_table.sql_query()})
+                )
+                SELECT * FROM adjacent_input
+            """)
             adjacent_pipeline = create_sql_pipeline(
                 con,
-                input_rel=cleaned_address_table,
+                input_rel=adjacent_input,
                 stage_specs=[
                     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
                         include_input_columns=False,
