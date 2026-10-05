@@ -250,6 +250,18 @@
       "output_column_name": "flat_identity",
       "comparison_levels": [
         {
+          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND ((NOT coalesce((flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r),false) OR (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))))) AND ((flat_number_l IS NOT NULL AND flat_number_l = flat_number_r)\n    OR (flat_letter_l IS NOT NULL AND flat_letter_l = flat_letter_r)) AND flat_identity_l != flat_identity_r AND (NOT coalesce(road_1_norm_l IS NOT NULL AND road_1_norm_r IS NOT NULL AND road_1_norm_l != road_1_norm_r, false))",
+          "label_for_charts": "Explicit unit identifier agrees; additional floor detail",
+          "m_probability": 0.5,
+          "u_probability": 0.005262631159631602
+        },
+        {
+          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) AND flat_identity_l != flat_identity_r",
+          "label_for_charts": "Multi-floor description includes canonical floor; numbers agree",
+          "m_probability": 0.5,
+          "u_probability": 0.5
+        },
+        {
           "sql_condition": "has_flat_indicator_l != has_flat_indicator_r",
           "label_for_charts": "One has flat indicator, other does not",
           "m_probability": 0.05106352126896113,
@@ -401,6 +413,12 @@
     {
       "output_column_name": "numeric_token_1",
       "comparison_levels": [
+        {
+          "sql_condition": "postcode_l=postcode_r AND len(numeric_tokens_r)=0 AND numeric_token_1_l IS NOT NULL AND regexp_matches(clean_full_address_l,'(^| )[ABC][0-9]+[A-Z]?( |$)') AND (list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1)>=40 OR coalesce(list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1),0)>=2) AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false))",
+          "label_for_charts": "Unnumbered source; canonical coded road reference; strong named-property evidence",
+          "m_probability": 0.5,
+          "u_probability": 0.5
+        },
         {
           "sql_condition": "\"numeric_token_1_l\" IS NULL AND \"numeric_token_1_r\" IS NULL",
           "label_for_charts": "Both null",
@@ -578,6 +596,11 @@
     {
       "output_column_name": "token_rel_freq_arr_hist",
       "comparison_levels": [
+        {
+          "sql_condition": "token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL",
+          "label_for_charts": "Term-frequency history unavailable",
+          "is_null_level": true
+        },
         {
           "sql_condition": "\n    list_reduce(\n        list_prepend(\n        1.0,\n        list_filter(\n            list_transform(\n            flatten(\n                list_transform(\n                map_entries(token_rel_freq_arr_hist_l),\n                entry -> CASE\n                            WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0\n                            THEN list_value(POW(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key])))\n                            ELSE list_value()\n                        END\n                )\n            ),\n            x -> x\n            ),\n            x -> x IS NOT NULL\n        )\n        ),\n        (p, q) -> p * q\n    )\n     < 1e-29",
           "label_for_charts": " < 1e-29",
@@ -932,6 +955,12 @@
       "output_column_name": "signature_evidence",
       "comparison_levels": [
         {
+          "sql_condition": "((postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND ((NOT coalesce((flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r),false) OR (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))))) AND list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 20 AND (coalesce(list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1),0)<1 OR (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r))) AND (list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 40)",
+          "label_for_charts": "Strong rare-span evidence; postcode and numbers agree; no explicit unit conflict",
+          "m_probability": 0.5,
+          "u_probability": 0.00048828125
+        },
+        {
           "sql_condition": "list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) IS NULL",
           "label_for_charts": "No signature overlap",
           "is_null_level": true
@@ -990,6 +1019,11 @@
     {
       "output_column_name": "commercial_same_role_numeric_contradiction",
       "comparison_levels": [
+        {
+          "sql_condition": "(numeric_token_1_l IS NULL AND numeric_token_2_l IS NULL) OR (numeric_token_1_r IS NULL AND numeric_token_2_r IS NULL) OR numeric_specific_markers_l IS NULL OR numeric_specific_markers_r IS NULL",
+          "label_for_charts": "Numeric contradiction evidence unavailable",
+          "is_null_level": true
+        },
         {
           "sql_condition": "((numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '') IS NOT NULL AND nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') != nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] = numeric_specific_markers_r[1] AND numeric_specific_markers_l[1] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT')) OR ((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL AND numeric_token_2_l != numeric_token_2_r) AND len(numeric_specific_markers_l) >= 2 AND len(numeric_specific_markers_r) >= 2 AND numeric_specific_markers_l[2] = numeric_specific_markers_r[2] AND numeric_specific_markers_l[2] IN ('PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT', 'GARAGE', 'YARD', 'SHOP', 'BAY', 'FLOOR', 'UNIT'))",
           "label_for_charts": "Confident same-role numeric contradiction (-6)",
