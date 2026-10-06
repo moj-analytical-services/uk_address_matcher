@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.cleaning.materialisation import _CanonicalIntermediates
 from uk_address_matcher.cleaning.pipelines import (
     QUEUE_FOR_TF_DERIVATION,
     QUEUE_INVERTED_INDEX_SELF,
@@ -76,29 +77,62 @@ def _materialise_relation(
     con: DuckDBPyConnection,
     relation: DuckDBPyRelation,
     table_name: str,
+    *,
+    _storage: _CanonicalIntermediates | None = None,
+    append: bool = False,
+    temporary: bool = False,
+    partition_by: str | None = None,
+    order_by: str | None = None,
 ) -> DuckDBPyRelation:
-    # Ensure any prior table/view/registered alias with this name is removed.
-    _drop_table_and_registered_aliases(con, table_name)
-
-    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM ({relation.sql_query()})")
+    if not append:
+        _drop_materialised_relation(con, table_name, _storage)
+    if _storage is not None:
+        return _storage.write(
+            relation,
+            table_name,
+            append=append,
+            partition_by=partition_by,
+            order_by=order_by,
+        )
+    if append:
+        relation.insert_into(table_name)
+    else:
+        temporary_sql = "TEMPORARY " if temporary else ""
+        con.execute(f"CREATE {temporary_sql}TABLE {table_name} AS {relation.sql_query()}")
     return con.table(table_name)
 
 
-def _drop_tables_with_prefix(con: DuckDBPyConnection, prefix: str) -> None:
+def _drop_materialised_relation(
+    con: DuckDBPyConnection,
+    table_name: str,
+    _storage: _CanonicalIntermediates | None = None,
+) -> None:
+    if _storage is not None:
+        _storage.drop(table_name)
+    else:
+        _drop_table_and_registered_aliases(con, table_name)
+
+
+def _drop_tables_with_prefix(
+    con: DuckDBPyConnection,
+    prefix: str,
+    _storage: _CanonicalIntermediates | None = None,
+) -> None:
     table_names = [name for (name,) in con.execute("SHOW TABLES").fetchall()]
     for table_name in table_names:
         if table_name.startswith(prefix):
-            _drop_table_and_registered_aliases(con, table_name)
+            _drop_materialised_relation(con, table_name, _storage)
 
 
 def _drop_cleaned_chunk_relation(
     con: DuckDBPyConnection,
     relation_name: str,
+    _storage: _CanonicalIntermediates | None = None,
 ) -> None:
-    _drop_table_and_registered_aliases(con, relation_name)
+    _drop_materialised_relation(con, relation_name, _storage)
     if relation_name.startswith("__ukam_chunked_addresses_"):
         uid = relation_name.removeprefix("__ukam_chunked_addresses_")
-        _drop_tables_with_prefix(con, f"__ukam_cleaned_chunk_{uid}_")
+        _drop_tables_with_prefix(con, f"__ukam_cleaned_chunk_{uid}_", _storage)
 
 
 def _calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:
@@ -140,6 +174,7 @@ def _add_canonical_road_blocking_keys(
     roadlike_places: DuckDBPyRelation | None = None,
     require_catalogue_support: bool = True,
     _stored_unique_address_ids: bool = False,
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Add road keys; the ID fast path requires stored, unique, non-null IDs."""
     if "road_1_norm" in canonical_addresses.columns:
@@ -197,9 +232,7 @@ def _add_canonical_road_blocking_keys(
     )
     con.execute("SET preserve_insertion_order = false")
     try:
-        _drop_table_and_registered_aliases(con, preferred_table)
-        con.execute(f"""
-            CREATE TEMPORARY TABLE {preferred_table} AS
+        preferred = con.sql(f"""
             WITH grouped AS (
                 SELECT
                     source.unique_id,
@@ -222,7 +255,13 @@ def _add_canonical_road_blocking_keys(
             FROM grouped
             {preferred_join}
         """)
-        preferred_addresses = con.table(preferred_table)
+        preferred_addresses = _materialise_relation(
+            con,
+            preferred,
+            preferred_table,
+            _storage=_storage,
+            temporary=True,
+        )
         preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])
     except Exception:
         con.execute(
@@ -240,7 +279,7 @@ def _add_canonical_road_blocking_keys(
             upper(coalesce(postcode, '')),
             '^\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s+\d', 1
         )"""
-    _drop_table_and_registered_aliases(con, road_keys_table)
+    _drop_materialised_relation(con, road_keys_table, _storage)
     try:
         for chunk_index in range(road_chunk_count):
             if road_chunk_count == 1:
@@ -259,23 +298,21 @@ def _add_canonical_road_blocking_keys(
                 roadlike_places=roadlike_places,
                 require_catalogue_support=require_catalogue_support,
             )
-            if chunk_index == 0:
-                con.execute(f"""
-                    CREATE TEMPORARY TABLE {road_keys_table} AS
-                    SELECT * FROM ({chunk_keys.sql_query()})
-                """)
-            else:
-                con.execute(f"""
-                    INSERT INTO {road_keys_table}
-                    SELECT * FROM ({chunk_keys.sql_query()})
-                """)
+            _materialise_relation(
+                con,
+                chunk_keys,
+                road_keys_table,
+                _storage=_storage,
+                append=chunk_index > 0,
+                temporary=True,
+            )
             _drop_table_and_registered_aliases(con, chunk_keys_table)
     except Exception:
-        _drop_table_and_registered_aliases(con, road_keys_table)
+        _drop_materialised_relation(con, road_keys_table, _storage)
         raise
     finally:
         _drop_table_and_registered_aliases(con, chunk_keys_table)
-        _drop_table_and_registered_aliases(con, preferred_table)
+        _drop_materialised_relation(con, preferred_table, _storage)
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
         )
@@ -292,10 +329,12 @@ def _add_canonical_road_blocking_keys(
     try:
         # Retain the narrow road keys instead of copying every canonical column.
         con.execute(f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}")
+        if _storage is not None:
+            _storage.retain_view(enriched_table)
         return con.table(enriched_table)
     except BaseException:
         _drop_table_and_registered_aliases(con, enriched_table)
-        _drop_table_and_registered_aliases(con, road_keys_table)
+        _drop_materialised_relation(con, road_keys_table, _storage)
         raise
     finally:
         con.execute(
@@ -312,6 +351,7 @@ def derive_roadlike_places(
     postcode_districts_per_batch: int | None = 16,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Build a roadlike-place catalogue from canonical addresses.
 
@@ -409,8 +449,7 @@ def derive_roadlike_places(
         "'^\\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\\s+\\d', 1), ''), '__UNKNOWN__')"
     )
     batch_size = postcode_districts_per_batch or 16
-    con.execute(f"""
-        CREATE TEMPORARY TABLE {district_table} AS
+    districts = con.sql(f"""
         SELECT district,
             (row_number() OVER (ORDER BY district) - 1) // {batch_size} AS batch_id
         FROM (
@@ -418,6 +457,13 @@ def derive_roadlike_places(
             FROM ({road_catalogue_source.sql_query()}) AS source
         ) AS districts
     """)
+    _materialise_relation(
+        con,
+        districts,
+        district_table,
+        _storage=_storage,
+        temporary=True,
+    )
     total_batches = con.sql(f"SELECT max(batch_id) + 1 FROM {district_table}").fetchone()[
         0
     ]
@@ -485,9 +531,12 @@ def derive_roadlike_places(
                     "road_tail_tokens AS address_tokens, allow_truncated_windows "
                     f"FROM ({candidate_sources_sql}) AS candidate_sources"
                 )
-                con.execute(
-                    f"CREATE TEMPORARY TABLE {candidate_sources_table} AS "
-                    f"{candidate_sources_sql}"
+                _materialise_relation(
+                    con,
+                    con.sql(candidate_sources_sql),
+                    candidate_sources_table,
+                    _storage=_storage,
+                    temporary=True,
                 )
                 candidate_relation = roadlike_place_prepared_candidate_sql(
                     candidate_sources_table,
@@ -496,11 +545,14 @@ def derive_roadlike_places(
                 catalogue_sql = roadlike_place_catalog_sql(
                     f"({candidate_relation})", by_postcode_district=True
                 )
-                if batch_index == 0:
-                    con.execute(f"CREATE TABLE {catalogue_table} AS {catalogue_sql}")
-                else:
-                    con.execute(f"INSERT INTO {catalogue_table} {catalogue_sql}")
-                _drop_table_and_registered_aliases(con, candidate_sources_table)
+                _materialise_relation(
+                    con,
+                    con.sql(catalogue_sql),
+                    catalogue_table,
+                    _storage=_storage,
+                    append=batch_index > 0,
+                )
+                _drop_materialised_relation(con, candidate_sources_table, _storage)
 
                 processed_rows += batch_rows
                 progress.update(processed_rows, completed_units=batch_index + 1)
@@ -521,8 +573,8 @@ def derive_roadlike_places(
             )
     finally:
         progress.close()
-        _drop_table_and_registered_aliases(con, candidate_sources_table)
-        _drop_table_and_registered_aliases(con, district_table)
+        _drop_materialised_relation(con, candidate_sources_table, _storage)
+        _drop_materialised_relation(con, district_table, _storage)
 
     log_stage_complete(
         stage_label,
@@ -541,6 +593,7 @@ def clean_data_pre_term_frequencies(
     _owned_chunks: dict[str, int] | None = None,
     debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Clean address data with foundational steps only (no term frequencies).
 
@@ -590,14 +643,20 @@ def clean_data_pre_term_frequencies(
     )
 
     try:
-        con.execute(f"""
-            CREATE TABLE {chunked_input_name} AS
+        raw_input = con.sql(f"""
             SELECT
                 *,
                 CAST(abs(hash(address_concat)) % {total_chunks} AS INTEGER)
                     AS {chunk_index_column}
             FROM {input_name}
         """)
+        _materialise_relation(
+            con,
+            raw_input,
+            chunked_input_name,
+            _storage=_storage,
+            partition_by=chunk_index_column,
+        )
 
         chunk_row_counts = dict(
             con.execute(f"""
@@ -632,6 +691,7 @@ def clean_data_pre_term_frequencies(
                 con,
                 chunk_query,
                 chunk_table,
+                _storage=_storage,
             )
             chunk_row_count = chunk.count("*").fetchone()[0]
 
@@ -651,7 +711,7 @@ def clean_data_pre_term_frequencies(
                     )
                 )
             chunk_name = f"{cleaned_chunk_prefix}{chunk_index}"
-            processed_chunk.create(chunk_name)
+            _materialise_relation(con, processed_chunk, chunk_name, _storage=_storage)
             if _owned_chunks is not None:
                 # Explicitly transfer owned tables and inclusive ID bounds to
                 # finishing; arbitrary caller-owned relations are never enrolled.
@@ -673,14 +733,14 @@ def clean_data_pre_term_frequencies(
                 total_chunks=total_chunks,
             )
 
-            _drop_table_and_registered_aliases(con, chunk_table)
+            _drop_materialised_relation(con, chunk_table, _storage)
     except BaseException:
-        _drop_tables_with_prefix(con, cleaned_chunk_prefix)
+        _drop_tables_with_prefix(con, cleaned_chunk_prefix, _storage)
         raise
     finally:
         progress.close()
-        _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_")
-        _drop_table_and_registered_aliases(con, chunked_input_name)
+        _drop_tables_with_prefix(con, f"__ukam_chunk_input_{uid}_", _storage)
+        _drop_materialised_relation(con, chunked_input_name, _storage)
         _drop_table_and_registered_aliases(con, input_name)
 
     chunked_table = f"__ukam_chunked_addresses_{uid}"
@@ -696,9 +756,11 @@ def clean_data_pre_term_frequencies(
             for chunk_index in range(total_chunks)
         )
         con.execute(f"CREATE VIEW {chunked_table} AS {chunk_tables_sql}")
+        if _storage is not None:
+            _storage.retain_view(chunked_table)
         return con.table(chunked_table)
     except BaseException:
-        _drop_cleaned_chunk_relation(con, chunked_table)
+        _drop_cleaned_chunk_relation(con, chunked_table, _storage)
         raise
 
 
@@ -885,6 +947,7 @@ def derive_inverted_index(
     *,
     debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Derive an inverted index from already-cleaned canonical data.
 
@@ -972,11 +1035,14 @@ def derive_inverted_index(
             )
             chunk_result = pipeline.run(debug_options if first_insert else None)
 
-            if first_insert:
-                chunk_result.create(result_table)
-                first_insert = False
-            else:
-                chunk_result.insert_into(result_table)
+            _materialise_relation(
+                con,
+                chunk_result,
+                result_table,
+                _storage=_storage,
+                append=not first_insert,
+            )
+            first_insert = False
             log_chunk_progress(
                 total_rows,
                 total_rows,
@@ -1084,11 +1150,14 @@ def derive_inverted_index(
                     )
                     chunk_result = pipeline.run(debug_options if first_insert else None)
 
-                    if first_insert:
-                        chunk_result.create(result_table)
-                        first_insert = False
-                    else:
-                        chunk_result.insert_into(result_table)
+                    _materialise_relation(
+                        con,
+                        chunk_result,
+                        result_table,
+                        _storage=_storage,
+                        append=not first_insert,
+                    )
+                    first_insert = False
 
                     processed_records = min(
                         (chunk_index + 1)
@@ -1167,6 +1236,7 @@ def _materialise_canonical_distinguishing_features(
     source: DuckDBPyRelation,
     table_name: str,
     debug_options: DebugOptions | None = None,
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Limit the adjacent window's working set using contiguous address ranges.
 
@@ -1204,6 +1274,8 @@ def _materialise_canonical_distinguishing_features(
             con,
             _canonical_distinguishing_features(con, adjacent_input, debug_options),
             table_name,
+            _storage=_storage,
+            order_by="ukam_address_id",
         )
 
     uid = _uid()
@@ -1251,15 +1323,19 @@ def _materialise_canonical_distinguishing_features(
                     features = _canonical_distinguishing_features(
                         con, con.table(input_table), debug_options if index == 0 else None
                     )
-                    if index == 0:
-                        _materialise_relation(con, features, table_name)
-                    else:
-                        con.execute(f"INSERT INTO {table_name} {features.sql_query()}")
+                    _materialise_relation(
+                        con,
+                        features,
+                        table_name,
+                        _storage=_storage,
+                        append=index > 0,
+                        order_by="ukam_address_id",
+                    )
                 finally:
                     _drop_table_and_registered_aliases(con, input_table)
         return con.table(table_name)
     except BaseException:
-        _drop_table_and_registered_aliases(con, table_name)
+        _drop_materialised_relation(con, table_name, _storage)
         raise
     finally:
         _drop_table_and_registered_aliases(con, bounds_table)
@@ -1286,6 +1362,7 @@ def prepare_data_for_matching(
     _owned_chunks: dict[str, int] | None = None,
     debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
+    _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     """Prepare address data for matching.
 
@@ -1358,13 +1435,13 @@ def prepare_data_for_matching(
             not _precleaned_addresses
             or cleaned_table_name.startswith("__ukam_chunked_addresses_")
         ):
-            _drop_cleaned_chunk_relation(con, cleaned_table_name)
+            _drop_cleaned_chunk_relation(con, cleaned_table_name, _storage)
         if distinguishing_table_name is not None:
-            _drop_table_and_registered_aliases(con, distinguishing_table_name)
+            _drop_materialised_relation(con, distinguishing_table_name, _storage)
         if inv_idx_table_name == "__ukam_inverted_index":
             _drop_table_and_registered_aliases(con, inv_idx_table_name)
         if processed_table is not None:
-            _drop_table_and_registered_aliases(con, processed_table)
+            _drop_materialised_relation(con, processed_table, _storage)
 
     if _precleaned_addresses:
         cleaned_address_table = address_table
@@ -1375,6 +1452,7 @@ def prepare_data_for_matching(
             num_of_chunks=num_of_chunks,
             debug_options=debug_options,
             show_progress=progress_mode,
+            _storage=_storage,
         )
     cleaned_table_name = cleaned_address_table.alias
     token_column = (
@@ -1388,7 +1466,11 @@ def prepare_data_for_matching(
             logger.debug("Deriving adjacent-record distinguishing tokens")
             distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
             _materialise_canonical_distinguishing_features(
-                con, cleaned_address_table, distinguishing_table_name, debug_options
+                con,
+                cleaned_address_table,
+                distinguishing_table_name,
+                debug_options,
+                _storage=_storage,
             )
             logger.debug("Adjacent-record distinguishing tokens derived")
         except BaseException:
@@ -1501,11 +1583,13 @@ def prepare_data_for_matching(
                     )
                 )
 
-            if chunk_index == 0:
-                con.execute(f"DROP TABLE IF EXISTS {processed_table}")
-                processed_chunk.create(processed_table)
-            else:
-                processed_chunk.insert_into(processed_table)
+            _materialise_relation(
+                con,
+                processed_chunk,
+                processed_table,
+                _storage=_storage,
+                append=chunk_index > 0,
+            )
 
             # Global TF and adjacent features are already materialised. Once
             # these IDs are written, only the remaining source chunks are live.
@@ -1526,7 +1610,7 @@ def prepare_data_for_matching(
                 else:
                     _drop_table_and_registered_aliases(con, cleaned_table_name)
                 for name in completed:
-                    _drop_table_and_registered_aliases(con, name)
+                    _drop_materialised_relation(con, name, _storage)
                     del _owned_chunks[name]
 
             processed_records = min((chunk_index + 1) * chunk_size, total_rows)
@@ -1556,9 +1640,9 @@ def prepare_data_for_matching(
 
     try:
         logger.debug("Finalizing prepared address table")
-        _drop_cleaned_chunk_relation(con, cleaned_table_name)
+        _drop_cleaned_chunk_relation(con, cleaned_table_name, _storage)
         if distinguishing_table_name is not None:
-            con.execute(f"DROP TABLE IF EXISTS {distinguishing_table_name}")
+            _drop_materialised_relation(con, distinguishing_table_name, _storage)
 
         # Clean up inverted index table if it was registered
         if inv_idx_table_name == "__ukam_inverted_index":
