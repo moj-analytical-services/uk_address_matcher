@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uk_address_matcher")
 
 ROAD_SCORING_CHUNK_ROWS = 10_000_000
+_CANONICAL_ADJACENT_BATCH_ROWS = 4_000_000
 
 DISTINGUISHING_FEATURE_COLUMNS = (
     "distinguishing_adj_start_tokens",
@@ -1125,6 +1126,145 @@ def derive_inverted_index(
     return con.table(result_table)
 
 
+def _canonical_distinguishing_features(
+    con: DuckDBPyConnection,
+    source: DuckDBPyRelation,
+    debug_options: DebugOptions | None,
+) -> DuckDBPyRelation:
+    return (
+        create_sql_pipeline(
+            con,
+            input_rel=source,
+            stage_specs=[
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+                    include_input_columns=False, use_precomputed_tokens=True
+                ),
+                _derive_distinguishing_token_components,
+            ],
+            pipeline_name="Derive locally distinguishing canonical tokens",
+            pipeline_description="Compare nearby suffix-similar records",
+        )
+        .run(debug_options)
+        .project(", ".join(("ukam_address_id", *DISTINGUISHING_FEATURE_COLUMNS)))
+    )
+
+
+def _adjacent_range_case(first: int, last: int) -> str:
+    if first == last:
+        return str(first)
+    middle = (first + last) // 2
+    splitter = f"list_extract(splitters, {middle + 1})"
+    return (
+        f"CASE WHEN range_key IS NOT NULL "
+        f"AND ({splitter} IS NULL OR range_key < {splitter}) "
+        f"THEN ({_adjacent_range_case(first, middle)}) "
+        f"ELSE ({_adjacent_range_case(middle + 1, last)}) END"
+    )
+
+
+def _materialise_canonical_distinguishing_features(
+    con: DuckDBPyConnection,
+    source: DuckDBPyRelation,
+    table_name: str,
+    debug_options: DebugOptions | None = None,
+) -> DuckDBPyRelation:
+    """Limit the adjacent window's working set using contiguous address ranges.
+
+    Up to three rows on either side of each boundary may get different features:
+    neighbours outside that range are deliberately omitted. Equal addresses stay
+    together, so the batch size is a target rather than a hard memory bound.
+    """
+    rows = source.count("*").fetchone()[0]
+    batch_count = (rows + _CANONICAL_ADJACENT_BATCH_ROWS - 1) // (
+        _CANONICAL_ADJACENT_BATCH_ROWS
+    )
+    collation, order, null_order = con.execute("""
+        SELECT current_setting('default_collation'),
+            current_setting('default_order'), current_setting('default_null_order')
+    """).fetchone()
+    # Other types (notably HUGEINT) may change values when written to Parquet.
+    unique_id_type = str(source.types[source.columns.index("unique_id")])
+    if (
+        batch_count <= 1
+        or unique_id_type not in {"VARCHAR", "BIGINT", "INTEGER"}
+        or collation not in ("", "binary")
+        or order not in ("ASC", "ASCENDING")
+        or null_order not in ("NULLS_LAST", "NULLS_LAST_ON_ASC_FIRST_ON_DESC")
+    ):
+        # Consolidate global UNION input; Parquet batches already have this boundary.
+        adjacent_input = con.sql(f"""
+            WITH adjacent_input AS MATERIALIZED (
+                SELECT ukam_address_id, unique_id, clean_full_address,
+                    clean_full_address_tokens
+                FROM ({source.sql_query()})
+            )
+            SELECT * FROM adjacent_input
+        """)
+        return _materialise_relation(
+            con,
+            _canonical_distinguishing_features(con, adjacent_input, debug_options),
+            table_name,
+        )
+
+    uid = _uid()
+    bounds_table = f"__ukam_adjacent_bounds_{uid}"
+    input_table = f"__ukam_adjacent_batch_{uid}"
+    columns = "ukam_address_id, unique_id, clean_full_address, clean_full_address_tokens"
+    source_sql = source.project(columns).sql_query()
+    # Hash-sample a bounded number of addresses; sort only that small sample.
+    modulus = max(1, rows // 65_536)
+    fractions = ", ".join(str(i / batch_count) for i in range(1, batch_count))
+    try:
+        con.execute(f"""
+            CREATE TEMPORARY TABLE {bounds_table} AS
+            SELECT quantile_disc(range_key, [{fractions}]) AS splitters
+            FROM (
+                SELECT reverse(clean_full_address) AS range_key
+                FROM ({source_sql}) AS source
+                WHERE hash(ukam_address_id) % {modulus} = 0
+                LIMIT 131072
+            ) AS sample
+        """)
+        with TemporaryDirectory(prefix="ukam-adjacent-batches-") as directory:
+            batch_path = directory.replace("'", "''")
+            con.execute(f"""
+                COPY (
+                    SELECT {columns},
+                        {_adjacent_range_case(0, batch_count - 1)} AS batch_id
+                    FROM (
+                        SELECT *, reverse(clean_full_address) AS range_key
+                        FROM ({source_sql}) AS source
+                    ) AS keyed CROSS JOIN {bounds_table}
+                ) TO '{batch_path}'
+                (FORMAT PARQUET, PARTITION_BY (batch_id), COMPRESSION UNCOMPRESSED)
+            """)
+            # Missing directories are empty ranges (e.g. repeated split points).
+            for index, batch in enumerate(sorted(Path(directory).glob("batch_id=*"))):
+                batch_files = str(batch / "*.parquet").replace("'", "''")
+                con.execute(f"""
+                    CREATE TEMPORARY VIEW {input_table} AS
+                    SELECT {columns} FROM read_parquet(
+                        '{batch_files}', hive_partitioning=false
+                    )
+                """)
+                try:
+                    features = _canonical_distinguishing_features(
+                        con, con.table(input_table), debug_options if index == 0 else None
+                    )
+                    if index == 0:
+                        _materialise_relation(con, features, table_name)
+                    else:
+                        con.execute(f"INSERT INTO {table_name} {features.sql_query()}")
+                finally:
+                    _drop_table_and_registered_aliases(con, input_table)
+        return con.table(table_name)
+    except BaseException:
+        _drop_table_and_registered_aliases(con, table_name)
+        raise
+    finally:
+        _drop_table_and_registered_aliases(con, bounds_table)
+
+
 # Chunking this requires a three phase approach:
 # 1. Clean data in chunks without term frequencies
 # 2. Register term frequency tables (either provided or pre-baked)
@@ -1246,52 +1386,9 @@ def prepare_data_for_matching(
     if derive_distinguishing_wrt_adjacent_records:
         try:
             logger.debug("Deriving adjacent-record distinguishing tokens")
-            adjacent_pipeline = create_sql_pipeline(
-                con,
-                input_rel=cleaned_address_table,
-                stage_specs=[
-                    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
-                        include_input_columns=False,
-                        use_precomputed_tokens=True,
-                    )
-                ],
-                pipeline_name="Derive locally distinguishing canonical tokens",
-                pipeline_description=(
-                    "Compare each canonical address with nearby suffix-similar records"
-                ),
-            )
-            adjacent_tokens = adjacent_pipeline.run(debug_options)
-            distinguishing_input = con.sql(f"""
-                SELECT
-                    cleaned.*,
-                    adjacent.distinguishing_adj_start_tokens,
-                    adjacent.common_adj_start_tokens
-                FROM {cleaned_table_name} AS cleaned
-                INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
-                    ON adjacent.ukam_address_id = cleaned.ukam_address_id
-            """)
-            distinguishing_pipeline = create_sql_pipeline(
-                con,
-                input_rel=distinguishing_input,
-                stage_specs=[_derive_distinguishing_token_components],
-                pipeline_name="Derive address-structure distinguishing tokens",
-                pipeline_description=(
-                    "Split distinguishing prefixes into structural and lexical tokens"
-                ),
-            )
-            distinguishing_tokens = distinguishing_pipeline.run(debug_options)
-            distinguishing_columns = [
-                "ukam_address_id",
-                *DISTINGUISHING_FEATURE_COLUMNS,
-            ]
-            distinguishing_tokens = distinguishing_tokens.project(
-                ", ".join(distinguishing_columns)
-            )
             distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
-            _materialise_relation(
-                con,
-                distinguishing_tokens,
-                distinguishing_table_name,
+            _materialise_canonical_distinguishing_features(
+                con, cleaned_address_table, distinguishing_table_name, debug_options
             )
             logger.debug("Adjacent-record distinguishing tokens derived")
         except BaseException:
