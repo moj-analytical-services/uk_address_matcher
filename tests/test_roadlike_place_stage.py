@@ -460,23 +460,46 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con, sto
         )
     """)
 
-    rows = (
-        _add_canonical_road_blocking_keys(
-            source,
-            duck_con,
-            num_of_chunks=2,
-            roadlike_places=_catalogue_from_source(duck_con, source),
-            _stored_unique_address_ids=stored_ids,
-        )
-        .order("ukam_address_id")
-        .fetchall()
+    enriched = _add_canonical_road_blocking_keys(
+        source,
+        duck_con,
+        num_of_chunks=2,
+        roadlike_places=_catalogue_from_source(duck_con, source),
+        _stored_unique_address_ids=stored_ids,
     )
+    # Consume after the scorer's preferred-address and chunk tables are released.
+    rows = enriched.order("ukam_address_id").fetchall()
 
     assert len(rows) == 2
     assert [row[8] for row in rows] == ["HIGH STREET", "HIGH STREET"]
     assert duck_con.execute(
         "SELECT current_setting('preserve_insertion_order')"
     ).fetchone() == (True,)
+    assert duck_con.sql("""
+        SELECT temporary FROM duckdb_views()
+        WHERE starts_with(view_name, '__ukam_canonical_with_road_')
+    """).fetchall() == [(True,)]
+    assert duck_con.sql("""
+        SELECT temporary FROM duckdb_tables()
+        WHERE starts_with(table_name, '__ukam_canonical_road_')
+    """).fetchall() == [(True,)]
+
+
+def test_canonical_road_keys_preserve_empty_input_schema(duck_con):
+    source = duck_con.sql("""
+        SELECT '1' AS unique_id, 1 AS ukam_address_id,
+            '12 HIGH STREET' AS clean_full_address, 'AB1 2CD' AS postcode,
+            ['12'] AS numeric_tokens
+    """)
+    catalogue = _catalogue_from_source(duck_con, source)
+    empty = source.limit(0)
+
+    enriched = _add_canonical_road_blocking_keys(
+        empty, duck_con, roadlike_places=catalogue
+    )
+
+    assert enriched.columns == empty.columns + ["road_1_norm"]
+    assert enriched.fetchall() == []
 
 
 @pytest.mark.parametrize("id_projection", ["", ", NULL::INTEGER AS ukam_address_id"])
@@ -720,8 +743,9 @@ def test_fallback_exclusion_preserves_duplicate_and_null_ids(duck_con):
 
 
 @pytest.mark.parametrize("preserve_order", [True, False])
-def test_canonical_road_keys_restore_order_after_materialisation_error(
-    duck_con, monkeypatch, preserve_order
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_canonical_road_keys_restore_order_after_view_creation_error(
+    duck_con, monkeypatch, preserve_order, error_type
 ):
     duck_con.execute(f"SET preserve_insertion_order = {str(preserve_order).lower()}")
     source = duck_con.sql("""
@@ -731,17 +755,18 @@ def test_canonical_road_keys_restore_order_after_materialisation_error(
     """)
     catalogue = _catalogue_from_source(duck_con, source)
 
-    def fail_materialisation(*args):
-        assert duck_con.sql(
-            "SELECT current_setting('preserve_insertion_order')"
-        ).fetchone() == (preserve_order,)
-        raise RuntimeError("materialisation failed")
+    original_execute = type(duck_con).execute
 
-    monkeypatch.setattr(
-        "uk_address_matcher.cleaning.chunking_strategies._materialise_relation",
-        fail_materialisation,
-    )
-    with pytest.raises(RuntimeError, match="materialisation failed"):
+    def fail_view_creation(connection, query, *args, **kwargs):
+        if query.startswith("CREATE TEMPORARY VIEW __ukam_canonical_with_road_"):
+            assert original_execute(
+                connection, "SELECT current_setting('preserve_insertion_order')"
+            ).fetchone() == (preserve_order,)
+            raise error_type("view creation failed")
+        return original_execute(connection, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(duck_con), "execute", fail_view_creation)
+    with pytest.raises(error_type, match="view creation failed"):
         _add_canonical_road_blocking_keys(source, duck_con, roadlike_places=catalogue)
     assert duck_con.sql(
         "SELECT current_setting('preserve_insertion_order')"
@@ -749,6 +774,10 @@ def test_canonical_road_keys_restore_order_after_materialisation_error(
     assert duck_con.sql("""
         SELECT count(*) FROM duckdb_tables()
         WHERE starts_with(table_name, '__ukam_canonical_road_')
+    """).fetchone() == (0,)
+    assert duck_con.sql("""
+        SELECT count(*) FROM duckdb_views()
+        WHERE starts_with(view_name, '__ukam_canonical_with_road_')
     """).fetchone() == (0,)
 
 
