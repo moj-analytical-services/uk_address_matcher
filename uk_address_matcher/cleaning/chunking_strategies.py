@@ -270,9 +270,14 @@ def _add_canonical_road_blocking_keys(
         LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
     """)
     try:
-        return _materialise_relation(con, enriched, enriched_table)
-    finally:
+        # Retain the narrow road keys instead of copying every canonical column.
+        con.execute(f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}")
+        return con.table(enriched_table)
+    except BaseException:
+        _drop_table_and_registered_aliases(con, enriched_table)
         _drop_table_and_registered_aliases(con, road_keys_table)
+        raise
+    finally:
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
         )
