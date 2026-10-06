@@ -1004,6 +1004,7 @@ def derive_inverted_index(
                 num_of_chunks,
                 progress_mode=progress_mode,
             )
+            key_directory = TemporaryDirectory(prefix="ukam-index-buckets-")
             try:
                 logger.debug("%s: staging keys once", stage_label)
                 key_pipeline = create_sql_pipeline(
@@ -1031,13 +1032,36 @@ def derive_inverted_index(
                         key,
                         abs(hash(key)) % {num_of_chunks} AS key_bucket
                     FROM scalar_keys
-                    ORDER BY key_bucket
                 """)
-                _materialise_relation(
-                    con,
-                    scalar_keys,
-                    strategy_keys_table,
-                )
+                # Keep native storage for identifier types whose Parquet
+                # round trip is not established here (for example HUGEINT).
+                if str(scalar_keys.types[0]) not in {"BIGINT", "VARCHAR"}:
+                    _materialise_relation(
+                        con, scalar_keys.order("key_bucket"), strategy_keys_table
+                    )
+                else:
+                    # Physical buckets avoid a global sort while keeping
+                    # each unchanged bucket query local to its own files.
+                    key_path = Path(key_directory.name) / "keys"
+                    escaped_path = str(key_path).replace("'", "''")
+                    con.execute(f"""
+                        COPY ({scalar_keys.sql_query()}) TO '{escaped_path}'
+                        (FORMAT PARQUET, PARTITION_BY (key_bucket), COMPRESSION SNAPPY)
+                    """)
+                    if any(key_path.rglob("*.parquet")):
+                        _drop_table_and_registered_aliases(con, strategy_keys_table)
+                        con.execute(f"""
+                            CREATE TEMPORARY VIEW {strategy_keys_table} AS
+                            SELECT unique_id, key, key_bucket::UBIGINT AS key_bucket
+                            FROM read_parquet('{escaped_path}/**/*.parquet',
+                                hive_partitioning=true)
+                        """)
+                    else:
+                        # Partitioned COPY produces no files when all keys
+                        # are empty; retain the native typed empty relation.
+                        _materialise_relation(
+                            con, scalar_keys.limit(0), strategy_keys_table
+                        )
                 logger.debug("%s: keys staged", stage_label)
 
                 for chunk_index in range(num_of_chunks):
@@ -1084,8 +1108,13 @@ def derive_inverted_index(
                         total_chunks=num_of_chunks,
                     )
             finally:
-                progress.close()
-                _drop_table_and_registered_aliases(con, strategy_keys_table)
+                try:
+                    progress.close()
+                    _drop_table_and_registered_aliases(con, strategy_keys_table)
+                finally:
+                    # Bucket results have been inserted before their files
+                    # disappear; the temporary view never outlives its input.
+                    key_directory.cleanup()
 
             log_stage_complete(
                 stage_label,
