@@ -32,6 +32,7 @@ def test_abbr_data(duck_con):
             ('10 LHS MEWS LONDON'),
             ('12 RHS COURT ROAD LONDON'),
             ('FLAT 1ST FLR FT 176 LOWER CLAPTON ROAD LONDON'),
+            ('FLAT UPPR 20 HIGH STREET LONDON'),
             ('FLAT 1ST FLR LT 4D UFTON ROAD LONDON'),
             ('FLAT 1ST FLR RT 10 RECTORY ROAD LONDON'),
         ) AS t(clean_full_address)
@@ -63,6 +64,7 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
         "10 LEFT HAND SIDE MEWS LONDON",
         "12 RIGHT HAND SIDE COURT ROAD LONDON",
         "FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON",
+        "FLAT UPPER 20 HIGH STREET LONDON",
         "FLAT FIRST FLOOR LEFT 4D UFTON ROAD LONDON",
         "FLAT FIRST FLOOR RIGHT 10 RECTORY ROAD LONDON",
     ]

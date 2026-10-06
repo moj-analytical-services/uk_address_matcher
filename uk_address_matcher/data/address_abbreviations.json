@@ -110,6 +110,7 @@
 
   { "token": "LGND", "replacement": "LOWER GROUND"},
   { "token": "UGND", "replacement": "UPPER GROUND"},
+  { "token": "UPPR", "replacement": "UPPER" },
 
   { "token": "GRD", "replacement": "GROUND" },
   { "token": "GND", "replacement": "GROUND" },

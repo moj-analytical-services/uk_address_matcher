@@ -429,7 +429,7 @@ def test_flat_number_letter_one_sided_penalty_not_fuzzy_equivalence():
 
     assert one_sided_bf == 5.17, (
         "Expected FLAT 2B vs FLAT 2 to hit 'Same number, letter one-sided' "
-        f"(bf=0.25), got bf_flat_identity={one_sided_bf:.6f}."
+        f"(bf=5.17), got bf_flat_identity={one_sided_bf:.6f}."
     )
     assert fuzzy_reference_bf == 13.0, (
         "Expected FLAT B vs FLAT 2 to hit fuzzy letter-number equivalence "
