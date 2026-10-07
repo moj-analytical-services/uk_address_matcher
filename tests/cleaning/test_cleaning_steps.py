@@ -34,9 +34,7 @@ def test_spaced_numeric_ranges_are_parsed_like_compact_ranges(number):
         assert cleaned.select(
             "numeric_range.lower, numeric_range.upper, numeric_token_1, numeric_token_2"
         ).fetchone() == (4, 6, "4", "6")
-        assert cleaned.select("numeric_tokens").fetchone()[0] == [
-            number.replace(" ", "")
-        ]
+        assert cleaned.select("numeric_tokens").fetchone()[0] == [number.replace(" ", "")]
 
 
 def _run_single_stage(stage_factory, input_relation, connection):
