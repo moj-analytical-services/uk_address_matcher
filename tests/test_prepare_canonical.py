@@ -88,11 +88,14 @@ def canonical_data(con):
     return con.from_arrow(pyarrow.Table.from_pylist(CANONICAL_RECORDS))
 
 
-@pytest.mark.parametrize("address", [
-    "FLAT 4 DEMO LODGE 12A DEMO ROAD",
-    "FLAT 2 18-20 DEMO ROAD",
-    "FLAT 4 12 DEMO ROAD",
-])
+@pytest.mark.parametrize(
+    "address",
+    [
+        "FLAT 4 DEMO LODGE 12A DEMO ROAD",
+        "FLAT 2 18-20 DEMO ROAD",
+        "FLAT 4 12 DEMO ROAD",
+    ],
+)
 def test_reloaded_numeric_slots_match_live_cleaning(con, address):
     source = con.sql(
         "SELECT 'C1' unique_id, ? address_concat, 'ZZ1 1ZZ' postcode",
