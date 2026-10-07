@@ -12,12 +12,14 @@ import pytest
 
 from uk_address_matcher import prepare_canonical_folder
 from uk_address_matcher.cleaning import chunking_strategies
+from uk_address_matcher.cleaning.pipelines import _clean_data_pre_term_frequencies
 from uk_address_matcher.logging import progress as progress_helpers
 from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
     _coerce_prepare_input_to_relation,
     _PreparedCanonical,
+    _rehydrate_canonical_addresses,
     load_prepared_canonical_data,
 )
 
@@ -84,6 +86,24 @@ def con():
 @pytest.fixture
 def canonical_data(con):
     return con.from_arrow(pyarrow.Table.from_pylist(CANONICAL_RECORDS))
+
+
+@pytest.mark.parametrize("address", [
+    "FLAT 4 DEMO LODGE 12A DEMO ROAD",
+    "FLAT 2 18-20 DEMO ROAD",
+    "FLAT 4 12 DEMO ROAD",
+])
+def test_reloaded_numeric_slots_match_live_cleaning(con, address):
+    source = con.sql(
+        "SELECT 'C1' unique_id, ? address_concat, 'ZZ1 1ZZ' postcode",
+        params=[address],
+    )
+    cleaned = _clean_data_pre_term_frequencies(source, con)
+    restored = _rehydrate_canonical_addresses(
+        cleaned.select("* EXCLUDE(numeric_token_2,numeric_token_3)")
+    )
+    slots = "numeric_token_1,numeric_token_2,numeric_token_3"
+    assert restored.select(slots).fetchall() == cleaned.select(slots).fetchall()
 
 
 @pytest.fixture
@@ -506,8 +526,10 @@ def test_prepared_canonical_schema_matches_debug_option(
         canonical_relation.select(
             """
         unique_id,
-        list_extract(numeric_tokens, 2) AS numeric_token_2,
-        list_extract(numeric_tokens, 3) AS numeric_token_3
+        list_extract(regexp_extract_all(
+            array_to_string(numeric_tokens, ' '), '\\d+'), 2) AS numeric_token_2,
+        list_extract(regexp_extract_all(
+            array_to_string(numeric_tokens, ' '), '\\d+'), 3) AS numeric_token_3
         """
         )
         .order("unique_id")

@@ -291,7 +291,8 @@ def _rehydrate_canonical_addresses(
         addresses = addresses.select("*, CAST(NULL AS VARCHAR) AS sub_premise_location")
         columns = addresses.columns
     numeric_token_views = [
-        f"list_extract(numeric_tokens, {position}) AS numeric_token_{position}"
+        "list_extract(regexp_extract_all(array_to_string(numeric_tokens, ' '), "
+        f"'\\d+'), {position}) AS numeric_token_{position}"
         for position in (2, 3)
         if f"numeric_token_{position}" not in columns
     ]
