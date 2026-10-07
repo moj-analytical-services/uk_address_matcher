@@ -1,12 +1,14 @@
 import logging
 
 import duckdb
+import pytest
 
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     DISTINGUISHING_FEATURE_COLUMNS,
     prepare_data_for_matching,
 )
+from uk_address_matcher.cleaning.pipelines import _clean_data_pre_term_frequencies
 from uk_address_matcher.cleaning.steps import (
     _derive_numeric_range,
     _parse_out_address_structure_premise,
@@ -19,6 +21,22 @@ from uk_address_matcher.cleaning.steps import (
     _split_numeric_tokens_to_cols,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
+
+
+@pytest.mark.parametrize("number", ["4-6", "4 - 6", "4- 6", "4 -6", "4A - 6B"])
+def test_spaced_numeric_ranges_are_parsed_like_compact_ranges(number):
+    with duckdb.connect() as con:
+        source = con.sql(
+            "SELECT 'C1' unique_id, ? address_concat, 'ZZ1 1ZZ' postcode",
+            params=[number + " DEMO ROAD"],
+        )
+        cleaned = _clean_data_pre_term_frequencies(source, con)
+        assert cleaned.select(
+            "numeric_range.lower, numeric_range.upper, numeric_token_1, numeric_token_2"
+        ).fetchone() == (4, 6, "4", "6")
+        assert cleaned.select("numeric_tokens").fetchone()[0] == [
+            number.replace(" ", "")
+        ]
 
 
 def _run_single_stage(stage_factory, input_relation, connection):

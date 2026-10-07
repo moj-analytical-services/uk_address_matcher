@@ -40,11 +40,9 @@ def standarise_num_dash_num(input: str):
         str: The standardized string with numeric ranges formatted correctly.
     """
     regex_pattern = (
-        r"(?<![A-Za-z])"  # Ensure preceding character is not a letter.
-        r"(\d+[A-Za-z]?)"  # Matches a number with an optional single letter
+        r"\b(\d{1,5}[A-Za-z]?)"
         r"\s*-\s*"  # Matches spaces around a dash
-        r"(\d+[A-Za-z]?)"  # Another number with an optional single letter.
-        r"(?![A-Za-z])"  # Ensure following character is not a letter.
+        r"(\d{1,5}[A-Za-z]?)\b"
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 

@@ -13,6 +13,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
     split_letter_dash_letter,
+    standarise_num_dash_num,
     standarise_num_letter,
     trim,
 )
@@ -202,7 +203,7 @@ def _clean_address_string_first_pass() -> str:
             replace_non_numeric_adjacent_underscores,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
-            # standarise_num_dash_num,  # left commented as in original
+            standarise_num_dash_num,
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
