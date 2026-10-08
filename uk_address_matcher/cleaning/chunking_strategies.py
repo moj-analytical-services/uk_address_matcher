@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uk_address_matcher")
 
 ROAD_SCORING_CHUNK_ROWS = 10_000_000
+_CANONICAL_ADJACENT_BATCH_ROWS = 4_000_000
 
 DISTINGUISHING_FEATURE_COLUMNS = (
     "distinguishing_adj_start_tokens",
@@ -138,8 +139,9 @@ def _add_canonical_road_blocking_keys(
     num_of_chunks: int = 1,
     roadlike_places: DuckDBPyRelation | None = None,
     require_catalogue_support: bool = True,
+    _stored_unique_address_ids: bool = False,
 ) -> DuckDBPyRelation:
-    """Add one derived road key per canonical address identifier."""
+    """Add road keys; the ID fast path requires stored, unique, non-null IDs."""
     if "road_1_norm" in canonical_addresses.columns:
         return canonical_addresses
     if roadlike_places is None:
@@ -179,6 +181,17 @@ def _add_canonical_road_blocking_keys(
         if column in canonical_addresses.columns
     )
     preferred_order = ", ".join(preferred_order_fields)
+    preferred_value = f"struct_pack({preferred_value_fields})"
+    preferred_source = "preferred"
+    preferred_join = ""
+    if _stored_unique_address_ids:
+        # Keep text/lists out of aggregate state; recover the winning row by ID.
+        preferred_value = "source.ukam_address_id"
+        preferred_source = "chosen"
+        preferred_join = f"""
+            INNER JOIN ({canonical_addresses.sql_query()}) AS chosen
+                ON chosen.ukam_address_id = grouped.preferred
+        """
     preserve_insertion_order = bool(
         con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
     )
@@ -191,22 +204,23 @@ def _add_canonical_road_blocking_keys(
                 SELECT
                     source.unique_id,
                     min_by(
-                        struct_pack({preferred_value_fields}),
+                        {preferred_value},
                         struct_pack({preferred_order})
                     ) AS preferred
                 FROM ({canonical_addresses.sql_query()}) AS source
                 GROUP BY source.unique_id
             )
             SELECT
-                unique_id,
+                grouped.unique_id,
                 {
             ", ".join(
-                f'preferred."{column}" AS "{column}"'
+                f'{preferred_source}."{column}" AS "{column}"'
                 for column in preferred_columns
                 if column != "unique_id"
             )
         }
             FROM grouped
+            {preferred_join}
         """)
         preferred_addresses = con.table(preferred_table)
         preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])
@@ -220,6 +234,12 @@ def _add_canonical_road_blocking_keys(
         (preferred_row_count + ROAD_SCORING_CHUNK_ROWS - 1) // ROAD_SCORING_CHUNK_ROWS,
     )
     road_chunk_count = min(max(1, num_of_chunks), required_chunks)
+    road_chunk_key = "CAST(unique_id AS VARCHAR)"
+    if "postcode_district" in roadlike_places.columns:
+        road_chunk_key = r"""regexp_extract(
+            upper(coalesce(postcode, '')),
+            '^\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s+\d', 1
+        )"""
     _drop_table_and_registered_aliases(con, road_keys_table)
     try:
         for chunk_index in range(road_chunk_count):
@@ -229,7 +249,7 @@ def _add_canonical_road_blocking_keys(
                 chunk = con.sql(f"""
                     SELECT *
                     FROM {preferred_table}
-                    WHERE hash(CAST(unique_id AS VARCHAR)) % {road_chunk_count}
+                    WHERE hash({road_chunk_key}) % {road_chunk_count}
                         = {chunk_index}
                 """)
             chunk_keys = derive_top_1_road_keys(
@@ -270,9 +290,14 @@ def _add_canonical_road_blocking_keys(
         LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
     """)
     try:
-        return _materialise_relation(con, enriched, enriched_table)
-    finally:
+        # Retain the narrow road keys instead of copying every canonical column.
+        con.execute(f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}")
+        return con.table(enriched_table)
+    except BaseException:
+        _drop_table_and_registered_aliases(con, enriched_table)
         _drop_table_and_registered_aliases(con, road_keys_table)
+        raise
+    finally:
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
         )
@@ -512,6 +537,8 @@ def clean_data_pre_term_frequencies(
     con: DuckDBPyConnection,
     num_of_chunks: int = 10,
     *,
+    _drop_columns: Collection[str] = (),
+    _owned_chunks: dict[str, int] | None = None,
     debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
@@ -615,7 +642,20 @@ def clean_data_pre_term_frequencies(
                 debug_options=debug_options if chunk_index == 0 else None,
             )
 
-            processed_chunk.create(f"{cleaned_chunk_prefix}{chunk_index}")
+            if _drop_columns:
+                processed_chunk = processed_chunk.project(
+                    ", ".join(
+                        f'"{column}"'
+                        for column in processed_chunk.columns
+                        if column not in _drop_columns
+                    )
+                )
+            chunk_name = f"{cleaned_chunk_prefix}{chunk_index}"
+            processed_chunk.create(chunk_name)
+            if _owned_chunks is not None:
+                # Explicitly transfer owned tables and inclusive ID bounds to
+                # finishing; arbitrary caller-owned relations are never enrolled.
+                _owned_chunks[chunk_name] = chunk_offsets[chunk_index] + chunk_row_count
 
             processed_records += chunk_row_count
             progress.update(
@@ -965,6 +1005,7 @@ def derive_inverted_index(
                 num_of_chunks,
                 progress_mode=progress_mode,
             )
+            key_directory = TemporaryDirectory(prefix="ukam-index-buckets-")
             try:
                 logger.debug("%s: staging keys once", stage_label)
                 key_pipeline = create_sql_pipeline(
@@ -992,13 +1033,36 @@ def derive_inverted_index(
                         key,
                         abs(hash(key)) % {num_of_chunks} AS key_bucket
                     FROM scalar_keys
-                    ORDER BY key_bucket
                 """)
-                _materialise_relation(
-                    con,
-                    scalar_keys,
-                    strategy_keys_table,
-                )
+                # Keep native storage for identifier types whose Parquet
+                # round trip is not established here (for example HUGEINT).
+                if str(scalar_keys.types[0]) not in {"BIGINT", "VARCHAR"}:
+                    _materialise_relation(
+                        con, scalar_keys.order("key_bucket"), strategy_keys_table
+                    )
+                else:
+                    # Physical buckets avoid a global sort while keeping
+                    # each unchanged bucket query local to its own files.
+                    key_path = Path(key_directory.name) / "keys"
+                    escaped_path = str(key_path).replace("'", "''")
+                    con.execute(f"""
+                        COPY ({scalar_keys.sql_query()}) TO '{escaped_path}'
+                        (FORMAT PARQUET, PARTITION_BY (key_bucket), COMPRESSION SNAPPY)
+                    """)
+                    if any(key_path.rglob("*.parquet")):
+                        _drop_table_and_registered_aliases(con, strategy_keys_table)
+                        con.execute(f"""
+                            CREATE TEMPORARY VIEW {strategy_keys_table} AS
+                            SELECT unique_id, key, key_bucket::UBIGINT AS key_bucket
+                            FROM read_parquet('{escaped_path}/**/*.parquet',
+                                hive_partitioning=true)
+                        """)
+                    else:
+                        # Partitioned COPY produces no files when all keys
+                        # are empty; retain the native typed empty relation.
+                        _materialise_relation(
+                            con, scalar_keys.limit(0), strategy_keys_table
+                        )
                 logger.debug("%s: keys staged", stage_label)
 
                 for chunk_index in range(num_of_chunks):
@@ -1045,8 +1109,13 @@ def derive_inverted_index(
                         total_chunks=num_of_chunks,
                     )
             finally:
-                progress.close()
-                _drop_table_and_registered_aliases(con, strategy_keys_table)
+                try:
+                    progress.close()
+                    _drop_table_and_registered_aliases(con, strategy_keys_table)
+                finally:
+                    # Bucket results have been inserted before their files
+                    # disappear; the temporary view never outlives its input.
+                    key_directory.cleanup()
 
             log_stage_complete(
                 stage_label,
@@ -1055,6 +1124,145 @@ def derive_inverted_index(
             )
 
     return con.table(result_table)
+
+
+def _canonical_distinguishing_features(
+    con: DuckDBPyConnection,
+    source: DuckDBPyRelation,
+    debug_options: DebugOptions | None,
+) -> DuckDBPyRelation:
+    return (
+        create_sql_pipeline(
+            con,
+            input_rel=source,
+            stage_specs=[
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+                    include_input_columns=False, use_precomputed_tokens=True
+                ),
+                _derive_distinguishing_token_components,
+            ],
+            pipeline_name="Derive locally distinguishing canonical tokens",
+            pipeline_description="Compare nearby suffix-similar records",
+        )
+        .run(debug_options)
+        .project(", ".join(("ukam_address_id", *DISTINGUISHING_FEATURE_COLUMNS)))
+    )
+
+
+def _adjacent_range_case(first: int, last: int) -> str:
+    if first == last:
+        return str(first)
+    middle = (first + last) // 2
+    splitter = f"list_extract(splitters, {middle + 1})"
+    return (
+        f"CASE WHEN range_key IS NOT NULL "
+        f"AND ({splitter} IS NULL OR range_key < {splitter}) "
+        f"THEN ({_adjacent_range_case(first, middle)}) "
+        f"ELSE ({_adjacent_range_case(middle + 1, last)}) END"
+    )
+
+
+def _materialise_canonical_distinguishing_features(
+    con: DuckDBPyConnection,
+    source: DuckDBPyRelation,
+    table_name: str,
+    debug_options: DebugOptions | None = None,
+) -> DuckDBPyRelation:
+    """Limit the adjacent window's working set using contiguous address ranges.
+
+    Up to three rows on either side of each boundary may get different features:
+    neighbours outside that range are deliberately omitted. Equal addresses stay
+    together, so the batch size is a target rather than a hard memory bound.
+    """
+    rows = source.count("*").fetchone()[0]
+    batch_count = (rows + _CANONICAL_ADJACENT_BATCH_ROWS - 1) // (
+        _CANONICAL_ADJACENT_BATCH_ROWS
+    )
+    collation, order, null_order = con.execute("""
+        SELECT current_setting('default_collation'),
+            current_setting('default_order'), current_setting('default_null_order')
+    """).fetchone()
+    # Other types (notably HUGEINT) may change values when written to Parquet.
+    unique_id_type = str(source.types[source.columns.index("unique_id")])
+    if (
+        batch_count <= 1
+        or unique_id_type not in {"VARCHAR", "BIGINT", "INTEGER"}
+        or collation not in ("", "binary")
+        or order not in ("ASC", "ASCENDING")
+        or null_order not in ("NULLS_LAST", "NULLS_LAST_ON_ASC_FIRST_ON_DESC")
+    ):
+        # Consolidate global UNION input; Parquet batches already have this boundary.
+        adjacent_input = con.sql(f"""
+            WITH adjacent_input AS MATERIALIZED (
+                SELECT ukam_address_id, unique_id, clean_full_address,
+                    clean_full_address_tokens
+                FROM ({source.sql_query()})
+            )
+            SELECT * FROM adjacent_input
+        """)
+        return _materialise_relation(
+            con,
+            _canonical_distinguishing_features(con, adjacent_input, debug_options),
+            table_name,
+        )
+
+    uid = _uid()
+    bounds_table = f"__ukam_adjacent_bounds_{uid}"
+    input_table = f"__ukam_adjacent_batch_{uid}"
+    columns = "ukam_address_id, unique_id, clean_full_address, clean_full_address_tokens"
+    source_sql = source.project(columns).sql_query()
+    # Hash-sample a bounded number of addresses; sort only that small sample.
+    modulus = max(1, rows // 65_536)
+    fractions = ", ".join(str(i / batch_count) for i in range(1, batch_count))
+    try:
+        con.execute(f"""
+            CREATE TEMPORARY TABLE {bounds_table} AS
+            SELECT quantile_disc(range_key, [{fractions}]) AS splitters
+            FROM (
+                SELECT reverse(clean_full_address) AS range_key
+                FROM ({source_sql}) AS source
+                WHERE hash(ukam_address_id) % {modulus} = 0
+                LIMIT 131072
+            ) AS sample
+        """)
+        with TemporaryDirectory(prefix="ukam-adjacent-batches-") as directory:
+            batch_path = directory.replace("'", "''")
+            con.execute(f"""
+                COPY (
+                    SELECT {columns},
+                        {_adjacent_range_case(0, batch_count - 1)} AS batch_id
+                    FROM (
+                        SELECT *, reverse(clean_full_address) AS range_key
+                        FROM ({source_sql}) AS source
+                    ) AS keyed CROSS JOIN {bounds_table}
+                ) TO '{batch_path}'
+                (FORMAT PARQUET, PARTITION_BY (batch_id), COMPRESSION UNCOMPRESSED)
+            """)
+            # Missing directories are empty ranges (e.g. repeated split points).
+            for index, batch in enumerate(sorted(Path(directory).glob("batch_id=*"))):
+                batch_files = str(batch / "*.parquet").replace("'", "''")
+                con.execute(f"""
+                    CREATE TEMPORARY VIEW {input_table} AS
+                    SELECT {columns} FROM read_parquet(
+                        '{batch_files}', hive_partitioning=false
+                    )
+                """)
+                try:
+                    features = _canonical_distinguishing_features(
+                        con, con.table(input_table), debug_options if index == 0 else None
+                    )
+                    if index == 0:
+                        _materialise_relation(con, features, table_name)
+                    else:
+                        con.execute(f"INSERT INTO {table_name} {features.sql_query()}")
+                finally:
+                    _drop_table_and_registered_aliases(con, input_table)
+        return con.table(table_name)
+    except BaseException:
+        _drop_table_and_registered_aliases(con, table_name)
+        raise
+    finally:
+        _drop_table_and_registered_aliases(con, bounds_table)
 
 
 # Chunking this requires a three phase approach:
@@ -1074,6 +1282,8 @@ def prepare_data_for_matching(
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
     _precleaned_addresses: bool = False,
+    _drop_columns: Collection[str] = (),
+    _owned_chunks: dict[str, int] | None = None,
     debug_options: DebugOptions | None = None,
     show_progress: ShowProgress = "auto",
 ) -> DuckDBPyRelation:
@@ -1176,52 +1386,9 @@ def prepare_data_for_matching(
     if derive_distinguishing_wrt_adjacent_records:
         try:
             logger.debug("Deriving adjacent-record distinguishing tokens")
-            adjacent_pipeline = create_sql_pipeline(
-                con,
-                input_rel=cleaned_address_table,
-                stage_specs=[
-                    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
-                        include_input_columns=False,
-                        use_precomputed_tokens=True,
-                    )
-                ],
-                pipeline_name="Derive locally distinguishing canonical tokens",
-                pipeline_description=(
-                    "Compare each canonical address with nearby suffix-similar records"
-                ),
-            )
-            adjacent_tokens = adjacent_pipeline.run(debug_options)
-            distinguishing_input = con.sql(f"""
-                SELECT
-                    cleaned.*,
-                    adjacent.distinguishing_adj_start_tokens,
-                    adjacent.common_adj_start_tokens
-                FROM {cleaned_table_name} AS cleaned
-                INNER JOIN ({adjacent_tokens.sql_query()}) AS adjacent
-                    ON adjacent.ukam_address_id = cleaned.ukam_address_id
-            """)
-            distinguishing_pipeline = create_sql_pipeline(
-                con,
-                input_rel=distinguishing_input,
-                stage_specs=[_derive_distinguishing_token_components],
-                pipeline_name="Derive address-structure distinguishing tokens",
-                pipeline_description=(
-                    "Split distinguishing prefixes into structural and lexical tokens"
-                ),
-            )
-            distinguishing_tokens = distinguishing_pipeline.run(debug_options)
-            distinguishing_columns = [
-                "ukam_address_id",
-                *DISTINGUISHING_FEATURE_COLUMNS,
-            ]
-            distinguishing_tokens = distinguishing_tokens.project(
-                ", ".join(distinguishing_columns)
-            )
             distinguishing_table_name = f"__ukam_distinguishing_tokens_{uid}"
-            _materialise_relation(
-                con,
-                distinguishing_tokens,
-                distinguishing_table_name,
+            _materialise_canonical_distinguishing_features(
+                con, cleaned_address_table, distinguishing_table_name, debug_options
             )
             logger.debug("Adjacent-record distinguishing tokens derived")
         except BaseException:
@@ -1325,12 +1492,42 @@ def prepare_data_for_matching(
                 debug_options=debug_options if chunk_index == 0 else None,
                 narrow_post_tf=True,
             )
+            if _drop_columns:
+                processed_chunk = processed_chunk.project(
+                    ", ".join(
+                        f'"{column}"'
+                        for column in processed_chunk.columns
+                        if column not in _drop_columns
+                    )
+                )
 
             if chunk_index == 0:
                 con.execute(f"DROP TABLE IF EXISTS {processed_table}")
                 processed_chunk.create(processed_table)
             else:
                 processed_chunk.insert_into(processed_table)
+
+            # Global TF and adjacent features are already materialised. Once
+            # these IDs are written, only the remaining source chunks are live.
+            completed = [
+                name
+                for name, maximum in (_owned_chunks or {}).items()
+                if maximum <= last_id
+            ]
+            if completed:
+                remaining = [name for name in _owned_chunks if name not in completed]
+                if remaining:
+                    union_sql = " UNION ALL ".join(
+                        f"SELECT * FROM {name}" for name in remaining
+                    )
+                    con.execute(
+                        f"CREATE OR REPLACE VIEW {cleaned_table_name} AS {union_sql}"
+                    )
+                else:
+                    _drop_table_and_registered_aliases(con, cleaned_table_name)
+                for name in completed:
+                    _drop_table_and_registered_aliases(con, name)
+                    del _owned_chunks[name]
 
             processed_records = min((chunk_index + 1) * chunk_size, total_rows)
             progress.update(
