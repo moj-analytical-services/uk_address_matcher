@@ -37,6 +37,7 @@
   { "token": "BLDG", "replacement": "BUILDING" },
   { "token": "BLGD", "replacement": "BUILDING" },
   { "token": "BLK", "replacement": "BLOCK" },
+  { "token": "BLCK-SMS", "replacement": "BLACKSMITHS" },
 
   { "token": "BLVD", "replacement": "BOULEVARD" },
   { "token": "BVD", "replacement": "BOULEVARD" },
@@ -55,6 +56,7 @@
 
   { "token": "CHAM", "replacement": "CHAMBER" },
   { "token": "CIN", "replacement": "CINEMA" },
+  { "token": "CFT", "replacement": "CROFT" },
 
   { "token": "CLS", "replacement": "CLOSE" },
 
@@ -81,12 +83,15 @@
 
   { "token": "FAC", "replacement": "FACTORY" },
 
+  { "token": "FARMHSE", "replacement": "FARMHOUSE" },
+
   { "token": "AFL", "replacement": "ATTIC FLOOR LEFT" },
   { "token": "AFR", "replacement": "ATTIC FLOOR RIGHT" },
   { "token": "AFW", "replacement": "ATTIC FLOOR WEST" },
   { "token": "AF-W", "replacement": "ATTIC FLOOR WEST" },
 
   { "token": "FF", "replacement": "FIRST FLOOR" },
+  { "token": "F-F", "replacement": "FIRST FLOOR" },
   { "token": "FHSE", "replacement": "FARM HOUSE" },
   { "token": "F-HSE", "replacement": "FARM HOUSE" },
   { "token": "FT", "replacement": "FRONT" },
@@ -97,10 +102,13 @@
   { "token": "FLS", "replacement": "FLOORS" },
 
   { "token": "FLD", "replacement": "FIELD" },
+  { "token": "FM", "replacement": "FARM" },
+  { "token": "FNT", "replacement": "FRONT" },
 
   { "token": "MAIS", "replacement": "MAISONETTE" },
 
   { "token": "GALL", "replacement": "GALLERY" },
+  { "token": "GAMEKPRS", "replacement": "GAMEKEEPERS" },
 
   { "token": "GDN", "replacement": "GARDEN" },
   { "token": "GDNS", "replacement": "GARDENS" },
@@ -111,6 +119,7 @@
   { "token": "LGND", "replacement": "LOWER GROUND"},
   { "token": "UGND", "replacement": "UPPER GROUND"},
   { "token": "UPPR", "replacement": "UPPER" },
+  { "token": "UPR", "replacement": "UPPER" },
 
   { "token": "GRD", "replacement": "GROUND" },
   { "token": "GND", "replacement": "GROUND" },
@@ -141,6 +150,7 @@
   { "token": "GYM", "replacement": "GYMNASIUM" },
 
   { "token": "HARBOR", "replacement": "HARBOUR" },
+  { "token": "H-HEAD", "replacement": "HILLHEAD" },
 
   { "token": "HGT", "replacement": "HEIGHT" },
   { "token": "HTS", "replacement": "HEIGHTS" },
@@ -155,8 +165,13 @@
 
   { "token": "LIB", "replacement": "LIBRARY" },
 
+  { "token": "LDG", "replacement": "LODGE" },
+  { "token": "LDGE", "replacement": "LODGE" },
+  { "token": "LGE", "replacement": "LODGE" },
+
   { "token": "LHS", "replacement": "LEFT HAND SIDE" },
   { "token": "LT", "replacement": "LEFT" },
+  { "token": "LWR", "replacement": "LOWER" },
 
   { "token": "LN", "replacement": "LANE" },
 
@@ -241,6 +256,7 @@
   { "token": "TOWNHALL", "replacement": "TOWN HALL" },
 
   { "token": "TOWNHSE", "replacement": "TOWNHOUSE" },
+  { "token": "TRNRHALL", "replacement": "TURNERHALL" },
 
   { "token": "UNIV", "replacement": "UNIVERSITY" },
 

@@ -439,26 +439,3 @@ def _split_letter_dash_letter() -> str:
         {cleaned} AS clean_full_address
     FROM {{input}}
     """
-
-
-@pipeline_stage(
-    name="join_excluding_with_next_token",
-    description=(
-        "Join EXCLUDING with the following token to avoid false basement/studio "
-        "matches during tokenisation"
-    ),
-    tags=["normalisation", "cleaning"],
-)
-def _join_excluding_with_next_token() -> str:
-    sql = r"""
-    SELECT
-        * EXCLUDE (clean_full_address),
-        regexp_replace(
-            clean_full_address,
-            '(^|[ (])EXCLUDING +([^ )]+)',
-            '\1EXCLUDING\2',
-            'g'
-        ) AS clean_full_address
-    FROM {input}
-    """
-    return sql
