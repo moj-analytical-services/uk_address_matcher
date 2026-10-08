@@ -7,6 +7,12 @@ from uk_address_matcher.cleaning.steps.regexes import (
 )
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
+
+def _address_for_parsing(address_expression: str) -> str:
+    exclusion_pattern = r"'(^|[ (])EXCLUDING +([^ )]+)', '\1EXCLUDING_\2', 'g'"
+    return f"regexp_replace({address_expression}, {exclusion_pattern})"
+
+
 _DISTINGUISHING_MARKER_VALUES = (
     "ANNEXE",
     "WORKSHOP",
@@ -343,10 +349,12 @@ def _parse_out_flat_position_and_letter():
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
     scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
+    address_for_parsing = _address_for_parsing("input.clean_full_address")
 
     final_base_sql = f"""
     SELECT
-        i.*,
+        i.* EXCLUDE (clean_full_address, __original_clean_full_address),
+        i.__original_clean_full_address AS clean_full_address,
 
         -- 1) Positional/floor signal from the address string itself.
         CASE
@@ -466,9 +474,15 @@ def _parse_out_flat_position_and_letter():
                 )
             )
             ELSE NULL
-        END AS flat_number
-
-    FROM {{input}} i
+        END AS flat_number,
+        regexp_matches(i.clean_full_address, '\\bFLAT\\b') AS __has_explicit_flat
+    FROM (
+        SELECT
+            input.* EXCLUDE (clean_full_address),
+            input.clean_full_address AS __original_clean_full_address,
+            {address_for_parsing} AS clean_full_address
+        FROM {{input}} input
+    ) i
     """
 
     # Final step: boolean indicator and composite flat identity
@@ -476,12 +490,12 @@ def _parse_out_flat_position_and_letter():
     # Also check for the word FLAT itself as a flat signal
     final_sql = r"""
     SELECT
-        *,
+        * EXCLUDE (__has_explicit_flat),
         (
             flat_letter IS NOT NULL
             OR flat_number IS NOT NULL
             OR flat_positional IS NOT NULL
-            OR regexp_matches(clean_full_address, '\bFLAT\b')
+            OR __has_explicit_flat
         ) AS has_flat_indicator,
         CASE
             WHEN flat_number IS NOT NULL OR flat_letter IS NOT NULL
@@ -520,24 +534,30 @@ def _parse_out_sub_premise_location():
     positives from place names such as commercial centres later in the string.
     """
 
-    prefix_sql = r"""
+    tokens_for_parsing = _address_for_parsing(
+        "array_to_string(i.clean_full_address_tokens, ' ')"
+    )
+    prefix_sql = f"""
     SELECT
-        i.*,
+        i.* EXCLUDE (__tokens_for_parsing),
         list_slice(
-                i.clean_full_address_tokens,
+                __tokens_for_parsing,
                 1,
                 LEAST(
-                    len(i.clean_full_address_tokens),
+                    len(__tokens_for_parsing),
                     GREATEST(
                         6,
-                        CAST(
-                            CEIL(len(i.clean_full_address_tokens) / 2.0)
-                            AS BIGINT
-                        )
+                        CAST(CEIL(len(__tokens_for_parsing) / 2.0) AS BIGINT)
                     )
                 )
             ) AS sub_premise_location_prefix_tokens
-    FROM {input} i
+    FROM (
+        SELECT
+            i.*,
+            string_split({tokens_for_parsing}, ' ')::VARCHAR[]
+                AS __tokens_for_parsing
+        FROM {{input}} i
+    ) i
     """
 
     final_sql = r"""
@@ -615,6 +635,7 @@ def _parse_out_business_unit():
     singular_pattern = (
         rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
     )
+    address_for_parsing = _address_for_parsing("source.clean_full_address")
 
     sql = f"""
     SELECT
@@ -632,7 +653,7 @@ def _parse_out_business_unit():
         SELECT
             source.*,
             regexp_extract(
-                source.clean_full_address,
+                {address_for_parsing},
                 '{singular_pattern}',
                 ['business_unit_type', 'business_unit_id']
             ) AS __business_unit_match
@@ -866,6 +887,7 @@ def _address_structure_premise_sql() -> str:
     ]
     premise_pattern = "|".join(address_structure_premise_patterns)
     identifier_pattern = r"[A-Za-z]?\d{1,4}[A-Za-z]?|[A-Za-z]"
+    address_for_parsing = _address_for_parsing("input.clean_full_address")
     return f"""
     SELECT
         source.* EXCLUDE (__address_structure_premise_match),
@@ -907,7 +929,7 @@ def _address_structure_premise_sql() -> str:
         SELECT
             input.*,
             regexp_extract(
-                input.clean_full_address,
+                {address_for_parsing},
                 '\\b({premise_pattern})\\b(?:\\s+({identifier_pattern})\\b)?',
                 ['address_structure_premise_type', 'address_structure_premise_id']
             ) AS __address_structure_premise_match

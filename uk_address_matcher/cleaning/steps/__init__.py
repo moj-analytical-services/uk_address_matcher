@@ -15,7 +15,6 @@ from uk_address_matcher.cleaning.steps.normalisation import (
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _extract_postcode_from_address,
-    _join_excluding_with_next_token,
     _normalise_abbreviations_and_units,
     _preserve_original_address_concat,
     _remove_duplicate_end_tokens,
@@ -90,7 +89,6 @@ __all__ = [
     "_rename_and_select_columns",
     "_normalise_abbreviations_and_units",
     "_split_letter_dash_letter",
-    "_join_excluding_with_next_token",
     "_preserve_original_address_concat",
     # numeric_ranges
     "_add_numeric_range_lower_endpoint_tf",
