@@ -16,6 +16,7 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     ensure_numeric_range_struct,
     project_splink_predictions,
 )
+from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
@@ -33,6 +34,9 @@ def _local_key_input_aliases(con: duckdb.DuckDBPyConnection) -> set[str]:
             SELECT view_name FROM duckdb_views()
             WHERE view_name LIKE 'local_key_source%'
                 OR view_name LIKE 'local_key_canonical%'
+            UNION ALL
+            SELECT table_name FROM duckdb_tables()
+            WHERE table_name LIKE '__ukam__name_%'
         """).fetchall()
     }
 
@@ -41,85 +45,95 @@ def _local_key_input_aliases(con: duckdb.DuckDBPyConnection) -> set[str]:
 def _anchored_name_aliases() -> list[CTEStep]:
     return [
         CTEStep(
-            "alias_levels",
+            "spacing_predictions",
             """
-            SELECT predictions.*,
-                coalesce(map_extract_value(lk_level_by_alias_r,
-                    ukam_address_id_l::VARCHAR), 0) AS spacing_alias_level
+            SELECT predictions.ukam_address_id_l, predictions.ukam_address_id_r,
+                predictions.unique_id_l, predictions.unique_id_r,
+                predictions.match_weight, predictions.__spacing_name_factor
             FROM {local_key_source_predictions} predictions
+            JOIN {local_key_source_names} source
+                ON predictions.ukam_address_id_r::VARCHAR = source.ukam_address_id
+            WHERE predictions.__spacing_name_factor > 1
+                AND len(source.lk_anchor_uprns) = 1
+                AND list_contains(source.lk_anchor_uprns,
+                    predictions.unique_id_l::VARCHAR)
+                AND map_extract_value(source.lk_level_by_alias,
+                    predictions.ukam_address_id_l::VARCHAR) = 2
             """,
         ),
         CTEStep(
-            "alias_alternatives",
+            "excluded_aliases",
             """
-            SELECT levels.unique_id_l, levels.unique_id_r,
-                max(levels.match_weight) AS nonspacing_alias_weight
-            FROM {alias_levels} levels JOIN (
-                SELECT DISTINCT unique_id_l, unique_id_r FROM {alias_levels}
-                WHERE spacing_alias_level = 2 AND __spacing_name_factor > 1
-                    AND len(lk_anchor_uprns_r) = 1
-                    AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
-            ) affected USING (unique_id_l, unique_id_r)
-            WHERE levels.spacing_alias_level <> 2
-            GROUP BY levels.unique_id_l, levels.unique_id_r
-            """,
-        ),
-        CTEStep(
-            "preserved_aliases",
-            """
-            SELECT levels.* EXCLUDE (spacing_alias_level, __spacing_name_factor)
-            FROM {alias_levels} levels
-            LEFT JOIN {alias_alternatives} alternatives USING (unique_id_l, unique_id_r)
-            WHERE NOT coalesce(
-                spacing_alias_level = 2 AND nonspacing_alias_weight IS NOT NULL
-                AND __spacing_name_factor > 1
-                AND len(lk_anchor_uprns_r) = 1
-                AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
-                AND match_weight >= nonspacing_alias_weight
-                AND match_weight - CASE WHEN __spacing_name_factor > 1
-                    THEN log2(__spacing_name_factor) ELSE 0 END
-                    < nonspacing_alias_weight,
-                FALSE)
+            SELECT spacing.ukam_address_id_l, spacing.ukam_address_id_r
+            FROM {spacing_predictions} spacing
+            JOIN {local_key_source_predictions} predictions
+                USING (unique_id_l, unique_id_r)
+            LEFT JOIN {local_key_source_names} source
+                ON predictions.ukam_address_id_r::VARCHAR = source.ukam_address_id
+            WHERE coalesce(map_extract_value(source.lk_level_by_alias,
+                predictions.ukam_address_id_l::VARCHAR), 0) <> 2
+            GROUP BY spacing.ukam_address_id_l, spacing.ukam_address_id_r,
+                spacing.match_weight, spacing.__spacing_name_factor
+            HAVING spacing.match_weight >= max(predictions.match_weight)
+                AND spacing.match_weight - log2(spacing.__spacing_name_factor)
+                    < max(predictions.match_weight)
             """,
         ),
     ]
 
 
 def _preserve_anchored_name_aliases(
-    con: duckdb.DuckDBPyConnection, predictions: duckdb.DuckDBPyRelation
+    con: duckdb.DuckDBPyConnection,
+    predictions: duckdb.DuckDBPyRelation,
+    source: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    if not {
-        "lk_level_by_alias_r",
-        "lk_anchor_uprns_r",
-        "bf_postcode_distinguishing_name",
-    }.issubset(predictions.columns):
+    if "bf_postcode_distinguishing_name" not in predictions.columns:
         return predictions
     factor = "bf_postcode_distinguishing_name"
     if "bf_tf_postcode_distinguishing_name" in predictions.columns:
         factor += " * coalesce(bf_tf_postcode_distinguishing_name, 1.0)"
     if (
-        predictions.filter(f"""
-        ({factor}) > 1
-        AND map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2
-        AND len(lk_anchor_uprns_r) = 1
-        AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
+        source.filter("""
+        len(lk_anchor_uprns) = 1 AND list_contains(map_values(lk_level_by_alias), 2)
     """)
         .limit(1)
         .fetchone()
         is None
     ):
         return predictions
-    return create_sql_pipeline(
+    excluded = create_sql_pipeline(
         con,
         [
             InputBinding(
                 "local_key_source_predictions",
-                predictions.select(f"*, ({factor}) AS __spacing_name_factor"),
-            )
+                predictions.select(
+                    "ukam_address_id_l, ukam_address_id_r, unique_id_l, unique_id_r, "
+                    f"match_weight, ({factor}) AS __spacing_name_factor"
+                ),
+            ),
+            InputBinding(
+                "local_key_source_names",
+                source.select(
+                    "ukam_address_id::VARCHAR AS ukam_address_id, "
+                    "lk_level_by_alias, lk_anchor_uprns"
+                ),
+            ),
         ],
         stage_specs=[_anchored_name_aliases],
         pipeline_name="Preserve exact anchored name aliases",
     ).run()
+    excluded_name = f"__ukam__name_alias_exclusions_{_uid()}"
+    con.execute(f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}')
+    excluded = con.table(excluded_name)
+    prediction_alias = f"local_key_source_unfiltered_predictions_{_uid()}"
+    return predictions.query(
+        prediction_alias,
+        f"""
+        SELECT predictions.* FROM "{prediction_alias}" predictions
+        ANTI JOIN ({excluded.sql_query()}) excluded
+            USING (ukam_address_id_l, ukam_address_id_r)
+    """,
+    )
 
 
 def _prepare_inferred_road_scoring_features(
@@ -353,9 +367,6 @@ class SplinkStage(MatchingStage):
                 "common_end_tokens_hist",
                 "clean_full_address",
                 "postcode",
-                "lk_level_by_alias",
-                "lk_anchor_uprns",
-                "lk_eligible",
             ]
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
@@ -402,7 +413,7 @@ class SplinkStage(MatchingStage):
             self.predictions_table = table_name
             df_predict_ddb = con.table(table_name)
             df_predict_for_improvement = _preserve_anchored_name_aliases(
-                con, raw_prediction_ddb
+                con, raw_prediction_ddb, df_unmatched
             )
             if numeric_range_reranker is None:
                 df_predict_for_improvement = project_splink_predictions(
@@ -519,6 +530,9 @@ class SplinkStage(MatchingStage):
                 with suppress(InvalidInputException):
                     con.unregister(input_name)
             for input_name in _local_key_input_aliases(con) - local_key_aliases_before:
+                if input_name.startswith("__ukam__name_"):
+                    con.execute(f'DROP TABLE "{input_name}"')
+                    continue
                 with suppress(InvalidInputException):
                     con.unregister(input_name)
             self._owned_splink_frames = tuple(owned_frames)

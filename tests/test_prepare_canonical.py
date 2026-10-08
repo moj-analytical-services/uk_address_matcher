@@ -112,7 +112,8 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
         SELECT * FROM (VALUES
             ('001', 'MEADOW COTTAGE 54 TEST ROAD', 'ZZ1 1ZZ'),
             ('002', 'MEADOW HOUSE 56 TEST ROAD', 'ZZ1 1ZZ'),
-            ('003', 'ORCHARD HOUSE 58 TEST ROAD', 'ZZ1 1ZZ')
+            ('003', 'ORCHARD HOUSE 58 TEST ROAD', 'ZZ1 1ZZ'),
+            ('004', 'PINE LODGE 60 TEST ROAD', 'ZZ1 1ZZ')
         ) addresses(unique_id, address_concat, postcode)
     """)
     prepare_canonical_folder(
@@ -124,6 +125,7 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
         _derive_road_catalogue=False,
     )
     loaded = load_prepared_canonical_data(tmp_path, con)
+    assert "local_key_tokens" not in loaded.addresses.columns
     index = (
         loaded.addresses.filter("unique_id = '001'")
         .select("local_key_index")
@@ -132,7 +134,7 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
     meadow = next(
         key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
     )
-    assert (meadow["df_uprns"], meadow["n_uprns"]) == (2, 3)
+    assert (meadow["df_uprns"], meadow["n_uprns"]) == (2, 4)
     manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
     assert "derive_local_keys" not in manifest["preparation_options"]
 

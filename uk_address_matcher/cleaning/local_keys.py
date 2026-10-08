@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from uk_address_matcher.cleaning.steps.token_parsing import _derive_local_key_tokens
+from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
@@ -20,6 +21,16 @@ _LOCAL_KEY_CACHE_COLUMNS = (
 )
 
 
+def _canonical_local_key_gate(prefix: str) -> str:
+    return (
+        f"{prefix}pos <= 3 AND {prefix}n_uprns >= 2 AND ("
+        f"({prefix}df_uprns <= 3 AND "
+        f"{prefix}df_uprns::DOUBLE / {prefix}n_uprns <= 0.5) "
+        f"OR ({prefix}spacing_df_uprns = 1 AND "
+        f"length(replace({prefix}key, ' ', '')) >= 6))"
+    )
+
+
 @pipeline_stage(name="canonical_local_key_statistics", materialized=True)
 def _canonical_local_key_statistics():
     return [
@@ -28,7 +39,8 @@ def _canonical_local_key_statistics():
             """
             SELECT postcode, count(*) AS aliases, count(DISTINCT unique_id) AS n_uprns,
                 bit_xor(hash(ukam_address_id::VARCHAR, unique_id::VARCHAR,
-                    postcode, clean_full_address)) AS signature
+                    postcode, clean_full_address)) AS signature,
+                min(ukam_address_id::VARCHAR) AS metadata_alias
             FROM {input} GROUP BY postcode
             """,
         ),
@@ -59,28 +71,31 @@ def _canonical_local_key_statistics():
         ),
         CTEStep(
             "indexed_aliases",
-            """
+            f"""
             SELECT ukam_address_id, list(struct_pack(
                 pos := pos, kind := kind, key := key,
                 df_uprns := df_uprns, n_uprns := n_uprns,
                 spacing_df_uprns := spacing_df_uprns
             ) ORDER BY kind, key, pos) AS local_key_index
-            FROM {occurrences} occurrences
-            JOIN {frequencies} frequencies USING (postcode, kind, key)
-            JOIN {background} background USING (postcode)
-            LEFT JOIN {spacing_frequencies} spacing
+            FROM {{occurrences}} occurrences
+            JOIN {{frequencies}} frequencies USING (postcode, kind, key)
+            JOIN {{background}} background USING (postcode)
+            LEFT JOIN {{spacing_frequencies}} spacing
                 ON occurrences.postcode = spacing.postcode
                 AND replace(occurrences.key, ' ', '') = spacing.compact_key
+            WHERE {_canonical_local_key_gate("")}
             GROUP BY ukam_address_id
         """,
         ),
         CTEStep(
             "final",
             """
-            SELECT input.*, 2 AS local_key_version,
-                struct_pack(aliases := background.aliases,
+            SELECT input.* EXCLUDE (local_key_tokens), 4 AS local_key_version,
+                CASE WHEN input.ukam_address_id::VARCHAR = background.metadata_alias
+                THEN [struct_pack(aliases := background.aliases,
                     n_uprns := background.n_uprns,
-                    signature := background.signature) AS local_key_background,
+                    signature := background.signature)] ELSE [] END
+                    AS local_key_background,
                 coalesce(indexed.local_key_index, []::STRUCT(
                     pos INTEGER, kind VARCHAR, key VARCHAR,
                     df_uprns BIGINT, n_uprns BIGINT, spacing_df_uprns BIGINT
@@ -127,29 +142,73 @@ def prepare_canonical_local_keys(
     canonical: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
     """Reuse postcode statistics only while their canonical background matches."""
-    if set(_LOCAL_KEY_CACHE_COLUMNS).issubset(canonical.columns):
-        stale = canonical.query(
-            "canonical",
-            """
+    if set(_LOCAL_KEY_CACHE_COLUMNS[1:]).issubset(canonical.columns) and (
+        "spacing_df_uprns"
+        in dict(
+            canonical.types[canonical.columns.index("local_key_index")]
+            .children[0][1]
+            .children
+        )
+    ):
+        sparse_background = (
+            canonical.types[canonical.columns.index("local_key_background")].id == "list"
+        )
+        cache = (
+            canonical
+            if sparse_background
+            else canonical.select(
+                "* REPLACE ([local_key_background] AS local_key_background)"
+            )
+        )
+        stale = (
+            cache.query(
+                "canonical",
+                f"""
             WITH background AS (
                 SELECT postcode, count(*) AS aliases,
                     count(DISTINCT unique_id) AS n_uprns,
                     bit_xor(hash(ukam_address_id::VARCHAR, unique_id::VARCHAR,
-                        postcode, clean_full_address)) AS signature
+                        postcode, clean_full_address)) AS signature,
+                    sum(len(local_key_background)) AS cache_entries
                 FROM canonical GROUP BY postcode
             )
-            SELECT count(*) FROM canonical
+            SELECT 1 FROM canonical
             JOIN background ON canonical.postcode IS NOT DISTINCT FROM background.postcode
-            WHERE local_key_version IS DISTINCT FROM 2
+            WHERE local_key_version IS NULL
+                OR local_key_version NOT IN ({"4" if sparse_background else "2, 3"})
+                OR background.cache_entries IS DISTINCT FROM
+                    {"1" if sparse_background else "background.aliases"}
+                OR local_key_background IS NULL OR len(local_key_background) > 1
                 OR local_key_token_version IS DISTINCT FROM 2
                 OR local_key_numericless_only IS DISTINCT FROM false
                 OR local_key_token_hash IS DISTINCT FROM hash(clean_full_address)
-                OR local_key_background.aliases IS DISTINCT FROM background.aliases
-                OR local_key_background.n_uprns IS DISTINCT FROM background.n_uprns
-                OR local_key_background.signature IS DISTINCT FROM background.signature
+                OR (len(local_key_background) = 1 AND (
+                    local_key_background[1].aliases IS DISTINCT FROM background.aliases
+                    OR local_key_background[1].n_uprns IS DISTINCT FROM background.n_uprns
+                    OR local_key_background[1].signature
+                        IS DISTINCT FROM background.signature
+                ))
         """,
-        ).fetchone()[0]
-        if not stale:
+            )
+            .limit(1)
+            .fetchone()
+        )
+        if stale is None:
+            if not sparse_background:
+                projection = "*"
+                if "local_key_tokens" in canonical.columns:
+                    projection += " EXCLUDE (local_key_tokens)"
+                return canonical.select(
+                    f"""
+                    {projection} REPLACE (4 AS local_key_version,
+                        CASE WHEN ukam_address_id::VARCHAR = min(ukam_address_id::VARCHAR)
+                            OVER (PARTITION BY postcode)
+                        THEN [local_key_background] ELSE [] END AS local_key_background,
+                        list_filter(local_key_index, occurrence ->
+                            ({_canonical_local_key_gate("occurrence.")}))
+                            AS local_key_index)
+                    """,
+                )
             return canonical
     existing = [
         column for column in _LOCAL_KEY_CACHE_COLUMNS if column in canonical.columns
@@ -328,6 +387,29 @@ def add_local_key_features(
         [_local_key_features],
         pipeline_name="Postcode-distinguishing property names",
     )
-    featured_source = pipeline.run()
+    features = (
+        pipeline.run()
+        .filter("lk_eligible")
+        .select(
+            "ukam_address_id::VARCHAR AS alias_id, lk_level_by_alias, lk_anchor_uprns"
+        )
+    )
+    feature_table = f"__ukam__name_source_features_{_uid()}"
+    con.execute(f'CREATE TEMP TABLE "{feature_table}" AS {features.sql_query()}')
+    featured_source = (
+        source.set_alias("source")
+        .join(
+            con.table(feature_table).set_alias("features"),
+            "source.ukam_address_id::VARCHAR = features.alias_id",
+            how="left",
+        )
+        .select("""
+        source.*,
+            coalesce(features.lk_level_by_alias, MAP([]::VARCHAR[], []::INTEGER[]))
+                AS lk_level_by_alias,
+            coalesce(features.lk_anchor_uprns, []::VARCHAR[]) AS lk_anchor_uprns,
+            features.alias_id IS NOT NULL AS lk_eligible
+    """)
+    )
     featured_canonical = canonical.select(neutral_features)
     return featured_source, featured_canonical
