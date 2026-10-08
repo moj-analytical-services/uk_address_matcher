@@ -7,6 +7,75 @@ from uk_address_matcher.cleaning.steps.regexes import (
 )
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
+
+@pipeline_stage(name="derive_local_key_tokens")
+def _derive_local_key_tokens(*, numericless_only: bool = True):
+    """Extract lexical keys without changing original token positions."""
+    eligible = "clean_full_address IS NOT NULL"
+    token_hash = "hash(clean_full_address)"
+    if numericless_only:
+        eligible += " AND len(numeric_tokens) = 0"
+        token_hash = "hash(clean_full_address, len(numeric_tokens))"
+    lexical = (
+        "length(__local_tokens[position]) >= 2 "
+        "AND NOT regexp_matches(__local_tokens[position], '[0-9]')"
+    )
+    next_lexical = lexical.replace("[position]", "[position + 1]")
+    return [
+        CTEStep(
+            "local_tokens",
+            """
+            SELECT input.*,
+                coalesce(string_split(clean_full_address, ' '), []::VARCHAR[])
+                    AS __local_tokens
+            FROM {input} input
+            """,
+        ),
+        CTEStep(
+            "final",
+            f"""
+            SELECT * EXCLUDE (__local_tokens),
+                CASE WHEN {eligible} THEN list_concat(
+                    list_transform(
+                        list_filter(range(1, len(__local_tokens) + 1), position ->
+                            {lexical}
+                            AND __local_tokens[position] NOT IN (
+                                'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
+                            )
+                        ),
+                        position -> struct_pack(
+                            pos := position::INTEGER, kind := 'word',
+                            key := __local_tokens[position]
+                        )
+                    ),
+                    list_transform(
+                        list_filter(range(1, len(__local_tokens)), position ->
+                            {lexical} AND {next_lexical}
+                            AND (__local_tokens[position] NOT IN (
+                                    'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
+                                )
+                                OR __local_tokens[position + 1]
+                                    NOT IN (
+                                        'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
+                                    ))
+                        ),
+                        position -> struct_pack(
+                            pos := position::INTEGER, kind := 'phrase',
+                            key := __local_tokens[position] || ' '
+                                || __local_tokens[position + 1]
+                        )
+                    )
+                ) ELSE []::STRUCT(pos INTEGER, kind VARCHAR, key VARCHAR)[] END
+                    AS local_key_tokens,
+                {token_hash} AS local_key_token_hash,
+                2 AS local_key_token_version,
+                {str(numericless_only).lower()} AS local_key_numericless_only
+            FROM {{local_tokens}}
+            """,
+        ),
+    ]
+
+
 _DISTINGUISHING_MARKER_VALUES = (
     "ANNEXE",
     "WORKSHOP",
