@@ -130,6 +130,36 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_manifest.json").exists()
 
 
+def test_preparation_releases_consumed_source_chunks(con, tmp_path, monkeypatch):
+    original = chunking_strategies._clean_data_using_precomputed_rel_tok_freq
+    remaining = []
+
+    def finish(*args, **kwargs):
+        remaining.append(
+            sum(
+                name.startswith("__ukam_cleaned_chunk_")
+                for (name,) in con.execute("SHOW TABLES").fetchall()
+            )
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        chunking_strategies, "_clean_data_using_precomputed_rel_tok_freq", finish
+    )
+    monkeypatch.setattr(chunking_strategies, "_calculate_chunk_size", lambda n, c: 4)
+    source = con.sql("""
+        SELECT i AS unique_id, i || ' EXAMPLE ROAD' AS address_concat,
+            'AA1 1AA' AS postcode FROM range(20) AS t(i)
+    """)
+    prepare_canonical_folder(source, tmp_path, con=con, show_progress="off")
+    assert remaining[0] == 5 and remaining[-1] < remaining[0]
+    assert remaining == sorted(remaining, reverse=True)
+    assert not any(
+        name.startswith("__ukam_cleaned_chunk_")
+        for (name,) in con.execute("SHOW TABLES").fetchall()
+    )
+
+
 def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
     records = CANONICAL_RECORDS + [
         {
@@ -1020,7 +1050,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     monkeypatch.setattr(
         chunking_strategies,
         "clean_data_pre_term_frequencies",
-        lambda data, con, num_of_chunks, show_progress=True: clean_relation,
+        lambda data, con, num_of_chunks, show_progress=True, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -1146,7 +1176,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     monkeypatch.setattr(
         chunking_strategies,
         "clean_data_pre_term_frequencies",
-        lambda data, con, num_of_chunks, show_progress=True: clean_relation,
+        lambda data, con, num_of_chunks, show_progress=True, **kwargs: clean_relation,
     )
     monkeypatch.setattr(
         chunking_strategies,

@@ -636,10 +636,23 @@ def prepare_canonical_folder(
 
     # Derive artefacts / cleaned canonical data for export
     logger.debug("Cleaning canonical addresses before term-frequency derivation")
+    owned_chunks: dict[str, int] = {}
+    preclean_drop_columns = (
+        (
+            "original_address_concat",
+            "numeric_role_keys",
+            "numeric_broad_roles",
+            "address_tokens",
+        )
+        if not add_debug_features
+        else ()
+    )
     precleaned = clean_data_pre_term_frequencies(
         data,
         con=con,
         num_of_chunks=num_of_chunks,
+        _drop_columns=preclean_drop_columns,
+        _owned_chunks=owned_chunks,
         show_progress=progress_mode,
     )
     logger.debug("Deriving term frequencies from pre-cleaned canonical data")
@@ -656,6 +669,8 @@ def prepare_canonical_folder(
         ),
         dataset_role="canonical",
         _precleaned_addresses=True,
+        _drop_columns=canonical_drop_columns,
+        _owned_chunks=owned_chunks,
         show_progress=progress_mode,
     )
     pre_artefact_drop_columns = tuple(
