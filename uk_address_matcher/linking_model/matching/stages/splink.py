@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from duckdb import InvalidInputException
 
+from uk_address_matcher.cleaning.local_keys import add_local_key_features
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     add_road_blocking_features,
 )
@@ -15,12 +16,110 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     ensure_numeric_range_struct,
     project_splink_predictions,
 )
+from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 if TYPE_CHECKING:
     import duckdb
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+def _local_key_input_aliases(con: duckdb.DuckDBPyConnection) -> set[str]:
+    return {
+        row[0]
+        for row in con.sql("""
+            SELECT view_name FROM duckdb_views()
+            WHERE view_name LIKE 'local_key_source%'
+                OR view_name LIKE 'local_key_canonical%'
+        """).fetchall()
+    }
+
+
+@pipeline_stage(name="preserve_anchored_name_aliases", materialized=True)
+def _anchored_name_aliases() -> list[CTEStep]:
+    return [
+        CTEStep(
+            "alias_levels",
+            """
+            SELECT predictions.*,
+                coalesce(map_extract_value(lk_level_by_alias_r,
+                    ukam_address_id_l::VARCHAR), 0) AS spacing_alias_level
+            FROM {local_key_source_predictions} predictions
+            """,
+        ),
+        CTEStep(
+            "alias_alternatives",
+            """
+            SELECT levels.unique_id_l, levels.unique_id_r,
+                max(levels.match_weight) AS nonspacing_alias_weight
+            FROM {alias_levels} levels JOIN (
+                SELECT DISTINCT unique_id_l, unique_id_r FROM {alias_levels}
+                WHERE spacing_alias_level = 2 AND __spacing_name_factor > 1
+                    AND len(lk_anchor_uprns_r) = 1
+                    AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
+            ) affected USING (unique_id_l, unique_id_r)
+            WHERE levels.spacing_alias_level <> 2
+            GROUP BY levels.unique_id_l, levels.unique_id_r
+            """,
+        ),
+        CTEStep(
+            "preserved_aliases",
+            """
+            SELECT levels.* EXCLUDE (spacing_alias_level, __spacing_name_factor)
+            FROM {alias_levels} levels
+            LEFT JOIN {alias_alternatives} alternatives USING (unique_id_l, unique_id_r)
+            WHERE NOT coalesce(
+                spacing_alias_level = 2 AND nonspacing_alias_weight IS NOT NULL
+                AND __spacing_name_factor > 1
+                AND len(lk_anchor_uprns_r) = 1
+                AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
+                AND match_weight >= nonspacing_alias_weight
+                AND match_weight - CASE WHEN __spacing_name_factor > 1
+                    THEN log2(__spacing_name_factor) ELSE 0 END
+                    < nonspacing_alias_weight,
+                FALSE)
+            """,
+        ),
+    ]
+
+
+def _preserve_anchored_name_aliases(
+    con: duckdb.DuckDBPyConnection, predictions: duckdb.DuckDBPyRelation
+) -> duckdb.DuckDBPyRelation:
+    if not {
+        "lk_level_by_alias_r",
+        "lk_anchor_uprns_r",
+        "bf_postcode_distinguishing_name",
+    }.issubset(predictions.columns):
+        return predictions
+    factor = "bf_postcode_distinguishing_name"
+    if "bf_tf_postcode_distinguishing_name" in predictions.columns:
+        factor += " * coalesce(bf_tf_postcode_distinguishing_name, 1.0)"
+    if (
+        predictions.filter(f"""
+        ({factor}) > 1
+        AND map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2
+        AND len(lk_anchor_uprns_r) = 1
+        AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)
+    """)
+        .limit(1)
+        .fetchone()
+        is None
+    ):
+        return predictions
+    return create_sql_pipeline(
+        con,
+        [
+            InputBinding(
+                "local_key_source_predictions",
+                predictions.select(f"*, ({factor}) AS __spacing_name_factor"),
+            )
+        ],
+        stage_specs=[_anchored_name_aliases],
+        pipeline_name="Preserve exact anchored name aliases",
+    ).run()
 
 
 def _prepare_inferred_road_scoring_features(
@@ -65,13 +164,6 @@ def _prepare_inferred_road_scoring_features(
         df_canonical = df_canonical.select("*, NULL::VARCHAR AS road_1_norm")
 
     return df_unmatched, df_canonical
-
-
-SPLINK_POST_LINKAGE_COLUMNS = (
-    "common_end_tokens_hist",
-    "clean_full_address",
-    "postcode",
-)
 
 
 @dataclass(repr=False)
@@ -215,6 +307,7 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        local_key_aliases_before = _local_key_input_aliases(con)
         owned_frames: list = []
         reranker_matches_table: str | None = None
         self.linker = None
@@ -230,6 +323,10 @@ class SplinkStage(MatchingStage):
                 df_canonical,
                 canonical_road_keys_path=self.canonical_road_keys_path,
                 roadlike_places=self.roadlike_places,
+            )
+
+            df_unmatched, df_canonical = add_local_key_features(
+                con, df_unmatched, df_canonical
             )
 
             numeric_range_reranker = NumericRangeRerankerConfig()
@@ -252,7 +349,14 @@ class SplinkStage(MatchingStage):
             else:
                 numeric_range_reranker = None
                 range_input_columns = []
-            linker_columns = list(SPLINK_POST_LINKAGE_COLUMNS)
+            linker_columns = [
+                "common_end_tokens_hist",
+                "clean_full_address",
+                "postcode",
+                "lk_level_by_alias",
+                "lk_anchor_uprns",
+                "lk_eligible",
+            ]
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
             linker_columns = list(dict.fromkeys(linker_columns))
@@ -297,11 +401,17 @@ class SplinkStage(MatchingStage):
             )
             self.predictions_table = table_name
             df_predict_ddb = con.table(table_name)
-            df_predict_for_improvement = (
-                raw_prediction_ddb
-                if numeric_range_reranker is not None
-                else df_predict_ddb
+            df_predict_for_improvement = _preserve_anchored_name_aliases(
+                con, raw_prediction_ddb
             )
+            if numeric_range_reranker is None:
+                df_predict_for_improvement = project_splink_predictions(
+                    con,
+                    df_predict_for_improvement,
+                    retain_intermediate_calculation_columns=(
+                        self.retain_intermediate_calculation_columns
+                    ),
+                )
             df_improved = improve_predictions_using_distinguishing_tokens(
                 df_predict=df_predict_for_improvement,
                 con=con,
@@ -406,6 +516,9 @@ class SplinkStage(MatchingStage):
         finally:
             # Unregister both aliases even if linker setup failed before registration.
             for input_name in ("m_", "c_"):
+                with suppress(InvalidInputException):
+                    con.unregister(input_name)
+            for input_name in _local_key_input_aliases(con) - local_key_aliases_before:
                 with suppress(InvalidInputException):
                     con.unregister(input_name)
             self._owned_splink_frames = tuple(owned_frames)
