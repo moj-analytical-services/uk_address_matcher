@@ -107,6 +107,36 @@ def test_prepare_creates_expected_files(prepared_folder):
     assert (prepared_folder / "ukam_manifest.json").exists()
 
 
+def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            ('001', 'MEADOW COTTAGE 54 TEST ROAD', 'ZZ1 1ZZ'),
+            ('002', 'MEADOW HOUSE 56 TEST ROAD', 'ZZ1 1ZZ'),
+            ('003', 'ORCHARD HOUSE 58 TEST ROAD', 'ZZ1 1ZZ')
+        ) addresses(unique_id, address_concat, postcode)
+    """)
+    prepare_canonical_folder(
+        canonical,
+        output_folder=tmp_path,
+        con=con,
+        num_of_chunks=3,
+        output_chunk_count=2,
+        _derive_road_catalogue=False,
+    )
+    loaded = load_prepared_canonical_data(tmp_path, con)
+    index = (
+        loaded.addresses.filter("unique_id = '001'")
+        .select("local_key_index")
+        .fetchone()[0]
+    )
+    meadow = next(
+        key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
+    )
+    assert (meadow["df_uprns"], meadow["n_uprns"]) == (2, 3)
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    assert "derive_local_keys" not in manifest["preparation_options"]
+
+
 def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
     records = CANONICAL_RECORDS + [
         {
@@ -1022,6 +1052,11 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         "derive_inverted_index",
         lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
     )
+    name_statistics = MagicMock(return_value=clean_relation)
+    monkeypatch.setattr(
+        "uk_address_matcher.prepare_canonical.prepare_canonical_local_keys",
+        name_statistics,
+    )
 
     prepare_canonical_folder(
         "s3://bucket/input/canonical.csv",
@@ -1031,6 +1066,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         add_debug_features=add_debug_features,
     )
 
+    name_statistics.assert_called_once_with(con, clean_relation)
     con.read_csv.assert_called_once_with("s3://bucket/input/canonical.csv")
 
     copy_sql = [
@@ -1148,6 +1184,11 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         "derive_inverted_index",
         lambda df_clean, con, num_of_chunks, show_progress=True: inverted_relation,
     )
+    name_statistics = MagicMock(return_value=clean_relation)
+    monkeypatch.setattr(
+        "uk_address_matcher.prepare_canonical.prepare_canonical_local_keys",
+        name_statistics,
+    )
 
     prepare_canonical_folder(
         "s3://bucket/input/canonical.csv",
@@ -1157,6 +1198,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
         add_debug_features=add_debug_features,
     )
 
+    name_statistics.assert_called_once_with(con, clean_relation)
     copy_sql = [
         call.args[0]
         for call in con.execute.call_args_list

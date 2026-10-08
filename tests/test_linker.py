@@ -534,7 +534,8 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 9
+    assert len(packaged_rules) == 10
+    assert "map_contains(r.lk_level_by_alias" in packaged_rules[-1]
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules
@@ -672,3 +673,15 @@ def test_get_linker_accepts_canonical_without_raw_address(
 
     retained_columns = linker._settings_obj.as_dict()["additional_columns_to_retain"]
     assert "original_address_concat" not in retained_columns
+    for input_name in ("m_", "c_"):
+        assert duck_con.table(input_name).select(
+            "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
+        ).distinct().fetchall() == [({}, [], False)]
+    assert (
+        duck_con.sql("""
+        SELECT view_name FROM duckdb_views()
+        WHERE view_name LIKE 'local_key_source%'
+            OR view_name LIKE 'local_key_canonical%'
+    """).fetchall()
+        == []
+    )
