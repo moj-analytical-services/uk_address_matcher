@@ -439,5 +439,3 @@ def _split_letter_dash_letter() -> str:
         {cleaned} AS clean_full_address
     FROM {{input}}
     """
-
-
