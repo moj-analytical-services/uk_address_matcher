@@ -50,6 +50,10 @@
     {
       "blocking_rule": "l.road_1_norm = r.road_1_norm and l.numeric_token_1 = r.numeric_token_1 and list_extract(l.unusual_tokens_arr, 1) = list_extract(r.unusual_tokens_arr, 1)",
       "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.postcode = r.postcode AND r.lk_eligible AND map_contains(r.lk_level_by_alias, l.ukam_address_id::VARCHAR)",
+      "sql_dialect": "duckdb"
     }
   ],
   "comparisons": [
@@ -1042,6 +1046,59 @@
         }
       ],
       "comparison_description": "Commercial same-role structural/numeric contradiction"
+    },
+    {
+      "output_column_name": "postcode_distinguishing_name",
+      "comparison_levels": [
+        {
+          "sql_condition": "lk_eligible_r IS NOT TRUE OR postcode_l IS DISTINCT FROM postcode_r",
+          "label_for_charts": "No postcode-distinguishing name evidence",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "len(lk_anchor_uprns_r) = 1 AND NOT list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)",
+          "label_for_charts": "Name identifies a different property in the postcode",
+          "m_probability": 0.125,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 6",
+          "label_for_charts": "Unique leading property-name phrase",
+          "m_probability": 0.5,
+          "u_probability": 0.03125
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 5",
+          "label_for_charts": "Unique leading property-name word",
+          "m_probability": 0.5,
+          "u_probability": 0.0625
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 4",
+          "label_for_charts": "Rare property-name phrase in the postcode",
+          "m_probability": 0.5,
+          "u_probability": 0.125
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 3",
+          "label_for_charts": "Rare property-name word in the postcode",
+          "m_probability": 0.5,
+          "u_probability": 0.25
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2",
+          "label_for_charts": "Unique joined split property name in postcode",
+          "m_probability": 0.5,
+          "u_probability": 0.25
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No supporting postcode-distinguishing name",
+          "m_probability": 0.5,
+          "u_probability": 0.5
+        }
+      ],
+      "comparison_description": "Literal and exact spacing-equivalent postcode-distinguishing property names"
     }
   ]
 }

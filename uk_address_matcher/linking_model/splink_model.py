@@ -316,6 +316,27 @@ def _align_road_key_columns(
     return df_addresses_to_match, df_addresses_to_search_within
 
 
+def _align_postcode_name_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Add neutral typed evidence fields where prepared inputs lack them."""
+    for column, expression in (
+        ("lk_level_by_alias", "MAP([]::VARCHAR[], []::INTEGER[])"),
+        ("lk_anchor_uprns", "[]::VARCHAR[]"),
+        ("lk_eligible", "false"),
+    ):
+        if column not in df_addresses_to_match.columns:
+            df_addresses_to_match = df_addresses_to_match.select(
+                f"*, {expression} AS {column}"
+            )
+        if column not in df_addresses_to_search_within.columns:
+            df_addresses_to_search_within = df_addresses_to_search_within.select(
+                f"*, {expression} AS {column}"
+            )
+    return df_addresses_to_match, df_addresses_to_search_within
+
+
 def _get_linker(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -448,6 +469,24 @@ def _get_linker(
         settings_as_dict = _get_model_settings_dict()
     else:
         settings_as_dict = settings.create_settings_dict("duckdb")
+
+    df_addresses_to_match, df_addresses_to_search_within = _align_postcode_name_columns(
+        df_addresses_to_match, df_addresses_to_search_within
+    )
+    if (
+        "ukam_address_id" not in df_addresses_to_match.columns
+        and "unique_id" in df_addresses_to_match.columns
+    ):
+        df_addresses_to_match = df_addresses_to_match.select(
+            "*, unique_id::VARCHAR AS ukam_address_id"
+        )
+    if (
+        "ukam_address_id" not in df_addresses_to_search_within.columns
+        and "unique_id" in df_addresses_to_search_within.columns
+    ):
+        df_addresses_to_search_within = df_addresses_to_search_within.select(
+            "*, unique_id::VARCHAR AS ukam_address_id"
+        )
 
     settings_as_dict["linker_uid"] = None
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)

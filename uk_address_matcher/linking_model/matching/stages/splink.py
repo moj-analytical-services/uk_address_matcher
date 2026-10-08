@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from duckdb import InvalidInputException
 
+from uk_address_matcher.cleaning.local_keys import add_local_key_features
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     add_road_blocking_features,
 )
@@ -15,12 +16,124 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     ensure_numeric_range_struct,
     project_splink_predictions,
 )
+from uk_address_matcher.sql_pipeline.helpers import _uid
+from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 if TYPE_CHECKING:
     import duckdb
     from splink import SettingsCreator
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
+
+
+def _local_key_input_aliases(con: duckdb.DuckDBPyConnection) -> set[str]:
+    return {
+        row[0]
+        for row in con.sql("""
+            SELECT view_name FROM duckdb_views()
+            WHERE view_name LIKE 'local_key_source%'
+                OR view_name LIKE 'local_key_canonical%'
+            UNION ALL
+            SELECT table_name FROM duckdb_tables()
+            WHERE table_name LIKE '__ukam__name_%'
+        """).fetchall()
+    }
+
+
+@pipeline_stage(name="preserve_anchored_name_aliases", materialized=True)
+def _anchored_name_aliases() -> list[CTEStep]:
+    return [
+        CTEStep(
+            "spacing_predictions",
+            """
+            SELECT predictions.ukam_address_id_l, predictions.ukam_address_id_r,
+                predictions.unique_id_l, predictions.unique_id_r,
+                predictions.match_weight, predictions.__spacing_name_factor
+            FROM {local_key_source_predictions} predictions
+            JOIN {local_key_source_names} source
+                ON predictions.ukam_address_id_r::VARCHAR = source.ukam_address_id
+            WHERE predictions.__spacing_name_factor > 1
+                AND len(source.lk_anchor_uprns) = 1
+                AND list_contains(source.lk_anchor_uprns,
+                    predictions.unique_id_l::VARCHAR)
+                AND map_extract_value(source.lk_level_by_alias,
+                    predictions.ukam_address_id_l::VARCHAR) = 2
+            """,
+        ),
+        CTEStep(
+            "excluded_aliases",
+            """
+            SELECT spacing.ukam_address_id_l, spacing.ukam_address_id_r
+            FROM {spacing_predictions} spacing
+            JOIN {local_key_source_predictions} predictions
+                USING (unique_id_l, unique_id_r)
+            LEFT JOIN {local_key_source_names} source
+                ON predictions.ukam_address_id_r::VARCHAR = source.ukam_address_id
+            WHERE coalesce(map_extract_value(source.lk_level_by_alias,
+                predictions.ukam_address_id_l::VARCHAR), 0) <> 2
+            GROUP BY spacing.ukam_address_id_l, spacing.ukam_address_id_r,
+                spacing.match_weight, spacing.__spacing_name_factor
+            HAVING spacing.match_weight >= max(predictions.match_weight)
+                AND spacing.match_weight - log2(spacing.__spacing_name_factor)
+                    < max(predictions.match_weight)
+            """,
+        ),
+    ]
+
+
+def _preserve_anchored_name_aliases(
+    con: duckdb.DuckDBPyConnection,
+    predictions: duckdb.DuckDBPyRelation,
+    source: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    if "bf_postcode_distinguishing_name" not in predictions.columns:
+        return predictions
+    factor = "bf_postcode_distinguishing_name"
+    if "bf_tf_postcode_distinguishing_name" in predictions.columns:
+        factor += " * coalesce(bf_tf_postcode_distinguishing_name, 1.0)"
+    if (
+        source.filter("""
+        len(lk_anchor_uprns) = 1 AND list_contains(map_values(lk_level_by_alias), 2)
+    """)
+        .limit(1)
+        .fetchone()
+        is None
+    ):
+        return predictions
+    excluded = create_sql_pipeline(
+        con,
+        [
+            InputBinding(
+                "local_key_source_predictions",
+                predictions.select(
+                    "ukam_address_id_l, ukam_address_id_r, unique_id_l, unique_id_r, "
+                    f"match_weight, ({factor}) AS __spacing_name_factor"
+                ),
+            ),
+            InputBinding(
+                "local_key_source_names",
+                source.select(
+                    "ukam_address_id::VARCHAR AS ukam_address_id, "
+                    "lk_level_by_alias, lk_anchor_uprns"
+                ),
+            ),
+        ],
+        stage_specs=[_anchored_name_aliases],
+        pipeline_name="Preserve exact anchored name aliases",
+    ).run()
+    excluded_name = f"__ukam__name_alias_exclusions_{_uid()}"
+    con.execute(f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}')
+    excluded = con.table(excluded_name)
+    prediction_alias = f"local_key_source_unfiltered_predictions_{_uid()}"
+    return predictions.query(
+        prediction_alias,
+        f"""
+        SELECT predictions.* FROM "{prediction_alias}" predictions
+        ANTI JOIN ({excluded.sql_query()}) excluded
+            USING (ukam_address_id_l, ukam_address_id_r)
+    """,
+    )
 
 
 def _prepare_inferred_road_scoring_features(
@@ -65,13 +178,6 @@ def _prepare_inferred_road_scoring_features(
         df_canonical = df_canonical.select("*, NULL::VARCHAR AS road_1_norm")
 
     return df_unmatched, df_canonical
-
-
-SPLINK_POST_LINKAGE_COLUMNS = (
-    "common_end_tokens_hist",
-    "clean_full_address",
-    "postcode",
-)
 
 
 @dataclass(repr=False)
@@ -215,6 +321,7 @@ class SplinkStage(MatchingStage):
         if unmatched_count == 0:
             return None
 
+        local_key_aliases_before = _local_key_input_aliases(con)
         owned_frames: list = []
         reranker_matches_table: str | None = None
         self.linker = None
@@ -230,6 +337,10 @@ class SplinkStage(MatchingStage):
                 df_canonical,
                 canonical_road_keys_path=self.canonical_road_keys_path,
                 roadlike_places=self.roadlike_places,
+            )
+
+            df_unmatched, df_canonical = add_local_key_features(
+                con, df_unmatched, df_canonical
             )
 
             numeric_range_reranker = NumericRangeRerankerConfig()
@@ -252,7 +363,11 @@ class SplinkStage(MatchingStage):
             else:
                 numeric_range_reranker = None
                 range_input_columns = []
-            linker_columns = list(SPLINK_POST_LINKAGE_COLUMNS)
+            linker_columns = [
+                "common_end_tokens_hist",
+                "clean_full_address",
+                "postcode",
+            ]
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
             linker_columns = list(dict.fromkeys(linker_columns))
@@ -297,11 +412,17 @@ class SplinkStage(MatchingStage):
             )
             self.predictions_table = table_name
             df_predict_ddb = con.table(table_name)
-            df_predict_for_improvement = (
-                raw_prediction_ddb
-                if numeric_range_reranker is not None
-                else df_predict_ddb
+            df_predict_for_improvement = _preserve_anchored_name_aliases(
+                con, raw_prediction_ddb, df_unmatched
             )
+            if numeric_range_reranker is None:
+                df_predict_for_improvement = project_splink_predictions(
+                    con,
+                    df_predict_for_improvement,
+                    retain_intermediate_calculation_columns=(
+                        self.retain_intermediate_calculation_columns
+                    ),
+                )
             df_improved = improve_predictions_using_distinguishing_tokens(
                 df_predict=df_predict_for_improvement,
                 con=con,
@@ -406,6 +527,12 @@ class SplinkStage(MatchingStage):
         finally:
             # Unregister both aliases even if linker setup failed before registration.
             for input_name in ("m_", "c_"):
+                with suppress(InvalidInputException):
+                    con.unregister(input_name)
+            for input_name in _local_key_input_aliases(con) - local_key_aliases_before:
+                if input_name.startswith("__ukam__name_"):
+                    con.execute(f'DROP TABLE "{input_name}"')
+                    continue
                 with suppress(InvalidInputException):
                     con.unregister(input_name)
             self._owned_splink_frames = tuple(owned_frames)
