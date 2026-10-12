@@ -55,6 +55,8 @@ from uk_address_matcher.logging.progress import (
 )
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
+    _register_input_relation_once,
+    _relation_from_registered_alias,
     _uid,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
@@ -334,7 +336,7 @@ def _add_canonical_road_blocking_keys(
         con.execute(f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}")
         if _storage is not None:
             _storage.retain_view(enriched_table)
-        return con.table(enriched_table)
+        return _relation_from_registered_alias(con, enriched_table)
     except BaseException:
         _drop_table_and_registered_aliases(con, enriched_table)
         _drop_materialised_relation(con, road_keys_table, _storage)
@@ -584,7 +586,7 @@ def derive_roadlike_places(
         total_rows,
         progress_mode=progress_mode,
     )
-    return con.table(catalogue_table)
+    return _relation_from_registered_alias(con, catalogue_table)
 
 
 def clean_data_pre_term_frequencies(
@@ -761,7 +763,7 @@ def clean_data_pre_term_frequencies(
         con.execute(f"CREATE VIEW {chunked_table} AS {chunk_tables_sql}")
         if _storage is not None:
             _storage.retain_view(chunked_table)
-        return con.table(chunked_table)
+        return _relation_from_registered_alias(con, chunked_table)
     except BaseException:
         _drop_cleaned_chunk_relation(con, chunked_table, _storage)
         raise
@@ -1220,7 +1222,7 @@ def derive_inverted_index(
                 progress_mode=progress_mode,
             )
 
-    return con.table(result_table)
+    return _relation_from_registered_alias(con, result_table)
 
 
 def _canonical_distinguishing_features(
@@ -1272,6 +1274,7 @@ def _materialise_canonical_distinguishing_features(
     neighbours outside that range are deliberately omitted. Equal addresses stay
     together, so the batch size is a target rather than a hard memory bound.
     """
+    source = _register_input_relation_once(source, con=con)
     rows = source.count("*").fetchone()[0]
     batch_count = (rows + _CANONICAL_ADJACENT_BATCH_ROWS - 1) // (
         _CANONICAL_ADJACENT_BATCH_ROWS
@@ -1287,8 +1290,8 @@ def _materialise_canonical_distinguishing_features(
         batch_count <= 1
         or unique_id_type not in {"VARCHAR", "BIGINT", "INTEGER"}
         or collation not in ("", "binary")
-        or order not in ("ASC", "ASCENDING")
-        or null_order not in ("NULLS_LAST", "NULLS_LAST_ON_ASC_FIRST_ON_DESC")
+        or order.upper() not in ("ASC", "ASCENDING")
+        or null_order.upper() not in ("NULLS_LAST", "NULLS_LAST_ON_ASC_FIRST_ON_DESC")
         or _input_has_collation(con, source.project(columns))
     ):
         # Consolidate global UNION input; Parquet batches already have this boundary.
@@ -1350,7 +1353,9 @@ def _materialise_canonical_distinguishing_features(
                 """)
                 try:
                     features = _canonical_distinguishing_features(
-                        con, con.table(input_table), debug_options if index == 0 else None
+                        con,
+                        _relation_from_registered_alias(con, input_table),
+                        debug_options if index == 0 else None,
                     )
                     _materialise_relation(
                         con,
@@ -1362,7 +1367,7 @@ def _materialise_canonical_distinguishing_features(
                     )
                 finally:
                     _drop_table_and_registered_aliases(con, input_table)
-        return con.table(table_name)
+        return _relation_from_registered_alias(con, table_name)
     except BaseException:
         _drop_materialised_relation(con, table_name, _storage)
         raise
@@ -1682,7 +1687,7 @@ def prepare_data_for_matching(
 
     logger.debug("Prepared address table finalized")
 
-    return con.table(processed_table)
+    return _relation_from_registered_alias(con, processed_table)
 
 
 __all__ = [

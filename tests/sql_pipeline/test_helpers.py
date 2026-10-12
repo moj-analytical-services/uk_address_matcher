@@ -19,6 +19,10 @@ class _FakeRelation:
     def sql_query(self) -> str:
         return self._sql
 
+    def set_alias(self, alias: str):
+        self.alias = alias
+        return self
+
 
 class _FakeConnection:
     def __init__(self) -> None:
@@ -53,6 +57,7 @@ def test_register_input_relation_once_uses_sql_for_registered_aliases():
     assert con.table_calls == []
     assert con.sql_calls == [f'SELECT * FROM "{alias}"']
     assert result.sql_query() == f'SELECT * FROM "{alias}"'
+    assert result.alias == alias
 
 
 def test_register_input_relation_once_returns_nested_sql_for_cross_connection_relation():

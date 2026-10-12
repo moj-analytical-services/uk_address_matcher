@@ -176,7 +176,7 @@ def _relation_from_registered_alias(
     relation via ``SELECT * FROM <alias>`` keeps ``sql_query()`` valid across
     DuckDB versions, which matters because downstream code nests that SQL.
     """
-    return con.sql(f"SELECT * FROM {_quote_identifier(alias)}")
+    return con.sql(f"SELECT * FROM {_quote_identifier(alias)}").set_alias(alias)
 
 
 def _drop_table_and_registered_aliases(

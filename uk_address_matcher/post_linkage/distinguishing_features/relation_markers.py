@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
+from uk_address_matcher.sql_pipeline.helpers import _register_input_relation_once
+
 _RELATION_MARKERS_SQL = (
     "ADJACENT TO|OPPOSITE TO|REAR OFF|REAR OF|ADJ TO|NEXT TO|R O|RO|"
     "ADJACENT|OPPOSITE|BEHIND|REAR|ADJ|OPP"
@@ -30,12 +32,13 @@ def improve_predictions_using_relation_markers(
 ) -> DuckDBPyRelation:
     """Prefer target-property evidence over relation-marker anchor evidence."""
 
+    df_predict = _register_input_relation_once(df_predict, con=con)
     return con.sql(f"""
         WITH source_addresses AS (
             SELECT DISTINCT
                 unique_id_r,
                 clean_full_address_r
-            FROM df_predict
+            FROM ({df_predict.sql_query()})
         ),
         possible_relation_sources AS (
             SELECT
@@ -75,7 +78,7 @@ def improve_predictions_using_relation_markers(
                 candidates.*,
                 source_relation_parts.source_address,
                 COALESCE(source_relation_parts.relation_marker, '') AS relation_marker
-            FROM df_predict AS candidates
+            FROM ({df_predict.sql_query()}) AS candidates
             LEFT JOIN source_relation_parts USING (unique_id_r, clean_full_address_r)
         ),
         normalised AS (
