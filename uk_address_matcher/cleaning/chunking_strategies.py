@@ -1597,14 +1597,17 @@ def prepare_data_for_matching(
                     _materialise_distinguishing_hierarchy,
                 )
 
+                hierarchy_table_name = f"__ukam_supported_suffixes_{uid}"
                 _materialise_distinguishing_hierarchy(
                     con,
                     cleaned_address_table,
                     distinguishing_table_name,
                     depth=distinguishing_hierarchy_depth,
+                    output_table=hierarchy_table_name,
                     debug_options=debug_options,
                     _storage=_storage,
                 )
+                distinguishing_table_name = hierarchy_table_name
             logger.debug("Adjacent-record distinguishing tokens derived")
         except BaseException:
             cleanup_on_failure()

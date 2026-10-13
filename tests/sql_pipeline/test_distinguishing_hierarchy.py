@@ -184,6 +184,13 @@ def test_folder_exports_requested_columns(con, tmp_path, depth):
     assert "second_shared_part" in result.columns
     assert ("third_shared_part" in result.columns) == (depth == 3)
     assert "__shared_suffix_depth" not in result.columns
+    loaded = load_prepared_canonical_data(tmp_path, con=con).addresses
+    columns = "unique_id, second_shared_part"
+    if depth == 3:
+        columns += ", third_shared_part"
+    assert loaded.project(columns).order("unique_id").fetchall() == (
+        result.project(columns).order("unique_id").fetchall()
+    )
     assert (
         str(result.types[result.columns.index("second_shared_part")])
         == "STRUCT(tokens VARCHAR[], support BIGINT)"
@@ -240,3 +247,53 @@ def test_hierarchy_intermediates_removed_on_failure(con, monkeypatch, storage_ki
             "SELECT view_name FROM duckdb_views() "
             "WHERE view_name LIKE '__ukam_hierarchy_%'"
         ).fetchall()
+
+
+def test_parquet_batches_keep_rows_across_hierarchy_schema_change(con, monkeypatch):
+    # The first-cut files have one row group each; the supported output has two.
+    # Reusing a first-cut file path with a new schema/row-group layout exposed a
+    # DuckDB 1.5 cached-metadata failure in the full London preparation.
+    import uk_address_matcher.cleaning.chunking_strategies as chunking
+
+    monkeypatch.setattr(chunking, "_CANONICAL_ADJACENT_BATCH_ROWS", 35_000)
+    source = con.sql("""
+        SELECT i AS ukam_address_id, i::VARCHAR AS unique_id,
+            concat(i, ' STREET', i % 100, ' LANE TOWN', i % 10,
+                ' COUNTY') AS clean_full_address,
+            string_split(clean_full_address, ' ') AS clean_full_address_tokens
+        FROM range(1, 140001) t(i)
+    """)
+    with _CanonicalIntermediates(con) as storage:
+        first = _materialise_canonical_distinguishing_features(
+            con,
+            source,
+            "adjacent",
+            _storage=storage,
+            include_shared_depth=True,
+        )
+        expected = storage.write(
+            first.project("* EXCLUDE (__shared_suffix_depth)"),
+            "original_features",
+        )
+        result = _materialise_distinguishing_hierarchy(
+            con,
+            source,
+            "adjacent",
+            depth=3,
+            _storage=storage,
+        )
+        assert result.count("*").fetchone()[0] == 140_000
+        assert (
+            result.aggregate("count(DISTINCT ukam_address_id)").fetchone()[0] == 140_000
+        )
+        actual = result.project(", ".join(expected.columns))
+        assert actual.except_(expected).count("*").fetchone()[0] == 0
+        assert expected.except_(actual).count("*").fetchone()[0] == 0
+        assert (
+            result.filter(
+                "second_shared_part.support <> 1400 OR third_shared_part.support <> 14000"
+            )
+            .count("*")
+            .fetchone()[0]
+            == 0
+        )

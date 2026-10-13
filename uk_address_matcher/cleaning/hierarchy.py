@@ -201,6 +201,7 @@ def _materialise_distinguishing_hierarchy(
     adjacent_table: str,
     *,
     depth: Literal[2, 3],
+    output_table: str | None = None,
     debug_options: DebugOptions | None = None,
     _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
@@ -217,8 +218,8 @@ def _materialise_distinguishing_hierarchy(
 
     names: list[str] = []
 
-    def run(stage, **relations):
-        name = f"__ukam_hierarchy_{_uid()}"
+    def run(stage, *, output_name=None, **relations):
+        name = output_name or f"__ukam_hierarchy_{_uid()}"
         names.append(name)
         pipeline = create_sql_pipeline(
             con,
@@ -230,6 +231,7 @@ def _materialise_distinguishing_hierarchy(
             pipeline.run(debug_options),
             name,
             _storage=_storage,
+            order_by="ukam_address_id" if output_name else None,
         )
 
     try:
@@ -246,15 +248,17 @@ def _materialise_distinguishing_hierarchy(
                 tails=third_tails,
                 support=support,
             )
-        # Output reads the old adjacent table; persist before replacing it.
-        output = run(_hierarchy_output(depth=depth), **output_inputs)
-        return _materialise_relation(
-            con,
-            output,
-            adjacent_table,
-            _storage=_storage,
-            order_by="ukam_address_id",
+        # Use a fresh file path: an in-place schema change can reuse cached
+        # Parquet metadata for the first-cut input within the same connection.
+        final_name = output_table or f"__ukam_supported_suffixes_{_uid()}"
+        if final_name == adjacent_table:
+            raise ValueError("Hierarchy output requires a fresh table name")
+        output = run(
+            _hierarchy_output(depth=depth), output_name=final_name, **output_inputs
         )
+        _drop_materialised_relation(con, adjacent_table, _storage)
+        names.remove(final_name)  # Output ownership transfers to the caller.
+        return output
     finally:
         for name in reversed(names):
             _drop_materialised_relation(con, name, _storage)
