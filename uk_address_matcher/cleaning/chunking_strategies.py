@@ -1292,11 +1292,13 @@ def _canonical_distinguishing_features(
         )
         .run(debug_options)
         .project(
-            ", ".join((
-                "ukam_address_id",
-                *DISTINGUISHING_FEATURE_COLUMNS,
-                *(("__shared_suffix_depth",) if include_shared_depth else ()),
-            ))
+            ", ".join(
+                (
+                    "ukam_address_id",
+                    *DISTINGUISHING_FEATURE_COLUMNS,
+                    *(("__shared_suffix_depth",) if include_shared_depth else ()),
+                )
+            )
         )
     )
 
@@ -1539,7 +1541,7 @@ def prepare_data_for_matching(
     ):
         raise ValueError("Hierarchy support requires adjacent distinguishing features")
     hierarchy_columns = ("second_shared_part", "third_shared_part")[
-        :distinguishing_hierarchy_depth - 1
+        : distinguishing_hierarchy_depth - 1
     ]
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
@@ -1730,9 +1732,11 @@ def prepare_data_for_matching(
                         InputBinding("processed", processed_chunk),
                         InputBinding("hierarchy", con.table(distinguishing_table_name)),
                     ],
-                    [_attach_distinguishing_hierarchy(
-                        depth=distinguishing_hierarchy_depth,
-                    )],
+                    [
+                        _attach_distinguishing_hierarchy(
+                            depth=distinguishing_hierarchy_depth,
+                        )
+                    ],
                 ).run()
 
             _materialise_relation(
