@@ -1223,14 +1223,10 @@ def derive_inverted_index(
     return con.table(result_table)
 
 
-def _canonical_distinguishing_features(
-    con: DuckDBPyConnection,
-    source: DuckDBPyRelation,
-    debug_options: DebugOptions | None,
-) -> DuckDBPyRelation:
-    # Custom cached tokens and collations retain the original window. The
-    # scalar path reconstructs tokens only after sorting and selecting neighbours.
-    optimised = False
+def _can_defer_canonical_tokens(
+    con: DuckDBPyConnection, source: DuckDBPyRelation
+) -> bool:
+    """Prove that delayed native splitting preserves cached-token semantics."""
     native_token_type = str(
         source.types[source.columns.index("clean_full_address_tokens")]
     ) == "VARCHAR[]"
@@ -1257,7 +1253,22 @@ def _canonical_distinguishing_features(
             )
             FROM ({source.sql_query()}) AS canonical
         """).fetchone()[0]
-        optimised = unsafe == 0
+        return unsafe == 0
+    return False
+
+
+def _canonical_distinguishing_features(
+    con: DuckDBPyConnection,
+    source: DuckDBPyRelation,
+    debug_options: DebugOptions | None,
+    *,
+    _optimisation_safe: bool | None = None,
+) -> DuckDBPyRelation:
+    # Private callers may reuse the proof made before writing scalar batches.
+    optimised = (
+        _can_defer_canonical_tokens(con, source)
+        if _optimisation_safe is None else _optimisation_safe
+    )
     return (
         create_sql_pipeline(
             con,
@@ -1317,6 +1328,11 @@ def _materialise_canonical_distinguishing_features(
     # Other types (notably HUGEINT) may change values when written to Parquet.
     unique_id_type = str(source.types[source.columns.index("unique_id")])
     columns = "ukam_address_id, unique_id, clean_full_address, clean_full_address_tokens"
+    # Validate once on original cached tokens before omitting them from files.
+    # Normal callers reconstruct arrays only after the neighbour window; unsafe
+    # inputs retain the original cached arrays and calculation in every batch.
+    optimisation_safe = _can_defer_canonical_tokens(con, source.project(columns))
+    feature_options = {"_optimisation_safe": optimisation_safe}
     if (
         batch_count <= 1
         or unique_id_type not in {"VARCHAR", "BIGINT", "INTEGER"}
@@ -1336,7 +1352,9 @@ def _materialise_canonical_distinguishing_features(
         """)
         return _materialise_relation(
             con,
-            _canonical_distinguishing_features(con, adjacent_input, debug_options),
+            _canonical_distinguishing_features(
+                con, adjacent_input, debug_options, **feature_options
+            ),
             table_name,
             _storage=_storage,
             order_by="ukam_address_id",
@@ -1346,6 +1364,14 @@ def _materialise_canonical_distinguishing_features(
     bounds_table = f"__ukam_adjacent_bounds_{uid}"
     input_table = f"__ukam_adjacent_batch_{uid}"
     source_sql = source.project(columns).sql_query()
+    batch_columns = (
+        "ukam_address_id, unique_id, clean_full_address"
+        if optimisation_safe else columns
+    )
+    batch_projection = batch_columns + (
+        ", string_split(clean_full_address, ' ')::VARCHAR[] AS clean_full_address_tokens"
+        if optimisation_safe else ""
+    )
     # Hash-sample a bounded number of addresses; sort only that small sample.
     modulus = max(1, rows // 65_536)
     fractions = ", ".join(str(i / batch_count) for i in range(1, batch_count))
@@ -1364,7 +1390,7 @@ def _materialise_canonical_distinguishing_features(
             batch_path = directory.replace("'", "''")
             con.execute(f"""
                 COPY (
-                    SELECT {columns},
+                    SELECT {batch_columns},
                         {_adjacent_range_case(0, batch_count - 1)} AS batch_id
                     FROM (
                         SELECT *, reverse(clean_full_address) AS range_key
@@ -1378,13 +1404,16 @@ def _materialise_canonical_distinguishing_features(
                 batch_files = str(batch / "*.parquet").replace("'", "''")
                 con.execute(f"""
                     CREATE TEMPORARY VIEW {input_table} AS
-                    SELECT {columns} FROM read_parquet(
+                    SELECT {batch_projection} FROM read_parquet(
                         '{batch_files}', hive_partitioning=false
                     )
                 """)
                 try:
                     features = _canonical_distinguishing_features(
-                        con, con.table(input_table), debug_options if index == 0 else None
+                        con,
+                        con.table(input_table),
+                        debug_options if index == 0 else None,
+                        **feature_options,
                     )
                     _materialise_relation(
                         con,

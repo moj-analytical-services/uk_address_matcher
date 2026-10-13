@@ -42,7 +42,7 @@ def test_adjacent_batches_preserve_interior_rows(duck_con, monkeypatch, tmp_path
     original = cs._canonical_distinguishing_features
     batches = []
 
-    def capture(con, batch, debug_options):
+    def capture(con, batch, debug_options, **options):
         batches.append(
             [
                 r[0]
@@ -54,7 +54,7 @@ def test_adjacent_batches_preserve_interior_rows(duck_con, monkeypatch, tmp_path
                 .fetchall()
             ]
         )
-        return original(con, batch, debug_options)
+        return original(con, batch, debug_options, **options)
 
     monkeypatch.setattr(cs, "_CANONICAL_ADJACENT_BATCH_ROWS", 12)
     monkeypatch.setattr(cs, "_canonical_distinguishing_features", capture)
@@ -102,12 +102,12 @@ def test_adjacent_batch_failure_cleans_files_and_partial_output(
     original = cs._canonical_distinguishing_features
     calls = 0
 
-    def fail_second(con, batch, debug_options):
+    def fail_second(con, batch, debug_options, **options):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("synthetic batch failure")
-        return original(con, batch, debug_options)
+        return original(con, batch, debug_options, **options)
 
     monkeypatch.setattr(cs, "_CANONICAL_ADJACENT_BATCH_ROWS", 12)
     monkeypatch.setattr(cs, "_canonical_distinguishing_features", fail_second)

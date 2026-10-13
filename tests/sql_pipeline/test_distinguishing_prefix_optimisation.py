@@ -10,7 +10,7 @@ from uk_address_matcher.cleaning.steps.token_parsing import (
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
 
-def _native(con, source, debug_options=None):
+def _native(con, source, debug_options=None, **_options):
     return (
         create_sql_pipeline(
             con,
