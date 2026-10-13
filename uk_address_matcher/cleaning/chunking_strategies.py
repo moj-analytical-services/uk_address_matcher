@@ -1228,13 +1228,47 @@ def _canonical_distinguishing_features(
     source: DuckDBPyRelation,
     debug_options: DebugOptions | None,
 ) -> DuckDBPyRelation:
+    # Custom cached tokens and collations retain the original window. The
+    # scalar path reconstructs tokens only after sorting and selecting neighbours.
+    optimised = False
+    native_token_type = str(
+        source.types[source.columns.index("clean_full_address_tokens")]
+    ) == "VARCHAR[]"
+    if native_token_type and not _input_has_collation(con, source):
+        unsafe = con.sql(rf"""
+            SELECT count(*) FILTER (WHERE
+                ukam_address_id IS NULL
+                OR clean_full_address_tokens IS DISTINCT FROM
+                    string_split(clean_full_address, ' ')
+                OR (clean_full_address <> ''
+                    AND list_contains(clean_full_address_tokens, ''))
+                OR CASE
+                    WHEN regexp_full_match(clean_full_address, '[ -~]*')
+                        THEN false
+                    ELSE reverse(clean_full_address) IS DISTINCT FROM
+                        array_to_string(list_transform(
+                            list_reverse(clean_full_address_tokens),
+                            token -> reverse(token)), ' ')
+                        OR len(list_filter(clean_full_address_tokens,
+                            token -> reverse(reverse(token))
+                                IS DISTINCT FROM token)) > 0
+                        OR regexp_matches(clean_full_address, '[\x00-\x1f]')
+                END
+            )
+            FROM ({source.sql_query()}) AS canonical
+        """).fetchone()[0]
+        optimised = unsafe == 0
     return (
         create_sql_pipeline(
             con,
             input_rel=source,
             stage_specs=[
                 _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
-                    include_input_columns=False, use_precomputed_tokens=True
+                    include_input_columns=False,
+                    use_precomputed_tokens=True,
+                    carry_neighbour_tokens=not optimised,
+                    defer_input_tokens=optimised,
+                    partition_by_final_token=optimised,
                 ),
                 _derive_distinguishing_token_components,
             ],

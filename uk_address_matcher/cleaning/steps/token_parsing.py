@@ -57,6 +57,8 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     include_input_columns: bool = True,
     carry_neighbour_tokens: bool = True,
     use_precomputed_tokens: bool = False,
+    defer_input_tokens: bool = False,
+    partition_by_final_token: bool = False,
 ):
     """Split each address around its longest suffix shared by a local neighbour."""
     token_expression = (
@@ -72,6 +74,16 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         {token_expression} AS __tokens
     FROM {{input}} AS input_address
     """
+    if defer_input_tokens:
+        if carry_neighbour_tokens:
+            raise ValueError("Deferred tokens require string neighbours")
+        tokenised_addresses_sql = """
+            WITH scalar_input AS MATERIALIZED (
+                SELECT ukam_address_id, unique_id, clean_full_address
+                FROM {input} AS input_address
+            )
+            SELECT * FROM scalar_input
+        """
 
     neighbour_value = "__tokens" if carry_neighbour_tokens else "clean_full_address"
     neighbour_suffix = "tokens" if carry_neighbour_tokens else "address"
@@ -102,6 +114,20 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     """.replace("{neighbour_value}", neighbour_value).replace(
         "{neighbour_suffix}", neighbour_suffix
     )
+
+    if defer_input_tokens:
+        neighbouring_addresses_sql = neighbouring_addresses_sql.replace(
+            "        __tokens,", "        clean_full_address,", 1
+        )
+    if partition_by_final_token:
+        # Complete final-token classes are contiguous in guarded binary order.
+        # Collisions merge classes; neighbours in another class share no suffix.
+        neighbouring_addresses_sql = neighbouring_addresses_sql.replace(
+            "WINDOW address_order AS (",
+            "WINDOW address_order AS (\n"
+            "        PARTITION BY hash(regexp_extract(clean_full_address, '[^ ]*$'))",
+            1,
+        )
 
     nearest_distinct_neighbours_sql = """
     SELECT
@@ -185,6 +211,13 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         .replace("{left_neighbour_tokens}", left_neighbour_tokens)
         .replace("{right_neighbour_tokens}", right_neighbour_tokens)
     )
+
+    if defer_input_tokens:
+        suffix_lengths_sql = suffix_lengths_sql.replace(
+            "        __tokens,",
+            "        string_split(clean_full_address, ' ')::VARCHAR[] AS __tokens,",
+            1,
+        )
 
     maximum_suffix_lengths_sql = """
     SELECT
