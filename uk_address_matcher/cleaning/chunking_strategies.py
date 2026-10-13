@@ -1227,9 +1227,10 @@ def _can_defer_canonical_tokens(
     con: DuckDBPyConnection, source: DuckDBPyRelation
 ) -> bool:
     """Prove that delayed native splitting preserves cached-token semantics."""
-    native_token_type = str(
-        source.types[source.columns.index("clean_full_address_tokens")]
-    ) == "VARCHAR[]"
+    native_token_type = (
+        str(source.types[source.columns.index("clean_full_address_tokens")])
+        == "VARCHAR[]"
+    )
     if native_token_type and not _input_has_collation(con, source):
         unsafe = con.sql(rf"""
             SELECT count(*) FILTER (WHERE
@@ -1267,7 +1268,8 @@ def _canonical_distinguishing_features(
     # Private callers may reuse the proof made before writing scalar batches.
     optimised = (
         _can_defer_canonical_tokens(con, source)
-        if _optimisation_safe is None else _optimisation_safe
+        if _optimisation_safe is None
+        else _optimisation_safe
     )
     return (
         create_sql_pipeline(
@@ -1365,12 +1367,12 @@ def _materialise_canonical_distinguishing_features(
     input_table = f"__ukam_adjacent_batch_{uid}"
     source_sql = source.project(columns).sql_query()
     batch_columns = (
-        "ukam_address_id, unique_id, clean_full_address"
-        if optimisation_safe else columns
+        "ukam_address_id, unique_id, clean_full_address" if optimisation_safe else columns
     )
     batch_projection = batch_columns + (
         ", string_split(clean_full_address, ' ')::VARCHAR[] AS clean_full_address_tokens"
-        if optimisation_safe else ""
+        if optimisation_safe
+        else ""
     )
     # Hash-sample a bounded number of addresses; sort only that small sample.
     modulus = max(1, rows // 65_536)
