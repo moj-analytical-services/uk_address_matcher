@@ -921,6 +921,8 @@ def _prepare_canonical_folder(
             row_counts=manifest_row_counts,
             preparation_options={
                 "add_debug_features": add_debug_features,
+                **({"distinguishing_hierarchy_depth": distinguishing_hierarchy_depth}
+                   if distinguishing_hierarchy_depth > 1 else {}),
             },
         )
     else:
@@ -932,6 +934,8 @@ def _prepare_canonical_folder(
             row_counts=manifest_row_counts,
             preparation_options={
                 "add_debug_features": add_debug_features,
+                **({"distinguishing_hierarchy_depth": distinguishing_hierarchy_depth}
+                   if distinguishing_hierarchy_depth > 1 else {}),
             },
         )
 

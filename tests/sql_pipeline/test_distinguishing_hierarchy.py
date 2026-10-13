@@ -1,5 +1,6 @@
 """Synthetic examples and an independent complete-suffix support oracle."""
 
+import json
 from collections import defaultdict
 
 import pytest
@@ -180,6 +181,8 @@ def test_folder_exports_requested_columns(con, tmp_path, depth):
         show_progress="off",
         _derive_road_catalogue=False,
     )
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    assert manifest["preparation_options"]["distinguishing_hierarchy_depth"] == depth
     result = con.read_parquet(str(tmp_path / "ukam_canonical_addresses.parquet"))
     assert "second_shared_part" in result.columns
     assert ("third_shared_part" in result.columns) == (depth == 3)
