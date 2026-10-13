@@ -57,7 +57,7 @@ from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
     _uid,
 )
-from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
+from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 
 if TYPE_CHECKING:
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
@@ -1658,7 +1658,7 @@ def prepare_data_for_matching(
                 ",\n                "
                 + ",\n                ".join(
                     f"distinguishing.{column}"
-                    for column in (*DISTINGUISHING_FEATURE_COLUMNS, *hierarchy_columns)
+                    for column in DISTINGUISHING_FEATURE_COLUMNS
                 )
             )
             distinguishing_join_sql = f"""
@@ -1718,6 +1718,22 @@ def prepare_data_for_matching(
                         if column not in _drop_columns
                     )
                 )
+
+            if hierarchy_columns:
+                from uk_address_matcher.cleaning.hierarchy import (
+                    _attach_distinguishing_hierarchy,
+                )
+
+                processed_chunk = create_sql_pipeline(
+                    con,
+                    [
+                        InputBinding("processed", processed_chunk),
+                        InputBinding("hierarchy", con.table(distinguishing_table_name)),
+                    ],
+                    [_attach_distinguishing_hierarchy(
+                        depth=distinguishing_hierarchy_depth,
+                    )],
+                ).run()
 
             _materialise_relation(
                 con,

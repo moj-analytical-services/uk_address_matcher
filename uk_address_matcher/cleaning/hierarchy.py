@@ -248,8 +248,8 @@ def _materialise_distinguishing_hierarchy(
                 tails=third_tails,
                 support=support,
             )
-        # Use a fresh file path: an in-place schema change can reuse cached
-        # Parquet metadata for the first-cut input within the same connection.
+        # Persist to a fresh file path before dropping the bound first-cut input.
+        # The caller owns this output through subsequent preparation and export.
         final_name = output_table or f"__ukam_supported_suffixes_{_uid()}"
         if final_name == adjacent_table:
             raise ValueError("Hierarchy output requires a fresh table name")
@@ -262,3 +262,23 @@ def _materialise_distinguishing_hierarchy(
     finally:
         for name in reversed(names):
             _drop_materialised_relation(con, name, _storage)
+
+
+@pipeline_stage(
+    name="attach_distinguishing_hierarchy",
+    description="Attach supported segments after term-frequency processing",
+)
+def _attach_distinguishing_hierarchy(*, depth: Literal[2, 3]):
+    columns = ("second_shared_part", "third_shared_part")[: depth - 1]
+    projection = ", ".join(f"h.{column}" for column in columns)
+    return [
+        CTEStep(
+            "final",
+            """
+        SELECT p.*, """
+            + projection
+            + """
+        FROM {processed} p LEFT JOIN {hierarchy} h USING (ukam_address_id)
+    """,
+        )
+    ]

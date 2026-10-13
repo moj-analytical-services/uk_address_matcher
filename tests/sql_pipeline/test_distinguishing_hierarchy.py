@@ -249,10 +249,12 @@ def test_hierarchy_intermediates_removed_on_failure(con, monkeypatch, storage_ki
         ).fetchall()
 
 
-def test_parquet_batches_keep_rows_across_hierarchy_schema_change(con, monkeypatch):
+def test_parquet_batches_keep_rows_across_hierarchy_schema_change(
+    con, monkeypatch, tmp_path
+):
     # The first-cut files have one row group each; the supported output has two.
-    # Reusing a first-cut file path with a new schema/row-group layout exposed a
-    # DuckDB 1.5 cached-metadata failure in the full London preparation.
+    # Exercise more than one output row group when transferring ownership from
+    # several first-cut files to the supported output with a wider schema.
     import uk_address_matcher.cleaning.chunking_strategies as chunking
 
     monkeypatch.setattr(chunking, "_CANONICAL_ADJACENT_BATCH_ROWS", 35_000)
@@ -297,3 +299,27 @@ def test_parquet_batches_keep_rows_across_hierarchy_schema_change(con, monkeypat
             .fetchone()[0]
             == 0
         )
+
+    # More than one row group in a TF chunk, with nullable nested support structs.
+    # Carrying these structs through the TF stages triggered a DuckDB 1.5 vector
+    # error in full London; attaching them after TF preserves its input schema.
+    raw = source.project("""
+        unique_id,
+        CASE WHEN ukam_address_id % 113 = 0
+            THEN concat('ONLY PLACE ', ukam_address_id)
+            ELSE clean_full_address END AS address_concat,
+        NULL::VARCHAR AS postcode
+    """)
+    prepare_canonical_folder(
+        raw,
+        tmp_path,
+        con=con,
+        num_of_chunks=1,
+        distinguishing_hierarchy_depth=3,
+        show_progress="off",
+        _derive_road_catalogue=False,
+    )
+    loaded = load_prepared_canonical_data(tmp_path, con=con).addresses
+    assert loaded.count("*").fetchone()[0] == 140_000
+    assert loaded.filter("second_shared_part IS NULL").count("*").fetchone()[0] > 0
+    assert loaded.filter("third_shared_part IS NOT NULL").count("*").fetchone()[0] > 0
