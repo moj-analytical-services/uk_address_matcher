@@ -124,3 +124,41 @@ The scripts and tests will run better if you create .vscode/settings.json with t
 }
 ```
 
+
+### Optional distinguishing hierarchy
+
+`prepare_canonical_folder(..., distinguishing_hierarchy_depth=2)` adds
+`second_shared_part`; depth `3` also adds `third_shared_part`. The default depth
+is `1`, which retains the existing output. Each new column is a nullable DuckDB
+struct with `tokens: VARCHAR[]` and `support: BIGINT`.
+
+A segment ends when removing more leading tokens increases the number of
+**distinct `unique_id` values sharing the remaining complete suffix**. Suffixes
+with equal support form one segment. Counts cover the complete canonical input,
+including aliases and all preparation batches; repeated rows of one property
+count once. SQL `COUNT(DISTINCT unique_id)` excludes null IDs. The third segment
+reuses the suffix counts calculated for the second.
+
+For a synthetic group whose three properties share `FABLE LANE STORYVILLE`,
+while seven properties share `STORYVILLE`, the resulting segments can be:
+`["7"]` in the existing distinguishing prefix,
+`{tokens: ["FABLE", "LANE"], support: 3}` in the second column, and
+`{tokens: ["STORYVILLE"], support: 7}` in the third column. These boundaries
+follow support changes and are not guaranteed to correspond to streets or towns.
+If the existing local-neighbour calculation finds no shared suffix, both new
+columns are null. A missing further support increase also leaves the next column
+null. The existing prefix remains the bounded local-neighbour heuristic; its
+support is not globally recomputed or guaranteed to be one.
+
+```python
+prepare_canonical_folder(
+    canonical,
+    "prepared_canonical",
+    con=con,
+    distinguishing_hierarchy_depth=3,
+)
+```
+
+Hierarchy support requires `derive_distinguishing_wrt_adjacent_records=True`.
+It adds preparation work and two columns at depth three; matching continues to
+use its existing features.

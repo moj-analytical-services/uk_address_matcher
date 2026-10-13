@@ -8,7 +8,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
@@ -535,6 +535,7 @@ def prepare_canonical_folder(
     num_of_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
+    distinguishing_hierarchy_depth: Literal[1, 2, 3] = 1,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
@@ -568,6 +569,12 @@ def prepare_canonical_folder(
             `ukam_canonical_addresses_chunks/`.
         derive_distinguishing_wrt_adjacent_records: Whether to derive canonical
             leading tokens that distinguish suffix-similar nearby records.
+        distinguishing_hierarchy_depth: 1 keeps the existing prefix fields.
+            2 adds ``second_shared_part`` and 3 also adds ``third_shared_part``.
+            Each nullable struct contains ``tokens`` and distinct-property
+            ``support`` for the complete suffix beginning at that segment.
+            Counts use the entire canonical dataset; equal-support suffixes
+            form one segment. Requires adjacent distinguishing features.
         overwrite: Whether to overwrite existing files in the folder. When
             `True`, all known artefacts are removed before writing to ensure
             the folder ends up in a consistent state.
@@ -588,6 +595,13 @@ def prepare_canonical_folder(
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
     """
+    if distinguishing_hierarchy_depth not in (1, 2, 3):
+        raise ValueError("distinguishing_hierarchy_depth must be 1, 2 or 3")
+    if (
+        distinguishing_hierarchy_depth > 1
+        and not derive_distinguishing_wrt_adjacent_records
+    ):
+        raise ValueError("Hierarchy support requires adjacent distinguishing features")
     with _CanonicalIntermediates(con) as storage:
         _prepare_canonical_folder(
             data,
@@ -598,6 +612,7 @@ def prepare_canonical_folder(
             derive_distinguishing_wrt_adjacent_records=(
                 derive_distinguishing_wrt_adjacent_records
             ),
+            distinguishing_hierarchy_depth=distinguishing_hierarchy_depth,
             overwrite=overwrite,
             add_debug_features=add_debug_features,
             show_progress=show_progress,
@@ -614,6 +629,7 @@ def _prepare_canonical_folder(
     num_of_chunks: int,
     output_chunk_count: int,
     derive_distinguishing_wrt_adjacent_records: bool,
+    distinguishing_hierarchy_depth: Literal[1, 2, 3],
     overwrite: bool,
     add_debug_features: bool,
     show_progress: ShowProgress,
@@ -707,6 +723,7 @@ def _prepare_canonical_folder(
             derive_distinguishing_wrt_adjacent_records
         ),
         dataset_role="canonical",
+        distinguishing_hierarchy_depth=distinguishing_hierarchy_depth,
         _precleaned_addresses=True,
         _drop_columns=canonical_drop_columns,
         _owned_chunks=owned_chunks,

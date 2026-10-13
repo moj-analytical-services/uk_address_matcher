@@ -1264,6 +1264,7 @@ def _canonical_distinguishing_features(
     debug_options: DebugOptions | None,
     *,
     _optimisation_safe: bool | None = None,
+    include_shared_depth: bool = False,
 ) -> DuckDBPyRelation:
     # Private callers may reuse the proof made before writing scalar batches.
     optimised = (
@@ -1282,6 +1283,7 @@ def _canonical_distinguishing_features(
                     carry_neighbour_tokens=not optimised,
                     defer_input_tokens=optimised,
                     partition_by_final_token=optimised,
+                    include_shared_depth=include_shared_depth,
                 ),
                 _derive_distinguishing_token_components,
             ],
@@ -1289,7 +1291,13 @@ def _canonical_distinguishing_features(
             pipeline_description="Compare nearby suffix-similar records",
         )
         .run(debug_options)
-        .project(", ".join(("ukam_address_id", *DISTINGUISHING_FEATURE_COLUMNS)))
+        .project(
+            ", ".join((
+                "ukam_address_id",
+                *DISTINGUISHING_FEATURE_COLUMNS,
+                *(("__shared_suffix_depth",) if include_shared_depth else ()),
+            ))
+        )
     )
 
 
@@ -1312,6 +1320,8 @@ def _materialise_canonical_distinguishing_features(
     table_name: str,
     debug_options: DebugOptions | None = None,
     _storage: _CanonicalIntermediates | None = None,
+    *,
+    include_shared_depth: bool = False,
 ) -> DuckDBPyRelation:
     """Limit the adjacent window's working set using contiguous address ranges.
 
@@ -1335,6 +1345,8 @@ def _materialise_canonical_distinguishing_features(
     # inputs retain the original cached arrays and calculation in every batch.
     optimisation_safe = _can_defer_canonical_tokens(con, source.project(columns))
     feature_options = {"_optimisation_safe": optimisation_safe}
+    if include_shared_depth:
+        feature_options["include_shared_depth"] = True
     if (
         batch_count <= 1
         or unique_id_type not in {"VARCHAR", "BIGINT", "INTEGER"}
@@ -1451,6 +1463,7 @@ def prepare_data_for_matching(
     derive_distinguishing_wrt_adjacent_records: bool = False,
     *,
     dataset_role: Literal["messy", "canonical"] | None = None,
+    distinguishing_hierarchy_depth: Literal[1, 2, 3] = 1,
     _precleaned_addresses: bool = False,
     _drop_columns: Collection[str] = (),
     _owned_chunks: dict[str, int] | None = None,
@@ -1479,6 +1492,8 @@ def prepare_data_for_matching(
             `exploding_unique_ids` is set to [unique_id] (single-element array).
         derive_distinguishing_wrt_adjacent_records: Whether to derive distinguishing
             tokens relative to adjacent records.
+        distinguishing_hierarchy_depth: 1 retains the existing fields; 2 or 3
+            adds globally counted shared segments with distinct-property support.
         dataset_role: Optional role hint used to make output table names more
             descriptive in DuckDB catalogs. Use ``"canonical"`` or ``"messy"``.
         debug_options: Optional debug configuration for pipeline execution.
@@ -1516,6 +1531,16 @@ def prepare_data_for_matching(
         # Using pre-baked term frequencies (default):
         df_prepared = prepare_data_for_matching(df_addresses, con)
     """
+    if distinguishing_hierarchy_depth not in (1, 2, 3):
+        raise ValueError("distinguishing_hierarchy_depth must be 1, 2 or 3")
+    if (
+        distinguishing_hierarchy_depth > 1
+        and not derive_distinguishing_wrt_adjacent_records
+    ):
+        raise ValueError("Hierarchy support requires adjacent distinguishing features")
+    hierarchy_columns = ("second_shared_part", "third_shared_part")[
+        :distinguishing_hierarchy_depth - 1
+    ]
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     distinguishing_table_name = None
@@ -1565,7 +1590,21 @@ def prepare_data_for_matching(
                 distinguishing_table_name,
                 debug_options,
                 _storage=_storage,
+                **({"include_shared_depth": True} if hierarchy_columns else {}),
             )
+            if hierarchy_columns:
+                from uk_address_matcher.cleaning.hierarchy import (
+                    _materialise_distinguishing_hierarchy,
+                )
+
+                _materialise_distinguishing_hierarchy(
+                    con,
+                    cleaned_address_table,
+                    distinguishing_table_name,
+                    depth=distinguishing_hierarchy_depth,
+                    debug_options=debug_options,
+                    _storage=_storage,
+                )
             logger.debug("Adjacent-record distinguishing tokens derived")
         except BaseException:
             cleanup_on_failure()
@@ -1616,7 +1655,7 @@ def prepare_data_for_matching(
                 ",\n                "
                 + ",\n                ".join(
                     f"distinguishing.{column}"
-                    for column in DISTINGUISHING_FEATURE_COLUMNS
+                    for column in (*DISTINGUISHING_FEATURE_COLUMNS, *hierarchy_columns)
                 )
             )
             distinguishing_join_sql = f"""

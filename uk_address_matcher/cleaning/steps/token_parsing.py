@@ -59,6 +59,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     use_precomputed_tokens: bool = False,
     defer_input_tokens: bool = False,
     partition_by_final_token: bool = False,
+    include_shared_depth: bool = False,
 ):
     """Split each address around its longest suffix shared by a local neighbour."""
     token_expression = (
@@ -277,6 +278,14 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         "{output_source_sql}",
         output_source_sql,
     )
+
+    if include_shared_depth:
+        final_sql = final_sql.replace(
+            "AS common_adj_start_tokens",
+            "AS common_adj_start_tokens, "
+            "least(coalesce(maximums.__max_common_suffix_length, 0), "
+            "coalesce(len(maximums.__tokens), 0)) AS __shared_suffix_depth",
+        )
 
     steps = [
         CTEStep("tokenised_addresses", tokenised_addresses_sql),
