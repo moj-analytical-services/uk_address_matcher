@@ -9,7 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
     "duckdb>=1.5.0,<2.0",
     "splink>=4.0.16,<5",
-    "sqlglot==26.6.0",
+    "sqlglot==30.22.0",
 ]
 
 [project.urls]
