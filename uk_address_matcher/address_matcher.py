@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from collections.abc import Callable
 from copy import copy
+from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Optional, Union
 
 from uk_address_matcher.cleaning.chunking_strategies import (
@@ -13,6 +17,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
     derive_term_frequencies_table,
     prepare_data_for_matching,
 )
+from uk_address_matcher.cleaning.materialisation import _parquet_preserves_type
 from uk_address_matcher.cleaning.steps.inverted_index import (
     MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
 )
@@ -24,11 +29,18 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
-from uk_address_matcher.logging.progress import ShowProgress, resolve_progress_mode
+from uk_address_matcher.linking_model.matching.utils import format_elapsed, safe_divide
+from uk_address_matcher.logging.chunking import report_stage
+from uk_address_matcher.logging.progress import (
+    ShowProgress,
+    _ProgressBar,
+    resolve_progress_mode,
+)
 from uk_address_matcher.post_linkage.match_result import MatchResult
 from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 from uk_address_matcher.sql_pipeline.helpers import (
     _drop_table_and_registered_aliases,
+    _quote_identifier,
     _register_input_relation_once,
     _uid,
 )
@@ -36,6 +48,7 @@ from uk_address_matcher.sql_pipeline.helpers import (
 if TYPE_CHECKING:
     import duckdb
 
+    from uk_address_matcher._typing import StageDiagnostics
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
@@ -78,6 +91,13 @@ class AddressMatcher:
         cleaning_num_chunks: Number of chunks to use for cleaning and term
             frequency derivation when canonical input is a raw relation. Also
             used for messy-address cleaning. Must be a positive integer.
+        matching_num_chunks: Number of hash buckets on messy `unique_id` to
+            clean and match sequentially against the full canonical dataset.
+            Defaults to 1 (no matching chunks). Empty buckets are skipped.
+            Bucket sizes are approximate; repeated IDs stay together.
+            Chunked results use temporary Parquet parts until `MatchResult.close()`
+            and support input-column joins, but do not retain per-chunk Splink
+            inspection tables.
         show_progress: ``"auto"`` renders live updates in a supported
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
@@ -144,6 +164,7 @@ class AddressMatcher:
         debug_options: Optional[DebugOptions] = None,
         cleaning_num_chunks: int = 10,
         show_progress: ShowProgress = "auto",
+        matching_num_chunks: int = 1,
     ):
         self.con = con
         self.stages = stages if stages is not None else _default_stages()
@@ -155,6 +176,13 @@ class AddressMatcher:
         if cleaning_num_chunks < 1:
             raise ValueError("cleaning_num_chunks must be >= 1.")
         self.cleaning_num_chunks = cleaning_num_chunks
+        if not isinstance(matching_num_chunks, int) or isinstance(
+            matching_num_chunks, bool
+        ):
+            raise TypeError("matching_num_chunks must be an integer.")
+        if matching_num_chunks < 1:
+            raise ValueError("matching_num_chunks must be >= 1.")
+        self.matching_num_chunks = matching_num_chunks
         if self.canonical_address_filter is not None and not isinstance(
             self.canonical_address_filter, str
         ):
@@ -306,7 +334,7 @@ class AddressMatcher:
             if isinstance(stage, SplinkStage):
                 stage.roadlike_places = self._roadlike_places
 
-    def _resolve_messy_data(self) -> None:
+    def _resolve_messy_data(self, *, show_progress: ShowProgress | None = None) -> None:
         """Cleans messy data, reusing the canonical term frequencies and index."""
 
         logger.debug("Cleaning messy data")
@@ -324,7 +352,7 @@ class AddressMatcher:
             inverted_index_n=inverted_index_n,
             dataset_role="messy",
             debug_options=self.debug_options,
-            show_progress=self.show_progress,
+            show_progress=self.show_progress if show_progress is None else show_progress,
         )
         if self._roadlike_places is not None:
             logger.debug("Deriving messy road blocking keys from canonical catalogue")
@@ -363,6 +391,183 @@ class AddressMatcher:
 
         return addresses_to_match
 
+    def _match_chunk(
+        self,
+        *,
+        row_offset: int = 0,
+        progress_callback: Callable[[str, int, int, float | None], None] | None = None,
+    ) -> tuple[duckdb.DuckDBPyRelation, StageDiagnostics]:
+        if row_offset:
+            self._messy_clean = self._messy_clean.project(
+                f"* REPLACE (ukam_address_id::BIGINT + {row_offset} AS ukam_address_id)"
+            )
+        return _run_matching(
+            con=self.con,
+            df_messy_clean=self._messy_clean,
+            df_canonical_clean=self._canonical_clean,
+            stages=self.stages,
+            debug_options=self.debug_options,
+            _progress_callback=progress_callback,
+        )
+
+    def _match_chunks(
+        self, started_at: float
+    ) -> tuple[duckdb.DuckDBPyRelation, StageDiagnostics, TemporaryDirectory]:
+        raw_messy = self._raw_messy
+        chunks = self.con.sql(f"""
+            SELECT hash(unique_id) % {self.matching_num_chunks} AS bucket,
+                count(*) AS rows
+            FROM ({raw_messy.sql_query()}) AS messy
+            GROUP BY bucket ORDER BY bucket
+        """).fetchall()
+        if not chunks:
+            raise ValueError(
+                "Supplied address table has no records. Please provide a non-empty table."
+            )
+        total_rows = sum(rows for _, rows in chunks)
+        processed_rows = 0
+        retained_tables = {name for (name,) in self.con.execute("SHOW TABLES").fetchall()}
+        output_directory = TemporaryDirectory(prefix="ukam-match-chunks-")
+        encoded_types = {}
+        stage_totals = {}
+        chunks_started_at = time.perf_counter()
+        progress = _ProgressBar(
+            label="Matching",
+            total=total_rows,
+            total_units=len(chunks),
+            enabled=self.show_progress == "auto",
+            width=16,
+        )
+
+        try:
+            for chunk_number, (bucket, rows) in enumerate(chunks, start=1):
+                chunk_started_at = time.perf_counter()
+                self._raw_messy = raw_messy.filter(
+                    f"hash(unique_id) % {self.matching_num_chunks} = {bucket}"
+                )
+                try:
+                    progress.label = f"Chunk {chunk_number}/{len(chunks)} cleaning"
+                    progress.update(processed_rows, completed_units=chunk_number - 1)
+                    self._resolve_messy_data(show_progress="off")
+                    result, diagnostics = self._match_chunk(
+                        row_offset=processed_rows,
+                        progress_callback=partial(
+                            report_stage,
+                            progress_mode=self.show_progress,
+                            progress=progress,
+                            chunk_number=chunk_number,
+                            total_chunks=len(chunks),
+                            processed_rows=processed_rows,
+                            total_rows=total_rows,
+                            started_at=started_at,
+                            chunks_started_at=chunks_started_at,
+                        ),
+                    )
+                    projection = []
+                    for column, kind in zip(result.columns, result.types, strict=True):
+                        quoted = _quote_identifier(column)
+                        if _parquet_preserves_type(kind):
+                            projection.append(quoted)
+                        else:
+                            encoded_types[column] = kind
+                            projection.append(f"to_json({quoted})::VARCHAR AS {quoted}")
+                    result = result.project(", ".join(projection))
+                    result.write_parquet(
+                        str(Path(output_directory.name) / f"{chunk_number}.parquet"),
+                        compression="snappy",
+                    )
+                    for diagnostic in diagnostics:
+                        stage_name = diagnostic["stage"]
+                        if stage_name not in stage_totals:
+                            stage_totals[stage_name] = diagnostic.copy()
+                        else:
+                            for field in (
+                                "unmatched_before",
+                                "matched_this_stage",
+                                "remaining_after",
+                                "elapsed_seconds",
+                            ):
+                                stage_totals[stage_name][field] += diagnostic[field]
+                finally:
+                    result = None
+                    self._messy_clean = None
+                    self._raw_messy = raw_messy
+                    for stage in self.stages:
+                        if isinstance(stage, SplinkStage):
+                            stage._release_splink_tables()
+                            stage.linker = None
+                            stage.predictions_table = None
+                            stage.improved_predictions_table = None
+                            stage.best_matches_table = None
+                    self._cleanup_intermediate_tables(None, retained_tables)
+                processed_rows += rows
+                now = time.perf_counter()
+                elapsed = now - started_at
+                remaining = (now - chunks_started_at) * (
+                    total_rows - processed_rows
+                ) / processed_rows
+                progress.label = f"Matching chunk {chunk_number}/{len(chunks)}"
+                progress.update(
+                    processed_rows,
+                    completed_units=chunk_number,
+                    remaining_seconds=remaining,
+                )
+                if self.show_progress != "off" and not progress.enabled:
+                    filled = int(16 * processed_rows / total_rows)
+                    bar = "#" * filled + "-" * (16 - filled)
+                    logger.info(
+                        "Matching chunk %d/%d completed in %s: [%s] %.0f%%; "
+                        "%s/%s rows processed; elapsed %s; estimated total %s "
+                        "(%s remaining).",
+                        chunk_number,
+                        len(chunks),
+                        format_elapsed(now - chunk_started_at),
+                        bar,
+                        100 * processed_rows / total_rows,
+                        f"{processed_rows:,}",
+                        f"{total_rows:,}",
+                        format_elapsed(elapsed),
+                        format_elapsed(elapsed + remaining),
+                        format_elapsed(remaining),
+                    )
+            result = self.con.read_parquet(
+                str(Path(output_directory.name) / "*.parquet"),
+                union_by_name=True,
+                hive_partitioning=False,
+            )
+            if encoded_types:
+                restored = ", ".join(
+                    f"CAST({_quote_identifier(column)}::JSON AS {kind}) "
+                    f"AS {_quote_identifier(column)}"
+                    for column, kind in encoded_types.items()
+                )
+                result = result.project(f"* REPLACE ({restored})")
+        except BaseException:
+            output_directory.cleanup()
+            raise
+        finally:
+            progress.close()
+            self._raw_messy = raw_messy
+        for diagnostic in stage_totals.values():
+            diagnostic["matched_pct_of_unmatched"] = round(
+                safe_divide(
+                    diagnostic["matched_this_stage"], diagnostic["unmatched_before"]
+                ),
+                6,
+            )
+            diagnostic["matched_pct_of_input"] = round(
+                safe_divide(diagnostic["matched_this_stage"], total_rows), 6
+            )
+        self._messy_clean = result
+        if self.show_progress != "off":
+            logger.info(
+                "Chunked matching completed: %s rows across %d chunks in %s.",
+                f"{total_rows:,}",
+                len(chunks),
+                format_elapsed(time.perf_counter() - started_at),
+            )
+        return result, list(stage_totals.values()), output_directory
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -389,8 +594,17 @@ class AddressMatcher:
             additional columns produced by the stages.
         """
 
-        stage_list = "\n".join(f"    - {s.__class__.__name__}" for s in self.stages)
-        logger.info("Running address matcher with stages:\n%s", stage_list)
+        if self.show_progress != "off":
+            stage_list = ", ".join(stage.__class__.__name__ for stage in self.stages)
+            total_rows = self._raw_messy.count("*").fetchone()[0]
+            logger.info(
+                "Address matching: %s messy rows, %d requested chunk%s, "
+                "full canonical dataset; stages: %s.",
+                f"{total_rows:,}",
+                self.matching_num_chunks,
+                "" if self.matching_num_chunks == 1 else "s",
+                stage_list,
+            )
 
         existing_tables = {name for (name,) in self.con.execute("SHOW TABLES").fetchall()}
         for stage in self.stages:
@@ -402,9 +616,16 @@ class AddressMatcher:
                 stage._owned_splink_frames = ()
 
         completed = False
+        output_directory = None
         try:
+            started_at = time.perf_counter()
             self._resolve_canonical_data()
-            self._resolve_messy_data()
+            if self.matching_num_chunks > 1:
+                result, stage_diagnostics, output_directory = self._match_chunks(
+                    started_at
+                )
+            else:
+                self._resolve_messy_data()
             # The index is no longer needed once messy cleaning has finished.
             if self._inverted_index_table_name is not None:
                 _drop_table_and_registered_aliases(
@@ -412,13 +633,8 @@ class AddressMatcher:
                 )
                 self._inverted_index_table_name = None
 
-            result, stage_diagnostics = _run_matching(
-                con=self.con,
-                df_messy_clean=self._messy_clean,
-                df_canonical_clean=self._canonical_clean,
-                stages=self.stages,
-                debug_options=self.debug_options,
-            )
+            if self.matching_num_chunks == 1:
+                result, stage_diagnostics = self._match_chunk()
             completed = True
         finally:
             if not completed:
@@ -427,11 +643,15 @@ class AddressMatcher:
                         stage._release_splink_tables()
                 self._cleanup_intermediate_tables(None, existing_tables)
                 self._inverted_index_table_name = None
+                if output_directory is not None:
+                    output_directory.cleanup()
 
         splink_stage = next(
             (stage for stage in self.stages if isinstance(stage, SplinkStage)),
             None,
         )
+        if self.matching_num_chunks > 1:
+            splink_stage = None
 
         owned_tables = self._cleanup_intermediate_tables(result, existing_tables)
         # Snapshot inspection state too: callers may reuse these stage objects.
@@ -453,6 +673,7 @@ class AddressMatcher:
             _stage_diagnostics=stage_diagnostics,
             _owned_table_names=owned_tables,
             _owned_splink_frames=owned_splink_frames,
+            _temporary_directory=output_directory,
         )
 
     def _cleanup_intermediate_tables(

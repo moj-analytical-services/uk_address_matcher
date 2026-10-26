@@ -111,6 +111,136 @@ def test_match_with_explicit_stages(con, canonical_data, messy_data):
     assert result.matches().count("*").fetchone()[0] > 0
 
 
+@pytest.mark.parametrize("matching_num_chunks", [3, 32])
+def test_chunked_matching_preserves_all_rows(
+    con, canonical_data, matching_num_chunks, caplog
+):
+    records = [
+        {
+            **CANONICAL_RECORDS[index % len(CANONICAL_RECORDS)],
+            "unique_id": f"M{index}",
+        }
+        for index in range(12)
+    ]
+    records.extend(
+        [
+            {**records[0], "address_concat": "unknown address", "postcode": None},
+            {**records[1]},
+            {**records[2], "unique_id": None},
+        ]
+    )
+    messy = _make_addresses(con, records)
+    expected = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy,
+        con=con,
+        stages=[ExactMatchStage()],
+    ).match()
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_data,
+        addresses_to_match=messy,
+        con=con,
+        stages=[ExactMatchStage()],
+        matching_num_chunks=matching_num_chunks,
+    )
+
+    with caplog.at_level(logging.INFO, logger="uk_address_matcher"):
+        caplog.clear()
+        actual = matcher.match()
+
+    columns = "unique_id, resolved_canonical_id, match_reason"
+    assert actual.matches().count("*").fetchone()[0] == len(records)
+    assert actual.matches().project(columns).order("ALL").fetchall() == (
+        expected.matches().project(columns).order("ALL").fetchall()
+    )
+    summaries = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and record.getMessage().startswith("Matching chunk ")
+        and "completed in" in record.getMessage()
+    ]
+    assert len(summaries) > 1
+    assert all(
+        "estimated total" in message and "remaining" in message for message in summaries
+    )
+    assert "100%" in summaries[-1]
+    assert "Address matching:" in caplog.text
+    assert "rows processed in" in caplog.text
+    assert caplog.text.count("Cleaning and preprocessing: 3 records across 1 chunk") == 1
+    actual.close()
+    expected.close()
+
+
+def test_chunked_matching_with_prepared_canonical(con, canonical_data, tmp_path):
+    folder = tmp_path / "prepared"
+    prepare_canonical_folder(
+        canonical_data, output_folder=folder, con=con, show_progress="off"
+    )
+    messy = _make_addresses(con, MESSY_RECORDS).select(
+        "*, unique_id AS source_id, "
+        "123456789012345678901234567890::HUGEINT AS source_number"
+    )
+    matcher = AddressMatcher(
+        folder, messy, con=con, show_progress="off", matching_num_chunks=1
+    )
+    expected = matcher.match()
+    matcher.matching_num_chunks = 32
+    actual = matcher.match()
+    output_directory = Path(actual._temporary_directory.name)
+    assert len(list(output_directory.glob("*.parquet"))) == 2
+    assert str(output_directory) in actual._relation.sql_query()
+
+    assert actual.matches().order("unique_id").fetchall() == (
+        expected.matches().order("unique_id").fetchall()
+    )
+    assert actual.join_input_columns(
+        canonical=[{"input_column": "unique_id", "alias": "canonical_id"}],
+        messy=["source_id"],
+    ).select("unique_id, canonical_id, source_id").order("unique_id").fetchall() == [
+        ("M1", "C1", "M1"),
+        ("M2", "C2", "M2"),
+    ]
+    assert actual.join_input_columns(messy=["source_number"]).select(
+        "source_number"
+    ).fetchall() == [(123456789012345678901234567890,)] * 2
+    assert sum(
+        row["matched_this_stage"] for row in actual._stage_diagnostics
+    ) == 2
+    actual.close()
+    actual.close()
+    assert not output_directory.exists()
+    assert expected.matches().count("*").fetchone()[0] == 2
+    expected.close()
+    assert canonical_data.count("*").fetchone()[0] == len(CANONICAL_RECORDS)
+
+
+@pytest.mark.parametrize("matching_num_chunks", [1, 3])
+def test_chunked_matching_rejects_empty_input(con, canonical_data, matching_num_chunks):
+    matcher = AddressMatcher(
+        canonical_data,
+        _make_addresses(con, MESSY_RECORDS).limit(0),
+        con=con,
+        stages=[ExactMatchStage()],
+        matching_num_chunks=matching_num_chunks,
+        show_progress="off",
+    )
+    with pytest.raises(ValueError, match="no records"):
+        matcher.match()
+
+
+@pytest.mark.parametrize(
+    "value, error", [(0, ValueError), (-1, ValueError), (1.5, TypeError)]
+)
+def test_matching_num_chunks_requires_positive_integer(
+    con, canonical_data, messy_data, value, error
+):
+    with pytest.raises(error, match="matching_num_chunks"):
+        AddressMatcher(
+            canonical_data, messy_data, con=con, matching_num_chunks=value
+        )
+
+
 def test_stage_timing_logs_at_debug_level(con, canonical_data, messy_data, caplog):
     matcher = AddressMatcher(
         canonical_addresses=canonical_data,
@@ -306,8 +436,9 @@ def test_join_input_columns_prepared_canonical_uses_supplied_dataset(
         result.join_input_columns(canonical=["unavailable_upstream"])
 
 
+@pytest.mark.parametrize("matching_num_chunks", [1, 3])
 def test_join_input_columns_lifetime_is_scoped_to_each_result(
-    con, canonical_data, messy_data
+    con, canonical_data, messy_data, matching_num_chunks
 ):
     matcher = AddressMatcher(
         canonical_data.select("*, 'RD' AS classificationcode"),
@@ -315,6 +446,7 @@ def test_join_input_columns_lifetime_is_scoped_to_each_result(
         con=con,
         stages=[ExactMatchStage()],
         show_progress="off",
+        matching_num_chunks=matching_num_chunks,
     )
     canonical = ["classificationcode"]
     first = matcher.match()
@@ -830,12 +962,14 @@ def test_splink_matching_preserves_user_tables_with_legacy_internal_names(
         assert con.table(table_name).fetchall() == [("user data",)]
 
 
+@pytest.mark.parametrize("matching_num_chunks", [1, 3])
 def test_splink_stage_failure_restores_user_tables_and_leaves_no_leftovers(
-    con, canonical_data, messy_data, monkeypatch
+    con, canonical_data, messy_data, monkeypatch, matching_num_chunks, tmp_path
 ):
     """A mid-Splink exception must not leave m_/c_ shadowed or leak objects."""
     import uk_address_matcher.post_linkage.analyse_results as analyse_results
 
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     con.execute("CREATE TABLE m_ AS SELECT 'user data' AS marker")
     con.execute("CREATE TABLE c_ AS SELECT 'user data' AS marker")
 
@@ -849,12 +983,14 @@ def test_splink_stage_failure_restores_user_tables_and_leaves_no_leftovers(
         addresses_to_match=messy_data,
         con=con,
         stages=[SplinkStage(final_match_weight_threshold=-20.0)],
+        matching_num_chunks=matching_num_chunks,
     )
     # Matcher input bindings remain available for retrying a failed run.
     baseline = _catalogue_snapshot(con)
     with pytest.raises(RuntimeError, match="simulated failure"):
         matcher.match()
 
+    assert list(tmp_path.glob("ukam-match-chunks-*")) == []
     # User tables must resolve to user data again, not the matcher's relations
     assert con.sql("SELECT * FROM m_").fetchall() == [("user data",)]
     assert con.sql("SELECT * FROM c_").fetchall() == [("user data",)]

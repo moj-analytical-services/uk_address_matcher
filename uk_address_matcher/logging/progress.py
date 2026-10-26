@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import timedelta
 from typing import Literal, TypeAlias, cast
 
 ProgressMode: TypeAlias = Literal["auto", "stages", "off"]
@@ -104,7 +105,13 @@ class _ProgressBar:
     def _disable(self) -> None:
         self.enabled = False
 
-    def update(self, current: int, *, completed_units: int | None = None) -> None:
+    def update(
+        self,
+        current: int,
+        *,
+        completed_units: int | None = None,
+        remaining_seconds: float | None = None,
+    ) -> None:
         if not self.enabled:
             return
 
@@ -122,13 +129,20 @@ class _ProgressBar:
         filled_units = min(max(0, filled_units), self.width)
         empty_units = self.width - filled_units
         bar = self._filled_glyph * filled_units + self._empty_glyph * empty_units
+        elapsed_label = f"{elapsed:05.2f}s"
+        eta_label = ""
+        if remaining_seconds is not None:
+            elapsed_label = str(timedelta(seconds=round(max(0, elapsed))))
+            eta_label = (
+                f", {timedelta(seconds=round(max(0, remaining_seconds)))} remaining"
+            )
 
         try:
             line = (
                 f"{self.label}: {percent:3d}% "
                 f"{self._left_edge}{bar}{self._right_edge} "
                 f"({self.current:,}/{self.total:,} records, "
-                f"{elapsed:05.2f}s elapsed)"
+                f"{elapsed_label} elapsed{eta_label})"
             )
             padding = " " * max(0, self._last_render_length - len(line))
             self.stream.write(f"\r{line}{padding}")

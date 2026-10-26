@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher._typing import StageDiagnostics
@@ -152,6 +153,7 @@ def _run_matching(
     stages: list[MatchingStage],
     debug_options: Optional[DebugOptions] = None,
     explain: bool = False,
+    _progress_callback: Callable[[str, int, int, float | None], None] | None = None,
 ) -> tuple[Optional[duckdb.DuckDBPyRelation], StageDiagnostics]:
     """Run matching stages sequentially and return unified results.
 
@@ -210,17 +212,20 @@ def _run_matching(
         ).fetchone()[0]
 
         if unmatched_count == 0:
-            logger.info(
+            logger.debug(
                 "All records matched; skipping stage '%s' and remaining stages.",
                 stage_name,
             )
             break
 
-        logger.info(
-            "Running stage '%s' with %d unmatched records...",
-            stage_name,
-            unmatched_count,
-        )
+        if _progress_callback is not None:
+            _progress_callback(stage_name, unmatched_count, 0, None)
+        else:
+            logger.debug(
+                "Running stage '%s' with %d unmatched records...",
+                stage_name,
+                unmatched_count,
+            )
 
         df_unmatched = _get_unmatched(con, df_messy_clean, results_table)
 
@@ -271,12 +276,19 @@ def _run_matching(
                 "elapsed_seconds": round(float(elapsed_seconds), 6),
             }
         )
-        logger.info(
-            "Stage '%s' matched %d records (%d remaining).",
-            stage_name,
-            matched_this_stage,
-            remaining,
-        )
+        if _progress_callback is not None:
+            _progress_callback(
+                stage_name, unmatched_count, matched_this_stage, elapsed_seconds
+            )
+        else:
+            logger.info(
+                "Stage '%s': %s rows processed in %s, %s matched (%s remaining).",
+                stage_name,
+                f"{unmatched_count:,}",
+                format_elapsed(elapsed_seconds),
+                f"{matched_this_stage:,}",
+                f"{remaining:,}",
+            )
 
     if explain:
         con.execute(f'DROP TABLE IF EXISTS "{results_table}"')
