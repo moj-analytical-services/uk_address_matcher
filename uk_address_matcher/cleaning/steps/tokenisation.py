@@ -35,7 +35,7 @@ def _split_numeric_tokens_to_cols():
                 *,
                 regexp_extract_all(
                     array_to_string(numeric_tokens, ' '),
-                    '\\d+'
+                    '\\d+(?:/\\d+)+|\\d+'
                 ) AS __numeric_scalar_tokens
             FROM {input}
             """,

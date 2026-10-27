@@ -783,8 +783,9 @@ def _parse_out_numbers():
     """
     regex_pattern = (
         r"\b"  # Word boundary
-        # Prioritize matching number ranges first
-        r"(\d{1,5}[A-Za-z]?-\d{1,5}[A-Za-z]?|[A-Za-z]?\d{1,5}[A-Za-z]?)"
+        # Keep slash-delimited numeric identifiers intact, then match ranges.
+        r"(\d{1,5}(?:/\d{1,5})+|\d{1,5}[A-Za-z]?-\d{1,5}[A-Za-z]?|"
+        r"[A-Za-z]?\d{1,5}[A-Za-z]?)"
         r"\b"  # Word boundary
     )
     road_code_pattern = (

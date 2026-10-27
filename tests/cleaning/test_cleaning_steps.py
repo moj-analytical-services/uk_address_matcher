@@ -8,6 +8,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
     prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.steps import (
+    _clean_address_string_first_pass,
     _derive_numeric_range,
     _parse_out_address_structure_premise,
     _parse_out_business_unit,
@@ -193,6 +194,47 @@ def test_parse_out_numbers_excludes_road_references():
         )
         assert result.count("*").fetchone()[0] == 20
         assert "__numeric_token_address" not in result.columns
+
+
+def test_cleaning_preserves_numeric_slash_notation():
+    connection = duckdb.connect()
+    input_relation = connection.sql("""
+        SELECT * FROM (VALUES
+            (1, '2/1 FICTIONAL ROAD', '2/1 FICTIONAL ROAD'),
+            (2, 'FLAT 3/2 41 FICTIONAL ROAD', 'FLAT 3/2 41 FICTIONAL ROAD'),
+            (3, '2/1/3 FICTIONAL ROAD', '2/1/3 FICTIONAL ROAD')
+        ) AS t(example_id, clean_full_address, original_address_concat)
+    """)
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(_clean_address_string_first_pass())
+    pipeline.add_step(_parse_out_flat_position_and_letter())
+    pipeline.add_step(_parse_out_numbers())
+    pipeline.add_step(_derive_numeric_range())
+    pipeline.add_step(_split_numeric_tokens_to_cols())
+    result = pipeline.run(DebugOptions(pretty_print_sql=False))
+
+    actual = (
+        result.project(
+            "example_id, clean_full_address, numeric_tokens, numeric_token_1, "
+            "numeric_token_2, numeric_range, flat_number"
+        )
+        .order("example_id")
+        .fetchall()
+    )
+
+    assert actual == [
+        (1, "2/1 FICTIONAL ROAD", ["2/1"], "2/1", None, None, None),
+        (
+            2,
+            "FLAT 3/2 41 FICTIONAL ROAD",
+            ["3/2", "41"],
+            "3/2",
+            "41",
+            None,
+            "2",
+        ),
+        (3, "2/1/3 FICTIONAL ROAD", ["2/1/3"], "2/1/3", None, None, None),
+    ]
 
 
 def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():

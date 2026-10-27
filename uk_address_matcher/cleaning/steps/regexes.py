@@ -49,11 +49,14 @@ def standarise_num_dash_num(input: str):
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
 
-# TODO(ThomasHepworth): Do we want this?
-# For Scottish flats we actually want to keep the slash.
 def replace_fwd_slash_with_dash(input: str):
-    # Sometimes we see Unit 5/6 as opposed to unit 5-6
-    return f"regexp_replace({input}, '/', '-', 'g')"
+    """Preserve numeric slash notation; otherwise standardise slashes as dashes."""
+    numeric_slash_pattern = r"\d\s*/\s*\d"
+    return (
+        f"CASE WHEN regexp_matches({input}, '{numeric_slash_pattern}') "
+        f"THEN regexp_replace({input}, '\\s*/\\s*', '/', 'g') "
+        f"ELSE regexp_replace({input}, '/', '-', 'g') END"
+    )
 
 
 def split_letter_dash_letter(input: str):
