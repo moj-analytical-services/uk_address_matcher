@@ -483,6 +483,25 @@ def test_sanitise_null_comparison_level_removes_probabilities():
     assert sanitised["comparisons"][0]["comparison_levels"][0] == {"is_null_level": True}
 
 
+@pytest.mark.parametrize(
+    "empty_side,expected_message",
+    [
+        ("messy", "No unresolved records remain"),
+        ("canonical", "Canonical relation is empty"),
+    ],
+)
+def test_linker_rejects_empty_inputs(
+    duck_con, unresolved_matches, canonical_non_empty, empty_side, expected_message
+):
+    messy = unresolved_matches.limit(0) if empty_side == "messy" else unresolved_matches
+    canonical = (
+        canonical_non_empty.limit(0) if empty_side == "canonical" else canonical_non_empty
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        _get_linker(messy, canonical, con=duck_con)
+
+
 def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_con):
     canonical = duck_con.sql("""
         SELECT * FROM (VALUES
