@@ -157,17 +157,17 @@ def test_chunked_matching_preserves_all_rows(
         record.getMessage()
         for record in caplog.records
         if record.levelno == logging.INFO
-        and record.getMessage().startswith("Matching chunk ")
+        and record.getMessage().startswith("Chunk ")
         and "completed in" in record.getMessage()
     ]
     assert len(summaries) > 1
-    assert all(
-        "estimated total" in message and "remaining" in message for message in summaries
-    )
-    assert "100%" in summaries[-1]
-    assert "Address matching:" in caplog.text
-    assert "rows processed in" in caplog.text
-    assert caplog.text.count("Cleaning and preprocessing: 3 records across 1 chunk") == 1
+    assert "remaining" not in summaries[0] + summaries[-1]
+    assert "100% complete" in summaries[-1]
+    assert "Address matching started | 15 records" in caplog.text
+    assert "Address matching completed | 15 records" in caplog.text
+    assert "Matched: 14 | Unmatched: 1" in caplog.text
+    assert "matching completed in" not in caplog.text
+    assert caplog.text.count("Cleaning and preprocessing: 3 records") == 1
     actual.close()
     expected.close()
 
