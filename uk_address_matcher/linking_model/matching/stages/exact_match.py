@@ -85,13 +85,16 @@ class ExactMatchStage(MatchingStage):
 
     Set ``enable_flat_retraction=False`` to skip phase 3.
 
+    Set ``require_unique_match=False`` to accept rows whose exact key maps to
+    more than one canonical entity. The default is ``True``.
+
     Set ``inward_postcode_levenshtein`` to a positive integer to allow the
     exact-address phase to tolerate that many inward postcode edits; the
     default ``0`` skips the fuzzy postcode phase.
     """
 
     enable_flat_retraction: bool = True
-    require_unique_match: bool = False
+    require_unique_match: bool = True
     inward_postcode_levenshtein: int = 0
 
     def __post_init__(self) -> None:
@@ -141,7 +144,7 @@ def _exact_matches(
     messy_input_name: MessyInputName = "__ukam__tmp_messy_addresses",
     *,
     enable_flat_retraction: bool = True,
-    require_unique_match: bool = False,
+    require_unique_match: bool = True,
     inward_postcode_levenshtein: int = 0,
 ) -> list[CTEStep]:
     """Find deterministic matches using exact, no-whitespace and FLAT phases.
@@ -161,7 +164,7 @@ def _exact_matches(
         yields an unambiguous candidate. If ``False``, skip phase 3.
     require_unique_match:
         If ``True``, reject a messy row when its exact candidates resolve to
-        more than one distinct canonical entity.
+        more than one distinct canonical entity. Defaults to ``True``.
     inward_postcode_levenshtein:
         Maximum inward postcode Levenshtein distance for the optional fuzzy
         postcode phase. A value of ``0`` skips that phase entirely.

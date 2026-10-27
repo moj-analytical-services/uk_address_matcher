@@ -1086,7 +1086,7 @@ def test_exact_matching_can_reject_multiple_canonical_entities(duck_con):
         con=duck_con,
         df_messy_clean=df_messy,
         df_canonical_clean=df_canonical,
-        stages=[ExactMatchStage(require_unique_match=True)],
+        stages=[ExactMatchStage()],
     )
 
     assert results.fetchdf()["resolved_canonical_id"].isna().all()
