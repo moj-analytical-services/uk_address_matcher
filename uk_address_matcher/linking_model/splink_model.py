@@ -324,6 +324,7 @@ def _align_postcode_name_columns(
     for column, expression in (
         ("lk_level_by_alias", "MAP([]::VARCHAR[], []::INTEGER[])"),
         ("lk_anchor_uprns", "[]::VARCHAR[]"),
+        ("lk_word_support_by_uprn", "MAP([]::VARCHAR[], []::INTEGER[])"),
         ("lk_eligible", "false"),
     ):
         if column not in df_addresses_to_match.columns:

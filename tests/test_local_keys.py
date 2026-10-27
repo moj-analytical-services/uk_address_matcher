@@ -497,6 +497,10 @@ def test_late_canonical_hits_still_count_towards_frequency(duck_con):
 
 def test_model_includes_local_key_comparison_and_block():
     model = _get_model_settings_dict()
+    comparisons = {
+        comparison["output_column_name"]: comparison
+        for comparison in model["comparisons"]
+    }
     comparison = model["comparisons"][-1]
     assert comparison["output_column_name"] == "postcode_distinguishing_name"
     assert "additional_columns_to_retain" not in model
@@ -512,6 +516,20 @@ def test_model_includes_local_key_comparison_and_block():
         level["m_probability"] / level["u_probability"]
         for level in comparison["comparison_levels"][1:]
     ] == ([0.25, 16, 8, 4, 2, 2, 1, 1])
+    joint = comparisons["joint_local_evidence"]
+    assert any(
+        "lk_word_support_by_uprn_r" in level["sql_condition"]
+        for level in joint["comparison_levels"]
+    )
+    assert "local_name_already_in_joint" in comparisons
+    numeric_levels = comparisons["numeric_token_1"]["comparison_levels"]
+    assert any(
+        level.get("disable_tf_exact_match_detection") is True for level in numeric_levels
+    )
+    assert {
+        "Strong postcode name with different lexical fallback words",
+        "Unique leading spacing name with different lexical fallback words",
+    } <= {level.get("label_for_charts") for level in numeric_levels}
 
 
 @pytest.mark.parametrize(
@@ -982,6 +1000,7 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
             "alias_id",
             "lk_level_by_alias",
             "lk_anchor_uprns",
+            "lk_word_support_by_uprn",
         ]
         assert duck_con.table(lookup_name).count("*").fetchone() == (1,)
 
