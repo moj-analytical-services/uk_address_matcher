@@ -211,6 +211,7 @@ class AddressMatcher:
 
         # Internal state — populated during match()
         self._canonical_clean: duckdb.DuckDBPyRelation | None = None
+        self._canonical_count: int | None = None
         self._roadlike_places: duckdb.DuckDBPyRelation | None = None
         self._tf_table: duckdb.DuckDBPyRelation | None = None
         self._inverted_index_table_name: str | None = None
@@ -220,7 +221,7 @@ class AddressMatcher:
         self,
         inverted_index: duckdb.DuckDBPyRelation,
     ) -> None:
-        """Materialise and register inverted index on this matcher's connection."""
+        """Register the index, keeping chunked prepared data disk-backed."""
         if self._inverted_index_table_name is not None:
             _drop_table_and_registered_aliases(self.con, self._inverted_index_table_name)
 
@@ -232,8 +233,12 @@ class AddressMatcher:
         )
 
         table_name = f"__ukam__inverted_index_{_uid()}"
+        # A view avoids keeping the full prepared index resident across matching chunks.
+        storage = "TABLE"
+        if self.matching_num_chunks > 1 and isinstance(self._raw_canonical, (str, Path)):
+            storage = "TEMP VIEW"
         self.con.execute(
-            "CREATE TABLE "
+            f"CREATE {storage} "
             + table_name
             + " AS SELECT * FROM ("
             + source_relation.sql_query()
@@ -256,6 +261,7 @@ class AddressMatcher:
     def _resolve_canonical_data(self) -> None:
         """Loads or cleans canonical data depending on the input type."""
 
+        self._canonical_count = None
         self._roadlike_places = None
 
         if isinstance(self._raw_canonical, (str, Path)):
@@ -338,9 +344,8 @@ class AddressMatcher:
         """Cleans messy data, reusing the canonical term frequencies and index."""
 
         logger.debug("Cleaning messy data")
-        inverted_index_n: int | None = None
-        if self._canonical_clean is not None:
-            inverted_index_n = self._canonical_clean.count("*").fetchone()[0]
+        if self._canonical_clean is not None and self._canonical_count is None:
+            self._canonical_count = self._canonical_clean.count("*").fetchone()[0]
         self._messy_clean = prepare_data_for_matching(
             self._raw_messy,
             con=self.con,
@@ -349,7 +354,7 @@ class AddressMatcher:
             term_frequency_lookup=self._tf_table,
             inverted_index=self._inverted_index,
             _inverted_index_strategies=MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
-            inverted_index_n=inverted_index_n,
+            inverted_index_n=self._canonical_count,
             dataset_role="messy",
             debug_options=self.debug_options,
             show_progress=self.show_progress if show_progress is None else show_progress,
@@ -428,6 +433,7 @@ class AddressMatcher:
         processed_rows = 0
         retained_tables = {name for (name,) in self.con.execute("SHOW TABLES").fetchall()}
         output_directory = TemporaryDirectory(prefix="ukam-match-chunks-")
+        canonical_cache_directory = TemporaryDirectory(prefix="ukam-canonical-cache-")
         encoded_types = {}
         stage_totals = {}
         chunks_started_at = time.perf_counter()
@@ -440,6 +446,11 @@ class AddressMatcher:
         )
 
         try:
+            for stage_index, stage in enumerate(self.stages):
+                if isinstance(stage, SplinkStage):
+                    stage._canonical_cache_path = str(
+                        Path(canonical_cache_directory.name) / f"{stage_index}.parquet"
+                    )
             for chunk_number, (bucket, rows) in enumerate(chunks, start=1):
                 chunk_started_at = time.perf_counter()
                 self._raw_messy = raw_messy.filter(
@@ -503,9 +514,11 @@ class AddressMatcher:
                 processed_rows += rows
                 now = time.perf_counter()
                 elapsed = now - started_at
-                remaining = (now - chunks_started_at) * (
-                    total_rows - processed_rows
-                ) / processed_rows
+                remaining = (
+                    (now - chunks_started_at)
+                    * (total_rows - processed_rows)
+                    / processed_rows
+                )
                 progress.label = f"Matching chunk {chunk_number}/{len(chunks)}"
                 progress.update(
                     processed_rows,
@@ -548,6 +561,10 @@ class AddressMatcher:
         finally:
             progress.close()
             self._raw_messy = raw_messy
+            for stage in self.stages:
+                if isinstance(stage, SplinkStage):
+                    stage._canonical_cache_path = None
+            canonical_cache_directory.cleanup()
         for diagnostic in stage_totals.values():
             diagnostic["matched_pct_of_unmatched"] = round(
                 safe_divide(

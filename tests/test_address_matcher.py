@@ -172,6 +172,120 @@ def test_chunked_matching_preserves_all_rows(
     expected.close()
 
 
+@pytest.mark.parametrize("fail_on_second_chunk", [False, True])
+def test_chunked_splink_reuses_and_cleans_canonical_cache(
+    con, canonical_data, tmp_path, monkeypatch, fail_on_second_chunk
+):
+    from uk_address_matcher.linking_model import splink_model
+
+    folder = tmp_path / "prepared"
+    canonical_data = canonical_data.select(
+        "*, 123456789012345678901234567890::HUGEINT AS cached_number"
+    )
+    prepare_canonical_folder(
+        canonical_data, output_folder=folder, con=con, show_progress="off"
+    )
+    records = [
+        {**MESSY_RECORDS[index % len(MESSY_RECORDS)], "unique_id": f"M{index}"}
+        for index in range(12)
+    ]
+    matcher = AddressMatcher(
+        folder,
+        _make_addresses(con, records).select("*, NULL::HUGEINT AS cached_number"),
+        con=con,
+        stages=[SplinkStage(additional_columns_to_retain=["cached_number"])],
+        show_progress="off",
+    )
+    original_register_index = matcher._register_inverted_index
+
+    def register_index(index):
+        original_register_index(index)
+        assert con.sql(
+            "SELECT count(*) FROM duckdb_tables() WHERE table_name = ?",
+            params=[matcher._inverted_index_table_name],
+        ).fetchone() == (int(matcher.matching_num_chunks == 1),)
+
+    monkeypatch.setattr(matcher, "_register_inverted_index", register_index)
+    expected = matcher.match()
+    cached_files = []
+    original_get_linker = splink_model._get_linker
+
+    def get_linker(*args, **kwargs):
+        assert (
+            con.sql(
+                "SELECT 1 FROM duckdb_tables() "
+                "WHERE table_name IN (?, '__ukam_inverted_index')",
+                params=[matcher._inverted_index_table_name],
+            ).fetchone()
+            is None
+        )
+        kwargs["df_addresses_to_search_within"] = kwargs[
+            "df_addresses_to_search_within"
+        ].select("* REPLACE (123456789012345678901234567890::HUGEINT AS cached_number)")
+        linker = original_get_linker(*args, **kwargs)
+        path = Path(kwargs["canonical_cache_path"])
+        cached_files.append((path, path.stat().st_mtime_ns))
+        assert "local_key_index" not in con.read_parquet(str(path)).columns
+        assert con.table("c_").select("cached_number").fetchall() == [
+            (123456789012345678901234567890,)
+        ] * len(CANONICAL_RECORDS)
+        if fail_on_second_chunk and len(cached_files) == 2:
+            raise RuntimeError("stop on second chunk")
+        return linker
+
+    monkeypatch.setattr(splink_model, "_get_linker", get_linker)
+    matcher.matching_num_chunks = 3
+    if fail_on_second_chunk:
+        with pytest.raises(RuntimeError, match="stop on second chunk"):
+            matcher.match()
+    else:
+        actual = matcher.match()
+        assert actual.matches().order("unique_id").fetchall() == (
+            expected.matches().order("unique_id").fetchall()
+        )
+        actual.close()
+    assert len(cached_files) > 1
+    assert len(set(cached_files)) == 1
+    assert all(not path.exists() for path, _ in cached_files)
+    assert all(not path.parent.exists() for path, _ in cached_files)
+    assert matcher.stages[0]._canonical_cache_path is None
+    assert (
+        con.sql(
+            "SELECT view_name FROM duckdb_views() "
+            "WHERE starts_with(view_name, '__ukam__inverted_index_')"
+        ).fetchall()
+        == []
+    )
+    expected.close()
+
+
+def test_chunked_canonical_count_refreshes_between_matches(con, canonical_data):
+    canonical_data.create("canonical_count_source")
+    records = [{**CANONICAL_RECORDS[0], "unique_id": f"M{index}"} for index in range(12)]
+    matcher = AddressMatcher(
+        con.table("canonical_count_source"),
+        _make_addresses(con, records),
+        con=con,
+        stages=[ExactMatchStage()],
+        cleaning_num_chunks=1,
+        matching_num_chunks=3,
+        show_progress="off",
+    )
+
+    for expected_count in (3, 4):
+        if expected_count == 4:
+            con.execute(
+                "INSERT INTO canonical_count_source VALUES "
+                "('C4', '99 FICTIONAL TEST ROAD', 'SW1A 1AA')"
+            )
+        result = matcher.match()
+        assert matcher._canonical_count == expected_count
+        assert result.matches().select("resolved_canonical_id").fetchall() == [
+            ("C1",)
+        ] * len(records)
+        result.close()
+
+
 def test_chunked_matching_with_prepared_canonical(con, canonical_data, tmp_path):
     folder = tmp_path / "prepared"
     prepare_canonical_folder(
@@ -201,12 +315,13 @@ def test_chunked_matching_with_prepared_canonical(con, canonical_data, tmp_path)
         ("M1", "C1", "M1"),
         ("M2", "C2", "M2"),
     ]
-    assert actual.join_input_columns(messy=["source_number"]).select(
-        "source_number"
-    ).fetchall() == [(123456789012345678901234567890,)] * 2
-    assert sum(
-        row["matched_this_stage"] for row in actual._stage_diagnostics
-    ) == 2
+    assert (
+        actual.join_input_columns(messy=["source_number"])
+        .select("source_number")
+        .fetchall()
+        == [(123456789012345678901234567890,)] * 2
+    )
+    assert sum(row["matched_this_stage"] for row in actual._stage_diagnostics) == 2
     actual.close()
     actual.close()
     assert not output_directory.exists()
@@ -236,9 +351,7 @@ def test_matching_num_chunks_requires_positive_integer(
     con, canonical_data, messy_data, value, error
 ):
     with pytest.raises(error, match="matching_num_chunks"):
-        AddressMatcher(
-            canonical_data, messy_data, con=con, matching_num_chunks=value
-        )
+        AddressMatcher(canonical_data, messy_data, con=con, matching_num_chunks=value)
 
 
 def test_stage_timing_logs_at_debug_level(con, canonical_data, messy_data, caplog):
