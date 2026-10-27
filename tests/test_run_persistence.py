@@ -9,6 +9,7 @@ from pathlib import Path
 import duckdb
 
 from benchmarking.insights.run_persistence import (
+    _serialisable_stage,
     compare_persisted_runs,
     generate_benchmark_run_id,
     persist_benchmark_run,
@@ -19,6 +20,8 @@ from benchmarking.runner import (
     run_selected_datasets,
     run_single_dataset,
 )
+from uk_address_matcher import SplinkStage
+from uk_address_matcher.linking_model.splink_model import _get_production_model_settings
 from uk_address_matcher.post_linkage.match_result.result import MatchResult
 
 
@@ -71,6 +74,17 @@ def test_generate_benchmark_run_id_hashes_timestamp_seed() -> None:
         == hashlib.sha256(timestamp_seed.encode("utf-8")).hexdigest()[:16]
     )
     assert generate_benchmark_run_id(at=timestamp) != timestamp_seed
+
+
+def test_splink_stage_definition_resolves_default_and_custom_settings() -> None:
+    default_settings = _serialisable_stage(SplinkStage())["params"]["settings"]
+    custom_settings = _serialisable_stage(
+        SplinkStage(settings=_get_production_model_settings())
+    )["params"]["settings"]
+
+    assert isinstance(default_settings, dict)
+    assert default_settings == custom_settings
+    assert default_settings["comparisons"]
 
 
 def test_overlay_html_uses_matching_vega_lite_runtime_and_export_actions(
