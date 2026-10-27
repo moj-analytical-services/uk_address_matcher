@@ -172,6 +172,9 @@ def add_local_key_features(
     gate = """
         clean_full_address IS NOT NULL
         AND NOT regexp_matches(clean_full_address, '[0-9]')
+        AND NOT regexp_matches(
+            clean_full_address, '(^| )(EXCLUDING|EXCEPT|EXCL)( |$)'
+        )
         AND resolved_canonical_id IS NULL
         AND has_flat_indicator IS FALSE AND has_business_unit IS FALSE
     """
@@ -191,18 +194,25 @@ def add_local_key_features(
             canonical = prepare_canonical_local_keys(con, canonical)
         con.register(canonical_input, canonical)
         con.execute(f"""
-            CREATE TEMP VIEW "{source_keys_table}" AS
+            CREATE TEMP TABLE "{source_keys_table}" AS
             SELECT DISTINCT ukam_address_id::VARCHAR AS alias_id,
-                postcode, occurrence.pos, occurrence.kind, occurrence.key
+                postcode, occurrence.pos, occurrence.kind, occurrence.key,
+                min(occurrence.pos) FILTER (WHERE occurrence.kind = 'word')
+                    OVER (PARTITION BY source.ukam_address_id) AS first_word_position,
+                regexp_extract(source.clean_full_address, '^[^ ]+( [^ ]+)?', 0)
+                    AS leading_tokens
             FROM ({source.sql_query()}) source,
                 UNNEST(local_key_tokens) entries(occurrence)
             WHERE {gate}
         """)
         con.execute(f"""
             CREATE TEMP TABLE "{canonical_input}_keys" AS
-            SELECT ukam_address_id, unique_id, postcode, local_key_index
+            SELECT ukam_address_id, unique_id, postcode, local_key_index,
+                regexp_extract(clean_full_address, '^[^ ]+( [^ ]+)?', 0)
+                    AS leading_tokens
             FROM "{canonical_input}"
             WHERE postcode IN (SELECT postcode FROM "{source_keys_table}")
+                AND len(local_key_index) > 0
         """)
         con.execute(f"""
             CREATE TEMP TABLE "{spacing_table}" AS
@@ -249,7 +259,8 @@ def add_local_key_features(
                 SELECT * FROM "{source_keys_table}"
             ), canonical_keys AS MATERIALIZED (
                 SELECT DISTINCT ukam_address_id::VARCHAR AS alias_id,
-                    unique_id::VARCHAR AS entity_id, postcode, occurrence.*
+                    unique_id::VARCHAR AS entity_id, postcode, leading_tokens,
+                    occurrence.*
                 FROM "{canonical_input}_keys" canonical,
                     UNNEST(local_key_index) entries(occurrence)
                 WHERE occurrence.pos <= 3
@@ -258,7 +269,34 @@ def add_local_key_features(
                 SELECT DISTINCT source.alias_id AS query_alias_id,
                     canonical.alias_id AS canonical_alias_id,
                     canonical.entity_id AS uprn, source.pos AS source_position,
-                    source.kind, canonical.df_uprns
+                    source.kind, canonical.df_uprns,
+                    (source.pos <= 3 AND (
+                        (source.pos = canonical.pos AND (
+                            source.pos = 1
+                            OR (source.pos = 2
+                                AND split_part(source.leading_tokens, ' ', 1)
+                                    = split_part(canonical.leading_tokens, ' ', 1))
+                            OR (source.pos = 3
+                                AND source.leading_tokens = canonical.leading_tokens)
+                        ))
+                        OR (source.pos <= source.first_word_position AND (
+                            canonical.pos = 1 OR (canonical.pos = 2 AND (
+                                split_part(canonical.leading_tokens, ' ', 1)
+                                    IN ('THE', 'GROUND')
+                                OR regexp_full_match(
+                                    split_part(canonical.leading_tokens, ' ', 1),
+                                    '[0-9]+[A-Z]?'
+                                )
+                            ))
+                        ))
+                        OR (source.kind = 'phrase' AND canonical.pos = 1
+                            AND split_part(source.key, ' ', 1) NOT IN (
+                                'THE', 'OF', 'AT', 'NEAR', 'VIA', 'FROM', 'TO',
+                                'AND', 'WITH', 'HOUSE', 'COTTAGE', 'COTTAGES',
+                                'FARM', 'FARMHOUSE', 'BUNGALOW', 'LODGE', 'FLOOR',
+                                'ROAD', 'STREET', 'LANE', 'TERRACE', 'FLAT', 'UNIT'
+                            ))
+                    )) AS is_name_key
                 FROM source_keys source JOIN canonical_keys canonical
                     ON source.postcode = canonical.postcode
                     AND source.kind = canonical.kind AND source.key = canonical.key
@@ -266,10 +304,11 @@ def add_local_key_features(
                     AND canonical.df_uprns::DOUBLE / canonical.n_uprns <= 0.5
             ), literal_levels AS MATERIALIZED (
                 SELECT query_alias_id, canonical_alias_id, max(CASE
+                    WHEN NOT is_name_key THEN 1
                     WHEN kind = 'phrase' AND df_uprns = 1
-                        AND source_position <= 3 THEN 6
+                        AND source_position <= 3 AND is_name_key THEN 6
                     WHEN kind = 'word' AND df_uprns = 1
-                        AND source_position <= 3 THEN 5
+                        AND source_position <= 3 AND is_name_key THEN 5
                     WHEN kind = 'phrase' THEN 4 ELSE 3 END)::INTEGER AS evidence_level
                 FROM hits GROUP BY query_alias_id, canonical_alias_id
             ), anchors AS MATERIALIZED (
@@ -278,6 +317,7 @@ def add_local_key_features(
                     SELECT *, min(source_position) OVER (PARTITION BY query_alias_id)
                         AS first_position
                     FROM hits WHERE df_uprns = 1 AND source_position <= 3
+                        AND is_name_key
                 ) candidates
                 WHERE source_position = first_position GROUP BY query_alias_id
             ), compact_candidates AS MATERIALIZED (
@@ -327,6 +367,9 @@ def add_local_key_features(
             FROM levels LEFT JOIN anchors USING (query_alias_id)
             GROUP BY query_alias_id
         """)
+        con.execute(f'DROP TABLE "{source_keys_table}"')
+        con.execute(f'DROP TABLE "{spacing_table}"')
+        con.execute(f'DROP TABLE "{canonical_input}_keys"')
     con.execute(f"""
         CREATE TEMP VIEW "{source_table}" AS
         SELECT source.*,
