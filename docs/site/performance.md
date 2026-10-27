@@ -34,6 +34,65 @@ Luckily, there are several open datasets of labelled address data that can be us
 
 In this section, we set out `uk_address_matcher`'s accuracy against these labelled datasets.
 
+### Pooled councils: postcode-local name safeguards
+
+This comparison measures the postcode-local name safeguards on 348,687 labelled
+rows pooled from Hackney, Rhondda and Aberdeenshire. Both runs used the same
+prepared canonical data, residential filter, matching stages, one cleaning chunk
+and Splink final weight threshold of 10. Run IDs are baseline `2dcdef1db20a10c9`
+and safeguards `f6069197e22284d2`.
+
+| Measure | Baseline | Safeguards | Change |
+| --- | ---: | ---: | ---: |
+| Correct matches | 342,024 | 342,105 | +81 |
+| Wrong matches | 3,399 | 3,384 | -15 |
+| Unmatched rows | 3,264 | 3,198 | -66 |
+| Precision | 99.0160% | 99.0205% | +0.0045 percentage points |
+| Recall | 98.0891% | 98.1123% | +0.0232 percentage points |
+| F1 | 98.5504% | 98.5643% | +0.0139 percentage points |
+| PR-AUC | 0.316362 | 0.316599 | +0.000237 |
+| Splink stage | 74.534 sec | 70.882 sec | -3.653 sec |
+| Match pipeline | 89.869 sec | 84.728 sec | -5.141 sec |
+| Dataset total (load and match) | 90.434 sec | 85.305 sec | -5.128 sec |
+
+All examples below are fictional. `TESTVILLE` is used to make that explicit.
+
+**An excluded component cannot anchor a property.** For input
+`HOUSE EXCLUDING SECOND FLOOR ALDER HOUSE`, a canonical alias named
+`SECOND FLOOR ALDER HOUSE` must not win merely because `SECOND FLOOR` is a rare
+postcode key. The exclusion cue disables local-name evidence for this source;
+other matching stages can still resolve it.
+
+**A later shared word cannot overrule the leading name.** For
+`SUNNY SIDE BUNGALOW TEST ROAD TESTVILLE`, compare the fictional canonical names
+`SUNNYSIDE TEST ROAD TESTVILLE` and
+`LINDEN TREE BUNGALOW TEST ROAD TESTVILLE`. The leading spacing-equivalent name
+can receive level 2 support. The later `BUNGALOW` key is context-only (level 1)
+for the unrelated `LINDEN TREE` property, so it cannot create an anchor.
+
+**A compatible prefix can still support genuine matches.**
+`MILL OF BIRCH TESTVILLE` can anchor the matching canonical name at its second
+phrase when the preceding tokens agree. Conversely, `UPPER MEADOW` shared by
+`NEW UPPER MEADOW FARM` and `NEW UPPER MEADOW COTTAGE` supports both as rare
+context, not as a unique property anchor; it does not identify either one alone.
+
+For an unnumbered pair in the same postcode, a unique leading spacing key can
+also protect a genuine name match when the lexical fallback fields differ. The
+comparison retains a penalty of BF 0.0625 (-4 bits), rather than the general
+BF 0.0001 (-13.3 bits) mismatch penalty. It does not waive contradictions when
+either address contains numeric tokens.
+
+The runtime changes target repeated and retained lookup work: source key rows
+are materialised once for reuse, canonical lookup skips aliases with empty key
+indexes, and lookup tables are dropped before pair scoring. This is not simply
+fewer source tokens extracted for every address. The pooled run was faster, but
+it is one run per version and does not isolate the cause. A separate three-run
+lookup measurement in the handover was 4.611 sec for the baseline and 5.008 sec
+for the safeguards on a different 128,386-source workload. Treat the pooled
+runtime reduction as promising, not as proof that local-key extraction itself
+is faster. The change affects matching-time features, not canonical preparation;
+these timings are not a full national canonical rebuild.
+
 
 ### Hackney Council data
 
