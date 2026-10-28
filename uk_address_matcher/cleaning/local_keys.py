@@ -181,7 +181,7 @@ def add_local_key_features(
     con.execute(f"""
         CREATE TEMP TABLE "{feature_table}" (
             alias_id VARCHAR, lk_level_by_alias MAP(VARCHAR, INTEGER),
-            lk_anchor_uprns VARCHAR[]
+            lk_anchor_uprns VARCHAR[], lk_word_support_by_uprn MAP(VARCHAR, INTEGER)
         )
     """)
     if (
@@ -269,7 +269,7 @@ def add_local_key_features(
                 SELECT DISTINCT source.alias_id AS query_alias_id,
                     canonical.alias_id AS canonical_alias_id,
                     canonical.entity_id AS uprn, source.pos AS source_position,
-                    source.kind, canonical.df_uprns,
+                    source.kind, source.key, canonical.df_uprns,
                     (source.pos <= 3 AND (
                         (source.pos = canonical.pos AND (
                             source.pos = 1
@@ -302,6 +302,17 @@ def add_local_key_features(
                     AND source.kind = canonical.kind AND source.key = canonical.key
                 WHERE canonical.n_uprns >= 2 AND canonical.df_uprns <= 3
                     AND canonical.df_uprns::DOUBLE / canonical.n_uprns <= 0.5
+            ), word_counts AS MATERIALIZED (
+                SELECT query_alias_id, uprn, count(DISTINCT key)::INTEGER AS n_words
+                FROM hits
+                WHERE kind = 'word'
+                GROUP BY query_alias_id, uprn
+            ), word_support AS MATERIALIZED (
+                SELECT query_alias_id,
+                    map(list(uprn ORDER BY uprn), list(n_words ORDER BY uprn))
+                        AS support_by_uprn
+                FROM word_counts
+                GROUP BY query_alias_id
             ), literal_levels AS MATERIALIZED (
                 SELECT query_alias_id, canonical_alias_id, max(CASE
                     WHEN NOT is_name_key THEN 1
@@ -363,8 +374,11 @@ def add_local_key_features(
                 map(list(canonical_alias_id ORDER BY canonical_alias_id),
                     list(evidence_level ORDER BY canonical_alias_id))
                     AS lk_level_by_alias,
-                coalesce(first(anchors.anchor_uprns), []::VARCHAR[]) AS lk_anchor_uprns
+                coalesce(first(anchors.anchor_uprns), []::VARCHAR[]) AS lk_anchor_uprns,
+                coalesce(first(word_support.support_by_uprn),
+                    MAP([]::VARCHAR[], []::INTEGER[])) AS lk_word_support_by_uprn
             FROM levels LEFT JOIN anchors USING (query_alias_id)
+            LEFT JOIN word_support USING (query_alias_id)
             GROUP BY query_alias_id
         """)
         con.execute(f'DROP TABLE "{source_keys_table}"')
@@ -376,7 +390,9 @@ def add_local_key_features(
             coalesce(features.lk_level_by_alias, MAP([]::VARCHAR[], []::INTEGER[]))
                 AS lk_level_by_alias,
             coalesce(features.lk_anchor_uprns, []::VARCHAR[]) AS lk_anchor_uprns,
-            features.alias_id IS NOT NULL AS lk_eligible
+            features.alias_id IS NOT NULL AS lk_eligible,
+            coalesce(features.lk_word_support_by_uprn,
+                MAP([]::VARCHAR[], []::INTEGER[])) AS lk_word_support_by_uprn
         FROM ({source.sql_query()}) AS source
         LEFT JOIN "{feature_table}" AS features
             ON source.ukam_address_id::VARCHAR = features.alias_id
@@ -385,7 +401,8 @@ def add_local_key_features(
     con.execute(f"""
         CREATE TEMP VIEW "{canonical_table}" AS
         SELECT *, MAP([]::VARCHAR[], []::INTEGER[]) AS lk_level_by_alias,
-            []::VARCHAR[] AS lk_anchor_uprns, false AS lk_eligible
+            []::VARCHAR[] AS lk_anchor_uprns, false AS lk_eligible,
+            MAP([]::VARCHAR[], []::INTEGER[]) AS lk_word_support_by_uprn
         FROM "{canonical_input}"
     """)
     return con.table(source_table), con.table(canonical_table)
