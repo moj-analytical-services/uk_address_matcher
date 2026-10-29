@@ -359,6 +359,38 @@
       "output_column_name": "sub_premise_identifier",
       "comparison_levels": [
         {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), ids -> len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), ids -> len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), role -> map_contains(premise_keys_r, role) AND NOT list_has_any(map_extract_value(premise_keys_l, role), map_extract_value(premise_keys_r, role)))) > 0",
+          "label_for_charts": "Explicit premise role identifiers conflict",
+          "m_probability": 0.00390625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), ids -> len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), ids -> len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), role -> map_contains(premise_keys_r, role) AND NOT list_has_all(map_extract_value(premise_keys_r, role), map_extract_value(premise_keys_l, role)))) > 0",
+          "label_for_charts": "Canonical premise identifiers over-cover source",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), ids -> len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), ids -> len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND list_sort(map_keys(premise_keys_l)) = list_sort(map_keys(premise_keys_r)) AND len(list_filter(map_keys(premise_keys_l), role -> list_sort(map_extract_value(premise_keys_l, role)) != list_sort(map_extract_value(premise_keys_r, role)))) = 0",
+          "label_for_charts": "Complete premise role sets agree",
+          "m_probability": 1.0,
+          "u_probability": 0.00390625,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), ids -> len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), ids -> len(ids) > 1)) > 0",
+          "label_for_charts": "Eligible premise role evidence is incomplete or uncertain",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NULL",
           "label_for_charts": "Both sub-premise identifiers absent",
           "is_null_level": true
