@@ -12,8 +12,9 @@ def _premise_identifier_pattern(max_digits: int = 4) -> str:
     return rf"[A-Za-z]?\d{{1,{max_digits}}}[A-Za-z]?|[A-Za-z]"
 
 
-def _premise_role_segment_pattern(role: str) -> str:
-    identifier = rf"\b(?:{_premise_identifier_pattern(5)})\b"
+def _premise_role_segment_pattern(role: str, range_separator: str) -> str:
+    endpoint = rf"\b(?:{_premise_identifier_pattern(5)})\b"
+    identifier = rf"{endpoint}(?:\s*{range_separator}\s*{endpoint})?"
     marker = f"{role}S?"
     return (
         rf"\b{marker}\s+(?:PART\s+)?{identifier}"
@@ -720,6 +721,7 @@ def _parse_out_business_unit():
     # Note: UNIT is normalised FROM residential APARTMENT in earlier cleaning,
     # but raw UNIT in business contexts (UNIT C, UNIT 5) remains
     roles = "UNIT SUITE ROOM OFFICE BLOCK BUILDING WORKSHOP WAREHOUSE STUDIO".split()
+    range_separator = r"(?:-|TO|THROUGH|UP\s+TO)"
     business_keywords = [
         role for role in roles if role not in ("ROOM", "BLOCK", "BUILDING")
     ]
@@ -760,7 +762,7 @@ def _parse_out_business_unit():
     """
     segment_pattern = (
         r"(?:\bEXCLUDING\s+)?(?:"
-        + "|".join(_premise_role_segment_pattern(role) for role in roles)
+        + "|".join(_premise_role_segment_pattern(role, range_separator) for role in roles)
         + ")"
     )
     return [
@@ -775,7 +777,7 @@ def _parse_out_business_unit():
             """,
         ),
         CTEStep("business_unit", sql),
-        CTEStep("final", _premise_key_set_sql(roles)),
+        CTEStep("final", _premise_key_set_sql(roles, range_separator)),
     ]
 
 
@@ -945,8 +947,9 @@ def _clean_address_string_second_pass_and_tokenise():
     ]
 
 
-def _premise_key_set_sql(roles: list[str]) -> str:
+def _premise_key_set_sql(roles: list[str], range_separator: str) -> str:
     identifier_pattern = rf"\b(?:{_premise_identifier_pattern(5)})\b"
+    numeric_range_pattern = rf"\b\d{{1,5}}\s*{range_separator}\s*\d{{1,5}}\b"
     role_pattern = "|".join(f"{role}S?" for role in roles)
     map_entries = []
     for role in roles:
@@ -958,32 +961,43 @@ def _premise_key_set_sql(roles: list[str]) -> str:
                 list_filter(__premise_segments, segment -> regexp_matches(
                     segment, '^(?:EXCLUDING\\s+)?{marker}\\b'
                 )),
-                segment -> regexp_extract_all(
-                    regexp_replace(segment, '{marker_removal_pattern}', ' ', 'g'),
-                    '{identifier_pattern}',
-                    0
+                segment -> list_concat(
+                    regexp_extract_all(
+                        regexp_replace(segment, '{marker_removal_pattern}', ' ', 'g'),
+                        '{identifier_pattern}', 0
+                    ),
+                    flatten(list_transform(
+                        regexp_extract_all(segment, '{numeric_range_pattern}', 0),
+                        numeric_range -> list_transform(
+                            range(
+                                regexp_extract(numeric_range, '^\\d+', 0)::BIGINT + 1,
+                                regexp_extract(numeric_range, '\\d+$', 0)::BIGINT
+                            ),
+                            identifier -> identifier::VARCHAR
+                        )
+                    ))
                 )
             )))))"""
         )
 
     map_entry_sql = ",\n".join(map_entries)
     role_range_pattern = (
-        rf"\b(?:{role_pattern})\s+{identifier_pattern}"
-        rf"\s*(?:-|TO|THROUGH|UP\s+TO)\s*{identifier_pattern}\b"
+        rf"{identifier_pattern}\s*{range_separator}\s*{identifier_pattern}"
     )
     partial_role_pattern = rf"\bPART\s+(?:{role_pattern})\b"
-    uncertain_pattern = _scope_uncertainty_pattern(
-        role_range_pattern, partial_role_pattern
-    )
+    uncertain_pattern = _scope_uncertainty_pattern(partial_role_pattern)
     return f"""
     SELECT
         * EXCLUDE (__premise_segments, __premise_parse_address),
         map_from_entries(list_filter(
             [{map_entry_sql}], entry -> len(struct_extract(entry, 'value')) > 0
         )) AS premise_keys,
-        len(map_keys(premise_keys)) > 0
-            AND regexp_matches(__premise_parse_address, '{uncertain_pattern}')
-            AS premise_scope_uncertain
+        len(map_keys(premise_keys)) > 0 AND (
+            regexp_matches(__premise_parse_address, '{uncertain_pattern}')
+            OR len(list_filter(__premise_segments, segment ->
+                regexp_matches(segment, '{role_range_pattern}')
+            )) > 0
+        ) AS premise_scope_uncertain
     FROM (
         SELECT *, upper(coalesce(clean_full_address, '')) AS __premise_parse_address
         FROM {{business_unit}}
