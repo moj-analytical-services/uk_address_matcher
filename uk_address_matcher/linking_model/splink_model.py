@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import importlib.resources as pkg_resources
 import json
+from pathlib import Path
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation, InvalidInputException
 from splink import DuckDBAPI, Linker, SettingsCreator
+from sqlglot import exp, parse_one
 
+from uk_address_matcher.cleaning.materialisation import _parquet_preserves_type
 from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
@@ -11,7 +16,10 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     ensure_numeric_range_struct,
 )
-from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
+from uk_address_matcher.sql_pipeline.helpers import (
+    _quote_identifier,
+    package_resource_read_sql,
+)
 
 
 def _get_model_settings_dict():
@@ -351,6 +359,7 @@ def _get_linker(
     settings: SettingsCreator | None = None,
     owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
+    canonical_cache_path: str | None = None,
 ) -> Linker:
     """Build a configured Splink linker for the given relations.
 
@@ -399,15 +408,13 @@ def _get_linker(
             "* EXCLUDE(original_address_concat)"
         )
 
-    unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
-    if unresolved_count == 0:
+    if df_addresses_to_match.select("1").limit(1).fetchone() is None:
         raise ValueError(
             "No unresolved records remain after deterministic matching. Either "
             "skip Splink or provide rows with unresolved matches."
         )
 
-    canonical_count = df_addresses_to_search_within.count("*").fetchall()[0][0]
-    if canonical_count == 0:
+    if df_addresses_to_search_within.select("1").limit(1).fetchone() is None:
         raise ValueError(
             "Canonical relation is empty - Splink requires at least one search record."
         )
@@ -679,6 +686,63 @@ def _get_linker(
     """
 
     concat_with_tf = con.sql(sql)
+    if canonical_cache_path is not None:
+        queries = [
+            "SELECT " + ", ".join(linker._settings_obj._columns_to_select_for_blocking)
+        ]
+        for rule in linker._settings_obj._blocking_rules_to_generate_predictions:
+            definition = rule.as_dict()
+            queries.append("SELECT 1 WHERE " + definition["blocking_rule"])
+            queries.extend(
+                "SELECT " + column for column in definition.get("arrays_to_explode", [])
+            )
+        required_columns = {
+            column.name
+            for query in queries
+            for column in parse_one(query, read="duckdb").find_all(exp.Column)
+        }
+        columns = [
+            column for column in concat_with_tf.columns if column in required_columns
+        ]
+        encoded_types = {
+            column: kind
+            for column, kind in zip(
+                concat_with_tf.columns, concat_with_tf.types, strict=True
+            )
+            if column in columns and not _parquet_preserves_type(kind)
+        }
+        projection = ", ".join(_quote_identifier(column) for column in columns)
+        cache_path = Path(canonical_cache_path)
+        if not cache_path.exists():
+            cache_projection = ", ".join(
+                f"to_json({_quote_identifier(column)})::VARCHAR "
+                f"AS {_quote_identifier(column)}"
+                if column in encoded_types
+                else _quote_identifier(column)
+                for column in columns
+            )
+            concat_with_tf.filter("source_dataset = 'c_'").project(
+                cache_projection
+            ).write_parquet(str(cache_path), compression="zstd")
+        cached_canonical = con.read_parquet(str(cache_path))
+        if cached_canonical.columns != columns:
+            raise ValueError("Canonical matching cache schema changed between chunks.")
+        if encoded_types:
+            restored = ", ".join(
+                f"CAST({_quote_identifier(column)}::JSON AS {kind}) "
+                f"AS {_quote_identifier(column)}"
+                for column, kind in encoded_types.items()
+            )
+            cached_canonical = cached_canonical.project(f"* REPLACE ({restored})")
+        con.register(
+            canonical_name, cached_canonical.project("* EXCLUDE(source_dataset)")
+        )
+        concat_with_tf = con.sql(f"""
+            SELECT {projection}
+            FROM (SELECT *, 'm_' AS source_dataset FROM ({messy_subquery}))
+            UNION ALL
+            SELECT * FROM ({cached_canonical.sql_query()})
+        """)
     concat_frame = linker.table_management.register_table_input_nodes_concat_with_tf(
         concat_with_tf
     )
