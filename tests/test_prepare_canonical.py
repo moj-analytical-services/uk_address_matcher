@@ -128,12 +128,19 @@ def prepared_folder(con, canonical_data, tmp_path):
     return tmp_path
 
 
-def test_prepare_creates_expected_files(prepared_folder):
+def test_prepare_creates_expected_files(prepared_folder, con):
     assert (prepared_folder / "ukam_canonical_addresses.parquet").exists()
     assert (prepared_folder / "ukam_term_frequencies.parquet").exists()
     assert (prepared_folder / "ukam_inverted_index.parquet").exists()
     assert (prepared_folder / "roadlike_places.parquet").exists()
     assert (prepared_folder / "ukam_manifest.json").exists()
+    prepared = load_prepared_canonical_data(prepared_folder, con)
+    assert {
+        "premise_keys",
+        "premise_scope_uncertain",
+        "floor_keys",
+        "floor_scope_uncertain",
+    }.issubset(prepared.addresses.columns)
 
 
 @pytest.mark.parametrize(
