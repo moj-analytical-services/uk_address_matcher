@@ -142,6 +142,8 @@ def test_cleaning_derives_premise_and_floor_key_sets(duck_con):
             ('m_repeated', 'UNIT A UNIT A', 'N1 1AA'),
             ('m_partial', 'UNIT A AND PART UNIT B AND UNIT D AND E', 'N1 1AA'),
             ('m_range', 'UNIT 1 TO 3', 'N1 1AA'),
+            ('m_hyphen_range', 'UNITS 1-3', 'N1 1AA'),
+            ('m_range_list', 'UNITS 1 AND 3 TO 5 AND UNIT 7', 'N1 1AA'),
             ('m_exclusion', 'UNIT A EXCLUDING UNIT B', 'N1 1AA'),
             ('m_floors', 'GROUND AND FIRST FLOORS', 'N1 1AA'),
             ('m_floor_range', 'FIRST TO THIRD FLOORS', 'N1 1AA'),
@@ -182,8 +184,12 @@ def test_cleaning_derives_premise_and_floor_key_sets(duck_con):
     assert rows["m_repeated"][0] == {"UNIT": ["A"]}
     assert rows["m_partial"][0] == {"UNIT": ["A", "B", "D", "E"]}
     assert rows["m_partial"][1] is True
-    assert rows["m_range"][0] == {"UNIT": ["1"]}
+    assert rows["m_range"][0] == {"UNIT": ["1", "2", "3"]}
     assert rows["m_range"][1] is True
+    assert rows["m_range"][6:] == ("UNIT", "1")
+    assert rows["m_hyphen_range"][0] == {"UNIT": ["1", "2", "3"]}
+    assert rows["m_range_list"][0] == {"UNIT": ["1", "3", "4", "5", "7"]}
+    assert rows["m_range_list"][1] is True
     assert rows["m_exclusion"][0] == {"UNIT": ["A", "B"]}
     assert rows["m_exclusion"][1] is True
     assert rows["m_floors"][2] == ["FIRST", "GROUND"]
