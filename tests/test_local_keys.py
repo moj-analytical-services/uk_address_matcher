@@ -511,7 +511,7 @@ def test_model_includes_local_key_comparison_and_block():
     assert [
         level["m_probability"] / level["u_probability"]
         for level in comparison["comparison_levels"][1:]
-    ] == ([0.25, 16, 8, 4, 2, 2, 1])
+    ] == ([0.25, 16, 8, 4, 2, 2, 1, 1])
 
 
 @pytest.mark.parametrize(
@@ -578,7 +578,7 @@ def test_stage_executes_local_key_comparison(
     "text,expected_level",
     [
         ("MEADOW COTTAGE", 6),
-        ("THE TEST PLACE MEADOW COTTAGE", 4),
+        ("THE TEST PLACE MEADOW COTTAGE", 1),
     ],
 )
 def test_leading_names_receive_stronger_evidence(duck_con, text, expected_level):
@@ -664,6 +664,7 @@ def test_shared_word_does_not_override_unique_phrase_anchor(duck_con):
         (True, "ZZ1 1ZZ", "001", 3, 2.0),
         (True, "ZZ1 1ZZ", "001", 2, 2.0),
         (True, "ZZ1 1ZZ", "001", 0, 1.0),
+        (True, "ZZ1 1ZZ", "001", 1, 1.0),
         (True, "ZZ1 1ZZ", "002", 6, 0.25),
         (True, "ZZ1 1ZZ", "002", 2, 0.25),
     ],
@@ -983,3 +984,246 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
             "lk_anchor_uprns",
         ]
         assert duck_con.table(lookup_name).count("*").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("exclusion", ["EXCLUDING", "EXCEPT", "EXCL"])
+def test_excluded_components_do_not_create_name_evidence(duck_con, exclusion):
+    source, _ = _features(
+        duck_con,
+        f"HOUSE {exclusion} SECOND FLOOR ALDER HOUSE",
+        [
+            ["001", "a1", "SECOND FLOOR ALDER HOUSE"],
+            ["002", "b1", "ALDER HOUSE"],
+        ],
+    )
+    assert source.select(
+        "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
+    ).fetchone() == ({}, [], False)
+
+
+def test_late_locality_phrase_does_not_override_shared_leading_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "NEW UPPER MEADOW TESTVILLE",
+        [
+            ["001", "a1", "NEW UPPER MEADOW FARM TESTVILLE"],
+            ["002", "b1", "NEW UPPER MEADOW COTTAGE TESTVILLE"],
+            ["003", "c1", "OLD UPPER MEADOW TESTVILLE"],
+            ["004", "d1", "PINE LODGE TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchone()
+    assert levels["a1"] == levels["b1"] == 4
+    assert levels["c1"] == 1
+    assert anchors == []
+
+
+def test_descriptor_locality_phrase_is_context_not_unique_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "BIRCH COTTAGE TESTVILLE",
+        [
+            ["001", "a1", "BIRCH COTTAGES TESTVILLE"],
+            ["001", "a2", "BIRCH COTTAGE LONG ROAD"],
+            ["002", "b1", "LITTLE BIRCH COTTAGE TESTVILLE"],
+            ["003", "c1", "PINE LODGE TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchone()
+    assert levels["a2"] == 4
+    assert levels["b1"] == 1
+    assert anchors == []
+
+
+def test_late_context_anchor_cannot_veto_leading_spacing_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "SUNNY SIDE BUNGALOW TEST ROAD TESTVILLE",
+        [
+            ["001", "a1", "SUNNYSIDE TEST ROAD TESTVILLE"],
+            ["002", "b1", "LINDEN TREE BUNGALOW TEST ROAD TESTVILLE"],
+            ["003", "c1", "PINE LODGE TEST ROAD TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TEST ROAD TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchone()
+    assert levels["a1"] == 2
+    assert levels["b1"] == 1
+    assert anchors == []
+
+
+def test_leading_stopword_does_not_hide_the_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "THE ALDER COTTAGE",
+        [["001", "a1", "ALDER COTTAGE"], ["002", "b1", "PINE LODGE"]],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+        {"a1": 6},
+        ["001"],
+    )
+
+
+def test_leading_canonical_qualifier_can_anchor_after_shared_building_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "ALDER HALL EAST WING TESTVILLE",
+        [
+            ["001", "a1", "EAST WING ALDER HALL TESTVILLE"],
+            ["002", "b1", "WEST WING ALDER HALL TESTVILLE"],
+            ["003", "c1", "ALDER HALL TESTVILLE"],
+            ["004", "d1", "PINE LODGE TESTVILLE"],
+        ],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone()[1] == ["001"]
+
+
+@pytest.mark.parametrize(
+    "numbers_l,numbers_r,eligible,anchors,postcode,expected",
+    [
+        ([], [], True, ["001"], "ZZ1 1ZZ", True),
+        (["7"], [], True, ["001"], "ZZ1 1ZZ", False),
+        ([], ["7"], True, ["001"], "ZZ1 1ZZ", False),
+        ([], [], False, ["001"], "ZZ1 1ZZ", False),
+        ([], [], True, ["002"], "ZZ1 1ZZ", False),
+        ([], [], True, ["001", "002"], "ZZ1 1ZZ", False),
+        ([], [], True, ["001"], "ZZ1 2ZZ", False),
+    ],
+)
+def test_lexical_fallback_relief_requires_anchored_unnumbered_property(
+    duck_con, numbers_l, numbers_r, eligible, anchors, postcode, expected
+):
+    comparison = next(
+        item
+        for item in _get_model_settings_dict()["comparisons"]
+        if item["output_column_name"] == "numeric_token_1"
+    )
+    level = next(
+        item
+        for item in comparison["comparison_levels"]
+        if item["label_for_charts"]
+        == "Strong postcode name with different lexical fallback words"
+    )
+    pair = duck_con.sql(
+        """
+        SELECT $numbers_l::VARCHAR[] AS numeric_tokens_l,
+            $numbers_r::VARCHAR[] AS numeric_tokens_r,
+            $eligible::BOOLEAN AS lk_eligible_r,
+            $anchors::VARCHAR[] AS lk_anchor_uprns_r,
+            '001' AS unique_id_l, 'ZZ1 1ZZ' AS postcode_l,
+            $postcode::VARCHAR AS postcode_r,
+            'WING' AS numeric_token_1_l, 'ALDER' AS numeric_token_1_r
+        """,
+        params={
+            "numbers_l": numbers_l,
+            "numbers_r": numbers_r,
+            "eligible": eligible,
+            "anchors": anchors,
+            "postcode": postcode,
+        },
+    )
+    assert bool(pair.filter(level["sql_condition"]).count("*").fetchone()[0]) == expected
+    assert level["m_probability"] / level["u_probability"] == 0.0625
+    assert comparison["comparison_levels"].index(level) < next(
+        index
+        for index, item in enumerate(comparison["comparison_levels"])
+        if item["label_for_charts"] == "Primary numbers both present but differ"
+    )
+
+
+def test_lookup_work_tables_are_released_before_pair_scoring(duck_con):
+    source, canonical = _features(
+        duck_con,
+        "MEADOW COTTAGE",
+        [["001", "a1", "MEADOW COTTAGE"], ["002", "b1", "ORCHARD HOUSE"]],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+        {"a1": 6},
+        ["001"],
+    )
+    assert canonical.count("*").fetchone()[0] == 2
+    assert (
+        duck_con.sql("""
+        SELECT count(*) FROM duckdb_tables()
+        WHERE table_name LIKE '__ukam__name_source_keys_%'
+            OR table_name LIKE '__ukam__name_spacing_candidates_%'
+            OR table_name LIKE '__ukam__name_canonical_%_keys'
+    """).fetchone()[0]
+        == 0
+    )
+
+
+def test_aligned_three_word_name_can_anchor_on_second_phrase(duck_con):
+    source, _ = _features(
+        duck_con,
+        "MILL OF BIRCH TESTVILLE",
+        [
+            ["001", "a1", "MILL OF BIRCH TESTVILLE"],
+            ["002", "b1", "MILL OF ALDER TESTVILLE"],
+            ["003", "c1", "PINE LODGE TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TESTVILLE"],
+        ],
+    )
+    assert source.select("lk_anchor_uprns").fetchone()[0] == ["001"]
+
+
+@pytest.mark.parametrize("prefix", ["THE", "GROUND", "12", "12A"])
+def test_canonical_article_floor_or_number_prefix_keeps_name_support(duck_con, prefix):
+    source, _ = _features(
+        duck_con,
+        "MEADOW COTTAGE",
+        [
+            ["001", "a1", f"{prefix} MEADOW COTTAGE"],
+            ["002", "b1", "ORCHARD HOUSE"],
+        ],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+        {"a1": 6},
+        ["001"],
+    )
+
+
+@pytest.mark.parametrize(
+    "tokens_l,tokens_r,level,numbers,expected",
+    [
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 2, [], True),
+        (["SUNNY", "SIDE", "ROAD"], ["SUNNYSIDE", "ROAD"], 2, [], True),
+        (["ALDER", "SUNNYSIDE"], ["ALDER", "SUNNY", "SIDE"], 2, [], False),
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 3, [], False),
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 2, ["7"], False),
+    ],
+)
+def test_spacing_fallback_relief_requires_an_exact_leading_name(
+    duck_con, tokens_l, tokens_r, level, numbers, expected
+):
+    comparison = next(
+        item
+        for item in _get_model_settings_dict()["comparisons"]
+        if item["output_column_name"] == "numeric_token_1"
+    )
+    rule = next(
+        item
+        for item in comparison["comparison_levels"]
+        if item["label_for_charts"]
+        == "Unique leading spacing name with different lexical fallback words"
+    )
+    pair = duck_con.sql(
+        """
+        SELECT $tokens_l::VARCHAR[] AS clean_full_address_tokens_l,
+            $tokens_r::VARCHAR[] AS clean_full_address_tokens_r,
+            $numbers::VARCHAR[] AS numeric_tokens_l, []::VARCHAR[] AS numeric_tokens_r,
+            true AS lk_eligible_r, 'ZZ1 1ZZ' AS postcode_l, 'ZZ1 1ZZ' AS postcode_r,
+            MAP(['alias'], [$level::INTEGER]) AS lk_level_by_alias_r,
+            'alias' AS ukam_address_id_l,
+            'SUNNYSIDE' AS numeric_token_1_l, 'SUNNY' AS numeric_token_1_r
+        """,
+        params={
+            "tokens_l": tokens_l,
+            "tokens_r": tokens_r,
+            "numbers": numbers,
+            "level": level,
+        },
+    )
+    assert bool(pair.filter(rule["sql_condition"]).count("*").fetchone()[0]) == expected
+    assert rule["m_probability"] / rule["u_probability"] == 0.0625
