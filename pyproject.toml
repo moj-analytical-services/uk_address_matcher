@@ -24,6 +24,7 @@ dev = [
     "pytest-playwright>=0.7.2",
     "pyyaml>=6.0.2",
     "ipykernel>=6.29.4",
+    "tornado>=6.6; python_version >= '3.11'",
     "boto3>=1.40.0"
 ]
 
