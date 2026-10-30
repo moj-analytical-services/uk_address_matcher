@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
+from benchmarking.config.datasets import load_dataset
 from benchmarking.config.sources import resolve_data_path
 
 
@@ -45,3 +47,26 @@ def test_resolve_data_path_raises_for_local_file_path(
 
     with pytest.raises(RuntimeError, match="does not exist"):
         resolve_data_path("UKAM_TEST_DATA_PATH")
+
+
+def test_load_gwynedd_maps_uprn_and_concatenates_address_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_file = tmp_path / "Gwynedd-domestic-property-list-060626.csv"
+    source_file.write_text(
+        "property_ref,uprn,band,addr1,addr2,addr3,addr4,postcode\n"
+        "42,12345678901,A,7 TEST STREET,,TEST TOWN,,ZZ1 1ZZ\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UKAM_GWYNEDD_DATA_PATH", str(tmp_path))
+
+    connection = duckdb.connect(":memory:")
+    try:
+        rows = load_dataset(connection, "gwynedd").fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [
+        ("12345678901", "7 test street test town", "12345678901", "ZZ1 1ZZ")
+    ]

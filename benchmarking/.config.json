@@ -1,4 +1,5 @@
 {
+	"UKAM_GWYNEDD_DATA_PATH": "/path/to/gwynedd/Gwynedd-domestic-property-list-060626.csv",
 	"UKAM_ABERDEENSHIRE_DATA_PATH": "/path/to/local/aberdeenshire/",
 	"UKAM_LAMBETH_DATA_PATH": "/path/to/local/lambeth/",
 	"UKAM_HACKNEY_DATA_PATH": "/path/to/local/hackney/",
