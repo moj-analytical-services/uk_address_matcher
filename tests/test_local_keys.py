@@ -6,8 +6,8 @@ from splink import SettingsCreator
 from uk_address_matcher import (
     AddressMatcher,
     SplinkStage,
-    prepare_data_for_matching,
 )
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.local_keys import (
     add_local_key_features,
     prepare_canonical_local_keys,

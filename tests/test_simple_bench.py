@@ -4,11 +4,39 @@ import duckdb
 import pytest
 
 import benchmarking.insights.reporting as reporting_module
+import benchmarking.runner as runner_module
 from benchmarking.config.datasets import _clean_output
 from benchmarking.insights.diagnostics import build_dataset_diagnostics
 from benchmarking.insights.reporting import print_benchmark_summary, print_diagnostics
 from benchmarking.insights.types import BenchmarkOutputOptions
 from benchmarking.runner import BenchmarkRunResult, resolve_dataset_selection
+from uk_address_matcher import ExactMatchStage, prepare_canonical_folder
+
+
+def test_runner_adapts_public_result_ids(tmp_path, monkeypatch):
+    with duckdb.connect() as con:
+        canonical = con.sql(
+            "SELECT 'C1' AS address_id, '10 HIGH STREET SW1A 1AA' AS address_concat"
+        )
+        messy = con.sql(
+            "SELECT 'M1' AS address_id, '10 HIGH STREET SW1A 1AA' AS address_concat, "
+            "'C1' AS ukam_label"
+        )
+        prepare_canonical_folder(canonical, tmp_path, con=con, show_progress="off")
+        monkeypatch.setattr(
+            runner_module, "get_dataset_definition", lambda key: {"label": key}
+        )
+        monkeypatch.setattr(runner_module, "load_dataset", lambda *args, **kwargs: messy)
+        result = runner_module.run_single_dataset(
+            con, "synthetic", str(tmp_path), stages=[ExactMatchStage()]
+        )
+        assert result.total_rows == result.matched_rows == result.correct_matches == 1
+        stored = con.table("simple_bench_matches_synthetic")
+        assert "address_id" not in stored.columns
+        assert "canonical_address_id" not in stored.columns
+        assert stored.select("unique_id, resolved_canonical_id").fetchall() == [
+            ("M1", "C1")
+        ]
 
 
 def test_resolve_dataset_selection_all() -> None:

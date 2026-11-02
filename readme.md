@@ -52,22 +52,24 @@ The package will find the best matching canonical address for each messy address
 
 ## Example:
 
-Your address files need, at minimum, two columns: `unique_id` and `address_concat`.
+Your address files need `address_concat` and an entity ID: prefer `address_id`,
+or use the supported `unique_id` alias. Supply exactly one ID column. Entity IDs
+may repeat across textual variants of an address.
 
-`postcode` is optional by recommended. If not provided an attempt is made to parse them out of `address_concat`
+`postcode` is optional; when omitted or null, it is extracted from `address_concat`.
 
 Given the following data:
 
 ### Messy data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | m_1 | Flat A Example Court, 10 Demo Road, Townton | AB1 2BC |
 | ...more rows |
 
 ### Canonical data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | c_1 | Flat A, 10 Demo Road, Townton | AB1 2BC |
 | c_2 | Flat B, 10 Demo Road, Townton | AB1 2BC |
@@ -90,15 +92,22 @@ matcher = AddressMatcher(
     addresses_to_match=messy,
     con=con,
 )
-result = matcher.match()
-result.matches().show(max_width=10000)
+with matcher.match() as result:
+    result.matches().show(max_width=10000)
+con.close()
 ```
 
-Example output:
+Selected output columns:
 
-| unique_id | resolved_canonical_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
+| address_id | canonical_address_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
 |----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
 | m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
+
+Results also include the per-run row keys `ukam_address_id` and
+`canonical_ukam_address_id`. `matches()` includes unmatched rows by default;
+use `matches(include_unmatched=False)` for successful matches only. Consume lazy
+relations before closing their result or connection; materialised Python values
+remain usable afterwards. See the [2.0 migration guide](docs/site/get_started.md#migrating-to-20).
 
 
 

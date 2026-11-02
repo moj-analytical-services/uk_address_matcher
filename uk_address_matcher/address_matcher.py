@@ -18,6 +18,8 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
 from uk_address_matcher.helpers.canonical_inputs import (
+    _normalise_address_dict,
+    _normalise_and_validate_address_input,
     normalise_and_validate_raw_canonical,
 )
 from uk_address_matcher.linking_model.address_record import AddressRecord
@@ -71,7 +73,11 @@ class AddressMatcher:
             or directly on the provided canonical relation.
         addresses_to_match: Messy addresses to resolve. Can be a
             `DuckDBPyRelation`, a list of `AddressRecord`, or a list of dicts
-            with `address_concat`, `postcode`, and `unique_id` fields.
+            with required `address_concat` and `address_id` fields. `unique_id`
+            is a supported input alias; supply only one ID name. Entity IDs
+            may repeat. `postcode` is optional and can be None; missing
+            postcodes are extracted from the address text. Dictionary and
+            relation metadata is retained for explicit result enrichment.
         con: DuckDB connection to use for all operations.
         stages: Optional list of `MatchingStage` instances defining the
             matching pipeline. Defaults to exact match followed by Splink.
@@ -99,7 +105,8 @@ class AddressMatcher:
                 addresses_to_match=messy,
                 con=con,
             )
-            result = matcher.match()
+            with matcher.match() as result:
+                rows = result.matches().fetchall()
 
         Custom stages:
 
@@ -117,7 +124,8 @@ class AddressMatcher:
                     SplinkStage(),
                 ],
             )
-            result = matcher.match()
+            with matcher.match() as result:
+                rows = result.matches().fetchall()
 
         Pre-prepared canonical data:
 
@@ -126,7 +134,8 @@ class AddressMatcher:
                 addresses_to_match=messy,
                 con=con,
             )
-            result = matcher.match()
+            with matcher.match() as result:
+                rows = result.matches().fetchall()
     """
 
     def __init__(
@@ -284,6 +293,7 @@ class AddressMatcher:
                 self._roadlike_places = derive_roadlike_places(
                     self._canonical_clean,
                     self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
                     debug_options=self.debug_options,
                     show_progress=self.show_progress,
                 )
@@ -314,7 +324,7 @@ class AddressMatcher:
         if self._canonical_clean is not None:
             inverted_index_n = self._canonical_clean.count("*").fetchone()[0]
         self._messy_clean = prepare_data_for_matching(
-            self._raw_messy,
+            _normalise_and_validate_address_input(self._raw_messy, dataset="messy"),
             con=self.con,
             num_of_chunks=self.cleaning_num_chunks,
             # If nothing was loaded from disk, these will be None — but that's fine,
@@ -353,9 +363,15 @@ class AddressMatcher:
                 return AddressRecord.to_duckdb_relation(addresses_to_match, self.con)
             if all(isinstance(record, dict) for record in addresses_to_match):
                 records = [
-                    AddressRecord.from_dict(record) for record in addresses_to_match
+                    _normalise_address_dict(record) for record in addresses_to_match
                 ]
-                return AddressRecord.to_duckdb_relation(records, self.con)
+                columns = dict.fromkeys(key for record in records for key in record)
+                rows = [{key: record.get(key) for key in columns} for record in records]
+                return self.con.sql(
+                    "SELECT * REPLACE (postcode::VARCHAR AS postcode) "
+                    "FROM (SELECT unnest($records, max_depth := 2))",
+                    params={"records": rows},
+                )
             raise TypeError(
                 "addresses_to_match must be a DuckDB relation, a list of AddressRecord, "
                 "or a list of dicts."
@@ -385,8 +401,9 @@ class AddressMatcher:
 
         Returns:
             A `MatchResult` wrapper around the final DuckDB relation, including
-            `unique_id`, `resolved_canonical_id`, `match_reason`, and any
-            additional columns produced by the stages.
+            `address_id`, `canonical_address_id`, the per-run UKAM row keys,
+            and `match_reason`. Use a context manager or `close()` to release
+            retained tables before closing the connection.
         """
 
         stage_list = "\n".join(f"    - {s.__class__.__name__}" for s in self.stages)
