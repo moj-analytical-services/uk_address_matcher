@@ -10,7 +10,7 @@ import pyarrow
 import pyarrow.parquet as pyarrow_parquet
 import pytest
 
-from uk_address_matcher import prepare_canonical_folder
+from uk_address_matcher import AddressMatcher, SplinkStage, prepare_canonical_folder
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.local_keys import prepare_canonical_local_keys
 from uk_address_matcher.cleaning.materialisation import (
@@ -24,6 +24,7 @@ from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
     _coerce_prepare_input_to_relation,
+    _prepare_canonical_folder,
     _PreparedCanonical,
     _rehydrate_canonical_addresses,
     load_prepared_canonical_data,
@@ -78,9 +79,10 @@ def _write_raw_canonical_csv(path: Path, records: list[dict[str, str]]) -> None:
 
 
 def _fake_relation(*, columns: list[str], row_count: int) -> MagicMock:
-    relation = MagicMock()
+    relation = MagicMock(spec=duckdb.DuckDBPyRelation)
     relation.columns = columns
     relation.count.return_value.fetchone.return_value = (row_count,)
+    relation.aggregate.return_value.fetchone.return_value = (0, 0)
     return relation
 
 
@@ -122,7 +124,6 @@ def prepared_folder(con, canonical_data, tmp_path):
         canonical_data,
         output_folder=tmp_path,
         con=con,
-        _derive_road_catalogue=True,
         overwrite=True,
     )
     return tmp_path
@@ -202,9 +203,8 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
         canonical,
         output_folder=tmp_path,
         con=con,
-        num_of_chunks=3,
+        cleaning_num_chunks=3,
         output_chunk_count=2,
-        _derive_road_catalogue=False,
     )
     loaded = load_prepared_canonical_data(tmp_path, con)
     assert "local_key_tokens" not in loaded.addresses.columns
@@ -221,7 +221,8 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
     assert "derive_local_keys" not in manifest["preparation_options"]
 
 
-def test_larger_road_batches_preserve_fallback_scope(con):
+@pytest.mark.parametrize("num_of_chunks", [1, 2, 10])
+def test_larger_road_batches_preserve_fallback_scope(con, num_of_chunks):
     source = con.sql("""
         SELECT *, regexp_extract_all(clean_full_address, '[0-9]+') AS numeric_tokens
         FROM (
@@ -230,10 +231,11 @@ def test_larger_road_batches_preserve_fallback_scope(con):
                     WHEN alias_id IN (2, 8) THEN NULL
                     WHEN alias_id IN (3, 24) THEN 'second-property'
                     ELSE alias_id::VARCHAR END AS unique_id,
-                'AB' || alias_id::VARCHAR || ' 1AA' AS postcode,
+                'A' || chr(65 + (alias_id // 10)::INTEGER)
+                    || (alias_id % 10)::VARCHAR || ' 1AA' AS postcode,
                 CASE WHEN alias_id IN (3, 8, 9) THEN '14 MYSTERY HAMLET'
                     ELSE '12 HIGH STREET' END AS clean_full_address
-            FROM range(1, 25) rows(alias_id)
+            FROM range(1, 161) rows(alias_id)
         ) addresses
     """)
     expected = chunking_strategies.derive_roadlike_places(
@@ -244,6 +246,65 @@ def test_larger_road_batches_preserve_fallback_scope(con):
     assert any(row[1] == "MYSTERY HAMLET" for row in expected_rows)
     actual = chunking_strategies.derive_roadlike_places(source, con, show_progress="off")
     assert actual.order(columns).fetchall() == expected_rows
+
+    seen_rows = []
+    for batch, total_batches in chunking_strategies._postcode_batches(
+        source, con, num_of_chunks=num_of_chunks, property_scope_column="road_scope"
+    ):
+        assert total_batches == num_of_chunks
+        seen_rows.extend(batch.select("ukam_address_id").fetchall())
+    assert (
+        sorted(seen_rows)
+        == source.order("ukam_address_id").select("ukam_address_id").fetchall()
+    )
+
+    roads, keys = chunking_strategies._derive_postcode_features(
+        source,
+        con,
+        include_local_keys=True,
+        num_of_chunks=num_of_chunks,
+        show_progress="off",
+    )
+    assert roads.order(columns).fetchall() == expected_rows
+    key_columns = ", ".join(keys.columns)
+    assert (
+        keys.order("ukam_address_id").fetchall()
+        == prepare_canonical_local_keys(con, source)
+        .select(key_columns)
+        .order("ukam_address_id")
+        .fetchall()
+    )
+
+
+@pytest.mark.parametrize("prepared", [True, False])
+def test_postcode_features_use_cleaning_chunk_count(con, tmp_path, caplog, prepared):
+    source = con.sql("""
+        SELECT alias_id::VARCHAR AS unique_id,
+            '12 HIGH STREET' AS address_concat,
+            'A' || chr(65 + (alias_id // 10)::INTEGER)
+                || (alias_id % 10)::VARCHAR || ' 1AA' AS postcode
+        FROM range(160) addresses(alias_id)
+    """)
+    with caplog.at_level(logging.INFO, logger="uk_address_matcher"):
+        if prepared:
+            prepare_canonical_folder(
+                source, tmp_path, con=con, cleaning_num_chunks=3, show_progress="stages"
+            )
+        else:
+            matcher = AddressMatcher(
+                canonical_addresses=source,
+                addresses_to_match=source.limit(1),
+                con=con,
+                cleaning_num_chunks=3,
+                stages=[SplinkStage()],
+                show_progress="stages",
+            )
+            with matcher.match() as result:
+                assert result.matches().count("*").fetchone() == (1,)
+    assert (
+        "Deriving canonical postcode features: 160 records across 3 chunks"
+        in caplog.messages
+    )
 
 
 def test_shared_road_batches_preserve_local_keys(con):
@@ -336,7 +397,6 @@ def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
         canonical_data,
         output_folder=tmp_path,
         con=con,
-        _derive_road_catalogue=False,
     )
     prepared = load_prepared_canonical_data(tmp_path, con)
     tokens = (
@@ -361,12 +421,20 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
 def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     output_folder = tmp_path / "without_road_keys"
 
-    prepare_canonical_folder(
-        canonical_data,
-        output_folder=output_folder,
-        con=con,
-        _derive_road_catalogue=False,
-    )
+    with _CanonicalIntermediates(con) as storage:
+        _prepare_canonical_folder(
+            canonical_data,
+            output_folder=output_folder,
+            con=con,
+            num_of_chunks=10,
+            output_chunk_count=1,
+            derive_distinguishing_wrt_adjacent_records=True,
+            overwrite=False,
+            add_debug_features=False,
+            show_progress="off",
+            _derive_road_catalogue=False,
+            _storage=storage,
+        )
     prepared = load_prepared_canonical_data(output_folder, con)
 
     assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
@@ -474,7 +542,6 @@ def test_prepare_road_catalogue_includes_all_classified_rows(
         source,
         output_folder=output_folder,
         con=con,
-        _derive_road_catalogue=True,
     )
 
     prepared = load_prepared_canonical_data(output_folder, con)
@@ -1151,28 +1218,28 @@ def test_prepare_rejects_output_chunk_count_above_supported_digits(
 
 
 @pytest.mark.parametrize("invalid_chunk_count", [0, -1, -10])
-def test_prepare_rejects_non_positive_num_of_chunks(
+def test_prepare_rejects_non_positive_cleaning_num_chunks(
     con, canonical_data, tmp_path, invalid_chunk_count
 ):
-    with pytest.raises(ValueError, match="num_of_chunks must be at least 1"):
+    with pytest.raises(ValueError, match="cleaning_num_chunks must be at least 1"):
         prepare_canonical_folder(
             canonical_data,
             output_folder=tmp_path,
             con=con,
-            num_of_chunks=invalid_chunk_count,
+            cleaning_num_chunks=invalid_chunk_count,
             overwrite=True,
         )
 
 
-def test_prepare_rejects_num_of_chunks_above_supported_digits(
+def test_prepare_rejects_cleaning_num_chunks_above_supported_digits(
     con, canonical_data, tmp_path
 ):
-    with pytest.raises(ValueError, match="num_of_chunks must be at most"):
+    with pytest.raises(ValueError, match="cleaning_num_chunks must be at most"):
         prepare_canonical_folder(
             canonical_data,
             output_folder=tmp_path,
             con=con,
-            num_of_chunks=MAX_CHUNK_COUNT + 1,
+            cleaning_num_chunks=MAX_CHUNK_COUNT + 1,
             overwrite=True,
         )
 
@@ -1270,7 +1337,6 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         "s3://bucket/input/canonical.csv",
         "s3://bucket/output/prepared",
         con=con,
-        _derive_road_catalogue=True,
         add_debug_features=add_debug_features,
     )
 
