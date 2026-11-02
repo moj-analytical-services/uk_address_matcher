@@ -1,6 +1,7 @@
 import duckdb
 
-from uk_address_matcher import AddressMatcher, prepare_canonical_folder, ukam_datasets
+from uk_address_matcher import AddressMatcher, prepare_canonical_folder
+from uk_address_matcher.datasets import ukam_datasets
 
 con = duckdb.connect(database=":memory:")
 
@@ -32,8 +33,7 @@ matcher = AddressMatcher(
     con=con,
 )
 
-match_result = matcher.match()
-result = match_result.matches()
-
-print("\n=== First 10 matched records ===")
-result.limit(10).show(max_width=500)
+with matcher.match() as match_result:
+    print("\n=== First 10 matched records ===")
+    match_result.matches().limit(10).show(max_width=500)
+con.close()

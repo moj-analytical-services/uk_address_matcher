@@ -5,20 +5,20 @@ from uk_address_matcher import (
     ExactMatchStage,
     PeeledAddressStage,
     SplinkStage,
-    ukam_datasets,
 )
+from uk_address_matcher.datasets import ukam_datasets
 
 # -----------------------------------------------------------------------------
 # Input data requirements
 # -----------------------------------------------------------------------------
-# Your input tables can be DuckDB relations, Pandas DataFrames, or anything
-# DuckDB can query. The matcher expects the following columns to be present.
+# Canonical input is a DuckDB relation or a prepared-folder path. Messy input
+# can also be a list of dictionaries or AddressRecord objects.
 #
 # Required columns
 # | Column         | DuckDB dtype         | What it's used for                              |
 # |----------------|----------------------|--------------------------------------------------|
-# | unique_id      | BIGINT or VARCHAR     | Stable identifier for each row (must be unique) |
-# | address_concat | VARCHAR               | Address text *excluding postcode* (recommended) |
+# | address_id     | BIGINT or VARCHAR     | Entity ID; unique_id is a supported alias       |
+# | address_concat | VARCHAR               | Address text, optionally including postcode     |
 #
 # Optional columns
 # | Column         | DuckDB dtype         | What it's used for                              |
@@ -72,38 +72,25 @@ matcher = AddressMatcher(
     ],
 )
 
-match_result = matcher.match()
+with matcher.match() as match_result:
+    result = match_result.matches()
+    print("=== First 10 matched records ===")
+    result.limit(10).show(max_width=500)
 
-# The underlying DuckDB relation is always available via .matches(),
-# which includes all matched records and metadata about the match process
-result = match_result.matches()
+    print("\n=== Successful matches ===")
+    match_result.matches(include_unmatched=False).limit(10).show(max_width=500)
 
-# -----------------------------------------------------------------------------
-# Preview results
-# -----------------------------------------------------------------------------
-print("=== First 10 matched records ===")
-result.limit(10).show(max_width=500)
+    print("\n=== Matches enriched with input data ===")
+    enriched_result = match_result.join_input_columns(
+        canonical=[
+            "clean_full_address",
+            {"input_column": "postcode", "alias": "canonical_input_postcode"},
+        ],
+        messy=[{"input_column": "postcode", "alias": "messy_input_postcode"}],
+    )
+    enriched_result.limit(10).show(max_width=500)
 
-print("\n=== Matches enriched with input data ===")
-enriched_result = match_result.join_input_columns(
-    canonical=[
-        "clean_full_address",
-        {"input_column": "postcode", "alias": "canonical_input_postcode"},
-    ],
-    messy=[{"input_column": "postcode", "alias": "messy_input_postcode"}],
-)
-enriched_result.limit(10).show(max_width=500)
+    print("\n=== Match metrics ===")
+    match_result.match_metrics().show()
 
-# -----------------------------------------------------------------------------
-# Match-reason breakdown
-# -----------------------------------------------------------------------------
-# match_metrics() groups rows by match_reason and shows counts + percentages.
-print("\n=== Match metrics ===")
-match_result.match_metrics().show()
-
-# -----------------------------------------------------------------------------
-# Splink inspection helpers (available when a Splink stage runs)
-# -----------------------------------------------------------------------------
-print("\n=== Splink predictions sample ===")
-splink_results = match_result._splink_predictions(limit=5)
-splink_results.show(max_width=500)
+con.close()

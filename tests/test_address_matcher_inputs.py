@@ -1,5 +1,6 @@
 import pytest
 
+import uk_address_matcher
 from uk_address_matcher import (
     AddressMatcher,
     AddressRecord,
@@ -167,6 +168,22 @@ def test_record_alias_validation_and_legacy_constructor():
             AddressRecord(address_concat="10 DOWNING STREET", **data)
     with pytest.raises(ValueError, match="address_concat"):
         AddressRecord.from_dict({"address_id": "M1"})
+
+
+def test_root_api_exports():
+    assert set(uk_address_matcher.__all__) == {
+        "AddressMatcher",
+        "AddressRecord",
+        "MatchResult",
+        "prepare_canonical_folder",
+        "ExactMatchStage",
+        "UniqueTrigramStage",
+        "PeeledAddressStage",
+        "SplinkStage",
+    }
+    assert not hasattr(uk_address_matcher, "prepare_data_for_matching")
+    assert not hasattr(uk_address_matcher, "ukam_datasets")
+    assert isinstance(uk_address_matcher.__version__, str)
 
 
 @pytest.mark.parametrize(
