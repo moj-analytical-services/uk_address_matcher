@@ -351,11 +351,14 @@ def _postcode_batches(
     source: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
+    num_of_chunks: int | None = None,
     postcode_districts_per_batch: int | None = None,
     target_rows_per_batch: int = 125_000,
     property_scope_column: str | None = None,
 ) -> Iterator[tuple[DuckDBPyRelation, int]]:
     """Materialise whole districts while retaining fixed road fallback groups."""
+    if num_of_chunks is not None and num_of_chunks < 1:
+        raise ValueError("num_of_chunks must be at least 1")
     if postcode_districts_per_batch is not None and postcode_districts_per_batch < 1:
         raise ValueError("postcode_districts_per_batch must be at least 1")
     if target_rows_per_batch < 1:
@@ -379,13 +382,20 @@ def _postcode_batches(
             SELECT {district_expression} AS district, count(*) AS alias_count
             FROM {input_table} GROUP BY district ORDER BY district
         """).fetchall()
+        scope_size = _ROAD_FALLBACK_SCOPE_DISTRICTS if property_scope_column else 1
+        scope_count = (len(district_counts) + scope_size - 1) // scope_size
+        requested_batches = min(num_of_chunks, scope_count) if num_of_chunks else 0
         districts = []
         batch_ids = []
         property_scopes = []
         batch_id = 0
         batch_rows = 0
         for district_index, (district, alias_count) in enumerate(district_counts):
-            if districts_per_batch is not None:
+            if num_of_chunks is not None:
+                batch_id = (
+                    (district_index // scope_size) * requested_batches // scope_count
+                )
+            elif districts_per_batch is not None:
                 batch_id = district_index // districts_per_batch
             elif (
                 batch_rows
@@ -475,6 +485,7 @@ def derive_roadlike_places(
     output_path: Path | str | None = None,
     *,
     postcode_districts: Collection[str] | None = None,
+    num_of_chunks: int | None = None,
     postcode_districts_per_batch: int | None = _CANONICAL_POSTCODE_DISTRICTS_PER_BATCH,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
@@ -488,7 +499,8 @@ def derive_roadlike_places(
     ``postcode_districts`` restricts the source before batching.
     Physical batches default to 128 districts; road fallback groups retain their
     existing 16-district boundaries. Larger requested batches are rounded down
-    to a whole number of fallback groups.
+    to a whole number of fallback groups. `num_of_chunks`, when supplied, takes
+    precedence and divides whole fallback groups across at most that many batches.
     """
     catalogue, _ = _derive_postcode_features(
         canonical_address_table,
@@ -496,6 +508,7 @@ def derive_roadlike_places(
         output_path,
         include_local_keys=False,
         postcode_districts=postcode_districts,
+        num_of_chunks=num_of_chunks,
         postcode_districts_per_batch=postcode_districts_per_batch,
         debug_options=debug_options,
         show_progress=show_progress,
@@ -512,6 +525,7 @@ def _derive_postcode_features(
     include_local_keys: bool,
     include_road_catalogue: bool = True,
     postcode_districts: Collection[str] | None = None,
+    num_of_chunks: int | None = None,
     postcode_districts_per_batch: int | None = _CANONICAL_POSTCODE_DISTRICTS_PER_BATCH,
     debug_options: Optional[DebugOptions] = None,
     show_progress: ShowProgress = "auto",
@@ -593,6 +607,7 @@ def _derive_postcode_features(
             _postcode_batches(
                 narrow_source,
                 con,
+                num_of_chunks=num_of_chunks,
                 postcode_districts_per_batch=postcode_districts_per_batch,
                 property_scope_column=property_scope_column,
             )

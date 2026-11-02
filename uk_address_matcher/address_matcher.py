@@ -284,6 +284,7 @@ class AddressMatcher:
                 self._roadlike_places = derive_roadlike_places(
                     self._canonical_clean,
                     self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
                     debug_options=self.debug_options,
                     show_progress=self.show_progress,
                 )

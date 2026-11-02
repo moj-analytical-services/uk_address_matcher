@@ -19,6 +19,7 @@ prepare_canonical_folder(
     df_canonical,
     output_folder="./ukam_prepared_canonical",
     con=con,
+    cleaning_num_chunks=10,
     overwrite=True,
 )
 
