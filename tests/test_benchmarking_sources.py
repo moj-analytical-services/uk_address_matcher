@@ -67,6 +67,4 @@ def test_load_gwynedd_maps_uprn_and_concatenates_address_fields(
     finally:
         connection.close()
 
-    assert rows == [
-        ("12345678901", "7 test street test town", "12345678901", "ZZ1 1ZZ")
-    ]
+    assert rows == [("12345678901", "7 test street test town", "12345678901", "ZZ1 1ZZ")]
