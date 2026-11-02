@@ -166,7 +166,7 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
     result = matcher.match()
     cols = result.matches().columns
 
-    assert "unique_id_l" in cols or "unique_id" in cols
+    assert "address_id" in cols
     assert "match_reason" in cols
     assert "postcode" in cols
     assert "postcode_canonical" in cols
@@ -198,6 +198,33 @@ def enrichment_result(con):
     )
 
 
+def test_public_matches_filter_and_identifiers(enrichment_result):
+    relation = enrichment_result._relation.project(
+        "*, CASE WHEN canonical_ukam_address_id IS NOT NULL THEN 'C1' END "
+        "AS resolved_canonical_id, 'source metadata' AS address_id, "
+        "'other metadata' AS canonical_address_id"
+    )
+    result = MatchResult(relation, con=enrichment_result.con)
+    metrics = result.match_metrics().fetchall()
+    for all_columns in (False, True):
+        rows = result.matches(all_columns=all_columns)
+        assert "unique_id" not in rows.columns
+        assert "resolved_canonical_id" not in rows.columns
+        assert len(rows.columns) == len(set(rows.columns))
+        assert rows.select(
+            "address_id, ukam_address_id, canonical_address_id, canonical_ukam_address_id"
+        ).order("ukam_address_id").fetchall() == [
+            ("M1", 1, "C1", 101),
+            ("M2", 2, None, None),
+            ("M1", 3, "C1", 102),
+        ]
+        assert result.matches(all_columns=all_columns, include_unmatched=False).select(
+            "ukam_address_id"
+        ).order("ukam_address_id").fetchall() == [(1,), (3,)]
+    assert result.matches().count("*").fetchone() == (3,)
+    assert result.match_metrics().fetchall() == metrics
+
+
 def test_join_input_columns_mixed_selections_aliases_and_unmatched_rows(
     enrichment_result,
 ):
@@ -217,11 +244,17 @@ def test_join_input_columns_mixed_selections_aliases_and_unmatched_rows(
         "messy_postcode",
     ]
     assert enriched.order("customer_id").fetchall() == [
-        ("M1", "SW1A 1AA", "exact", "RD", 7, 11, "one"),
-        ("M2", "M1 1AA", None, None, None, 12, "two"),
-        ("M1", "SW1A 1AA", "exact", "CO", 8, 13, "three"),
+        ("M1", 1, "SW1A 1AA", 101, "exact", "RD", 7, 11, "one"),
+        ("M2", 2, "M1 1AA", None, None, None, None, 12, "two"),
+        ("M1", 3, "SW1A 1AA", 102, "exact", "CO", 8, 13, "three"),
     ]
-    assert result.matches().columns == ["unique_id", "postcode", "match_reason"]
+    assert result.matches().columns == [
+        "address_id",
+        "ukam_address_id",
+        "postcode",
+        "canonical_ukam_address_id",
+        "match_reason",
+    ]
 
 
 def test_join_input_columns_reports_all_output_collisions(enrichment_result):
@@ -301,7 +334,7 @@ def test_join_input_columns_prepared_canonical_uses_supplied_dataset(
     ).match()
     assert result.join_input_columns(
         canonical=[{"input_column": "unique_id", "alias": "source_canonical_id"}]
-    ).select("unique_id, source_canonical_id").fetchall() == [("M1", "C1")]
+    ).select("address_id, source_canonical_id").fetchall() == [("M1", "C1")]
     with pytest.raises(duckdb.BinderException, match="unavailable_upstream"):
         result.join_input_columns(canonical=["unavailable_upstream"])
 
@@ -319,15 +352,15 @@ def test_join_input_columns_lifetime_is_scoped_to_each_result(
     canonical = ["classificationcode"]
     first = matcher.match()
     first_relation = first.join_input_columns(canonical=canonical, messy=["customer_id"])
-    first_rows = first_relation.order("unique_id").fetchall()
+    first_rows = first_relation.order("address_id").fetchall()
     second = matcher.match()
     assert first._canonical_relation is not second._canonical_relation
-    assert first_relation.order("unique_id").fetchall() == first_rows
+    assert first_relation.order("address_id").fetchall() == first_rows
     first.close()
     first.close()
     assert (
         second.join_input_columns(canonical=canonical, messy=["customer_id"])
-        .order("unique_id")
+        .order("address_id")
         .fetchall()
         == first_rows
     )
@@ -370,11 +403,11 @@ def test_lean_and_debug_prepared_canonical_matching_is_identical(
                 (
                     set(all_matches.columns),
                     all_matches.select(
-                        "unique_id, resolved_canonical_id, "
+                        "address_id, canonical_address_id, "
                         "canonical_ukam_address_id, match_reason, match_weight, "
                         "distinguishability"
                     )
-                    .order("unique_id")
+                    .order("address_id")
                     .fetchall(),
                 )
             )
@@ -459,7 +492,7 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     assert "original_address_concat_canonical" in result.matches().columns
     assert (
         result.matches()
-        .filter("unique_id = 'M2'")
+        .filter("address_id = 'M2'")
         .select("original_address_concat_canonical")
         .fetchone()[0]
         == "2 low street manchester"
@@ -493,7 +526,7 @@ def test_v1_2_0_prepared_canonical_matches(con):
         ).match()
 
     assert result.matches().count("*").fetchone() == (1,)
-    assert result.matches().filter("resolved_canonical_id IS NOT NULL").count(
+    assert result.matches().filter("canonical_address_id IS NOT NULL").count(
         "*"
     ).fetchone() == (1,)
 
@@ -1141,8 +1174,8 @@ def test_canonical_address_filter_applies_to_prepared_folder(con):
             con=con,
             stages=[ExactMatchStage()],
         )
-        result = matcher.match().matches().order("unique_id")
-        rows = result.select("unique_id, resolved_canonical_id").fetchall()
+        result = matcher.match().matches().order("address_id")
+        rows = result.select("address_id, canonical_address_id").fetchall()
 
     assert rows == [("M1", "C1"), ("M2", None)]
 
@@ -1189,8 +1222,8 @@ def test_canonical_address_filter_applies_to_relation(con):
         con=con,
         stages=[ExactMatchStage()],
     )
-    result = matcher.match().matches().order("unique_id")
-    rows = result.select("unique_id, resolved_canonical_id").fetchall()
+    result = matcher.match().matches().order("address_id")
+    rows = result.select("address_id, canonical_address_id").fetchall()
 
     assert rows == [("M1", "C1"), ("M2", None)]
 

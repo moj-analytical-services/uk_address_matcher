@@ -80,7 +80,6 @@ class MatchResult:
 
     Key methods:
         match_metrics      - match-reason breakdown with counts and percentages.
-        match_reasons      - distinct match-reason values.
         close              - drop every table/view retained for this result,
                              including the result table itself. After close(),
                              `.matches()` and the inspection methods no longer
@@ -109,27 +108,55 @@ class MatchResult:
             "Use .matches() to retrieve your raw results as a DuckDB table."
         )
 
-    def matches(self, *, all_columns: bool = False) -> DuckDBPyRelation:
-        """The underlying DuckDB relation containing match results.
+    def matches(
+        self,
+        *,
+        all_columns: bool = False,
+        include_unmatched: bool = True,
+    ) -> DuckDBPyRelation:
+        """Return match results using public entity and row identifiers.
 
         Args:
-            all_columns: When True, return every column. By default only the
-                key result columns are returned.
+            all_columns: Include diagnostic columns as well as key result columns.
+            include_unmatched: Include every input row by default. When False,
+                return successful matches only, without changing metrics or accuracy.
+
+        Both column modes use `address_id` and `canonical_address_id` for entity
+        IDs. `ukam_address_id` and `canonical_ukam_address_id` identify rows within
+        this run, not stable entities. Consume the lazy relation before closing
+        this result or its connection.
         """
         relation_sql = self._relation.sql_query()
-        base_relation_sql = f"""
-        SELECT * REPLACE (
-            CAST(match_reason AS VARCHAR) AS match_reason
+        identifiers = {
+            "unique_id": "address_id",
+            "resolved_canonical_id": "canonical_address_id",
+        }
+        projections = []
+        for column in self._relation.columns:
+            if _normalise_identifier_case(column) in identifiers.values():
+                continue
+            expression = _quote_identifier(column)
+            if column == "match_reason":
+                expression = f"CAST({expression} AS VARCHAR)"
+            alias = identifiers.get(column, column)
+            projections.append(f"{expression} AS {_quote_identifier(alias)}")
+        row_filter = (
+            "" if include_unmatched else "WHERE resolved_canonical_id IS NOT NULL"
         )
+        base_relation_sql = f"""
+        SELECT {", ".join(projections)}
         FROM ({relation_sql}) AS match_result
+        {row_filter}
         """
         if all_columns:
             return self.con.sql(base_relation_sql)
         preferred = [
-            "unique_id",
+            "address_id",
+            "ukam_address_id",
             "postcode",
             "postcode_canonical",
-            "resolved_canonical_id",
+            "canonical_address_id",
+            "canonical_ukam_address_id",
             "ukam_label",
             "original_address_concat",
             "clean_full_address_canonical",
@@ -138,7 +165,7 @@ class MatchResult:
             "match_weight",
             "distinguishability",
         ]
-        available = set(self._relation.columns)
+        available = {identifiers.get(column, column) for column in self._relation.columns}
         cols = [c for c in preferred if c in available]
         return self.con.sql(
             f"""

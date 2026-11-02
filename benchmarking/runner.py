@@ -109,7 +109,10 @@ def run_single_dataset(
         cleaning_num_chunks=cleaning_num_chunks,
     )
     match_result = matcher.match()
-    matches = match_result.matches(all_columns=True)
+    matches = match_result.matches(all_columns=True).project(
+        "* RENAME (address_id AS unique_id, "
+        "canonical_address_id AS resolved_canonical_id)"
+    )
     table_name = f"simple_bench_matches_{dataset_key}"
     con.sql(f"DROP TABLE IF EXISTS {table_name}")
     matches.to_table(table_name)
