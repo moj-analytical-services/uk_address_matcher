@@ -544,13 +544,12 @@ def prepare_canonical_folder(
     output_folder: str | Path,
     *,
     con: duckdb.DuckDBPyConnection,
-    num_of_chunks: int = 10,
+    cleaning_num_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
-    _derive_road_catalogue: bool = True,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
 
@@ -573,8 +572,10 @@ def prepare_canonical_folder(
             path, or a non-empty list of CSV/Parquet paths.
         output_folder: Folder to write prepared artefacts to.
         con: DuckDB connection.
-        num_of_chunks: Number of chunks to split the data into for cleaning
-            and term frequency derivation. Set to 1 for no chunking.
+        cleaning_num_chunks: Number of processing chunks for cleaning and term
+            frequency derivation, also used to batch postcode-local keys and road
+            parsing. Postcode batches retain whole districts and road fallback
+            groups, so small inputs can use fewer batches. Set to 1 for no chunking.
         output_chunk_count: Number of output chunks to write for canonical
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write contiguous globally ordered chunks under
@@ -594,19 +595,17 @@ def prepare_canonical_folder(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
-        _derive_road_catalogue: Whether to derive the road catalogue and canonical
-            road keys. Defaults to ``True``; pass ``False`` to skip road artefacts.
-
     Raises:
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
     """
+    _validate_chunk_count(cleaning_num_chunks, name="cleaning_num_chunks")
     with _CanonicalIntermediates(con) as storage:
         _prepare_canonical_folder(
             data,
             output_folder,
             con=con,
-            num_of_chunks=num_of_chunks,
+            num_of_chunks=cleaning_num_chunks,
             output_chunk_count=output_chunk_count,
             derive_distinguishing_wrt_adjacent_records=(
                 derive_distinguishing_wrt_adjacent_records
@@ -614,7 +613,7 @@ def prepare_canonical_folder(
             overwrite=overwrite,
             add_debug_features=add_debug_features,
             show_progress=show_progress,
-            _derive_road_catalogue=_derive_road_catalogue,
+            _derive_road_catalogue=True,
             _storage=storage,
         )
 
@@ -746,6 +745,7 @@ def _prepare_canonical_folder(
         con,
         include_local_keys=True,
         include_road_catalogue=_derive_road_catalogue,
+        num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
         _storage=_storage,
     )

@@ -18,6 +18,7 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import add_road_blocking_features
 from uk_address_matcher.helpers.canonical_inputs import (
+    _normalise_and_validate_address_input,
     normalise_and_validate_raw_canonical,
 )
 from uk_address_matcher.linking_model.address_record import AddressRecord
@@ -284,6 +285,7 @@ class AddressMatcher:
                 self._roadlike_places = derive_roadlike_places(
                     self._canonical_clean,
                     self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
                     debug_options=self.debug_options,
                     show_progress=self.show_progress,
                 )
@@ -314,7 +316,7 @@ class AddressMatcher:
         if self._canonical_clean is not None:
             inverted_index_n = self._canonical_clean.count("*").fetchone()[0]
         self._messy_clean = prepare_data_for_matching(
-            self._raw_messy,
+            _normalise_and_validate_address_input(self._raw_messy, dataset="messy"),
             con=self.con,
             num_of_chunks=self.cleaning_num_chunks,
             # If nothing was loaded from disk, these will be None — but that's fine,
