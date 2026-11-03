@@ -195,6 +195,11 @@ def print_run_persistence_summary(results: list[BenchmarkRunResult]) -> None:
             f"manifest={_display_path(persisted.manifest_path)}"
         )
         print(f"internal_dedupe_hash={persisted.run_hash}")
+        if persisted.precision_recall_chart_path is not None:
+            print(
+                "Precision-recall chart: "
+                f"{_display_path(persisted.precision_recall_chart_path)}"
+            )
         if persisted.comparison_warning is not None:
             print(f"Warning: {persisted.comparison_warning}")
         if persisted.comparison is None:

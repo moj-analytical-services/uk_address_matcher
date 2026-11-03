@@ -5,8 +5,10 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
+import pytest
 
 from benchmarking.insights.run_persistence import (
     compare_persisted_runs,
@@ -107,8 +109,8 @@ def test_persist_benchmark_run_records_run_id_and_legacy_hash(tmp_path: Path) ->
 
     persisted = persist_benchmark_run(
         run_id=run_id,
-        dataset_key="hackney",
-        dataset_label="Hackney",
+        dataset_key="conwy",
+        dataset_label="Conwy",
         stages=[DummyStage()],
         accuracy_table=_accuracy_table_relation(con),
         stage_diagnostics_table=_stage_diagnostics_relation(con),
@@ -118,12 +120,24 @@ def test_persist_benchmark_run_records_run_id_and_legacy_hash(tmp_path: Path) ->
         correct_matches=7,
         precision=0.875,
         recall=0.7,
+        precision_recall_curve_rows=[
+            {
+                "truth_threshold": 1.0,
+                "match_probability": 0.75,
+                "precision": 0.875,
+                "recall": 0.7,
+            }
+        ],
+        input_rows_before_canonical_filter=20,
         results_root=str(tmp_path),
-        enable_chart_exports=False,
+        enable_chart_exports=True,
     )
 
     manifest = json.loads(Path(persisted.manifest_path).read_text(encoding="utf-8"))
     history = json.loads((tmp_path / "run_history.json").read_text(encoding="utf-8"))
+    precision_recall_chart_path = Path(
+        manifest["artifacts"]["precision_recall_chart_path"]
+    )
 
     assert persisted.run_id == run_id
     assert persisted.run_hash == manifest["run_hash"]
@@ -132,6 +146,13 @@ def test_persist_benchmark_run_records_run_id_and_legacy_hash(tmp_path: Path) ->
     assert persisted.run_hash != run_id
     assert run_id in persisted.manifest_path
     assert persisted.deduplicated is False
+    assert manifest["summary"]["input_rows_before_canonical_filter"] == 20
+    assert manifest["summary"]["rows_excluded_by_canonical_filter"] == 10
+    assert persisted.precision_recall_chart_path == str(precision_recall_chart_path)
+    assert precision_recall_chart_path.is_file()
+    assert "Precision and recall across match thresholds." in (
+        precision_recall_chart_path.read_text(encoding="utf-8")
+    )
 
 
 def test_persist_benchmark_run_deduplicates_by_legacy_hash(tmp_path: Path) -> None:
@@ -346,6 +367,7 @@ def test_run_selected_datasets_passes_shared_run_id(monkeypatch) -> None:
     shared_run_id = "c7337f8f317d3734"
 
     def fake_run_single_dataset(**kwargs):
+        assert kwargs["filter_out_missing_uprns"] is True
         captured_run_ids.append(kwargs["run_id"])
         return BenchmarkRunResult(
             dataset_key=kwargs["dataset_key"],
@@ -372,6 +394,7 @@ def test_run_selected_datasets_passes_shared_run_id(monkeypatch) -> None:
         canonical_path="canonical.parquet",
         stages=[DummyStage()],
         run_id=shared_run_id,
+        filter_out_missing_uprns=True,
     )
 
     assert [result.dataset_key for result in results] == ["hackney", "lambeth_llpg"]
@@ -560,4 +583,98 @@ def test_run_single_dataset_supports_deterministic_only_match_results(
     }
     assert -999.0 in thresholds
     assert 999.0 in thresholds
+
+
+@pytest.mark.parametrize("dataset_key", ["conwy", "hackney"])
+@pytest.mark.parametrize("filter_out_missing_uprns", [True, False])
+def test_run_single_dataset_filters_missing_uprns(
+    monkeypatch,
+    capsys,
+    dataset_key,
+    filter_out_missing_uprns,
+) -> None:
+    con = duckdb.connect(database=":memory:")
+    source = con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES
+                ('10000000001', '10 MAIN ST', '10000000001', 'AB1 2CD'),
+                ('10000000002', '20 MAIN ST', '10000000002', 'AB2 3CD')
+        ) AS source(unique_id, address_concat, ukam_label, postcode)
+        """
+    )
+    canonical = con.sql("SELECT '10000000001' AS unique_id")
+    matched_rows = con.sql(
+        """
+        SELECT *
+        FROM (
+            VALUES (1, '10000000001', '10000000001', '10000000001', 'exact')
+        ) AS matches(
+            ukam_address_id,
+            unique_id,
+            ukam_label,
+            resolved_canonical_id,
+            match_reason
+        )
+        """
+    )
+    captured_input_counts: list[int] = []
+    expected_count = 1 if filter_out_missing_uprns else 2
+
+    class FakeAddressMatcher:
+        def __init__(self, *, addresses_to_match, con, **kwargs):
+            assert addresses_to_match.count("*").fetchone()[0] == expected_count
+            self.con = con
+
+        def match(self):
+            return SimpleNamespace(
+                matches=lambda all_columns=False: matched_rows,
+                _accuracy_table=lambda: con.sql("SELECT 1 AS x"),
+                _stage_diagnostics_table=lambda: con.sql("SELECT 1 AS x"),
+                accuracy_data=lambda: [],
+                _splink_predictions=lambda: (_ for _ in ()).throw(ValueError()),
+            )
+
+    monkeypatch.setattr(
+        "benchmarking.runner.get_dataset_definition",
+        lambda dataset_key: {"label": dataset_key},
+    )
+    monkeypatch.setattr(
+        "benchmarking.runner.load_dataset",
+        lambda con, dataset_key, sample_mode: source,
+    )
+    monkeypatch.setattr(
+        "benchmarking.runner.load_prepared_canonical_data",
+        lambda canonical_path, con, canonical_address_filter: SimpleNamespace(
+            addresses=canonical
+        ),
+    )
+    monkeypatch.setattr("benchmarking.runner.AddressMatcher", FakeAddressMatcher)
+
+    def fake_fetch_overall_summary(con, accuracy_rel, *, total_input_rows):
+        captured_input_counts.append(total_input_rows)
+        return total_input_rows, 1, 1, 1.0, 1.0
+
+    monkeypatch.setattr(
+        "benchmarking.runner.fetch_overall_summary",
+        fake_fetch_overall_summary,
+    )
+
+    result = run_single_dataset(
+        con=con,
+        dataset_key=dataset_key,
+        canonical_path="unused",
+        stages=[DummyStage()],
+        persist_results=False,
+        filter_out_missing_uprns=filter_out_missing_uprns,
+    )
+
+    assert result.total_rows == expected_count
+    assert result.source_rows_before_canonical_filter == (
+        2 if filter_out_missing_uprns else None
+    )
+    assert captured_input_counts == [expected_count]
+    output = capsys.readouterr().out
+    assert ("retained 1 of 2 rows; excluded 1" in output) == filter_out_missing_uprns
     assert result.splink_available is False

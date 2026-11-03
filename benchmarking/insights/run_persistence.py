@@ -41,6 +41,7 @@ _LEGACY_RESULTS_PREFIXES = (
     Path("results"),
 )
 _PRECISION_RECALL_CURVE_FILE = "precision_recall_curve.json"
+_PRECISION_RECALL_CHART_FILE = "precision_recall_curve.html"
 
 
 def _chart_to_definition(chart: Any) -> dict[str, Any]:
@@ -56,7 +57,12 @@ def _chart_to_definition(chart: Any) -> dict[str, Any]:
     raise TypeError("chart must be a Vega-Lite definition dict or chart object")
 
 
-def _vega_lite_html(*, title: str, chart_definition: dict[str, Any]) -> str:
+def _vega_lite_html(
+    *,
+    title: str,
+    chart_definition: dict[str, Any],
+    description: str,
+) -> str:
     return f"""<!doctype html>
 <html lang=\"en\">
 <head>
@@ -96,8 +102,7 @@ def _vega_lite_html(*, title: str, chart_definition: dict[str, Any]) -> str:
 <body>
     <div class=\"card\">
         <h1>{title}</h1>
-        <p>Overlayed precision-recall curves with recall-aligned reductions in
-            false positives.</p>
+        <p>{description}</p>
         <div id=\"chart\"></div>
     </div>
     <script>
@@ -145,7 +150,35 @@ def write_overlay_precision_recall_chart_html(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _vega_lite_html(title=chart_title, chart_definition=chart_definition),
+        _vega_lite_html(
+            title=chart_title,
+            chart_definition=chart_definition,
+            description=(
+                "Overlayed precision-recall curves with recall-aligned reductions "
+                "in false positives."
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_precision_recall_chart_html(
+    *,
+    path: Path,
+    curve_rows: list[dict[str, Any]],
+    title: str | None = None,
+) -> None:
+    chart_definition = build_precision_recall_chart_definition(curve_rows)
+    if title is not None:
+        chart_definition["title"] = title
+    chart_title = title or str(chart_definition.get("title") or "Precision-Recall Curve")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _vega_lite_html(
+            title=chart_title,
+            chart_definition=chart_definition,
+            description="Precision and recall across match thresholds.",
+        ),
         encoding="utf-8",
     )
 
@@ -330,6 +363,7 @@ def _run_hash(
     accuracy_rows: list[dict[str, Any]],
     stage_rows: list[dict[str, Any]],
     precision_recall_curve_rows: list[dict[str, Any]] | None = None,
+    input_rows_before_canonical_filter: int | None = None,
 ) -> str:
     payload = {
         "dataset_key": dataset_key,
@@ -339,6 +373,8 @@ def _run_hash(
     }
     if precision_recall_curve_rows is not None:
         payload["precision_recall_curve"] = precision_recall_curve_rows
+    if input_rows_before_canonical_filter is not None:
+        payload["input_rows_before_canonical_filter"] = input_rows_before_canonical_filter
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -538,6 +574,21 @@ def _write_precision_recall_curve_artifact(
     return curve_path
 
 
+def _write_precision_recall_chart_artifact(
+    *,
+    run_dir: Path,
+    curve_rows: list[dict[str, Any]],
+    dataset_label: str,
+) -> Path:
+    chart_path = run_dir / "charts" / _PRECISION_RECALL_CHART_FILE
+    write_precision_recall_chart_html(
+        path=chart_path,
+        curve_rows=curve_rows,
+        title=f"{dataset_label}: Precision-Recall Curve",
+    )
+    return chart_path
+
+
 def _backfill_precision_recall_curve_artifact(
     *,
     run_info: dict[str, Any],
@@ -572,6 +623,46 @@ def _backfill_precision_recall_curve_artifact(
 
     updated_run_info = dict(run_info)
     updated_run_info["precision_recall_curve_path"] = _to_relative(curve_path)
+    return updated_run_info
+
+
+def _backfill_precision_recall_chart_artifact(
+    *,
+    run_info: dict[str, Any],
+    curve_rows: list[dict[str, Any]] | None,
+    dataset_label: str,
+    results_root: Path,
+    export_chart: bool,
+) -> dict[str, Any]:
+    if not export_chart or not curve_rows:
+        return run_info
+
+    existing_chart_path = _manifest_artifact_path(
+        run_info,
+        results_root=results_root,
+        artifact_key="precision_recall_chart_path",
+    )
+    if existing_chart_path is not None:
+        return run_info
+
+    run_dir = _resolve_artifact_path(str(run_info["run_dir"]), results_root=results_root)
+    manifest_path = _resolve_artifact_path(
+        str(run_info["manifest_path"]),
+        results_root=results_root,
+    )
+    manifest = _read_json(manifest_path)
+    chart_path = _write_precision_recall_chart_artifact(
+        run_dir=run_dir,
+        curve_rows=curve_rows,
+        dataset_label=dataset_label,
+    )
+    manifest.setdefault("artifacts", {})["precision_recall_chart_path"] = _to_relative(
+        chart_path
+    )
+    _atomic_write_json(manifest_path, manifest)
+
+    updated_run_info = dict(run_info)
+    updated_run_info["precision_recall_chart_path"] = _to_relative(chart_path)
     return updated_run_info
 
 
@@ -668,6 +759,7 @@ def persist_benchmark_run(
     comparison_baseline_run_id: str | None = None,
     results_root: str = BENCHMARK_RESULTS_ROOT,
     enable_chart_exports: bool = True,
+    input_rows_before_canonical_filter: int | None = None,
 ) -> PersistedBenchmarkRun:
     root = Path(results_root)
     history_path = root / _HISTORY_FILE
@@ -699,6 +791,7 @@ def persist_benchmark_run(
         accuracy_rows=accuracy_hash_rows,
         stage_rows=stage_hash_rows,
         precision_recall_curve_rows=precision_recall_curve_hash_rows,
+        input_rows_before_canonical_filter=input_rows_before_canonical_filter,
     )
 
     history = _load_history(history_path)
@@ -711,6 +804,13 @@ def persist_benchmark_run(
             run_info=existing,
             curve_rows=precision_recall_curve_rows,
             results_root=root,
+        )
+        updated_existing = _backfill_precision_recall_chart_artifact(
+            run_info=updated_existing,
+            curve_rows=precision_recall_curve_rows,
+            dataset_label=dataset_label,
+            results_root=root,
+            export_chart=enable_chart_exports,
         )
         comparison = None
         baseline_info, comparison_warning = _resolve_requested_baseline_info(
@@ -744,6 +844,9 @@ def persist_benchmark_run(
             git_commit_hash=updated_existing.get("git_commit_hash"),
             comparison=comparison,
             comparison_warning=comparison_warning,
+            precision_recall_chart_path=updated_existing.get(
+                "precision_recall_chart_path"
+            ),
         )
 
     date_bucket = created_at.split("T", 1)[0]
@@ -764,6 +867,13 @@ def persist_benchmark_run(
         precision_recall_curve_path = _write_precision_recall_curve_artifact(
             run_dir=run_dir,
             curve_rows=precision_recall_curve_rows,
+        )
+    precision_recall_chart_path: Path | None = None
+    if enable_chart_exports and precision_recall_curve_rows:
+        precision_recall_chart_path = _write_precision_recall_chart_artifact(
+            run_dir=run_dir,
+            curve_rows=precision_recall_curve_rows,
+            dataset_label=dataset_label,
         )
 
     commit_hash = _git_commit_hash()
@@ -811,6 +921,19 @@ def persist_benchmark_run(
             export_charts=enable_chart_exports,
         )
 
+    summary = {
+        "total_rows": total_rows,
+        "matched_rows": matched_rows,
+        "correct_matches": correct_matches,
+        "precision": precision,
+        "recall": recall,
+    }
+    if input_rows_before_canonical_filter is not None:
+        summary["input_rows_before_canonical_filter"] = input_rows_before_canonical_filter
+        summary["rows_excluded_by_canonical_filter"] = (
+            input_rows_before_canonical_filter - total_rows
+        )
+
     manifest = {
         "run_id": run_id,
         "run_hash": run_hash,
@@ -822,19 +945,18 @@ def persist_benchmark_run(
         "stage_definition": stage_definition,
         "git_commit_hash": commit_hash,
         "timings": {k: round(float(v), 6) for k, v in timings.items()},
-        "summary": {
-            "total_rows": total_rows,
-            "matched_rows": matched_rows,
-            "correct_matches": correct_matches,
-            "precision": precision,
-            "recall": recall,
-        },
+        "summary": summary,
         "artifacts": {
             "accuracy_table_path": _to_relative(accuracy_path),
             "stage_diagnostics_path": _to_relative(stage_path),
             "precision_recall_curve_path": (
                 _to_relative(precision_recall_curve_path)
                 if precision_recall_curve_path is not None
+                else None
+            ),
+            "precision_recall_chart_path": (
+                _to_relative(precision_recall_chart_path)
+                if precision_recall_chart_path is not None
                 else None
             ),
             "comparison_summary_path": (
@@ -866,6 +988,11 @@ def persist_benchmark_run(
             if precision_recall_curve_path is not None
             else None
         ),
+        "precision_recall_chart_path": (
+            _to_relative(precision_recall_chart_path)
+            if precision_recall_chart_path is not None
+            else None
+        ),
         "timings": {k: round(float(v), 6) for k, v in timings.items()},
         "git_commit_hash": commit_hash,
     }
@@ -887,6 +1014,11 @@ def persist_benchmark_run(
         git_commit_hash=commit_hash,
         comparison=comparison,
         comparison_warning=comparison_warning,
+        precision_recall_chart_path=(
+            _to_relative(precision_recall_chart_path)
+            if precision_recall_chart_path is not None
+            else None
+        ),
     )
 
 

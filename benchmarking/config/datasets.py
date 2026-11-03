@@ -128,6 +128,25 @@ def _clean_output(
     )
 
 
+def filter_dataset_to_canonical_labels(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+    canonical_relation: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    return con.sql(
+        f"""
+        SELECT source.*
+        FROM ({relation.sql_query()}) AS source
+        WHERE EXISTS (
+            SELECT 1
+            FROM ({canonical_relation.sql_query()}) AS canonical
+            WHERE CAST(canonical.unique_id AS VARCHAR)
+                = CAST(source.ukam_label AS VARCHAR)
+        )
+        """
+    )
+
+
 def _load_hackney(
     con: duckdb.DuckDBPyConnection,
     source_path: str,
@@ -169,7 +188,7 @@ def _load_conwy(
             {address_expr} AS address_concat,
             "postcode" AS postcode
         FROM {reader}('{source_path}')
-        WHERE "uprn" IS NOT NULL
+            WHERE "uprn" IS NOT NULL
         """
     )
     return _clean_output(con, relation)
