@@ -478,7 +478,7 @@ def test_clean_output_lowercases_address_concat() -> None:
     )
 
     cleaned = _clean_output(con, relation)
-    row = cleaned.select("address_concat").fetchone()
+    row = next(iter(cleaned.select("address_concat").limit(1).fetchall()), None)
     assert row[0] == "10 high street"
 
 

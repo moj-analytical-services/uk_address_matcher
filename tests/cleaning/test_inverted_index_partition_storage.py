@@ -92,7 +92,7 @@ def test_partitioned_index_ignores_ancestor_names(
 )
 def test_partitioned_index_preserves_collations(duck_con, monkeypatch, field, count):
     if field == "default":
-        duck_con.execute("SET default_collation = 'nocase'")
+        duck_con.execute("SET default_collation = 'nocase'").fetchall()
     identifier = (
         "CASE WHEN i = 0 THEN 'Aa' ELSE 'aa' END COLLATE NOCASE"
         if field == "unique_id"

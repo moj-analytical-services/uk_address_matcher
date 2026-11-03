@@ -18,19 +18,18 @@ def test_only_global_adjacent_input_is_materialised(duck_con, monkeypatch, batch
     inputs = []
 
     def capture(con, input_rel, stage_specs, **kwargs):
-        inputs.append(input_rel)
+        inputs.append((input_rel.columns, input_rel.sql_query()))
         return original(con, input_rel, stage_specs, **kwargs)
 
     monkeypatch.setattr(cs, "create_sql_pipeline", capture)
     monkeypatch.setattr(cs, "_CANONICAL_ADJACENT_BATCH_ROWS", batch_rows)
     source = _source(duck_con).project("*, 'unused' AS unused_column")
     result = cs._materialise_canonical_distinguishing_features(duck_con, source, "result")
-    assert result.count("*").fetchone()[0] == 60
+    assert result.count("*").fetchall()[0][0] == 60
     assert len(inputs) > 1 if batch_rows == 12 else len(inputs) == 1
-    assert all(len(relation.columns) == 4 for relation in inputs)
+    assert all(len(columns) == 4 for columns, _ in inputs)
     assert all(
-        ("AS MATERIALIZED" in relation.sql_query().upper()) == (batch_rows == 100)
-        for relation in inputs
+        ("AS MATERIALIZED" in sql.upper()) == (batch_rows == 100) for _, sql in inputs
     )
 
 
@@ -93,7 +92,7 @@ def test_adjacent_batches_empty_small_and_skewed(duck_con, monkeypatch, rows, id
         monkeypatch.setattr(cs, "TemporaryDirectory", no_scatter)
     monkeypatch.setattr(cs, "_CANONICAL_ADJACENT_BATCH_ROWS", 4)
     result = cs._materialise_canonical_distinguishing_features(duck_con, source, "result")
-    assert result.count("*").fetchone()[0] == rows
+    assert result.count("*").fetchall()[0][0] == rows
 
 
 def test_adjacent_batch_failure_cleans_files_and_partial_output(

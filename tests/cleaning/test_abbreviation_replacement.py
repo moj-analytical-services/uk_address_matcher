@@ -325,7 +325,7 @@ def test_letter_dash_split_is_enabled_by_default(duck_con):
         stage_specs=[_split_letter_dash_letter],
     )
 
-    assert pipeline.run().fetchone()[0] == "PEN Y GRAIG"
+    assert pipeline.run().fetchall()[0][0] == "PEN Y GRAIG"
 
 
 def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_con):

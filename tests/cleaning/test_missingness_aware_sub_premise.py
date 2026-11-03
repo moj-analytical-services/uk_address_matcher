@@ -1,5 +1,3 @@
-import math
-
 import duckdb
 import pytest
 
@@ -122,7 +120,7 @@ def test_splink_scores_marker_missingness_and_identifier_conflict(duck_con):
             | ((rows["unique_id_l"] == canonical_id) & (rows["unique_id_r"] == messy_id))
         ]
         assert len(matching_rows) == 1
-        return math.log2(float(matching_rows.iloc[0]["bf_sub_premise_identifier"]))
+        return float(matching_rows.iloc[0]["mw_sub_premise_identifier"])
 
     assert score("m_missing", "c_flat_2") == pytest.approx(2)
     assert score("m_typo", "c_flat_2") == pytest.approx(3)
