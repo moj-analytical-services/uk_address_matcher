@@ -34,15 +34,16 @@ jobs:
       matrix:
         include:
           - python-version: "3.10"
-            duckdb-version: "1.5.0"
+            use-project-deps: true
           - python-version: "3.11"
-            duckdb-version: "1.5.0"
+            use-project-deps: true
           - python-version: "3.11"
-            duckdb-version: "2.0.0"
+            use-project-deps: false
+            duckdb-version: "1.5.0"
           - python-version: "3.12"
-            duckdb-version: "2.0.0"
+            use-project-deps: true
           - python-version: "3.13"
-            duckdb-version: "2.0.0"
+            use-project-deps: true
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,5 +67,10 @@ jobs:
       - name: Install project in editable mode
         run: uv pip install -e .
 
-      - name: Run pytest
+      - name: Run pytest with project dependencies
+        if: ${{ matrix.use-project-deps }}
+        run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+      - name: Run pytest with DuckDB override
+        if: ${{ matrix.use-project-deps == false }}
         run: uv run --with "duckdb==${{ matrix.duckdb-version }}" pytest tests/ --ignore=tests/labelling -vv
