@@ -108,7 +108,9 @@ def _materialise_relation(
         relation.insert_into(table_name)
     else:
         temporary_sql = "TEMPORARY " if temporary else ""
-        con.execute(f"CREATE {temporary_sql}TABLE {table_name} AS {relation.sql_query()}")
+        con.execute(
+            f"CREATE {temporary_sql}TABLE {table_name} AS {relation.sql_query()}"
+        ).fetchall()
     return con.table(table_name)
 
 
@@ -238,9 +240,9 @@ def _add_canonical_road_blocking_keys(
                 ON chosen.ukam_address_id = grouped.preferred
         """
     preserve_insertion_order = bool(
-        con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
+        con.execute("SELECT current_setting('preserve_insertion_order')").fetchall()[0][0]
     )
-    con.execute("SET preserve_insertion_order = false")
+    con.execute("SET preserve_insertion_order = false").fetchall()
     try:
         preferred = con.sql(f"""
             WITH grouped AS (
@@ -272,11 +274,11 @@ def _add_canonical_road_blocking_keys(
             _storage=_storage,
             temporary=True,
         )
-        preferred_row_count = int(preferred_addresses.count("*").fetchone()[0])
+        preferred_row_count = int(preferred_addresses.count("*").fetchall()[0][0])
     except Exception:
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
-        )
+        ).fetchall()
         raise
     required_chunks = max(
         1,
@@ -325,7 +327,7 @@ def _add_canonical_road_blocking_keys(
         _drop_materialised_relation(con, preferred_table, _storage)
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
-        )
+        ).fetchall()
     enriched = con.sql(f"""
         SELECT canonical.*, road_features.road_1_norm
         FROM ({canonical_addresses.sql_query()}) AS canonical
@@ -333,7 +335,9 @@ def _add_canonical_road_blocking_keys(
     """)
     try:
         # Retain the narrow road keys instead of copying every canonical column.
-        con.execute(f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}")
+        con.execute(
+            f"CREATE TEMPORARY VIEW {enriched_table} AS {enriched.sql_query()}"
+        ).fetchall()
         if _storage is not None:
             _storage.retain_view(enriched_table)
         return con.table(enriched_table)
@@ -344,7 +348,7 @@ def _add_canonical_road_blocking_keys(
     finally:
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
-        )
+        ).fetchall()
 
 
 def _postcode_batches(
@@ -416,7 +420,7 @@ def _postcode_batches(
                 "batch_ids": batch_ids,
                 "property_scopes": property_scopes,
             },
-        )
+        ).fetchall()
         scope_projection = (
             f", districts.property_scope AS {property_scope_column}"
             if property_scope_column is not None
@@ -431,7 +435,7 @@ def _postcode_batches(
             con.execute(f"""
                 CREATE TEMP TABLE {batch_table} AS
                 SELECT * EXCLUDE ({partition_column}) FROM ({batch_sql}) batches
-            """)
+            """).fetchall()
             yield con.table(batch_table), total_batches
             return
         parquet_safe = all(_parquet_preserves_type(kind) for kind in source.types)
@@ -443,7 +447,7 @@ def _postcode_batches(
                     COPY ({batch_sql}) TO '{escaped_directory}'
                     (FORMAT PARQUET, PARTITION_BY ({partition_column}),
                         COMPRESSION SNAPPY)
-                """)
+                """).fetchall()
             for batch_index in range(total_batches):
                 if parquet_safe:
                     batch_directory = (
@@ -458,7 +462,9 @@ def _postcode_batches(
                         SELECT * EXCLUDE ({partition_column}) FROM ({batch_sql}) batches
                         WHERE {partition_column} = {batch_index}
                     """
-                    con.execute(f"CREATE TEMP TABLE {batch_table} AS {batch_query}")
+                    con.execute(
+                        f"CREATE TEMP TABLE {batch_table} AS {batch_query}"
+                    ).fetchall()
                     batch = con.table(batch_table)
                 yield batch, total_batches
                 if parquet_safe:
@@ -549,7 +555,7 @@ def _derive_postcode_features(
             FROM ({canonical_address_table.sql_query()}) AS canonical
             WHERE {postcode_district_expression} IN ({district_values})
         """)
-    total_rows = road_catalogue_source.count("*").fetchone()[0]
+    total_rows = road_catalogue_source.count("*").fetchall()[0][0]
     if total_rows == 0:
         if selected_postcode_districts is not None:
             raise ValueError(
@@ -611,7 +617,7 @@ def _derive_postcode_features(
                         total_units=total_batches,
                         enabled=progress_mode == "auto",
                     )
-                batch_rows = batch_input.count("*").fetchone()[0]
+                batch_rows = batch_input.count("*").fetchall()[0][0]
                 if include_local_keys:
                     features = _canonical_local_key_features(con, batch_input)
                     _materialise_relation(
@@ -684,7 +690,7 @@ def _derive_postcode_features(
             con.execute(
                 f"COPY {catalogue_table} TO '{escaped_output_path}' "
                 "(FORMAT PARQUET, COMPRESSION ZSTD)"
-            )
+            ).fetchall()
     except BaseException:
         _drop_materialised_relation(con, local_key_table, _storage)
         _drop_materialised_relation(con, catalogue_table, _storage)
@@ -738,7 +744,7 @@ def clean_data_pre_term_frequencies(
     uid = _uid()
     input_name = f"__ukam_input_addresses_{uid}"
     con.register(input_name, address_table)
-    total_rows = address_table.count("*").fetchone()[0]
+    total_rows = address_table.count("*").fetchall()[0][0]
 
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
     total_chunks = (total_rows + chunk_size - 1) // chunk_size
@@ -751,7 +757,7 @@ def clean_data_pre_term_frequencies(
         enabled=progress_mode == "auto",
     )
 
-    con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}")
+    con.execute(f"DROP TABLE IF EXISTS __ukam_chunked_addresses_{uid}").fetchall()
     chunked_input_name = f"__ukam_chunked_input_{uid}"
     chunk_index_column = f"__ukam_chunk_index_{uid}"
     cleaned_chunk_prefix = f"__ukam_cleaned_chunk_{uid}_"
@@ -814,7 +820,7 @@ def clean_data_pre_term_frequencies(
                 chunk_table,
                 _storage=_storage,
             )
-            chunk_row_count = chunk.count("*").fetchone()[0]
+            chunk_row_count = chunk.count("*").fetchall()[0][0]
 
             # Apply debug options only on the first iteration.
             processed_chunk = _clean_data_pre_term_frequencies(
@@ -876,7 +882,7 @@ def clean_data_pre_term_frequencies(
             f"SELECT * FROM {cleaned_chunk_prefix}{chunk_index}"
             for chunk_index in range(total_chunks)
         )
-        con.execute(f"CREATE VIEW {chunked_table} AS {chunk_tables_sql}")
+        con.execute(f"CREATE VIEW {chunked_table} AS {chunk_tables_sql}").fetchall()
         if _storage is not None:
             _storage.retain_view(chunked_table)
         return con.table(chunked_table)
@@ -937,7 +943,7 @@ def derive_term_frequencies_table(
     input_name = f"__ukam_tf_derive_input_{uid}"
     con.register(input_name, address_table)
 
-    total_rows = address_table.count("*").fetchone()[0]
+    total_rows = address_table.count("*").fetchall()[0][0]
     chunk_size = _calculate_chunk_size(total_rows, num_of_chunks)
     total_chunks = (total_rows + chunk_size - 1) // chunk_size
     processed_records = 0
@@ -950,7 +956,7 @@ def derive_term_frequencies_table(
     )
 
     cleaned_table = f"__ukam_tf_derive_cleaned_{uid}"
-    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
+    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}").fetchall()
 
     # Process in chunks using minimal pipeline (clean + tokenise only)
     log_stage_start(
@@ -973,7 +979,7 @@ def derive_term_frequencies_table(
                 chunk_query,
                 chunk_table,
             )
-            chunk_row_count = chunk.count("*").fetchone()[0]
+            chunk_row_count = chunk.count("*").fetchall()[0][0]
 
             pipeline = create_sql_pipeline(
                 con,
@@ -1020,7 +1026,7 @@ def derive_term_frequencies_table(
     result = _derive_term_frequencies_from_precleaned(cleaned_table, con)
 
     # Clean up intermediate table
-    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}")
+    con.execute(f"DROP TABLE IF EXISTS {cleaned_table}").fetchall()
     _drop_table_and_registered_aliases(con, input_name)
 
     return result
@@ -1061,7 +1067,9 @@ def _derive_term_frequencies_from_precleaned(
 
 
 def _index_keys_have_collation(con: DuckDBPyConnection, keys: DuckDBPyRelation) -> bool:
-    if con.execute("SELECT current_setting('default_collation')").fetchone()[0] not in (
+    if con.execute("SELECT current_setting('default_collation')").fetchall()[0][
+        0
+    ] not in (
         "",
         "binary",
     ):
@@ -1072,10 +1080,10 @@ def _index_keys_have_collation(con: DuckDBPyConnection, keys: DuckDBPyRelation) 
         con.execute(
             f"CREATE TEMPORARY TABLE {name} AS "
             f"SELECT unique_id, key FROM ({keys.sql_query()}) LIMIT 0"
-        )
+        ).fetchall()
         ddl = con.execute(
             "SELECT sql FROM duckdb_tables() WHERE table_name = ?", [name]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         return " COLLATE " in ddl.upper()
     finally:
         _drop_table_and_registered_aliases(con, name)
@@ -1143,10 +1151,10 @@ def derive_inverted_index(
     num_of_chunks = max(1, num_of_chunks)
 
     result_table = f"__ukam_derived_inverted_index_{uid}"
-    con.execute(f"DROP TABLE IF EXISTS {result_table}")
+    con.execute(f"DROP TABLE IF EXISTS {result_table}").fetchall()
     first_insert = True
 
-    total_rows = cleaned_address_table.count("*").fetchone()[0]
+    total_rows = cleaned_address_table.count("*").fetchall()[0][0]
     token_column = (
         "clean_full_address_tokens"
         if "clean_full_address_tokens" in cleaned_address_table.columns
@@ -1260,7 +1268,7 @@ def derive_inverted_index(
                     con.execute(f"""
                         COPY ({scalar_keys.sql_query()}) TO '{escaped_path}'
                         (FORMAT PARQUET, PARTITION_BY (key_bucket), COMPRESSION SNAPPY)
-                    """)
+                    """).fetchall()
                 logger.debug("%s: keys staged", stage_label)
 
                 for chunk_index in range(num_of_chunks):
@@ -1372,7 +1380,7 @@ def _attach_canonical_features(
             """)
         if (
             road_features is not None
-            or features.count("*").fetchone()[0] > _CANONICAL_LOCAL_KEY_BATCH_ROWS
+            or features.count("*").fetchall()[0][0] > _CANONICAL_LOCAL_KEY_BATCH_ROWS
         ):
             _materialise_relation(
                 con,
@@ -1393,10 +1401,17 @@ def _attach_canonical_features(
         canonical = con.sql(f"""
             SELECT {source_columns} FROM ({source.sql_query()}) canonical
         """)
-        first_id, last_id = con.sql(f"""
+        first_id, last_id = next(
+            iter(
+                con.sql(f"""
             SELECT min(ukam_address_id), max(ukam_address_id)
             FROM ({canonical.sql_query()}) canonical
-        """).fetchone()
+        """)
+                .limit(1)
+                .fetchall()
+            ),
+            None,
+        )
         if first_id is None:
             first_id = last_id = 0
         for index, start in enumerate(
@@ -1478,14 +1493,19 @@ def _materialise_canonical_distinguishing_features(
     neighbours outside that range are deliberately omitted. Equal addresses stay
     together, so the batch size is a target rather than a hard memory bound.
     """
-    rows = source.count("*").fetchone()[0]
+    rows = source.count("*").fetchall()[0][0]
     batch_count = (rows + _CANONICAL_ADJACENT_BATCH_ROWS - 1) // (
         _CANONICAL_ADJACENT_BATCH_ROWS
     )
-    collation, order, null_order = con.execute("""
+    collation, order, null_order = next(
+        iter(
+            con.execute("""
         SELECT current_setting('default_collation'),
             current_setting('default_order'), current_setting('default_null_order')
-    """).fetchone()
+    """).fetchall()
+        ),
+        None,
+    )
     # Other types (notably HUGEINT) may change values when written to Parquet.
     unique_id_type = str(source.types[source.columns.index("unique_id")])
     columns = "ukam_address_id, unique_id, clean_full_address, clean_full_address_tokens"
@@ -1531,7 +1551,7 @@ def _materialise_canonical_distinguishing_features(
                 WHERE hash(ukam_address_id) % {modulus} = 0
                 LIMIT 131072
             ) AS sample
-        """)
+        """).fetchall()
         with TemporaryDirectory(prefix="ukam-adjacent-batches-") as directory:
             batch_path = directory.replace("'", "''")
             con.execute(f"""
@@ -1544,7 +1564,7 @@ def _materialise_canonical_distinguishing_features(
                     ) AS keyed CROSS JOIN {bounds_table}
                 ) TO '{batch_path}'
                 (FORMAT PARQUET, PARTITION_BY (batch_id), COMPRESSION UNCOMPRESSED)
-            """)
+            """).fetchall()
             # Missing directories are empty ranges (e.g. repeated split points).
             for index, batch in enumerate(sorted(Path(directory).glob("batch_id=*"))):
                 batch_files = str(batch / "*.parquet").replace("'", "''")
@@ -1553,7 +1573,7 @@ def _materialise_canonical_distinguishing_features(
                     SELECT {columns} FROM read_parquet(
                         '{batch_files}', hive_partitioning=false
                     )
-                """)
+                """).fetchall()
                 try:
                     features = _canonical_distinguishing_features(
                         con, con.table(input_table), debug_options if index == 0 else None
@@ -1713,7 +1733,7 @@ def prepare_data_for_matching(
             raise
 
     try:
-        total_rows = cleaned_address_table.count("*").fetchone()[0]
+        total_rows = cleaned_address_table.count("*").fetchall()[0][0]
         _create_term_frequency_tables(con, term_frequency_lookup=term_frequency_lookup)
 
         inv_idx_table_name = _register_inverted_index_table(
@@ -1841,7 +1861,7 @@ def prepare_data_for_matching(
                     )
                     con.execute(
                         f"CREATE OR REPLACE VIEW {cleaned_table_name} AS {union_sql}"
-                    )
+                    ).fetchall()
                 else:
                     _drop_table_and_registered_aliases(con, cleaned_table_name)
                 for name in completed:

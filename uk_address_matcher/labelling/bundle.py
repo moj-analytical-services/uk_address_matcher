@@ -87,7 +87,7 @@ def _export_labelling_bundle_beta(
     messy_relation = match_result._messy_relation
     if messy_relation is None:
         raise ValueError("The retained messy relation is unavailable for export.")
-    available_record_count = int(messy_relation.count("*").fetchone()[0])
+    available_record_count = int(messy_relation.count("*").fetchall()[0][0])
     expected_row_count = validate_record_selection_arguments(
         total_records_to_export=total_records_to_export,
         review_data_chunk_count=review_data_chunk_count,
@@ -251,7 +251,7 @@ def _write_parquet(
         COPY ({review_relation.sql_query()}) TO '{parquet_sql}'
         (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
 
 
 def _write_manifest(path: Path, manifest: dict[str, object]) -> None:

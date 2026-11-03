@@ -210,7 +210,7 @@ class AddressMatcher:
             + " AS SELECT * FROM ("
             + source_relation.sql_query()
             + ")"
-        )
+        ).fetchall()
         # The derived source table has been copied; it has no further use.
         if isinstance(source_name, str) and source_name.startswith(
             "__ukam_derived_inverted_index_"
@@ -312,7 +312,7 @@ class AddressMatcher:
         logger.debug("Cleaning messy data")
         inverted_index_n: int | None = None
         if self._canonical_clean is not None:
-            inverted_index_n = self._canonical_clean.count("*").fetchone()[0]
+            inverted_index_n = self._canonical_clean.count("*").fetchall()[0][0]
         self._messy_clean = prepare_data_for_matching(
             self._raw_messy,
             con=self.con,

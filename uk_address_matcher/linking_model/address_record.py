@@ -70,7 +70,7 @@ class AddressRecord:
         con.execute(
             f"CREATE TEMP TABLE {table_name} ("
             "unique_id VARCHAR, address_concat VARCHAR, postcode VARCHAR)"
-        )
+        ).fetchall()
         con.executemany(
             f"INSERT INTO {table_name} VALUES (?, ?, ?)",
             rows,
