@@ -314,12 +314,14 @@ def _infer_unique_id_column(
     try:
         bundle_count = connection.execute(
             f"SELECT COUNT(*) FROM {bundle_sql}", [bundle_parameter]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         matches: list[str] = []
         for column in columns:
             quoted = _quote_identifier(column)
-            row_count, distinct_count = connection.execute(
-                f"""
+            row_count, distinct_count = next(
+                iter(
+                    connection.execute(
+                        f"""
                 WITH bundle_ids AS (
                     SELECT CAST(unique_id AS VARCHAR) AS unique_id FROM {bundle_sql}
                 ), source_ids AS (
@@ -329,8 +331,11 @@ def _infer_unique_id_column(
                 FROM source_ids
                 WHERE unique_id IN (SELECT unique_id FROM bundle_ids)
                 """,
-                [bundle_parameter, source_parameter],
-            ).fetchone()
+                        [bundle_parameter, source_parameter],
+                    ).fetchall()
+                ),
+                None,
+            )
             if row_count == bundle_count and distinct_count == bundle_count:
                 matches.append(column)
     finally:
@@ -457,7 +462,7 @@ def apply_labelling_updates(
             f"COPY ({output_query}) TO {_quote_sql_string(str(temporary_file))} "
             f"(FORMAT {output_format}{header})",
             [*parameters, source_parameter],
-        )
+        ).fetchall()
     finally:
         connection.close()
     temporary_file.replace(target)

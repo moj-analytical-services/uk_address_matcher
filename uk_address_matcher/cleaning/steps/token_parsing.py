@@ -32,7 +32,7 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
         CTEStep(
             "lexical_flags",
             """
-            SELECT input.*, list_transform(__local_tokens, token ->
+            SELECT input.*, list_transform(__local_tokens, lambda token:
                 length(token) >= 2 AND NOT regexp_matches(token, '[0-9]'))
                 AS __local_lexical
             FROM {local_tokens} input
@@ -44,19 +44,19 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
             SELECT * EXCLUDE (__local_tokens, __local_lexical),
                 CASE WHEN {eligible} THEN list_concat(
                     list_transform(
-                        list_filter(range(1, len(__local_tokens) + 1), position ->
+                        list_filter(range(1, len(__local_tokens) + 1), lambda position:
                             __local_lexical[position]
                             AND __local_tokens[position] NOT IN (
                                 'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
                             )
                         ),
-                        position -> struct_pack(
+                        lambda position: struct_pack(
                             pos := position::INTEGER, kind := 'word',
                             key := __local_tokens[position]
                         )
                     ),
                     list_transform(
-                        list_filter(range(1, len(__local_tokens)), position ->
+                        list_filter(range(1, len(__local_tokens)), lambda position:
                             __local_lexical[position] AND __local_lexical[position + 1]
                             AND (__local_tokens[position] NOT IN (
                                     'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
@@ -66,7 +66,7 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
                                         'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
                                     ))
                         ),
-                        position -> struct_pack(
+                        lambda position: struct_pack(
                             pos := position::INTEGER, kind := 'phrase',
                             key := __local_tokens[position] || ' '
                                 || __local_tokens[position + 1]
@@ -228,7 +228,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
                             list_reverse({left_neighbour_tokens}),
                             true
                         ),
-                        token_pair -> token_pair[1] != token_pair[2]
+                        lambda token_pair: token_pair[1] != token_pair[2]
                     ),
                     true
                 ) - 1,
@@ -245,7 +245,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
                             list_reverse({right_neighbour_tokens}),
                             true
                         ),
-                        token_pair -> token_pair[1] != token_pair[2]
+                        lambda token_pair: token_pair[1] != token_pair[2]
                     ),
                     true
                 ) - 1,
@@ -965,7 +965,7 @@ def _generalised_token_aliases():
     SELECT
         *,
         flatten(
-            list_transform(distinguishing_adj_start_tokens, token ->
+            list_transform(distinguishing_adj_start_tokens, lambda token:
                {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
             )
         ) AS distinguishing_adj_token_aliases
@@ -1073,7 +1073,7 @@ def _derive_distinguishing_token_components():
             input.*,
             list_filter(
                 range(1, len(input.distinguishing_adj_start_tokens) + 1),
-                position -> list_extract(
+                lambda position: list_extract(
                     input.distinguishing_adj_start_tokens, position
                 ) IN ({marker_values})
                 OR (
@@ -1095,18 +1095,18 @@ def _derive_distinguishing_token_components():
         marked.* EXCLUDE (__structural_positions),
         list_transform(
             __structural_positions,
-            position -> list_extract(distinguishing_adj_start_tokens, position)
+            lambda position: list_extract(distinguishing_adj_start_tokens, position)
         ) AS distinguishing_structural_tokens,
         list_transform(
             distinguishing_adj_start_tokens,
-            (token, position) -> struct_pack(
+            lambda token, position: struct_pack(
                 token := token,
                 is_lexical := NOT list_contains(__structural_positions, position)
             )
         ) AS distinguishing_token_parts,
         list_filter(
             distinguishing_adj_start_tokens,
-            (token, position) -> NOT list_contains(__structural_positions, position)
+            lambda token, position: NOT list_contains(__structural_positions, position)
         ) AS distinguishing_lexical_tokens
     FROM marked
     """

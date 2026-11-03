@@ -91,14 +91,14 @@ def prepare_source_local_keys(
     con.execute(f"""
         CREATE TEMP VIEW "{table_name}_base" AS
         SELECT *{exclude} FROM "{input_name}"
-    """)
+    """).fetchall()
     prepared = create_sql_pipeline(
         con,
         input_rel=con.table(f"{table_name}_base"),
         stage_specs=[_derive_local_key_tokens()],
         pipeline_name="Prepare numericless source keys",
     ).run()
-    con.execute(f'CREATE TEMP VIEW "{table_name}" AS {prepared.sql_query()}')
+    con.execute(f'CREATE TEMP VIEW "{table_name}" AS {prepared.sql_query()}').fetchall()
     return con.table(table_name)
 
 
@@ -119,7 +119,7 @@ def prepare_canonical_local_keys(
         CREATE TEMP VIEW "{table_name}_base" AS
         SELECT ukam_address_id, unique_id, postcode, clean_full_address
         FROM "{input_name}"
-    """)
+    """).fetchall()
     prepared = create_sql_pipeline(
         con,
         input_rel=con.table(f"{table_name}_base"),
@@ -129,13 +129,15 @@ def prepare_canonical_local_keys(
         ],
         pipeline_name="Prepare canonical postcode-wide keys",
     ).run()
-    con.execute(f'CREATE TEMP TABLE "{table_name}_index" AS {prepared.sql_query()}')
+    con.execute(
+        f'CREATE TEMP TABLE "{table_name}_index" AS {prepared.sql_query()}'
+    ).fetchall()
     con.execute(f"""
         CREATE TEMP VIEW "{table_name}" AS
         SELECT canonical.*{exclude}, features.local_key_index
         FROM "{input_name}" canonical
         LEFT JOIN "{table_name}_index" features USING (ukam_address_id)
-    """)
+    """).fetchall()
     return con.table(table_name)
 
 
@@ -167,7 +169,7 @@ def add_local_key_features(
     con.execute(f"""
         CREATE TEMP VIEW "{source_input}" AS
         SELECT * {"".join(defaults)} FROM "{raw_source}"
-    """)
+    """).fetchall()
     source = prepare_source_local_keys(con, con.table(source_input))
     gate = """
         clean_full_address IS NOT NULL
@@ -180,11 +182,16 @@ def add_local_key_features(
             alias_id VARCHAR, lk_level_by_alias MAP(VARCHAR, INTEGER),
             lk_anchor_uprns VARCHAR[]
         )
-    """)
+    """).fetchall()
     if (
-        con.execute(
-            f"SELECT 1 FROM ({source.sql_query()}) WHERE {gate} LIMIT 1"
-        ).fetchone()
+        next(
+            iter(
+                con.execute(
+                    f"SELECT 1 FROM ({source.sql_query()}) WHERE {gate} LIMIT 1"
+                ).fetchall()
+            ),
+            None,
+        )
         is not None
     ):
         if "local_key_index" not in canonical.columns:
@@ -197,13 +204,13 @@ def add_local_key_features(
             FROM ({source.sql_query()}) source,
                 UNNEST(local_key_tokens) entries(occurrence)
             WHERE {gate}
-        """)
+        """).fetchall()
         con.execute(f"""
             CREATE TEMP TABLE "{canonical_input}_keys" AS
             SELECT ukam_address_id, unique_id, postcode, local_key_index
             FROM "{canonical_input}"
             WHERE postcode IN (SELECT postcode FROM "{source_keys_table}")
-        """)
+        """).fetchall()
         con.execute(f"""
             CREATE TEMP TABLE "{spacing_table}" AS
             WITH spellings AS (
@@ -231,7 +238,7 @@ def add_local_key_features(
                 ON canonical.postcode = source.postcode
                 AND occurrence.kind = source.kind AND occurrence.key = source.spelling
             WHERE {_canonical_local_key_gate("occurrence.")}
-        """)
+        """).fetchall()
         spacing_source = con.sql(f"""
             SELECT unique_id, postcode, clean_full_address
             FROM "{canonical_input}"
@@ -326,7 +333,7 @@ def add_local_key_features(
                 coalesce(first(anchors.anchor_uprns), []::VARCHAR[]) AS lk_anchor_uprns
             FROM levels LEFT JOIN anchors USING (query_alias_id)
             GROUP BY query_alias_id
-        """)
+        """).fetchall()
     con.execute(f"""
         CREATE TEMP VIEW "{source_table}" AS
         SELECT source.*,
@@ -337,12 +344,12 @@ def add_local_key_features(
         FROM ({source.sql_query()}) AS source
         LEFT JOIN "{feature_table}" AS features
             ON source.ukam_address_id::VARCHAR = features.alias_id
-    """)
+    """).fetchall()
     con.register(canonical_input, canonical)
     con.execute(f"""
         CREATE TEMP VIEW "{canonical_table}" AS
         SELECT *, MAP([]::VARCHAR[], []::INTEGER[]) AS lk_level_by_alias,
             []::VARCHAR[] AS lk_anchor_uprns, false AS lk_eligible
         FROM "{canonical_input}"
-    """)
+    """).fetchall()
     return con.table(source_table), con.table(canonical_table)

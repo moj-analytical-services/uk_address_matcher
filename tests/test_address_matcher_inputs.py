@@ -26,7 +26,7 @@ def _run_matcher(duck_con, canonical_relation, addresses_to_match):
         stages=[ExactMatchStage()],
     )
     match_result = matcher.match()
-    row = match_result.matches().fetchone()
+    row = next(iter(match_result.matches().limit(1).fetchall()), None)
     assert row is not None
 
 
@@ -111,7 +111,9 @@ def test_canonical_without_valid_postcode_still_uses_roads(duck_con, source_post
     matcher._resolve_canonical_data()
 
     assert matcher._roadlike_places is not None
-    assert matcher._canonical_clean.project("road_1_norm").fetchone() == ("HIGH STREET",)
+    assert (matcher._canonical_clean.project("road_1_norm").limit(1).fetchall())[0] == (
+        "HIGH STREET",
+    )
 
 
 @pytest.mark.parametrize("missing_column", ["unique_id", "address_concat"])
@@ -170,5 +172,5 @@ def test_canonical_relation_precleaned_pre_tf_still_matches(duck_con, canonical_
     )
 
     match_result = matcher.match()
-    row = match_result.matches().fetchone()
+    row = next(iter(match_result.matches().limit(1).fetchall()), None)
     assert row is not None

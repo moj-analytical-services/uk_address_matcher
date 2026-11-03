@@ -77,7 +77,7 @@ def _print_by_match_reason(
             WHERE match_reason = '{escaped_reason}'
             """
         )
-        row_count = int(reason_table.aggregate("COUNT(*) AS row_count").fetchone()[0])
+        row_count = int(reason_table.aggregate("COUNT(*) AS row_count").fetchall()[0][0])
         print(f"\nmatch_reason: {reason_name}. Showing {row_count} records")
         _show_via_sql(result, reason_table)
 

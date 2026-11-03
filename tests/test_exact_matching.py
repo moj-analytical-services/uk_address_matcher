@@ -676,7 +676,7 @@ def test_run_matching_handles_non_identifier_uid(duck_con, peeled_test_data, mon
         stages=[ExactMatchStage(), PeeledAddressStage()],
     )
 
-    assert results.count("*").fetchone()[0] == df_fuzzy.count("*").fetchone()[0]
+    assert results.count("*").fetchall()[0][0] == df_fuzzy.count("*").fetchall()[0][0]
 
 
 def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data):
@@ -690,8 +690,8 @@ def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data)
         stages=[ExactMatchStage(), PeeledAddressStage()],
     )
 
-    input_row_count = df_fuzzy.count("*").fetchone()[0]
-    output_row_count = results.count("*").fetchone()[0]
+    input_row_count = df_fuzzy.count("*").fetchall()[0][0]
+    output_row_count = results.count("*").fetchall()[0][0]
 
     assert output_row_count == input_row_count, (
         f"Row count changed: input={input_row_count}, output={output_row_count}"
@@ -1283,7 +1283,7 @@ def test_peeled_address_stripped_matching_is_enabled_by_default(duck_con):
     )
 
     default_row = default_results.fetchdf().iloc[0]
-    disabled_row = disabled_results.select("resolved_canonical_id").fetchone()[0]
+    disabled_row = disabled_results.select("resolved_canonical_id").fetchall()[0][0]
 
     assert default_row["resolved_canonical_id"] == 1000
     assert default_row["match_reason"] == (
@@ -1352,6 +1352,6 @@ def test_deterministic_stripping_preserves_numeric_boundaries(
         df_canonical_clean=canonical,
         stages=[stage_type(inward_postcode_levenshtein=inward_cap)],
     )
-    assert results.select("resolved_canonical_id").fetchone()[0] == (
+    assert results.select("resolved_canonical_id").fetchall()[0][0] == (
         1001 if include_exact_candidate else None
     )

@@ -25,15 +25,59 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-pytest:
+  run-pytest-primary:
+    name: Python 3.11 / locked dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --group model-training --locked
+
+      - name: Install project in editable mode
+        run: uv pip install -e .
+
+      - name: Run pytest
+        run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+  run-pytest-follow-up:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.test-label }}
+    needs: run-pytest-primary
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-
+        include:
+          - python-version: "3.10"
+            test-label: locked dependencies
+            use-project-deps: true
+          - python-version: "3.11"
+            test-label: DuckDB 1.5.0 override
+            use-project-deps: false
+            duckdb-version: "1.5.0"
+          - python-version: "3.12"
+            test-label: locked dependencies
+            use-project-deps: true
+          - python-version: "3.13"
+            test-label: locked dependencies
+            use-project-deps: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,5 +100,10 @@ jobs:
       - name: Install project in editable mode
         run: uv pip install -e .
 
-      - name: Run pytest
+      - name: Run pytest with project dependencies
+        if: ${{ matrix.use-project-deps }}
         run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+      - name: Run pytest with DuckDB override
+        if: ${{ matrix.use-project-deps == false }}
+        run: uv run --with "duckdb==${{ matrix.duckdb-version }}" pytest tests/ --ignore=tests/labelling -vv

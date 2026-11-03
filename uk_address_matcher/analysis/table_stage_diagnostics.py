@@ -30,7 +30,7 @@ def build_stage_diagnostics_relation(
             elapsed_seconds DOUBLE
         )
         '''
-    )
+    ).fetchall()
     insert_sql = f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
 
     stage_diagnostics_signature = tuple(StageDiagnosticRow.__annotations__.keys())
@@ -42,7 +42,7 @@ def build_stage_diagnostics_relation(
             )
         # index indicates the order of the stage in the pipeline,
         # which is useful for ordering in the final diagnostics table.
-        con.execute(insert_sql, [index, *row.values()])
+        con.execute(insert_sql, [index, *row.values()]).fetchall()
 
     return con.sql(
         f'''

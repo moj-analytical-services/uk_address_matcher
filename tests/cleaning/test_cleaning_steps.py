@@ -56,7 +56,7 @@ def _run_legacy_adjacent_query(input_relation, connection):
                                 list_reverse(__{neighbour_name}_tokens),
                                 true
                             ),
-                            token_pair -> token_pair[1] != token_pair[2]
+                            lambda token_pair: token_pair[1] != token_pair[2]
                         ),
                         true
                     ) - 1,
@@ -191,7 +191,7 @@ def test_parse_out_numbers_excludes_road_references():
         """).fetchall()
             == []
         )
-        assert result.count("*").fetchone()[0] == 20
+        assert result.count("*").fetchall()[0][0] == 20
         assert "__numeric_token_address" not in result.columns
 
 
@@ -206,11 +206,18 @@ def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():
         ] AS token_rel_freq_arr
     """)
 
-    result = _run_single_stage(
-        _separate_unusual_tokens,
-        input_relation,
-        connection,
-    ).fetchone()
+    result = next(
+        iter(
+            _run_single_stage(
+                _separate_unusual_tokens,
+                input_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
 
     assert result[-2:] == (
         ["CLEEVE", "ALCESTER"],
@@ -528,25 +535,33 @@ def test_separate_distinguishing_tokens_can_choose_best_left_or_right_neighbour(
         """
     )
 
-    left_target = (
-        _run_single_stage(
-            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-            left_input,
-            connection,
-        )
-        .filter("ukam_address_id = 2")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    left_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                left_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
-    right_target = (
-        _run_single_stage(
-            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-            right_input,
-            connection,
-        )
-        .filter("ukam_address_id = 2")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    right_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                right_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
 
     assert left_target == (
@@ -577,10 +592,14 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
         input_relation,
         connection,
     )
-    target = (
-        result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    target = next(
+        iter(
+            result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
 
     assert target == (["ALPHC", "RAINBOW"], ["LANE", "TAUNTON"])
@@ -763,11 +782,18 @@ def test_parse_out_flat_positional():
         + _sql_literal("FLAT, 6 HIGH STREET")
         + " AS original_address_concat"
     )
-    comma_separated_flat_row = _run_single_stage(
-        _parse_out_flat_position_and_letter,
-        comma_separated_flat_relation,
-        connection,
-    ).fetchone()
+    comma_separated_flat_row = next(
+        iter(
+            _run_single_stage(
+                _parse_out_flat_position_and_letter,
+                comma_separated_flat_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
     assert comma_separated_flat_row[number_idx] is None
 
 
@@ -1002,7 +1028,7 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
             show_progress="off",
         )
 
-    assert cleaned.count("*").fetchone()[0] == 1
+    assert cleaned.count("*").fetchall()[0][0] == 1
     stage_prefixes = ("Cleaning and preprocessing", "Applying term frequencies")
     assert not any(
         record.getMessage().startswith(stage_prefix)

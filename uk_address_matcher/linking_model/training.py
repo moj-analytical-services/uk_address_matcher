@@ -926,7 +926,7 @@ def array_reduce_by_freq(column_name: str) -> str:
                     flatten(
                         list_transform(
                             map_entries({column_name}_l),
-                            entry -> CASE
+                            lambda entry: CASE
                                 WHEN COALESCE({column_name}_r[entry.key], 0) > 0
                                 THEN list_value(
                                     POW(
@@ -938,12 +938,12 @@ def array_reduce_by_freq(column_name: str) -> str:
                             END
                         )
                     ),
-                    x -> x
+                    lambda x: x
                 ),
-                x -> x IS NOT NULL
+                lambda x: x IS NOT NULL
             )
         ),
-        (p, q) -> p * q
+        lambda p, q: p * q
     )
     """
 

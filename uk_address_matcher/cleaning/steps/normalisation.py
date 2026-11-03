@@ -411,7 +411,7 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
       array_to_string(
         list_transform(
         string_split(COALESCE(address.clean_full_address, ''), ' '),
-        x -> COALESCE(map_extract(m.abbr_map, x)[1], x)
+        lambda x: COALESCE(map_extract(m.abbr_map, x)[1], x)
         ),
         ' '
       ) AS clean_full_address
