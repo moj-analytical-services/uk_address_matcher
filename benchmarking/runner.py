@@ -97,7 +97,7 @@ def run_single_dataset(
     data_load_start = perf_counter()
     df_messy = load_dataset(con, dataset_key=dataset_key, sample_mode=sample_mode)
     timings["data_load"] = perf_counter() - data_load_start
-    total_input_rows = int(df_messy.aggregate("COUNT(*) AS row_count").fetchone()[0])
+    total_input_rows = int(df_messy.aggregate("COUNT(*) AS row_count").fetchall()[0][0])
 
     pipeline_start = perf_counter()
     matcher = AddressMatcher(
