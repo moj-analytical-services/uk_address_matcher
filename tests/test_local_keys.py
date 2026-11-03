@@ -6,6 +6,7 @@ from splink import SettingsCreator
 from uk_address_matcher import (
     AddressMatcher,
     SplinkStage,
+    prepare_canonical_folder,
     prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.local_keys import (
@@ -56,8 +57,12 @@ def test_local_key_evidence_uses_canonical_postcode_rarity(
     assert featured.select("ukam_address_id, lk_level_by_alias, lk_anchor_uprns").order(
         "ukam_address_id"
     ).fetchall() == [
-        ("literal", {"a1": 6}, ["001"]) if postcode == "ZZ1 1ZZ" else ("literal", {}, []),
-        ("spacing", {"b1": 2}, []) if postcode == "ZZ1 1ZZ" else ("spacing", {}, []),
+        ("literal", {"a1": 6}, ["001"])
+        if prepared_index and postcode == "ZZ1 1ZZ"
+        else ("literal", {}, []),
+        ("spacing", {"b1": 2}, [])
+        if prepared_index and postcode == "ZZ1 1ZZ"
+        else ("spacing", {}, []),
     ]
 
 
@@ -188,6 +193,7 @@ def _features(duck_con, text, canonical_rows):
     """,
         params={"rows": canonical_rows},
     )
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     return add_local_key_features(duck_con, source, canonical)
 
 
@@ -518,8 +524,9 @@ def test_model_includes_local_key_comparison_and_block():
     "source_name,target_name,expected_bf",
     [("MEADOW COTTAGE", "MEADOW COTTAGE", 16.0), ("ROSE BANK", "ROSEBANK", 2.0)],
 )
+@pytest.mark.parametrize("prepared_index", [False, True])
 def test_stage_executes_local_key_comparison(
-    duck_con, source_name, target_name, expected_bf
+    duck_con, tmp_path, source_name, target_name, expected_bf, prepared_index
 ):
     source = duck_con.sql(
         """
@@ -538,6 +545,12 @@ def test_stage_executes_local_key_comparison(
     """,
         params={"name": target_name, "source_name": source_name},
     )
+    if prepared_index:
+        folder = tmp_path / "canonical"
+        prepare_canonical_folder(
+            canonical, con=duck_con, output_folder=folder, show_progress="off"
+        )
+        canonical = folder
     stage = SplinkStage(
         include_full_postcode_block=True,
         predict_threshold_match_weight=-100,
@@ -553,7 +566,9 @@ def test_stage_executes_local_key_comparison(
     target = raw.filter(
         "unique_id_l = '001' AND clean_full_address_l LIKE '% 54 TEST ROAD'"
     )
-    assert target.select("bf_postcode_distinguishing_name").fetchone() == (expected_bf,)
+    assert target.select("bf_postcode_distinguishing_name").fetchone() == (
+        expected_bf if prepared_index else 1.0,
+    )
     assert not any(column.startswith("lk_") for column in raw.columns)
     improved = duck_con.table(stage.improved_predictions_table)
     assert not any(column.startswith("lk_") for column in improved.columns)
@@ -951,6 +966,7 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
             ('002', 'b1', 'LAUREL GROVE', 'ZZ1 1ZZ')
         ) canonical(unique_id, ukam_address_id, clean_full_address, postcode)
     """)
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     source = duck_con.sql("""
         SELECT 'query' AS unique_id, 'q1' AS ukam_address_id,
             'MEADOW COTTAGE' AS clean_full_address, 'ZZ1 1ZZ' AS postcode,
