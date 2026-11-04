@@ -418,7 +418,13 @@
       "output_column_name": "numeric_token_1",
       "comparison_levels": [
         {
-          "sql_condition": "postcode_l=postcode_r AND len(numeric_tokens_r)=0 AND numeric_token_1_l IS NOT NULL AND regexp_matches(clean_full_address_l,'(^| )[ABC][0-9]+[A-Z]?( |$)') AND (list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1)>=40 OR coalesce(list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1),0)>=2) AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false))",
+          "sql_condition": "COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\nAND LENGTH(numeric_tokens_r) = 0\nAND NOT (\n  LENGTH(lk_anchor_uprns_r) = 1\n  AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n) IS TRUE\nAND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\nAND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\nAND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\nAND lk_eligible_r IS TRUE\nAND postcode_l = postcode_r",
+          "label_for_charts": "Lexical fallback versus coded road; supporting postcode-local name (at least 2 bits)",
+          "m_probability": 0.01,
+          "u_probability": 0.01
+        },
+        {
+          "sql_condition": "(\n  COALESCE(\n    LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n    0\n  ) >= 2\n  OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n)\nAND LENGTH(numeric_tokens_r) = 0\nAND NOT COALESCE(\n  NOT business_unit_id_l IS NULL\n  AND NOT business_unit_id_r IS NULL\n  AND business_unit_id_l <> business_unit_id_r,\n  FALSE\n)\nAND NOT COALESCE(\n  NOT flat_letter_l IS NULL\n  AND NOT flat_letter_r IS NULL\n  AND flat_letter_l <> flat_letter_r,\n  FALSE\n)\nAND NOT COALESCE(\n  NOT flat_number_l IS NULL\n  AND NOT flat_number_r IS NULL\n  AND flat_number_l <> flat_number_r,\n  FALSE\n)\nAND NOT numeric_token_1_l IS NULL\nAND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\nAND postcode_l = postcode_r",
           "label_for_charts": "Unnumbered source; canonical coded road reference; strong named-property evidence",
           "m_probability": 0.5,
           "u_probability": 0.5
@@ -431,7 +437,7 @@
           "is_null_level": true
         },
         {
-          "sql_condition": "(numeric_token_1_l = numeric_token_1_r OR nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '') = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')) AND len(numeric_specific_markers_l) >= 1 AND len(numeric_specific_markers_r) >= 1 AND numeric_specific_markers_l[1] IS NOT NULL AND numeric_specific_markers_r[1] IS NOT NULL AND numeric_specific_markers_l[1] != numeric_specific_markers_r[1]",
+          "sql_condition": "LENGTH(numeric_specific_markers_l) >= 1\nAND LENGTH(numeric_specific_markers_r) >= 1\nAND NOT numeric_specific_markers_l[1] IS NULL\nAND NOT numeric_specific_markers_r[1] IS NULL\nAND (\n  NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n  OR numeric_token_1_l = numeric_token_1_r\n)\nAND numeric_specific_markers_l[1] <> numeric_specific_markers_r[1]",
           "label_for_charts": "Numeric 1 agrees but role marker conflicts (cap 6)",
           "m_probability": 64.0,
           "u_probability": 1.0,
@@ -439,27 +445,18 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "\"numeric_token_1_l\" = \"numeric_token_1_r\"",
-          "label_for_charts": "Exact match",
+          "sql_condition": "(\"numeric_token_1_l\" = \"numeric_token_1_r\") OR (NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), ''))",
+          "label_for_charts": "Exact primary token or matching numeric part",
           "m_probability": 95.00950852025916,
           "u_probability": 1,
           "fix_m_probability": true,
           "fix_u_probability": true,
           "tf_adjustment_column": "numeric_token_1",
-          "tf_adjustment_weight": 0.1
+          "tf_adjustment_weight": 0.1,
+          "disable_tf_exact_match_detection": true
         },
         {
-          "sql_condition": "\n                            nullif(regexp_extract(numeric_token_1_l, '\\d+', 0), '')\n                            = nullif(regexp_extract(numeric_token_1_r, '\\d+', 0), '')\n                            ",
-          "label_for_charts": "Numeric part matches",
-          "m_probability": 95.00950852025916,
-          "u_probability": 1,
-          "fix_m_probability": true,
-          "fix_u_probability": true,
-          "tf_adjustment_column": "numeric_token_1",
-          "tf_adjustment_weight": 0.1
-        },
-        {
-          "sql_condition": "numeric_token_2_l = numeric_token_1_r or numeric_token_1_l = numeric_token_2_r",
+          "sql_condition": "numeric_token_1_l = numeric_token_2_r OR numeric_token_1_r = numeric_token_2_l",
           "label_for_charts": "Exact match inverted numbers",
           "m_probability": 4,
           "u_probability": 1,
@@ -483,7 +480,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
+          "sql_condition": "NOT numeric_token_1_l IS NULL\nAND NOT numeric_token_1_r IS NULL\nAND numeric_token_1_l <> numeric_token_1_r",
           "label_for_charts": "Primary numbers both present but differ",
           "m_probability": 0.0001,
           "u_probability": 1,
@@ -616,6 +613,14 @@
     {
       "output_column_name": "token_rel_freq_arr_hist",
       "comparison_levels": [
+        {
+          "sql_condition": "lk_eligible_r AND postcode_l=postcode_r",
+          "label_for_charts": "Postcode-local anchor lane: TF contribution replaced by joint local levels",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
         {
           "sql_condition": "token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL",
           "label_for_charts": "Term-frequency history unavailable",
@@ -975,6 +980,14 @@
       "output_column_name": "signature_evidence",
       "comparison_levels": [
         {
+          "sql_condition": "lk_eligible_r AND postcode_l=postcode_r",
+          "label_for_charts": "Signature evidence included in joint local comparison",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "((postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND ((NOT coalesce((flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r),false) OR (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))))) AND list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 20 AND (coalesce(list_extract(map_extract(signature_unique_hits_map_r, CAST(unique_id_l AS VARCHAR)), 1),0)<1 OR (flat_identity_l IS NOT NULL AND flat_identity_r IS NOT NULL AND flat_identity_l != flat_identity_r))) AND (list_extract(map_extract(signature_score_map_r, CAST(unique_id_l AS VARCHAR)), 1) >= 40)",
           "label_for_charts": "Strong rare-span evidence; postcode and numbers agree; no explicit unit conflict",
           "m_probability": 0.5,
@@ -1062,6 +1075,196 @@
         }
       ],
       "comparison_description": "Commercial same-role structural/numeric contradiction"
+    },
+    {
+      "output_column_name": "joint_local_evidence",
+      "comparison_description": "Joint replacement of postcode_distinguishing_name, signature_evidence",
+      "comparison_levels": [
+        {
+          "sql_condition": "NOT lk_eligible_r IS TRUE OR postcode_l IS DISTINCT FROM postcode_r",
+          "label_for_charts": "Outside local joint evidence lane",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      (\n        NOT flat_identity_l IS NULL\n        AND NOT flat_identity_r IS NULL\n        AND flat_identity_l <> flat_identity_r\n      ) IS TRUE\n      OR NOT (\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1) >= 1\n        AND numeric_token_1_l = numeric_token_1_r\n      ) IS TRUE\n    )\n    AND NOT (\n      LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 8\n    ) IS TRUE\n  )\n  OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) IS NULL\n)\nAND (\n  (\n    (\n      COALESCE(\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n        0\n      ) >= 2\n      OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n    )\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT COALESCE(\n      NOT business_unit_id_l IS NULL\n      AND NOT business_unit_id_r IS NULL\n      AND business_unit_id_l <> business_unit_id_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_letter_l IS NULL\n      AND NOT flat_letter_r IS NULL\n      AND flat_letter_l <> flat_letter_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_number_l IS NULL\n      AND NOT flat_number_r IS NULL\n      AND flat_number_l <> flat_number_r,\n      FALSE\n    )\n    AND NOT numeric_token_1_l IS NULL\n    AND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT (\n      LENGTH(lk_anchor_uprns_r) = 1\n      AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n    ) IS TRUE\n    AND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\n    AND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\n    AND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\n    AND lk_eligible_r IS TRUE\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR NOT (\n    NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n    OR numeric_token_1_l = numeric_token_1_r\n  ) IS TRUE\n)\nAND (\n  (\n    (\n      LENGTH(lk_anchor_uprns_r) > 0.5\n    ) IS TRUE\n    AND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n  OR lk_anchor_uprns_r IS NULL\n)",
+          "label_for_charts": "No strong local support; weak numbers and signature [leaf 4]",
+          "m_probability": 0.214721223696066,
+          "u_probability": 0.5,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      COALESCE(\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n        0\n      ) >= 2\n      OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n    )\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT COALESCE(\n      NOT business_unit_id_l IS NULL\n      AND NOT business_unit_id_r IS NULL\n      AND business_unit_id_l <> business_unit_id_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_letter_l IS NULL\n      AND NOT flat_letter_r IS NULL\n      AND flat_letter_l <> flat_letter_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_number_l IS NULL\n      AND NOT flat_number_r IS NULL\n      AND flat_number_l <> flat_number_r,\n      FALSE\n    )\n    AND NOT numeric_token_1_l IS NULL\n    AND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT (\n      LENGTH(lk_anchor_uprns_r) = 1\n      AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n    ) IS TRUE\n    AND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\n    AND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\n    AND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\n    AND lk_eligible_r IS TRUE\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR NOT (\n    NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n    OR numeric_token_1_l = numeric_token_1_r\n  ) IS TRUE\n)\nAND (\n  (\n    (\n      LENGTH(lk_anchor_uprns_r) > 0.5\n    ) IS TRUE\n    AND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n  OR lk_anchor_uprns_r IS NULL\n)",
+          "label_for_charts": "No strong local support; weak numbers, signature present [leaf 5]",
+          "m_probability": 0.5,
+          "u_probability": 0.06889420158920798,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      (\n        NOT flat_identity_l IS NULL\n        AND NOT flat_identity_r IS NULL\n        AND flat_identity_l <> flat_identity_r\n      ) IS TRUE\n      OR NOT (\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1) >= 1\n        AND numeric_token_1_l = numeric_token_1_r\n      ) IS TRUE\n    )\n    AND NOT (\n      LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 8\n    ) IS TRUE\n  )\n  OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) IS NULL\n)\nAND (\n  (\n    (\n      LENGTH(lk_anchor_uprns_r) > 0.5\n    ) IS TRUE\n    AND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n  OR lk_anchor_uprns_r IS NULL\n)\nAND (\n  NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n  OR numeric_token_1_l = numeric_token_1_r\n) IS TRUE\nAND NOT (\n  (\n    COALESCE(\n      LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n      0\n    ) >= 2\n    OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n  )\n  AND LENGTH(numeric_tokens_r) = 0\n  AND NOT COALESCE(\n    NOT business_unit_id_l IS NULL\n    AND NOT business_unit_id_r IS NULL\n    AND business_unit_id_l <> business_unit_id_r,\n    FALSE\n  )\n  AND NOT COALESCE(\n    NOT flat_letter_l IS NULL\n    AND NOT flat_letter_r IS NULL\n    AND flat_letter_l <> flat_letter_r,\n    FALSE\n  )\n  AND NOT COALESCE(\n    NOT flat_number_l IS NULL\n    AND NOT flat_number_r IS NULL\n    AND flat_number_l <> flat_number_r,\n    FALSE\n  )\n  AND NOT numeric_token_1_l IS NULL\n  AND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\n  AND postcode_l = postcode_r\n) IS TRUE\nAND NOT (\n  COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\n  AND LENGTH(numeric_tokens_r) = 0\n  AND NOT (\n    LENGTH(lk_anchor_uprns_r) = 1\n    AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  ) IS TRUE\n  AND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\n  AND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\n  AND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\n  AND lk_eligible_r IS TRUE\n  AND postcode_l = postcode_r\n) IS TRUE",
+          "label_for_charts": "No strong local support; numbers agree, weak signature [leaf 7]",
+          "m_probability": 0.212896388397861,
+          "u_probability": 0.5,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      LENGTH(lk_anchor_uprns_r) > 0.5\n    ) IS TRUE\n    AND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n  OR lk_anchor_uprns_r IS NULL\n)\nAND TRUE",
+          "label_for_charts": "No strong local support; numbers and signature agree [leaf 8]",
+          "m_probability": 0.3193891402012709,
+          "u_probability": 0.5,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  LENGTH(distinguishing_lexical_tokens_l) > 0\n  AND NOT distinguishing_lexical_tokens_l IS NULL\n) IS TRUE\nAND (\n  LENGTH(lk_anchor_uprns_r) > 0.5\n) IS TRUE\nAND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) <= 0.5\nAND NOT (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE\nAND NOT (\n  clean_full_address_tokens_r && distinguishing_lexical_tokens_l\n) IS TRUE\nAND NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE",
+          "label_for_charts": "Other anchor; no other word support; lexical mismatch [leaf 11]",
+          "m_probability": 0.5,
+          "u_probability": 0.07958841662230903,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n    AND COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) <= 0.5\n    AND (\n      NOT (\n        LENGTH(distinguishing_lexical_tokens_l) > 0\n        AND NOT distinguishing_lexical_tokens_l IS NULL\n      ) IS TRUE\n      OR NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    )\n  )\n  OR (\n    (\n      LENGTH(lk_anchor_uprns_r) <= 0.5\n    ) IS TRUE\n    AND COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) <= 1\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n)\nAND (\n  LENGTH(distinguishing_lexical_tokens_l) > 0\n  AND NOT distinguishing_lexical_tokens_l IS NULL\n) IS TRUE\nAND NOT (\n  clean_full_address_tokens_r && distinguishing_lexical_tokens_l\n) IS TRUE\nAND NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE",
+          "label_for_charts": "Weak local support; lexical mismatch [leaf 12]",
+          "m_probability": 0.5,
+          "u_probability": 0.012438539098051912,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  LENGTH(lk_anchor_uprns_r) > 0.5\n) IS TRUE\nAND COALESCE(LIST_SUM(MAP_VALUES(lk_word_support_by_uprn_r)), 0) - COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) <= 0.5\nAND NOT (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE",
+          "label_for_charts": "Other anchor; no other word support; lexical compatible [leaf 14]",
+          "m_probability": 0.5,
+          "u_probability": 0.11710136190111396,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n    AND COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) <= 0.5\n    AND (\n      NOT (\n        LENGTH(distinguishing_lexical_tokens_l) > 0\n        AND NOT distinguishing_lexical_tokens_l IS NULL\n      ) IS TRUE\n      OR NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    )\n  )\n  OR (\n    (\n      LENGTH(lk_anchor_uprns_r) <= 0.5\n    ) IS TRUE\n    AND COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) <= 1\n    AND NOT (\n      ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n      AND LENGTH(lk_anchor_uprns_r) = 1\n    ) IS TRUE\n  )\n)\nAND TRUE",
+          "label_for_charts": "Weak local support; lexical compatible [leaf 15]",
+          "m_probability": 0.5,
+          "u_probability": 0.048657413446391976,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      (\n        NOT flat_identity_l IS NULL\n        AND NOT flat_identity_r IS NULL\n        AND flat_identity_l <> flat_identity_r\n      ) IS TRUE\n      OR NOT (\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1) >= 1\n        AND numeric_token_1_l = numeric_token_1_r\n      ) IS TRUE\n    )\n    AND NOT (\n      LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 8\n    ) IS TRUE\n  )\n  OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) IS NULL\n)\nAND (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE\nAND (\n  LENGTH(distinguishing_lexical_tokens_l) > 0\n  AND NOT distinguishing_lexical_tokens_l IS NULL\n) IS TRUE\nAND (\n  LENGTH(numeric_tokens_l) = 0\n  AND LENGTH(numeric_tokens_r) = 0\n  AND (\n    numeric_token_1_l = numeric_token_1_r\n    OR numeric_token_1_l IS NULL\n    OR numeric_token_1_r IS NULL\n  )\n) IS TRUE\nAND LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE",
+          "label_for_charts": "Own anchor; lexical and fallback compatible; weak signature [leaf 19]",
+          "m_probability": 0.5,
+          "u_probability": 5.001771990158864e-05,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE\nAND (\n  LENGTH(distinguishing_lexical_tokens_l) > 0\n  AND NOT distinguishing_lexical_tokens_l IS NULL\n) IS TRUE\nAND (\n  LENGTH(numeric_tokens_l) = 0\n  AND LENGTH(numeric_tokens_r) = 0\n  AND (\n    numeric_token_1_l = numeric_token_1_r\n    OR numeric_token_1_l IS NULL\n    OR numeric_token_1_r IS NULL\n  )\n) IS TRUE\nAND (\n  (\n    NOT flat_identity_l IS NULL\n    AND NOT flat_identity_r IS NULL\n    AND flat_identity_l <> flat_identity_r\n  ) IS TRUE\n  OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) IS NULL\n  OR NOT (\n    LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1) >= 2\n    AND numeric_token_1_l = numeric_token_1_r\n  ) IS TRUE\n)\nAND LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\nAND NOT (\n  (\n    (\n      REGEXP_EXTRACT_ALL(\n        REGEXP_EXTRACT(clean_full_address_r, '^[^0-9]*'),\n        'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH'\n      ) && REGEXP_EXTRACT_ALL(COALESCE(flat_positional_l, ''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH')\n      AND LENGTH(\n        LIST_DISTINCT(\n          REGEXP_EXTRACT_ALL(\n            REGEXP_EXTRACT(clean_full_address_r, '^[^0-9]*'),\n            'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH'\n          )\n        )\n      ) >= 2\n      AND LENGTH(\n        REGEXP_EXTRACT_ALL(COALESCE(flat_positional_l, ''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH')\n      ) > 0\n    )\n    OR NOT COALESCE(\n      (\n        NOT flat_positional_l IS NULL\n        AND NOT flat_positional_r IS NULL\n        AND flat_positional_l <> flat_positional_r\n      ),\n      FALSE\n    )\n  )\n  AND (\n    COALESCE(\n      LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n      0\n    ) < 1\n    OR (\n      NOT flat_identity_l IS NULL\n      AND NOT flat_identity_r IS NULL\n      AND flat_identity_l <> flat_identity_r\n    )\n  )\n  AND LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n  AND NOT COALESCE(\n    (\n      NOT NULLIF(REGEXP_EXTRACT(numeric_token_2_l, '[0-9]+'), '') IS NULL\n      AND NOT NULLIF(REGEXP_EXTRACT(numeric_token_2_r, '[0-9]+'), '') IS NULL\n      AND NOT numeric_token_2_l IS NULL\n      AND NOT numeric_token_2_r IS NULL\n      AND NULLIF(REGEXP_EXTRACT(numeric_token_2_l, '[0-9]+'), '') <> NULLIF(REGEXP_EXTRACT(numeric_token_2_r, '[0-9]+'), '')\n    ),\n    FALSE\n  )\n  AND NOT COALESCE(\n    NOT business_unit_id_l IS NULL\n    AND NOT business_unit_id_r IS NULL\n    AND business_unit_id_l <> business_unit_id_r,\n    FALSE\n  )\n  AND NOT COALESCE(\n    NOT flat_letter_l IS NULL\n    AND NOT flat_letter_r IS NULL\n    AND flat_letter_l <> flat_letter_r,\n    FALSE\n  )\n  AND NOT COALESCE(\n    NOT flat_number_l IS NULL\n    AND NOT flat_number_r IS NULL\n    AND flat_number_l <> flat_number_r,\n    FALSE\n  )\n  AND NOT NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '[0-9]+'), '') IS NULL\n  AND NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '[0-9]+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '[0-9]+'), '')\n  AND postcode_l = postcode_r\n) IS TRUE",
+          "label_for_charts": "Own anchor; lexical and fallback compatible; signature present [leaf 20]",
+          "m_probability": 0.5,
+          "u_probability": 6.297192073882587e-07,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE\nAND (\n  LENGTH(distinguishing_lexical_tokens_l) > 0\n  AND NOT distinguishing_lexical_tokens_l IS NULL\n) IS TRUE\nAND (\n  LENGTH(numeric_tokens_l) = 0\n  AND LENGTH(numeric_tokens_r) = 0\n  AND (\n    numeric_token_1_l = numeric_token_1_r\n    OR numeric_token_1_l IS NULL\n    OR numeric_token_1_r IS NULL\n  )\n) IS TRUE\nAND LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE",
+          "label_for_charts": "Own anchor; lexical and fallback compatible; strong signature [leaf 21]",
+          "m_probability": 0.5,
+          "u_probability": 2.0007258330883008e-07,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      COALESCE(\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n        0\n      ) >= 2\n      OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n    )\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT COALESCE(\n      NOT business_unit_id_l IS NULL\n      AND NOT business_unit_id_r IS NULL\n      AND business_unit_id_l <> business_unit_id_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_letter_l IS NULL\n      AND NOT flat_letter_r IS NULL\n      AND flat_letter_l <> flat_letter_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_number_l IS NULL\n      AND NOT flat_number_r IS NULL\n      AND flat_number_l <> flat_number_r,\n      FALSE\n    )\n    AND NOT numeric_token_1_l IS NULL\n    AND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT (\n      LENGTH(lk_anchor_uprns_r) = 1\n      AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n    ) IS TRUE\n    AND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\n    AND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\n    AND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\n    AND lk_eligible_r IS TRUE\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR NOT (\n    NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n    OR numeric_token_1_l = numeric_token_1_r\n  ) IS TRUE\n)\nAND (\n  LENGTH(lk_anchor_uprns_r) <= 0.5\n) IS TRUE\nAND COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) > 1\nAND NOT (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE",
+          "label_for_charts": "Unanchored name support; weak numbers [leaf 24]",
+          "m_probability": 0.5,
+          "u_probability": 2.4490377078353426e-05,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  LENGTH(lk_anchor_uprns_r) <= 0.5\n) IS TRUE\nAND COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) > 1\nAND NOT (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE",
+          "label_for_charts": "Unanchored name support; numbers agree [leaf 25]",
+          "m_probability": 0.5,
+          "u_probability": 4.0969773948324056e-05,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      COALESCE(\n        LIST_EXTRACT(MAP_EXTRACT(signature_unique_hits_map_r, CAST(unique_id_l AS TEXT)), 1),\n        0\n      ) >= 2\n      OR LIST_EXTRACT(MAP_EXTRACT(signature_score_map_r, CAST(unique_id_l AS TEXT)), 1) >= 40\n    )\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT COALESCE(\n      NOT business_unit_id_l IS NULL\n      AND NOT business_unit_id_r IS NULL\n      AND business_unit_id_l <> business_unit_id_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_letter_l IS NULL\n      AND NOT flat_letter_r IS NULL\n      AND flat_letter_l <> flat_letter_r,\n      FALSE\n    )\n    AND NOT COALESCE(\n      NOT flat_number_l IS NULL\n      AND NOT flat_number_r IS NULL\n      AND flat_number_l <> flat_number_r,\n      FALSE\n    )\n    AND NOT numeric_token_1_l IS NULL\n    AND REGEXP_MATCHES(clean_full_address_l, '(^| )[ABC][0-9]+[A-Z]?( |$)')\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\n    AND LENGTH(numeric_tokens_r) = 0\n    AND NOT (\n      LENGTH(lk_anchor_uprns_r) = 1\n      AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n    ) IS TRUE\n    AND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\n    AND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\n    AND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\n    AND lk_eligible_r IS TRUE\n    AND postcode_l = postcode_r\n  ) IS TRUE\n  OR NOT (\n    NULLIF(REGEXP_EXTRACT(numeric_token_1_l, '\\d+'), '') = NULLIF(REGEXP_EXTRACT(numeric_token_1_r, '\\d+'), '')\n    OR numeric_token_1_l = numeric_token_1_r\n  ) IS TRUE\n)\nAND (\n  (\n    (\n      LENGTH(distinguishing_lexical_tokens_l) > 0\n      AND NOT distinguishing_lexical_tokens_l IS NULL\n    ) IS TRUE\n    AND LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    AND NOT (\n      LENGTH(numeric_tokens_l) = 0\n      AND LENGTH(numeric_tokens_r) = 0\n      AND (\n        numeric_token_1_l = numeric_token_1_r\n        OR numeric_token_1_l IS NULL\n        OR numeric_token_1_r IS NULL\n      )\n    ) IS TRUE\n  )\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND (\n      NOT (\n        LENGTH(distinguishing_lexical_tokens_l) > 0\n        AND NOT distinguishing_lexical_tokens_l IS NULL\n      ) IS TRUE\n      OR NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    )\n  )\n)\nAND (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE",
+          "label_for_charts": "Own supported anchor; weak numbers [leaf 27]",
+          "m_probability": 0.5,
+          "u_probability": 7.934540005401633e-08,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(\n  (\n    (\n      LENGTH(distinguishing_lexical_tokens_l) > 0\n      AND NOT distinguishing_lexical_tokens_l IS NULL\n    ) IS TRUE\n    AND LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    AND NOT (\n      LENGTH(numeric_tokens_l) = 0\n      AND LENGTH(numeric_tokens_r) = 0\n      AND (\n        numeric_token_1_l = numeric_token_1_r\n        OR numeric_token_1_l IS NULL\n        OR numeric_token_1_r IS NULL\n      )\n    ) IS TRUE\n  )\n  OR (\n    COALESCE(MAP_EXTRACT_VALUE(lk_word_support_by_uprn_r, CAST(unique_id_l AS TEXT)), 0) > 0.5\n    AND (\n      NOT (\n        LENGTH(distinguishing_lexical_tokens_l) > 0\n        AND NOT distinguishing_lexical_tokens_l IS NULL\n      ) IS TRUE\n      OR NOT LIST_HAS_ALL(clean_full_address_tokens_r, distinguishing_lexical_tokens_l) IS TRUE\n    )\n  )\n)\nAND (\n  ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n  AND LENGTH(lk_anchor_uprns_r) = 1\n) IS TRUE",
+          "label_for_charts": "Own supported anchor; numbers agree [leaf 28]",
+          "m_probability": 0.5,
+          "u_probability": 7.509751508091897e-08,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No evaluated joint state",
+          "m_probability": 1.0,
+          "u_probability": 1.0
+        }
+      ]
+    },
+    {
+      "output_column_name": "local_name_already_in_joint",
+      "comparison_levels": [
+        {
+          "sql_condition": "lk_eligible_r IS NOT TRUE OR postcode_l IS DISTINCT FROM postcode_r",
+          "label_for_charts": "No postcode-distinguishing name evidence",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "len(lk_anchor_uprns_r) = 1 AND NOT list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR)",
+          "label_for_charts": "Name identifies a different property in the postcode",
+          "m_probability": 0.5,
+          "u_probability": 0.125
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 6",
+          "label_for_charts": "Unique leading property-name phrase",
+          "m_probability": 0.03125,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 5",
+          "label_for_charts": "Unique leading property-name word",
+          "m_probability": 0.0625,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 4",
+          "label_for_charts": "Rare property-name phrase in the postcode",
+          "m_probability": 0.125,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 3",
+          "label_for_charts": "Rare property-name word in the postcode",
+          "m_probability": 0.25,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2",
+          "label_for_charts": "Unique joined split property name in postcode",
+          "m_probability": 0.25,
+          "u_probability": 0.5
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "No supporting postcode-distinguishing name",
+          "m_probability": 0.5,
+          "u_probability": 0.5
+        }
+      ],
+      "comparison_description": "Remove the standalone name contribution already represented in the joint model"
     },
     {
       "output_column_name": "postcode_distinguishing_name",
