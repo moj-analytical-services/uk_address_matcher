@@ -467,6 +467,22 @@
           "fix_u_probability": true
         },
         {
+          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND len(lk_anchor_uprns_r) = 1 AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR) AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
+          "label_for_charts": "Strong postcode name with different lexical fallback words",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2 AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r AND (clean_full_address_tokens_l[1] = array_to_string(list_slice(clean_full_address_tokens_r, 1, 2), '') OR clean_full_address_tokens_r[1] = array_to_string(list_slice(clean_full_address_tokens_l, 1, 2), ''))",
+          "label_for_charts": "Unique leading spacing name with different lexical fallback words",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
           "sql_condition": "numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
           "label_for_charts": "Primary numbers both present but differ",
           "m_probability": 0.0001,
@@ -1090,6 +1106,12 @@
           "label_for_charts": "Unique joined split property name in postcode",
           "m_probability": 0.5,
           "u_probability": 0.25
+        },
+        {
+          "sql_condition": "map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 1",
+          "label_for_charts": "Context key outside the leading property name",
+          "m_probability": 0.5,
+          "u_probability": 0.5
         },
         {
           "sql_condition": "ELSE",
