@@ -1,4 +1,7 @@
-from uk_address_matcher.cleaning.local_keys import add_local_key_features
+from uk_address_matcher.cleaning.local_keys import (
+    add_local_key_features,
+    prepare_canonical_local_keys,
+)
 
 
 def test_word_support_deduplicates_words_and_aliases(duck_con):
@@ -12,6 +15,7 @@ def test_word_support_deduplicates_words_and_aliases(duck_con):
             ('005', 'e1', 'ALDER MEADOW', 'ZZ2 1ZZ')
         ) addresses(unique_id, ukam_address_id, clean_full_address, postcode)
     """)
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     source = duck_con.sql("""
         SELECT *, 'ZZ1 1ZZ' AS postcode, []::VARCHAR[] AS numeric_tokens,
             false AS has_flat_indicator, false AS has_business_unit
@@ -38,6 +42,7 @@ def test_word_support_is_empty_for_phrase_only_spacing_evidence(duck_con):
             ('002', 'b1', 'BIRCH HOUSE', 'ZZ1 1ZZ')
         ) addresses(unique_id, ukam_address_id, clean_full_address, postcode)
     """)
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     source = duck_con.sql("""
         SELECT 'source' AS ukam_address_id, 'ALDERMEADOW' AS clean_full_address,
             'ZZ1 1ZZ' AS postcode, []::VARCHAR[] AS numeric_tokens,
