@@ -28,6 +28,10 @@ from uk_address_matcher.analysis.accuracy_analysis import (
 from uk_address_matcher.analysis.overlay_precision_recall_charts import (
     _overlay_precision_recall_charts,
 )
+from uk_address_matcher.linking_model.splink_model import (
+    _get_production_model_settings,
+    _sanitise_null_comparison_levels,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -300,6 +304,17 @@ def _serialisable_stage(stage: Any) -> dict[str, Any]:
             value = getattr(stage, field.name)
             if callable(value):
                 continue
+            if (
+                field.name == "settings"
+                and stage.__class__.__module__
+                == "uk_address_matcher.linking_model.matching.stages.splink"
+            ):
+                settings = (
+                    value if value is not None else _get_production_model_settings()
+                )
+                settings_as_dict = settings.create_settings_dict("duckdb")
+                settings_as_dict["linker_uid"] = None
+                value = _sanitise_null_comparison_levels(settings_as_dict)
             params[field.name] = _normalise_value(value)
     elif hasattr(stage, "__dict__"):
         for key, value in sorted(stage.__dict__.items()):
