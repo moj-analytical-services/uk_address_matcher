@@ -182,13 +182,12 @@ def add_local_key_features(
         )
     """)
     if (
-        con.execute(
+        "local_key_index" in canonical.columns
+        and con.execute(
             f"SELECT 1 FROM ({source.sql_query()}) WHERE {gate} LIMIT 1"
         ).fetchone()
         is not None
     ):
-        if "local_key_index" not in canonical.columns:
-            canonical = prepare_canonical_local_keys(con, canonical)
         con.register(canonical_input, canonical)
         con.execute(f"""
             CREATE TEMP VIEW "{source_keys_table}" AS
