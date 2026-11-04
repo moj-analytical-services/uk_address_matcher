@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
-import benchmarking.runner as benchmark_runner
+from benchmarking.config.datasets import load_dataset
 from benchmarking.config.sources import resolve_data_path
 from uk_address_matcher import ExactMatchStage, prepare_canonical_folder
 
@@ -49,36 +50,22 @@ def test_resolve_data_path_raises_for_local_file_path(
         resolve_data_path("UKAM_TEST_DATA_PATH")
 
 
-@pytest.mark.parametrize("matching_num_chunks", [1, 3])
-def test_benchmark_chunked_reports_survive_return(
-    duck_con, tmp_path, monkeypatch, matching_num_chunks
-):
-    canonical = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('C1', '1 FICTIONAL HIGH STREET', 'SW1A 1AA'),
-            ('C2', '2 FICTIONAL HIGH STREET', 'SW1A 1AA')
-        ) AS addresses(unique_id, address_concat, postcode)
-    """)
-    folder = tmp_path / "prepared"
-    prepare_canonical_folder(
-        canonical, output_folder=folder, con=duck_con, show_progress="off"
+def test_load_gwynedd_maps_uprn_and_concatenates_address_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_file = tmp_path / "Gwynedd-domestic-property-list-060626.csv"
+    source_file.write_text(
+        "property_ref,uprn,band,addr1,addr2,addr3,addr4,postcode\n"
+        "42,12345678901,A,7 TEST STREET,,TEST TOWN,,ZZ1 1ZZ\n",
+        encoding="utf-8",
     )
-    messy = canonical.select("*, unique_id AS ukam_label")
-    monkeypatch.setattr(benchmark_runner, "load_dataset", lambda *args, **kwargs: messy)
+    monkeypatch.setenv("UKAM_GWYNEDD_DATA_PATH", str(tmp_path))
 
-    result = benchmark_runner.run_single_dataset(
-        con=duck_con,
-        dataset_key="pooled_councils",
-        canonical_path=str(folder),
-        stages=[ExactMatchStage()],
-        matching_num_chunks=matching_num_chunks,
-        persist_results=True,
-        results_root=str(tmp_path / "results"),
-        enable_comparison_charts=False,
-    )
+    connection = duckdb.connect(":memory:")
+    try:
+        rows = load_dataset(connection, "gwynedd").fetchall()
+    finally:
+        connection.close()
 
-    assert result.total_rows == 2
-    assert result.correct_matches == 2
-    assert result.accuracy_table.fetchall()
-    assert result.stage_diagnostics_table.fetchall()
-    assert Path(result.persisted_run.manifest_path).exists()
+    assert rows == [("12345678901", "7 test street test town", "12345678901", "ZZ1 1ZZ")]

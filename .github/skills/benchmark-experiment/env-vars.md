@@ -19,6 +19,7 @@
 These are defined in `benchmarking/config/datasets.py`.
 
 - `UKAM_ABERDEENSHIRE_DATA_PATH`
+- `UKAM_GWYNEDD_DATA_PATH`
 - `UKAM_HACKNEY_DATA_PATH`
 - `UKAM_LAMBETH_DATA_PATH`
 - `UKAM_MID_SUSSEX_DATA_PATH`
