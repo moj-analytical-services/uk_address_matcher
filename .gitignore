@@ -180,6 +180,7 @@ cython_debug/
 # Project specific folders to preclude from git history
 benchmarking/.config.json
 ukam_prepared_canonical/*
+.ai_scratch/
 tmp/*
 benchmarking/results/*
 ukam_labelling_bundle/*
