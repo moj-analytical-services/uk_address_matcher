@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 from benchmarking.config.datasets import (
+    filter_dataset_to_canonical_labels,
     get_dataset_definition,
     list_dataset_keys,
     load_dataset,
@@ -24,6 +25,7 @@ from benchmarking.insights.types import (
 )
 from benchmarking.utils.io import setup_connection
 from uk_address_matcher import AddressMatcher
+from uk_address_matcher.prepare_canonical import load_prepared_canonical_data
 
 if TYPE_CHECKING:
     import duckdb
@@ -49,6 +51,7 @@ class BenchmarkRunResult:
     splink_predictions: duckdb.DuckDBPyRelation | None = None
     splink_available: bool = False
     persisted_run: PersistedBenchmarkRun | None = None
+    source_rows_before_canonical_filter: int | None = None
 
 
 def resolve_dataset_selection(selection: str | list[str]) -> list[str]:
@@ -90,15 +93,41 @@ def run_single_dataset(
     enable_comparison_charts: bool = True,
     comparison_baseline_run_id: str | None = None,
     matching_num_chunks: int = 1,
+    filter_out_missing_uprns: bool = False,
 ) -> BenchmarkRunResult:
     dataset = get_dataset_definition(dataset_key)
     timings: dict[str, float] = {}
     total_start = perf_counter()
 
     data_load_start = perf_counter()
-    df_messy = load_dataset(con, dataset_key=dataset_key, sample_mode=sample_mode)
+    df_messy = load_dataset(
+        con,
+        dataset_key=dataset_key,
+        sample_mode=sample_mode,
+    )
+    source_rows_before_canonical_filter: int | None = None
+    if filter_out_missing_uprns:
+        source_rows_before_canonical_filter = int(
+            df_messy.aggregate("COUNT(*) AS row_count").fetchone()[0]
+        )
+        prepared_canonical = load_prepared_canonical_data(
+            canonical_path,
+            con,
+            canonical_address_filter=canonical_address_filter,
+        )
+        df_messy = filter_dataset_to_canonical_labels(
+            con,
+            df_messy,
+            prepared_canonical.addresses,
+        )
     timings["data_load"] = perf_counter() - data_load_start
     total_input_rows = int(df_messy.aggregate("COUNT(*) AS row_count").fetchone()[0])
+    if source_rows_before_canonical_filter is not None:
+        print(
+            "Canonical-label filter: retained "
+            f"{total_input_rows:,} of {source_rows_before_canonical_filter:,} rows; "
+            f"excluded {source_rows_before_canonical_filter - total_input_rows:,}."
+        )
 
     pipeline_start = perf_counter()
     matcher = AddressMatcher(
@@ -187,6 +216,7 @@ def run_single_dataset(
             precision=precision,
             recall=recall,
             precision_recall_curve_rows=precision_recall_curve_records,
+            input_rows_before_canonical_filter=source_rows_before_canonical_filter,
             comparison_baseline_run_id=comparison_baseline_run_id,
             results_root=results_root,
             enable_chart_exports=enable_comparison_charts,
@@ -211,6 +241,7 @@ def run_single_dataset(
         splink_predictions=splink_predictions,
         splink_available=splink_predictions is not None,
         persisted_run=persisted_run,
+        source_rows_before_canonical_filter=source_rows_before_canonical_filter,
     )
 
 
@@ -228,6 +259,7 @@ def run_selected_datasets(
     enable_comparison_charts: bool = True,
     comparison_baseline_run_id: str | None = None,
     matching_num_chunks: int = 1,
+    filter_out_missing_uprns: bool = False,
 ) -> list[BenchmarkRunResult]:
     selected = resolve_dataset_selection(selected_datasets)
     effective_run_id = run_id.strip() if isinstance(run_id, str) else run_id
@@ -253,6 +285,7 @@ def run_selected_datasets(
             results_root=results_root,
             enable_comparison_charts=enable_comparison_charts,
             comparison_baseline_run_id=comparison_baseline_run_id,
+            filter_out_missing_uprns=filter_out_missing_uprns,
         )
         print(
             f"Completed dataset '{dataset_key}' in {result.timings['total_runtime']:.2f}s"
