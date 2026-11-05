@@ -36,7 +36,7 @@ class PeeledAddressStage(MatchingStage):
 
     Set ``inward_postcode_levenshtein`` to a positive integer to enable the
     optional inward postcode phase; the default ``0`` skips it.
-    Cross-postcode matches require a unique entity and a specific shared locality.
+    Cross-postcode matches require a unique entity within the postcode district.
 
     Example:
         ``"100 Test Street Hackney London"`` can match
@@ -164,11 +164,7 @@ def _peeled_address_matches(
                     WHEN messy.peeled_address = messy.compact_address
                         OR canon.peeled_address = canon.compact_address THEN 1
                     ELSE 2
-                END AS key_priority,
-                messy.clean_full_address AS messy_address,
-                messy.peeled_address AS messy_peeled_address,
-                canon.canonical_clean_full_address AS canonical_address,
-                canon.peeled_address AS canonical_peeled_address
+                END AS key_priority
             FROM {{messy_peeled}} AS messy
             JOIN {{canonical_peeled}} AS canon
                 ON split_part(messy.postcode, ' ', 1)
@@ -205,12 +201,10 @@ def _peeled_address_matches(
             CTEStep("ranked_rescues", ranked_rescues_sql),
             CTEStep(
                 "peeled_address_matches",
-                f"""
+                """
                     SELECT ukam_address_id, canonical_ukam_address_id,
                         resolved_canonical_id, match_reason
-                    FROM {{ranked_rescues}}
-                    WHERE postcode_priority = 0
-                        OR len({_shared_peeled_locality_sql()}) > 0
+                    FROM {ranked_rescues}
                 """,
             ),
         ]
@@ -517,23 +511,6 @@ def _build_suffix_peel_regex_sql_literal() -> str:
     escaped = "|".join(re.escape(token).replace(r"\ ", " ") for token in tokens)
     pattern = rf"(?:^|\s+)(?:{escaped})(?:\s+(?:{escaped}))*\s*$"
     return pattern.replace("'", "''")
-
-
-def _shared_peeled_locality_sql() -> str:
-    broad_tokens = (
-        "'WALES', 'CYMRU', 'ENGLAND', 'SCOTLAND', 'NORTHERN', 'IRELAND', "
-        "'UNITED', 'KINGDOM', 'GREAT', 'BRITAIN', 'GLAMORGAN', 'MID', "
-        "'SOUTH', 'NORTH', 'EAST', 'WEST', 'ABERDEENSHIRE', 'RHONDDA', "
-        "'CYNON', 'TAF', 'COUNTY', 'COUNCIL'"
-    )
-    return f"""
-        list_filter(list_intersect(
-            regexp_split_to_array(substr(messy_address,
-                length(messy_peeled_address) + 1), '[^A-Z]+'),
-            regexp_split_to_array(substr(canonical_address,
-                length(canonical_peeled_address) + 1), '[^A-Z]+')
-        ), token -> length(token) >= 3 AND token NOT IN ({broad_tokens}))
-    """
 
 
 def _compacted_address_sql(expression: str) -> str:

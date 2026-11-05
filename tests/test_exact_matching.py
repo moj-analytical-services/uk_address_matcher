@@ -76,14 +76,22 @@ def rescue_data(duck_con, fictional_localities):
     return source, canonical
 
 
-def test_peeled_rescue_guards(duck_con, rescue_data):
+def test_peeled_district_rescue_guards(duck_con, rescue_data):
     source, canonical = rescue_data
     matched = PeeledAddressStage(inward_postcode_levenshtein=2).find_matches(
         duck_con, "rescue", source, canonical
     )
     assert matched.select("ukam_address_id, resolved_canonical_id").order(
         "ukam_address_id"
-    ).fetchall() == [(1, "1001"), (6, "1006"), (7, "1007"), (8, "1008")]
+    ).fetchall() == [
+        (1, "1001"),
+        (2, "1002"),
+        (3, "1003"),
+        (5, "1005"),
+        (6, "1006"),
+        (7, "1007"),
+        (8, "1008"),
+    ]
 
 
 def test_peeled_zero_cap_preserves_optional_uniqueness(duck_con, rescue_data):
@@ -984,7 +992,7 @@ def test_peeled_address_partial_postcode_matching(duck_con):
 
     assert results_df.loc[1, "resolved_canonical_id"] == 1002
     assert results_df.loc[1, "match_reason"] == MatchReason.PEELED_ADDRESS.value
-    assert results_df["resolved_canonical_id"].isna().loc[2]
+    assert results_df.loc[2, "resolved_canonical_id"] == 1003
     assert results_df["resolved_canonical_id"].isna().loc[3]
     assert results_df["resolved_canonical_id"].isna().loc[4]
 
@@ -1012,8 +1020,8 @@ def test_peeled_address_partial_postcode_matching(duck_con):
     assert (
         two_edit_results.fetchdf()
         .set_index("ukam_address_id")["resolved_canonical_id"]
-        .isna()
         .loc[4]
+        == 1005
     )
 
 
