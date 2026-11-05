@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from uk_address_matcher.logging.progress import ProgressMode, _ProgressBar
 
@@ -101,3 +102,54 @@ def log_chunk_progress(
         f"{total_records:,}",
         elapsed_suffix,
     )
+
+
+def report_stage(
+    stage_name: str,
+    stage_rows: int,
+    matched_rows: int,
+    stage_elapsed: float | None,
+    *,
+    progress_mode: ProgressMode,
+    progress: _ProgressBar,
+    chunk_number: int,
+    total_chunks: int,
+    processed_rows: int,
+    total_rows: int,
+    started_at: float,
+    chunks_started_at: float,
+) -> None:
+    if progress_mode == "off":
+        return
+    now = time.perf_counter()
+    remaining = (
+        (now - chunks_started_at) * (total_rows - processed_rows) / processed_rows
+        if processed_rows
+        else None
+    )
+    name = stage_name.replace("_", " ")
+    progress.label = f"Chunk {chunk_number}/{total_chunks} {name} ({stage_rows:,} rows)"
+    progress.update(
+        processed_rows,
+        completed_units=chunk_number - 1,
+        remaining_seconds=remaining,
+    )
+    if stage_elapsed is not None and not progress.enabled:
+        estimate = (
+            _format_elapsed(now - started_at + remaining)
+            if remaining is not None
+            else "pending first completed chunk"
+        )
+        logger.info(
+            "Matching chunk %d/%d | %s: %s rows processed in %s, %s matched; "
+            "job %.0f%%; elapsed %s; estimated total %s.",
+            chunk_number,
+            total_chunks,
+            name,
+            f"{stage_rows:,}",
+            _format_elapsed(stage_elapsed),
+            f"{matched_rows:,}",
+            100 * processed_rows / total_rows,
+            _format_elapsed(now - started_at),
+            estimate,
+        )

@@ -21,6 +21,18 @@ def test_progress_bar_does_not_render_to_non_tty_stream() -> None:
     assert progress.enabled is False
 
 
+def test_progress_bar_shows_remaining_time() -> None:
+    stream = _TtyStringIO()
+    progress = _ProgressBar(label="Matching", total=100, total_units=4, stream=stream)
+
+    progress.update(25, completed_units=1, remaining_seconds=90)
+    progress.close()
+
+    assert "25%" in stream.getvalue()
+    assert "25/100 records" in stream.getvalue()
+    assert "0:01:30 remaining" in stream.getvalue()
+
+
 def test_progress_bar_does_not_render_in_databricks_runtime(monkeypatch) -> None:
     stream = _TtyStringIO()
     monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "16.4")

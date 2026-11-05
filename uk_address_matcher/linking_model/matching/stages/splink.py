@@ -280,6 +280,9 @@ class SplinkStage(MatchingStage):
     best_matches_table: str | None = field(default=None, init=False, repr=False)
 
     _owned_splink_frames: tuple = field(default=(), init=False, repr=False)
+    _canonical_cache_path: str | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def _release_splink_tables(self) -> None:
         """Drop this run's Splink tables via Splink's public API."""
@@ -384,6 +387,7 @@ class SplinkStage(MatchingStage):
                 settings=self.settings,
                 owned_splink_frames=owned_frames,
                 retain_matching_columns=False,
+                canonical_cache_path=self._canonical_cache_path,
             )
 
             self.linker = linker
