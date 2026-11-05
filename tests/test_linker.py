@@ -27,7 +27,18 @@ from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 @pytest.mark.parametrize("with_local_guard", [False, True])
 def test_inline_histogram_keeps_guards_and_strict_thresholds(duck_con, with_local_guard):
-    settings = SettingsCreator.from_path_or_dict(_get_model_settings_dict())
+    model = _get_model_settings_dict()
+    histogram = next(
+        comparison
+        for comparison in model["comparisons"]
+        if comparison.get("output_column_name") == "token_rel_freq_arr_hist"
+    )
+    histogram["comparison_levels"] = [
+        level
+        for level in histogram["comparison_levels"]
+        if "lk_eligible_r" not in level["sql_condition"]
+    ]
+    settings = SettingsCreator.from_path_or_dict(model)
     comparison = next(
         comparison
         for comparison in settings.get_settings("duckdb").comparisons
