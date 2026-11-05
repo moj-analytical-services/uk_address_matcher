@@ -3,7 +3,6 @@ import math
 import pytest
 from splink import DuckDBAPI, SettingsCreator
 from splink.comparison_level_library import CustomLevel
-from splink.internals.pipeline import CTEPipeline
 from splink.internals.testing import is_in_level
 
 from uk_address_matcher import AddressMatcher
@@ -19,36 +18,31 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
-    _HistogramDuckDBAPI,
     _sanitise_null_comparison_levels,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 
 
-@pytest.mark.parametrize("with_local_guard", [False, True])
-def test_inline_histogram_keeps_guards_and_strict_thresholds(duck_con, with_local_guard):
-    model = _get_model_settings_dict()
+@pytest.mark.parametrize(
+    "removed_level, expected",
+    [
+        (None, [35, -1, -1, 34, 33, 33, 34]),
+        (0, [-1, -1, -1, 34, 33, 33, 34]),
+        (2, [34, -1, -1, 33, 33, 33, 33]),
+    ],
+)
+def test_inline_histogram_keeps_guards_and_strict_thresholds(
+    duck_con, removed_level, expected
+):
     histogram = next(
         comparison
-        for comparison in model["comparisons"]
+        for comparison in _get_model_settings_dict()["comparisons"]
         if comparison.get("output_column_name") == "token_rel_freq_arr_hist"
     )
-    histogram["comparison_levels"] = [
-        level
-        for level in histogram["comparison_levels"]
-        if "lk_eligible_r" not in level["sql_condition"]
-    ]
-    settings = SettingsCreator.from_path_or_dict(model)
-    comparison = next(
-        comparison
-        for comparison in settings.get_settings("duckdb").comparisons
-        if comparison.output_column_name == "token_rel_freq_arr_hist"
-    )
-    case_statement = comparison._case_statement
-    if with_local_guard:
-        case_statement = case_statement.replace(
-            "CASE", "CASE WHEN lk_eligible_r AND postcode_l = postcode_r THEN 35", 1
-        )
+    if removed_level is not None:
+        del histogram["comparison_levels"][removed_level]
+    settings = SettingsCreator(link_type="link_only", comparisons=[histogram])
+    case_statement = settings.get_settings("duckdb").comparisons[0]._case_statement
     vectors = f"""
         SELECT id, {case_statement}
         FROM (
@@ -71,32 +65,11 @@ def test_inline_histogram_keeps_guards_and_strict_thresholds(duck_con, with_loca
                    left_present, right_present, frequency)
         )
     """
-    results = []
-    for api in (DuckDBAPI(duck_con), _HistogramDuckDBAPI(duck_con)):
-        pipeline = CTEPipeline()
-        pipeline.enqueue_sql(vectors, "__splink__df_comparison_vectors")
-        pipeline.enqueue_sql(
-            "SELECT * FROM __splink__df_comparison_vectors ORDER BY id",
-            "__splink__df_predict",
-        )
-        result = api.sql_pipeline_to_splink_dataframe(pipeline, use_cache=False)
-        results.append(result.as_duckdbpyrelation().fetchall())
-        if isinstance(api, _HistogramDuckDBAPI):
-            assert result.sql_used_to_create.lower().count("list_reduce(") == 1
-
-    assert (
-        results[0]
-        == results[1]
-        == [
-            (1, 35 if with_local_guard else -1),
-            (2, -1),
-            (3, -1),
-            (4, 34),
-            (5, 33),
-            (6, 33),
-            (7, 34),
-        ]
-    )
+    assert [
+        gamma for _, gamma in duck_con.sql(vectors + " ORDER BY id").fetchall()
+    ] == expected
+    plan = duck_con.sql("EXPLAIN (FORMAT JSON) " + vectors).fetchone()[1]
+    assert plan.lower().count("list_reduce(") == 1
 
 
 @pytest.fixture

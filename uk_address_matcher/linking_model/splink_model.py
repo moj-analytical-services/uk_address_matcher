@@ -4,7 +4,6 @@ import importlib.resources as pkg_resources
 import json
 from pathlib import Path
 
-import sqlglot
 from duckdb import DuckDBPyConnection, DuckDBPyRelation, InvalidInputException
 from splink import DuckDBAPI, Linker, SettingsCreator
 from sqlglot import exp, parse_one
@@ -30,77 +29,6 @@ def _get_model_settings_dict():
         .open("r") as f
     ):
         return json.load(f)
-
-
-def _histogram_conditions(settings: dict) -> tuple[str, ...]:
-    for comparison in settings.get("comparisons", ()):
-        if comparison.get("output_column_name") == "token_rel_freq_arr_hist":
-            return tuple(
-                level["sql_condition"] for level in comparison["comparison_levels"]
-            )
-    return ()
-
-
-def _inline_histogram_product(sql: str) -> str:
-    """Bind the token product once, after the local-evidence and null guards."""
-    try:
-        projection = sqlglot.parse_one(sql, read="duckdb", into=exp.Select)
-    except sqlglot.errors.ParseError:
-        return sql
-
-    histogram = next(
-        (
-            column.this
-            for column in projection.expressions
-            if column.alias == "gamma_token_rel_freq_arr_hist"
-        ),
-        None,
-    )
-    if not isinstance(histogram, exp.Case):
-        return sql
-
-    levels = histogram.args["ifs"]
-    threshold_start = next(
-        (index for index, level in enumerate(levels) if isinstance(level.this, exp.LT)),
-        len(levels),
-    )
-    guards = levels[:threshold_start]
-    thresholds = levels[threshold_start:]
-    if not thresholds or not all(isinstance(level.this, exp.LT) for level in thresholds):
-        return sql
-    product = thresholds[0].this.this
-    if any(level.this.this != product for level in thresholds):
-        return sql
-
-    ladder = exp.Case(
-        ifs=[level.copy() for level in thresholds],
-        default=histogram.args["default"].copy(),
-    )
-    for level in ladder.args["ifs"]:
-        level.this.set("this", exp.column("histogram_product"))
-
-    inline = sqlglot.parse_one(
-        "SELECT list_extract(list_transform("
-        f"list_value({product.sql(dialect='duckdb')}), "
-        f"histogram_product -> {ladder.sql(dialect='duckdb')}), 1)",
-        read="duckdb",
-    ).expressions[0]
-    histogram.set("ifs", guards)
-    histogram.set("default", inline)
-    return projection.sql(dialect="duckdb")
-
-
-class _HistogramDuckDBAPI(DuckDBAPI):
-    def sql_pipeline_to_splink_dataframe(self, pipeline, use_cache: bool = True):
-        if (
-            pipeline.queue
-            and pipeline.queue[-1].output_table_name == "__splink__df_predict"
-        ):
-            for cte in pipeline.queue:
-                if cte.output_table_name == "__splink__df_comparison_vectors":
-                    cte.sql = _inline_histogram_product(cte.sql)
-                    break
-        return super().sql_pipeline_to_splink_dataframe(pipeline, use_cache=use_cache)
 
 
 def _get_production_model_settings_dict() -> dict:
@@ -715,11 +643,7 @@ def _get_linker(
             pass
         con.register(table_name, relation)
 
-    use_inline_histogram = settings is None or _histogram_conditions(
-        settings_as_dict
-    ) == _histogram_conditions(_get_model_settings_dict())
-    db_api_class = _HistogramDuckDBAPI if use_inline_histogram else DuckDBAPI
-    db_api = db_api_class(connection=con)
+    db_api = DuckDBAPI(connection=con)
 
     linker = Linker(
         [messy_name, canonical_name],
