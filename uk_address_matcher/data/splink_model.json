@@ -614,14 +614,6 @@
       "output_column_name": "token_rel_freq_arr_hist",
       "comparison_levels": [
         {
-          "sql_condition": "lk_eligible_r AND postcode_l=postcode_r",
-          "label_for_charts": "Postcode-local anchor lane: TF contribution replaced by joint local levels",
-          "m_probability": 1.0,
-          "u_probability": 1.0,
-          "fix_m_probability": true,
-          "fix_u_probability": true
-        },
-        {
           "sql_condition": "token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL",
           "label_for_charts": "Term-frequency history unavailable",
           "is_null_level": true

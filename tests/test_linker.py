@@ -370,6 +370,21 @@ def test_packaged_numberless_comparison_omits_reordered_token_level():
     )
 
 
+def test_packaged_tf_histogram_has_no_postcode_local_bypass():
+    comparisons = {
+        comparison["output_column_name"]: comparison
+        for comparison in _get_model_settings_dict()["comparisons"]
+    }
+    levels = comparisons["token_rel_freq_arr_hist"]["comparison_levels"]
+    assert levels[0].get("is_null_level") is True
+    assert all(
+        "postcode" not in level["sql_condition"]
+        and "lk_eligible" not in level["sql_condition"]
+        for level in levels
+    )
+    assert "joint_local_evidence" in comparisons
+
+
 def test_packaged_address_model_uses_inline_address_signatures():
     settings = _get_model_settings_dict()
     blocking_rules = settings["blocking_rules_to_generate_predictions"]
