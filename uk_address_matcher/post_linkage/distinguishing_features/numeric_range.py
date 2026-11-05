@@ -208,7 +208,7 @@ def build_numeric_range_candidate_pool(
         SELECT {pair_key_projection}, match_weight
         FROM ({relation.sql_query()}) AS candidate
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY match_weight DESC, unique_id_l DESC
         ) <= {search_depth}
     """).create(search_top_name)
@@ -217,7 +217,7 @@ def build_numeric_range_candidate_pool(
         SELECT {pair_key_projection}
         FROM {search_top_name}
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY match_weight DESC, unique_id_l DESC
         ) <= {top_n_matches}
     """).create(raw_top_name)
@@ -250,7 +250,7 @@ def build_numeric_range_candidate_pool(
                         WHERE numeric_range_guard_passed
                             AND numeric_range_adjustment > 0.0
             QUALIFY ROW_NUMBER() OVER (
-                                PARTITION BY unique_id_r
+                                PARTITION BY ukam_address_id_r
                 ORDER BY
                                         match_weight + numeric_range_adjustment DESC,
                                         unique_id_l DESC
@@ -290,7 +290,7 @@ def build_numeric_range_candidate_pool(
         SELECT *
         FROM candidate_pool
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY
                 match_weight + numeric_range_adjustment DESC,
                 unique_id_l DESC

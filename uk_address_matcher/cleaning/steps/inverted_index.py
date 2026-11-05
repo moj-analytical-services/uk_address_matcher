@@ -383,7 +383,7 @@ def _lookup_keys_in_inverted_index(
         """
         tokenised_sql = f"""
         SELECT
-            unique_id,
+            ukam_address_id AS unique_id,
             {token_array_expression} AS __tokens
         FROM {{base}}
         """
@@ -502,9 +502,9 @@ def _lookup_keys_in_inverted_index(
             ) AS signature_unique_hits_map
         FROM {base} AS base
         LEFT JOIN {deduplicated} AS candidates
-          ON base.unique_id = candidates.__messy_uid
+                    ON base.ukam_address_id = candidates.__messy_uid
         LEFT JOIN {score_map} AS scores
-          ON base.unique_id = scores.__messy_uid
+                    ON base.ukam_address_id = scores.__messy_uid
         """
         steps = [
             CTEStep("base", base_sql),
