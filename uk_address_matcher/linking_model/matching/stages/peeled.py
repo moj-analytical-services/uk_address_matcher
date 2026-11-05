@@ -45,6 +45,8 @@ class PeeledAddressStage(MatchingStage):
 
     enable_whitespace_punctuation_stripping: bool = True
     inward_postcode_levenshtein: int = 0
+    require_unique_match: bool = False
+    require_shared_locality: bool = False
 
     def __post_init__(self) -> None:
         _validate_inward_postcode_levenshtein(self.inward_postcode_levenshtein)
@@ -73,6 +75,8 @@ class PeeledAddressStage(MatchingStage):
                         self.enable_whitespace_punctuation_stripping
                     ),
                     inward_postcode_levenshtein=self.inward_postcode_levenshtein,
+                    require_unique_match=self.require_unique_match,
+                    require_shared_locality=self.require_shared_locality,
                 ),
             ],
             stage_name=stage_name,
@@ -97,6 +101,8 @@ def _peeled_address_matches(
     *,
     enable_whitespace_punctuation_stripping: bool = True,
     inward_postcode_levenshtein: int = 0,
+    require_unique_match: bool = False,
+    require_shared_locality: bool = False,
 ) -> list[CTEStep]:
     """Find matches using peeled addresses (after removing common UK end tokens).
 
@@ -141,6 +147,13 @@ def _peeled_address_matches(
     )
 
     if inward_postcode_levenshtein > 0:
+        if require_shared_locality:
+            canonical_peeled_sql = f"""
+                WITH cached_peeled AS MATERIALIZED (
+                    {canonical_peeled_sql}
+                )
+                SELECT * FROM cached_peeled
+            """
         single_pass_messy_sql = f"""
             SELECT
                 messy.*,
@@ -185,6 +198,9 @@ def _peeled_address_matches(
                     THEN '{match_reason_value}'::ENUM {enum_values}
                     ELSE '{stripped_match_reason_value}'::ENUM {enum_values}
                 END AS match_reason,
+                messy.postcode = canon.postcode AS same_postcode,
+                levenshtein(split_part(messy.postcode, ' ', 2),
+                    split_part(canon.postcode, ' ', 2)) AS inward_edit_distance,
                 CASE WHEN messy.postcode = canon.postcode THEN 0 ELSE 1 END
                     AS postcode_priority,
                 messy.key_priority + canon.key_priority AS key_priority
@@ -208,12 +224,37 @@ def _peeled_address_matches(
                 ) <= {inward_postcode_levenshtein}
             )
         """
-        single_pass_ranked_sql = """
+        candidate_source = "single_pass_candidates"
+        unique_steps = []
+        if require_unique_match or require_shared_locality:
+            unique_steps = [
+                CTEStep(
+                    "strongest_peeled_candidates",
+                    """
+                    SELECT * FROM {single_pass_candidates}
+                    QUALIFY postcode_priority * 10 + key_priority = min(
+                        postcode_priority * 10 + key_priority
+                    ) OVER (PARTITION BY ukam_address_id)
+                """,
+                ),
+                CTEStep(
+                    "unique_peeled_candidates",
+                    """
+                    SELECT * FROM {strongest_peeled_candidates}
+                    QUALIFY count(DISTINCT resolved_canonical_id)
+                        OVER (PARTITION BY ukam_address_id) = 1
+                """,
+                ),
+            ]
+            candidate_source = "unique_peeled_candidates"
+        single_pass_ranked_sql = f"""
             SELECT
                 candidates.ukam_address_id,
                 candidates.canonical_ukam_address_id,
                 candidates.resolved_canonical_id,
                 candidates.match_reason,
+                candidates.same_postcode,
+                candidates.inward_edit_distance,
                 ROW_NUMBER() OVER (
                     PARTITION BY candidates.ukam_address_id
                     ORDER BY
@@ -221,16 +262,29 @@ def _peeled_address_matches(
                         candidates.key_priority,
                         candidates.canonical_ukam_address_id
                 ) AS rn
-            FROM {single_pass_candidates} AS candidates
+            FROM {{{candidate_source}}} AS candidates
         """
-        single_pass_matches_sql = """
+        locality_joins = ""
+        locality_filter = ""
+        if require_shared_locality:
+            locality_joins = """
+                JOIN {messy_peeled} AS messy
+                    ON messy.ukam_address_id = ranked.ukam_address_id
+                JOIN {canonical_peeled} AS canon
+                    ON canon.canonical_ukam_address_id = ranked.canonical_ukam_address_id
+            """
+            locality_filter = (
+                f"AND (ranked.same_postcode OR len({_shared_peeled_locality_sql()}) > 0)"
+            )
+        single_pass_matches_sql = f"""
             SELECT
-                ukam_address_id,
-                canonical_ukam_address_id,
-                resolved_canonical_id,
-                match_reason
-            FROM {single_pass_ranked}
-            WHERE rn = 1
+                ranked.ukam_address_id,
+                ranked.canonical_ukam_address_id,
+                ranked.resolved_canonical_id,
+                ranked.match_reason
+            FROM {{single_pass_ranked}} AS ranked
+            {locality_joins}
+            WHERE ranked.rn = 1 {locality_filter}
         """
         return [
             CTEStep("messy_peeled", messy_peeled_sql),
@@ -238,6 +292,7 @@ def _peeled_address_matches(
             CTEStep("single_pass_messy", single_pass_messy_sql),
             CTEStep("single_pass_canonical", single_pass_canonical_sql),
             CTEStep("single_pass_candidates", single_pass_candidates_sql),
+            *unique_steps,
             CTEStep("single_pass_ranked", single_pass_ranked_sql),
             CTEStep("peeled_address_matches", single_pass_matches_sql),
         ]
@@ -256,7 +311,21 @@ def _peeled_address_matches(
         WHERE messy.did_peel OR canon.did_peel
     """
 
-    ranked_peeled_candidates_sql = """
+    peeled_candidate_source = "peeled_address_candidates"
+    unique_steps = []
+    if require_unique_match:
+        unique_steps = [
+            CTEStep(
+                "unique_peeled_candidates",
+                """
+            SELECT * FROM {peeled_address_candidates}
+            QUALIFY count(DISTINCT resolved_canonical_id)
+                OVER (PARTITION BY ukam_address_id) = 1
+        """,
+            )
+        ]
+        peeled_candidate_source = "unique_peeled_candidates"
+    ranked_peeled_candidates_sql = f"""
         SELECT
             candidates.ukam_address_id,
             candidates.canonical_ukam_address_id,
@@ -268,7 +337,7 @@ def _peeled_address_matches(
                     candidates.match_priority,
                     candidates.canonical_ukam_address_id
             ) AS rn
-        FROM {peeled_address_candidates} AS candidates
+        FROM {{{peeled_candidate_source}}} AS candidates
     """
 
     pre_stripped_matches_sql = """
@@ -285,6 +354,7 @@ def _peeled_address_matches(
         CTEStep("messy_peeled", messy_peeled_sql),
         CTEStep("canonical_peeled", canonical_peeled_sql),
         CTEStep("peeled_address_candidates", peeled_candidates_sql),
+        *unique_steps,
         CTEStep("ranked_peeled_candidates", ranked_peeled_candidates_sql),
         CTEStep("pre_stripped_matches", pre_stripped_matches_sql),
     ]
@@ -352,6 +422,16 @@ def _peeled_address_matches(
                 OR canon.compact_peeled_address <> canon.peeled_address
             )
         """
+
+        if require_unique_match:
+            stripped_candidates_sql += """
+                QUALIFY count(DISTINCT canon.canonical_unique_id)
+                    OVER (PARTITION BY messy.ukam_address_id) = 1
+                    AND row_number() OVER (
+                        PARTITION BY messy.ukam_address_id
+                        ORDER BY canon.canonical_ukam_address_id
+                    ) = 1
+            """
 
         steps.extend(
             [
@@ -519,6 +599,23 @@ def _build_suffix_peel_regex_sql_literal() -> str:
     escaped = "|".join(re.escape(token).replace(r"\ ", " ") for token in tokens)
     pattern = rf"(?:^|\s+)(?:{escaped})(?:\s+(?:{escaped}))*\s*$"
     return pattern.replace("'", "''")
+
+
+def _shared_peeled_locality_sql() -> str:
+    broad_tokens = (
+        "'WALES', 'CYMRU', 'ENGLAND', 'SCOTLAND', 'NORTHERN', 'IRELAND', "
+        "'UNITED', 'KINGDOM', 'GREAT', 'BRITAIN', 'GLAMORGAN', 'MID', "
+        "'SOUTH', 'NORTH', 'EAST', 'WEST', 'ABERDEENSHIRE', 'RHONDDA', "
+        "'CYNON', 'TAF', 'COUNTY', 'COUNCIL'"
+    )
+    return f"""
+        list_filter(list_intersect(
+            regexp_split_to_array(substr(messy.clean_full_address,
+                length(messy.peeled_address) + 1), '[^A-Z]+'),
+            regexp_split_to_array(substr(canon.canonical_clean_full_address,
+                length(canon.peeled_address) + 1), '[^A-Z]+')
+        ), token -> length(token) >= 3 AND token NOT IN ({broad_tokens}))
+    """
 
 
 def _compacted_address_sql(expression: str) -> str:

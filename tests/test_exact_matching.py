@@ -6,6 +6,7 @@ from uk_address_matcher import (
 )
 from uk_address_matcher.linking_model.matching import runner as matching_runner
 from uk_address_matcher.linking_model.matching.runner import _run_matching
+from uk_address_matcher.linking_model.matching.stages import peeled as peeled_stage
 from uk_address_matcher.linking_model.matching.stages.exact_match import (
     _exact_matches,
 )
@@ -13,6 +14,184 @@ from uk_address_matcher.linking_model.matching.stages.peeled import (
     _peeled_address_matches,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
+
+
+@pytest.fixture
+def fictional_localities(monkeypatch):
+    monkeypatch.setattr(
+        peeled_stage,
+        "_load_end_tokens_for_regex",
+        lambda: ("TESTVILLE", "DEMOFORD", "WALES"),
+    )
+    monkeypatch.setattr(
+        peeled_stage,
+        "_build_suffix_peel_regex_sql_literal",
+        peeled_stage._build_suffix_peel_regex_sql_literal.__wrapped__,
+    )
+
+
+def test_guarded_peeled_rescue_requires_unique_entity_and_specific_locality(
+    duck_con, fictional_localities
+):
+    """Exercise rescue guards using fictional addresses and a test-only vocabulary."""
+    source = duck_con.sql("""
+        SELECT *, ukam_address_id AS unique_id
+        FROM (VALUES
+            (1, '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (2, '11 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (3, '12 EXAMPLE ROAD WALES', 'ZZ1 1AA'),
+            (4, '13 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (5, '14 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (6, '15 EXAMPLE ROAD', 'ZZ1 1AA'),
+            (7, '16 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (8, '1 23 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (9, '19 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (10, '20 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (11, '21 EXAMPLE ROAD TESTVILLE', NULL),
+            (12, '22 EXAMPLE ROAD TESTVILLE', 'ZZ1'),
+            (13, '23 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (14, '24 EXAMPLE-ROAD TESTVILLE', 'ZZ1 1AA'),
+            (15, '25 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+            (16, '26 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA')
+        ) rows(ukam_address_id, clean_full_address, postcode)
+    """)
+    canonical = duck_con.sql("""
+        SELECT *, []::VARCHAR[] AS numeric_tokens, false AS has_flat_indicator,
+            false AS has_business_unit, NULL::VARCHAR AS flat_positional,
+            NULL::VARCHAR AS sub_premise_location, NULL::VARCHAR AS flat_letter,
+            NULL::VARCHAR AS flat_number, NULL::VARCHAR AS business_unit_type,
+            NULL::VARCHAR AS business_unit_id
+        FROM (VALUES
+            (101, '001', '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (102, '001', '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (201, '002', '11 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AB'),
+            (301, '003', '12 EXAMPLE ROAD WALES', 'ZZ1 1AB'),
+            (401, '004', '13 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (402, '005', '13 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (501, '006', '14 EXAMPLE ROAD TESTVILLE', 'ZZ2 1AB'),
+            (601, '007', '15 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (701, '008', '16 EXAMPLE ROAD TESTVILLE', 'ZZ1 2BC'),
+            (801, '009', '12 3 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (901, '010', '19 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AB'),
+            (902, '010', '19 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1001, '011', '20 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AA'),
+            (1101, '012', '21 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1201, '013', '22 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1301, '014', '23 EXAMPLE ROAD TESTVILLE', NULL),
+            (1401, '015', '24 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1501, '016', '25 EXAMPLEROAD TESTVILLE', 'ZZ1 1AB'),
+            (1502, '017', '25 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1601, '018', '26 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+            (1602, '019', '26 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AB')
+        ) rows(ukam_address_id, unique_id, clean_full_address, postcode)
+    """)
+    matched = PeeledAddressStage(
+        inward_postcode_levenshtein=2,
+        require_unique_match=True,
+        require_shared_locality=True,
+    ).find_matches(duck_con, "rescue", source, canonical)
+    assert matched.select("ukam_address_id, resolved_canonical_id").order(
+        "ukam_address_id"
+    ).fetchall() == [(1, "001"), (10, "011"), (14, "015"), (15, "017")]
+
+
+@pytest.mark.parametrize(
+    "selection",
+    ["neither", "exact", "peeled", "both", "separated", "reversed", "skip", "error"],
+)
+def test_rescue_pair_sharing_is_optional_and_scoped(
+    duck_con, fictional_localities, monkeypatch, selection
+):
+    projection = """
+        SELECT *, clean_full_address AS original_address_concat,
+            []::VARCHAR[] AS numeric_tokens, false AS has_flat_indicator,
+            false AS has_business_unit, NULL::VARCHAR AS flat_positional,
+            NULL::VARCHAR AS sub_premise_location, NULL::VARCHAR AS flat_letter,
+            NULL::VARCHAR AS flat_number, NULL::VARCHAR AS business_unit_type,
+            NULL::VARCHAR AS business_unit_id
+        FROM ({rows}) AS input(ukam_address_id, unique_id, clean_full_address, postcode)
+    """
+    source = duck_con.sql(
+        projection.format(
+            rows="""VALUES
+        (1, 1, '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (2, 2, '20 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (3, 3, '30 UNMATCHED ROAD TESTVILLE', 'ZZ1 1AA')
+    """
+        )
+    )
+    canonical = duck_con.sql(
+        projection.format(
+            rows="""VALUES
+        (101, 1001, '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+        (102, 1002, '20 EXAMPLE ROAD DEMOFORD TESTVILLE', 'ZZ1 1AB'),
+        (103, 1003, '30 UNMATCHED ROAD TESTVILLE', 'ZZ2 1AB')
+    """
+        )
+    )
+    exact = ExactMatchStage(
+        enable_flat_retraction=False,
+        require_unique_match=True,
+        inward_postcode_levenshtein=2,
+    )
+    peeled = PeeledAddressStage(
+        inward_postcode_levenshtein=2,
+        require_unique_match=True,
+        require_shared_locality=True,
+    )
+    stages = {
+        "neither": [],
+        "exact": [exact],
+        "peeled": [peeled],
+        "both": [exact, peeled],
+        "separated": [exact, ExactMatchStage(), peeled],
+        "reversed": [peeled, exact],
+        "skip": [ExactMatchStage(), exact, peeled],
+        "error": [exact, peeled],
+    }[selection]
+    if selection == "skip":
+        source = duck_con.sql(
+            projection.format(
+                rows="""VALUES
+            (1, 1, '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB')
+        """
+            )
+        )
+    preparations = []
+    original = matching_runner._prepare_rescue_canonical
+
+    def prepare(*arguments):
+        preparations.append(True)
+        return original(*arguments)
+
+    monkeypatch.setattr(matching_runner, "_prepare_rescue_canonical", prepare)
+    if selection == "error":
+
+        def fail(*arguments, **keywords):
+            raise RuntimeError("synthetic rescue failure")
+
+        monkeypatch.setattr(PeeledAddressStage, "find_matches", fail)
+        with pytest.raises(RuntimeError, match="synthetic rescue failure"):
+            _run_matching(duck_con, source, canonical, stages=stages)
+    else:
+        result, diagnostics = _run_matching(duck_con, source, canonical, stages=stages)
+        expected = {1: None, 2: None, 3: None}
+        if selection != "neither":
+            expected[1] = 1001
+        if selection in {"peeled", "both", "separated", "reversed"}:
+            expected[2] = 1002
+        if selection == "skip":
+            expected = {1: 1001}
+            assert len(diagnostics) == 1
+        assert (
+            dict(result.select("ukam_address_id, resolved_canonical_id").fetchall())
+            == expected
+        )
+    assert len(preparations) == int(selection in {"both", "error"})
+    assert not duck_con.sql("""
+        SELECT table_name FROM duckdb_tables()
+        WHERE starts_with(table_name, '__ukam__tmp_rescue_canonical_')
+    """).fetchall()
 
 
 @pytest.fixture

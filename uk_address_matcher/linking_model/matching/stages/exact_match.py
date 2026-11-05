@@ -303,14 +303,13 @@ def _exact_matches(
     if require_unique_match:
         unique_candidates_sql = """
             SELECT candidates.*
-            FROM {all_ranked_candidates} AS candidates
-            SEMI JOIN (
-                SELECT ukam_address_id
-                FROM {all_ranked_candidates}
-                GROUP BY ukam_address_id
-                HAVING COUNT(DISTINCT resolved_canonical_id) = 1
-            ) AS unique_messy
-                ON unique_messy.ukam_address_id = candidates.ukam_address_id
+            FROM (
+                SELECT * FROM {all_ranked_candidates}
+                QUALIFY match_priority = min(match_priority)
+                    OVER (PARTITION BY ukam_address_id)
+            ) AS candidates
+            QUALIFY count(DISTINCT resolved_canonical_id)
+                OVER (PARTITION BY ukam_address_id) = 1
         """
         candidate_source = "unique_exact_candidates"
     else:
@@ -476,7 +475,9 @@ def _exact_matches(
                 canon.canonical_ukam_address_id,
                 canon.canonical_unique_id AS resolved_canonical_id,
                 '{MatchReason.EXACT_PARTIAL_POSTCODE.value}'::ENUM {enum_values}
-                    AS match_reason
+                    AS match_reason,
+                CASE WHEN messy.clean_full_address = canon.clean_full_address
+                    THEN 1 ELSE 2 END AS match_priority
             FROM {{fuzzy_messy_residual}} AS messy
             INNER JOIN {{canon_keys}} AS canon
                 ON split_part(messy.postcode, ' ', 1)
@@ -505,14 +506,13 @@ def _exact_matches(
         if require_unique_match:
             fuzzy_unique_candidates_sql = """
                 SELECT candidates.*
-                FROM {fuzzy_candidates} AS candidates
-                SEMI JOIN (
-                    SELECT ukam_address_id
-                    FROM {fuzzy_candidates}
-                    GROUP BY ukam_address_id
-                    HAVING COUNT(DISTINCT resolved_canonical_id) = 1
-                ) AS unique_messy
-                    ON unique_messy.ukam_address_id = candidates.ukam_address_id
+                FROM (
+                    SELECT * FROM {fuzzy_candidates}
+                    QUALIFY match_priority = min(match_priority)
+                        OVER (PARTITION BY ukam_address_id)
+                ) AS candidates
+                QUALIFY count(DISTINCT resolved_canonical_id)
+                    OVER (PARTITION BY ukam_address_id) = 1
             """
             fuzzy_candidate_source = "fuzzy_unique_candidates"
 
@@ -525,7 +525,7 @@ def _exact_matches(
             FROM {{{fuzzy_candidate_source}}}
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY ukam_address_id
-                ORDER BY canonical_ukam_address_id
+                ORDER BY match_priority, canonical_ukam_address_id
             ) = 1
         """
 
