@@ -98,6 +98,7 @@ class PeeledAddressStage(MatchingStage):
 )
 def _peeled_address_matches(
     *,
+    messy_input_name: str = "__ukam__tmp_messy_addresses",
     enable_whitespace_punctuation_stripping: bool = True,
     inward_postcode_levenshtein: int = 0,
     require_unique_match: bool = False,
@@ -133,7 +134,7 @@ def _peeled_address_matches(
     enum_values = str(MatchReason.enum_values())
 
     messy_peeled_sql = _build_regex_peel_sql(
-        source_placeholder="__ukam__tmp_messy_addresses",
+        source_placeholder=messy_input_name,
         id_column="ukam_address_id",
         canonical=False,
     )

@@ -7,7 +7,10 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher._typing import StageDiagnostics
-from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
+from uk_address_matcher.linking_model.matching.stages.base_stage import (
+    MatchingStage,
+    _cleanup_matching_input_aliases,
+)
 from uk_address_matcher.linking_model.matching.utils import (
     format_elapsed,
     relation_sql,
@@ -15,21 +18,60 @@ from uk_address_matcher.linking_model.matching.utils import (
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_tables
 
 if TYPE_CHECKING:
     import duckdb
 
+    from uk_address_matcher.linking_model.matching.stages import (
+        ExactMatchStage,
+        PeeledAddressStage,
+    )
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
 
 
-def _prepare_rescue_canonical(
+@pipeline_stage(name="rescue_unmatched", depends_on=["exact_matches"])
+def _rescue_unmatched(exact_output: str) -> list[CTEStep]:
+    return [
+        CTEStep(
+            "rescue_unmatched",
+            f"""
+        SELECT messy.*
+        FROM {{__ukam__tmp_messy_addresses}} AS messy
+        ANTI JOIN {{{exact_output}}} AS matched USING (ukam_address_id)
+    """,
+        )
+    ]
+
+
+@pipeline_stage(
+    name="combined_rescue_matches",
+    depends_on=["exact_matches", "peeled_address_matching"],
+)
+def _combined_rescue_matches(exact_output: str, peeled_output: str) -> list[CTEStep]:
+    return [
+        CTEStep(
+            "combined_rescue_matches",
+            f"""
+        SELECT *, 0 AS rescue_stage_index FROM {{{exact_output}}}
+        UNION ALL
+        SELECT *, 1 AS rescue_stage_index FROM {{{peeled_output}}}
+    """,
+        )
+    ]
+
+
+def _prepare_rescue_matches(
     con: duckdb.DuckDBPyConnection,
     df_unmatched: duckdb.DuckDBPyRelation,
     df_canonical: duckdb.DuckDBPyRelation,
     table_name: str,
+    exact: ExactMatchStage,
+    peeled: PeeledAddressStage,
+    debug_options: Optional[DebugOptions],
 ) -> duckdb.DuckDBPyRelation:
     from uk_address_matcher.linking_model.matching.input_filters import (
         _restrict_canonical_to_messy_postcodes,
@@ -37,18 +79,44 @@ def _prepare_rescue_canonical(
     from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
         run_sql_pipeline,
     )
+    from uk_address_matcher.linking_model.matching.stages.exact_match import (
+        _exact_matches,
+    )
+    from uk_address_matcher.linking_model.matching.stages.peeled import (
+        _peeled_address_matches,
+    )
 
-    restricted = run_sql_pipeline(
+    exact_stage = _exact_matches(
+        enable_flat_retraction=exact.enable_flat_retraction,
+        require_unique_match=exact.require_unique_match,
+        inward_postcode_levenshtein=exact.inward_postcode_levenshtein,
+    )
+    peeled_stage = _peeled_address_matches(
+        messy_input_name="rescue_unmatched",
+        enable_whitespace_punctuation_stripping=(
+            peeled.enable_whitespace_punctuation_stripping
+        ),
+        require_unique_match=peeled.require_unique_match,
+        inward_postcode_levenshtein=peeled.inward_postcode_levenshtein,
+    )
+    exact_output = exact_stage.output or exact_stage.steps[-1].name
+    peeled_output = peeled_stage.output or peeled_stage.steps[-1].name
+    matches = run_sql_pipeline(
         con=con,
-        pipeline_stages=[_restrict_canonical_to_messy_postcodes("outward")],
-        stage_name="shared_rescue_canonical",
+        pipeline_stages=[
+            _restrict_canonical_to_messy_postcodes("outward"),
+            exact_stage,
+            _rescue_unmatched(exact_output),
+            peeled_stage,
+            _combined_rescue_matches(exact_output, peeled_output),
+        ],
+        stage_name="combined_rescue_matches",
         df_unmatched=df_unmatched,
         df_canonical=df_canonical,
+        debug_options=debug_options,
     )
-    shared = restricted.select(
-        "canonical_unique_id AS unique_id, * EXCLUDE (canonical_unique_id)"
-    )
-    con.execute(f'CREATE TEMP TABLE "{table_name}" AS {shared.sql_query()}')
+    con.execute(f'CREATE TEMP TABLE "{table_name}" AS {matches.sql_query()}')
+    _cleanup_matching_input_aliases(con)
     return con.table(table_name)
 
 
@@ -237,13 +305,13 @@ def _run_matching(
         PeeledAddressStage,
     )
 
-    shared_canonical = None
+    shared_matches = None
     shared_until = -1
     with ExitStack() as resources:
         for stage_index, stage in enumerate(stages):
-            if shared_canonical is not None and stage_index > shared_until:
+            if shared_matches is not None and stage_index > shared_until:
                 resources.close()
-                shared_canonical = None
+                shared_matches = None
             stage_name = _stage_name_for_instance(stage)
 
             unmatched_count = con.execute(
@@ -278,25 +346,35 @@ def _run_matching(
                 and type(stages[stage_index + 1]) is PeeledAddressStage
                 and stages[stage_index + 1].inward_postcode_levenshtein > 0
             ):
-                table_name = f"__ukam__tmp_rescue_canonical_{run_id}_{stage_index}"
+                table_name = f"__ukam__tmp_rescue_matches_{run_id}_{stage_index}"
                 resources.callback(con.execute, f'DROP TABLE IF EXISTS "{table_name}"')
-                shared_canonical = _prepare_rescue_canonical(
-                    con, df_unmatched, df_canonical_clean, table_name
+                shared_matches = _prepare_rescue_matches(
+                    con,
+                    df_unmatched,
+                    df_canonical_clean,
+                    table_name,
+                    stage,
+                    stages[stage_index + 1],
+                    debug_options,
                 )
                 shared_until = stage_index + 1
-            stage.run(
-                con=con,
-                stage_name=stage_name,
-                results_table=results_table,
-                df_unmatched=df_unmatched,
-                df_canonical=(
-                    shared_canonical
-                    if shared_canonical is not None
-                    else df_canonical_clean
-                ),
-                debug_options=debug_options,
-                explain=explain,
-            )
+            if shared_matches is not None:
+                stage_matches = shared_matches.filter(
+                    f"rescue_stage_index = {int(stage_index == shared_until)}"
+                ).select("* EXCLUDE (rescue_stage_index)")
+                stage._write_matches_to_results(
+                    con, stage_name, results_table, stage_matches
+                )
+            else:
+                stage.run(
+                    con=con,
+                    stage_name=stage_name,
+                    results_table=results_table,
+                    df_unmatched=df_unmatched,
+                    df_canonical=df_canonical_clean,
+                    debug_options=debug_options,
+                    explain=explain,
+                )
             elapsed_seconds = time.perf_counter() - started_at
             logger.debug(
                 "Stage '%s' completed in %s.",
