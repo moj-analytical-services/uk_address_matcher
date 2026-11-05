@@ -3,14 +3,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from contextlib import ExitStack
 from typing import TYPE_CHECKING, Optional
 
 from uk_address_matcher._typing import StageDiagnostics
-from uk_address_matcher.linking_model.matching.stages.base_stage import (
-    MatchingStage,
-    _cleanup_matching_input_aliases,
-)
+from uk_address_matcher.linking_model.matching.stages.base_stage import MatchingStage
 from uk_address_matcher.linking_model.matching.utils import (
     format_elapsed,
     relation_sql,
@@ -18,106 +14,14 @@ from uk_address_matcher.linking_model.matching.utils import (
 )
 from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
-from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_tables
 
 if TYPE_CHECKING:
     import duckdb
 
-    from uk_address_matcher.linking_model.matching.stages import (
-        ExactMatchStage,
-        PeeledAddressStage,
-    )
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
 logger = logging.getLogger("uk_address_matcher")
-
-
-@pipeline_stage(name="rescue_unmatched", depends_on=["exact_matches"])
-def _rescue_unmatched(exact_output: str) -> list[CTEStep]:
-    return [
-        CTEStep(
-            "rescue_unmatched",
-            f"""
-        SELECT messy.*
-        FROM {{__ukam__tmp_messy_addresses}} AS messy
-        ANTI JOIN {{{exact_output}}} AS matched USING (ukam_address_id)
-    """,
-        )
-    ]
-
-
-@pipeline_stage(
-    name="combined_rescue_matches",
-    depends_on=["exact_matches", "peeled_address_matching"],
-)
-def _combined_rescue_matches(exact_output: str, peeled_output: str) -> list[CTEStep]:
-    return [
-        CTEStep(
-            "combined_rescue_matches",
-            f"""
-        SELECT *, 0 AS rescue_stage_index FROM {{{exact_output}}}
-        UNION ALL
-        SELECT *, 1 AS rescue_stage_index FROM {{{peeled_output}}}
-    """,
-        )
-    ]
-
-
-def _prepare_rescue_matches(
-    con: duckdb.DuckDBPyConnection,
-    df_unmatched: duckdb.DuckDBPyRelation,
-    df_canonical: duckdb.DuckDBPyRelation,
-    table_name: str,
-    exact: ExactMatchStage,
-    peeled: PeeledAddressStage,
-    debug_options: Optional[DebugOptions],
-) -> duckdb.DuckDBPyRelation:
-    from uk_address_matcher.linking_model.matching.input_filters import (
-        _restrict_canonical_to_messy_postcodes,
-    )
-    from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
-        run_sql_pipeline,
-    )
-    from uk_address_matcher.linking_model.matching.stages.exact_match import (
-        _exact_matches,
-    )
-    from uk_address_matcher.linking_model.matching.stages.peeled import (
-        _peeled_address_matches,
-    )
-
-    exact_stage = _exact_matches(
-        enable_flat_retraction=exact.enable_flat_retraction,
-        require_unique_match=exact.require_unique_match,
-        inward_postcode_levenshtein=exact.inward_postcode_levenshtein,
-    )
-    peeled_stage = _peeled_address_matches(
-        messy_input_name="rescue_unmatched",
-        enable_whitespace_punctuation_stripping=(
-            peeled.enable_whitespace_punctuation_stripping
-        ),
-        require_unique_match=peeled.require_unique_match,
-        inward_postcode_levenshtein=peeled.inward_postcode_levenshtein,
-    )
-    exact_output = exact_stage.output or exact_stage.steps[-1].name
-    peeled_output = peeled_stage.output or peeled_stage.steps[-1].name
-    matches = run_sql_pipeline(
-        con=con,
-        pipeline_stages=[
-            _restrict_canonical_to_messy_postcodes("outward"),
-            exact_stage,
-            _rescue_unmatched(exact_output),
-            peeled_stage,
-            _combined_rescue_matches(exact_output, peeled_output),
-        ],
-        stage_name="combined_rescue_matches",
-        df_unmatched=df_unmatched,
-        df_canonical=df_canonical,
-        debug_options=debug_options,
-    )
-    con.execute(f'CREATE TEMP TABLE "{table_name}" AS {matches.sql_query()}')
-    _cleanup_matching_input_aliases(con)
-    return con.table(table_name)
 
 
 def _duckdb_column_type(
@@ -300,132 +204,91 @@ def _run_matching(
     total_input_rows = df_messy_clean.count("*").fetchone()[0]
     stage_diagnostics: StageDiagnostics = []
 
-    from uk_address_matcher.linking_model.matching.stages import (
-        ExactMatchStage,
-        PeeledAddressStage,
-    )
+    for stage in stages:
+        stage_name = _stage_name_for_instance(stage)
 
-    shared_matches = None
-    shared_until = -1
-    with ExitStack() as resources:
-        for stage_index, stage in enumerate(stages):
-            if shared_matches is not None and stage_index > shared_until:
-                resources.close()
-                shared_matches = None
-            stage_name = _stage_name_for_instance(stage)
+        unmatched_count = con.execute(
+            f'SELECT COUNT(*) FROM "{results_table}" WHERE resolved_canonical_id IS NULL'
+        ).fetchone()[0]
 
-            unmatched_count = con.execute(
-                f'SELECT COUNT(*) FROM "{results_table}" '
-                "WHERE resolved_canonical_id IS NULL"
-            ).fetchone()[0]
-
-            if unmatched_count == 0:
-                logger.debug(
-                    "All records matched; skipping stage '%s' and remaining stages.",
-                    stage_name,
-                )
-                break
-
-            if _progress_callback is not None:
-                _progress_callback(stage_name, unmatched_count, 0, None)
-            else:
-                logger.debug(
-                    "Running stage '%s' with %d unmatched records...",
-                    stage_name,
-                    unmatched_count,
-                )
-
-            df_unmatched = _get_unmatched(con, df_messy_clean, results_table)
-
-            started_at = time.perf_counter()
-            if (
-                not explain
-                and type(stage) is ExactMatchStage
-                and stage.inward_postcode_levenshtein > 0
-                and stage_index + 1 < len(stages)
-                and type(stages[stage_index + 1]) is PeeledAddressStage
-                and stages[stage_index + 1].inward_postcode_levenshtein > 0
-            ):
-                table_name = f"__ukam__tmp_rescue_matches_{run_id}_{stage_index}"
-                resources.callback(con.execute, f'DROP TABLE IF EXISTS "{table_name}"')
-                shared_matches = _prepare_rescue_matches(
-                    con,
-                    df_unmatched,
-                    df_canonical_clean,
-                    table_name,
-                    stage,
-                    stages[stage_index + 1],
-                    debug_options,
-                )
-                shared_until = stage_index + 1
-            if shared_matches is not None:
-                stage_matches = shared_matches.filter(
-                    f"rescue_stage_index = {int(stage_index == shared_until)}"
-                ).select("* EXCLUDE (rescue_stage_index)")
-                stage._write_matches_to_results(
-                    con, stage_name, results_table, stage_matches
-                )
-            else:
-                stage.run(
-                    con=con,
-                    stage_name=stage_name,
-                    results_table=results_table,
-                    df_unmatched=df_unmatched,
-                    df_canonical=df_canonical_clean,
-                    debug_options=debug_options,
-                    explain=explain,
-                )
-            elapsed_seconds = time.perf_counter() - started_at
+        if unmatched_count == 0:
             logger.debug(
-                "Stage '%s' completed in %s.",
+                "All records matched; skipping stage '%s' and remaining stages.",
                 stage_name,
+            )
+            break
+
+        if _progress_callback is not None:
+            _progress_callback(stage_name, unmatched_count, 0, None)
+        else:
+            logger.debug(
+                "Running stage '%s' with %d unmatched records...",
+                stage_name,
+                unmatched_count,
+            )
+
+        df_unmatched = _get_unmatched(con, df_messy_clean, results_table)
+
+        started_at = time.perf_counter()
+        stage.run(
+            con=con,
+            stage_name=stage_name,
+            results_table=results_table,
+            df_unmatched=df_unmatched,
+            df_canonical=df_canonical_clean,
+            debug_options=debug_options,
+            explain=explain,
+        )
+        elapsed_seconds = time.perf_counter() - started_at
+        logger.debug(
+            "Stage '%s' completed in %s.",
+            stage_name,
+            format_elapsed(elapsed_seconds),
+        )
+
+        if explain:
+            continue
+
+        remaining = con.execute(
+            f'SELECT COUNT(*) FROM "{results_table}" WHERE resolved_canonical_id IS NULL'
+        ).fetchone()[0]
+        matched_this_stage = unmatched_count - remaining
+        stage_diagnostics.append(
+            {
+                "stage": stage_name,
+                "unmatched_before": int(unmatched_count),
+                "matched_this_stage": int(matched_this_stage),
+                "remaining_after": int(remaining),
+                "matched_pct_of_unmatched": round(
+                    safe_divide(
+                        int(matched_this_stage),
+                        int(unmatched_count),
+                    ),
+                    6,
+                ),
+                "matched_pct_of_input": round(
+                    safe_divide(
+                        int(matched_this_stage),
+                        int(total_input_rows),
+                    ),
+                    6,
+                ),
+                "elapsed_seconds": round(float(elapsed_seconds), 6),
+            }
+        )
+        if _progress_callback is not None:
+            _progress_callback(
+                stage_name, unmatched_count, matched_this_stage, elapsed_seconds
+            )
+        else:
+            logger.info(
+                "Stage '%s': %s rows processed in %s, %s matched (%s remaining).",
+                stage_name,
+                f"{unmatched_count:,}",
                 format_elapsed(elapsed_seconds),
+                f"{matched_this_stage:,}",
+                f"{remaining:,}",
             )
-
-            if explain:
-                continue
-
-            remaining = con.execute(
-                f'SELECT COUNT(*) FROM "{results_table}" '
-                "WHERE resolved_canonical_id IS NULL"
-            ).fetchone()[0]
-            matched_this_stage = unmatched_count - remaining
-            stage_diagnostics.append(
-                {
-                    "stage": stage_name,
-                    "unmatched_before": int(unmatched_count),
-                    "matched_this_stage": int(matched_this_stage),
-                    "remaining_after": int(remaining),
-                    "matched_pct_of_unmatched": round(
-                        safe_divide(
-                            int(matched_this_stage),
-                            int(unmatched_count),
-                        ),
-                        6,
-                    ),
-                    "matched_pct_of_input": round(
-                        safe_divide(
-                            int(matched_this_stage),
-                            int(total_input_rows),
-                        ),
-                        6,
-                    ),
-                    "elapsed_seconds": round(float(elapsed_seconds), 6),
-                }
-            )
-            if _progress_callback is not None:
-                _progress_callback(
-                    stage_name, unmatched_count, matched_this_stage, elapsed_seconds
-                )
-            else:
-                logger.info(
-                    "Stage '%s': %s rows processed in %s, %s matched (%s remaining).",
-                    stage_name,
-                    f"{unmatched_count:,}",
-                    format_elapsed(elapsed_seconds),
-                    f"{matched_this_stage:,}",
-                    f"{remaining:,}",
-                )
 
     if explain:
         con.execute(f'DROP TABLE IF EXISTS "{results_table}"')

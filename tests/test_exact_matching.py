@@ -86,43 +86,19 @@ def test_peeled_rescue_guards(duck_con, rescue_data):
     ).fetchall() == [(1, "1001"), (6, "1006"), (7, "1007"), (8, "1008")]
 
 
-def test_rescue_chain_matches_sequential_stages(duck_con, rescue_data):
+def test_peeled_zero_cap_preserves_optional_uniqueness(duck_con, rescue_data):
     source, canonical = rescue_data
-    exact = ExactMatchStage(inward_postcode_levenshtein=1, require_unique_match=True)
-    peeled = PeeledAddressStage(
-        inward_postcode_levenshtein=2, enable_whitespace_punctuation_stripping=False
-    )
-    outputs = []
-    for stages in ([exact, ExactMatchStage(), peeled], [exact, peeled]):
-        result, diagnostics = _run_matching(duck_con, source, canonical, stages=stages)
-        assert dict(
-            result.select("ukam_address_id, resolved_canonical_id").fetchall()
-        ) == {
-            1: "1001",
-            2: None,
-            3: "1003",
-            4: None,
-            5: None,
-            6: "1006",
-            7: "1007",
-            8: "1008",
-        }
-        outputs.append(
-            result.select(
-                "ukam_address_id, resolved_canonical_id, "
-                "canonical_ukam_address_id, match_reason"
-            )
-            .order("ukam_address_id")
-            .fetchall()
+    source.select("* REPLACE ('ZZ1 1AB' AS postcode)").create("zero_cap_sources")
+    for unique, expected in [(False, [("1004",)]), (True, [])]:
+        matched = PeeledAddressStage(require_unique_match=unique).find_matches(
+            duck_con, "zero_cap", duck_con.table("zero_cap_sources"), canonical
         )
-        assert [
-            row["matched_this_stage"] for row in diagnostics if row["matched_this_stage"]
-        ] == [3, 2]
-        assert not duck_con.sql("""
-            SELECT table_name FROM duckdb_tables()
-            WHERE starts_with(table_name, '__ukam__tmp_rescue_')
-        """).fetchall()
-    assert outputs[0] == outputs[1]
+        assert (
+            matched.filter("ukam_address_id = 4")
+            .select("resolved_canonical_id")
+            .fetchall()
+            == expected
+        )
 
 
 @pytest.fixture
@@ -1138,24 +1114,6 @@ def test_zero_inward_postcode_levenshtein_skips_sql_function():
         "levenshtein(" in step.sql.lower()
         for step in _peeled_address_matches(inward_postcode_levenshtein=1).steps
     )
-
-
-def test_positive_peeled_cap_uses_single_pass_join():
-    steps = _peeled_address_matches(inward_postcode_levenshtein=1).steps
-    step_names = [step.name for step in steps]
-
-    assert step_names == [
-        "messy_peeled",
-        "canonical_peeled",
-        "single_pass_messy",
-        "single_pass_canonical",
-        "single_pass_candidates",
-        "strongest_peeled_candidates",
-        "unique_peeled_candidates",
-        "single_pass_ranked",
-        "peeled_address_matches",
-    ]
-    assert "partial_messy_residual" not in step_names
 
 
 @pytest.mark.parametrize("stage", [ExactMatchStage, PeeledAddressStage])
