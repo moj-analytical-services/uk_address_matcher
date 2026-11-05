@@ -92,6 +92,7 @@ def run_single_dataset(
     results_root: str = BENCHMARK_RESULTS_ROOT,
     enable_comparison_charts: bool = True,
     comparison_baseline_run_id: str | None = None,
+    matching_num_chunks: int = 1,
     filter_out_missing_uprns: bool = False,
 ) -> BenchmarkRunResult:
     dataset = get_dataset_definition(dataset_key)
@@ -136,12 +137,14 @@ def run_single_dataset(
         stages=stages,
         canonical_address_filter=canonical_address_filter,
         cleaning_num_chunks=cleaning_num_chunks,
+        matching_num_chunks=matching_num_chunks,
     )
     match_result = matcher.match()
     matches = match_result.matches(all_columns=True)
     table_name = f"simple_bench_matches_{dataset_key}"
     con.sql(f"DROP TABLE IF EXISTS {table_name}")
     matches.to_table(table_name)
+    match_result._relation = con.table(table_name)
     timings["match_pipeline"] = perf_counter() - pipeline_start
 
     initialisation_diagnostics = getattr(
@@ -255,6 +258,7 @@ def run_selected_datasets(
     results_root: str = BENCHMARK_RESULTS_ROOT,
     enable_comparison_charts: bool = True,
     comparison_baseline_run_id: str | None = None,
+    matching_num_chunks: int = 1,
     filter_out_missing_uprns: bool = False,
 ) -> list[BenchmarkRunResult]:
     selected = resolve_dataset_selection(selected_datasets)
@@ -276,6 +280,7 @@ def run_selected_datasets(
             canonical_address_filter=canonical_address_filter,
             diagnostic_output_options=diagnostic_output_options,
             cleaning_num_chunks=cleaning_num_chunks,
+            matching_num_chunks=matching_num_chunks,
             persist_results=persist_results,
             results_root=results_root,
             enable_comparison_charts=enable_comparison_charts,
