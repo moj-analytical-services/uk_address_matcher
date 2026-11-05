@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from benchmarking.config.sources import resolve_data_path
-from uk_address_matcher import ExactMatchStage, prepare_canonical_folder
 
 
 def test_resolve_data_path_accepts_s3_uri(monkeypatch: pytest.MonkeyPatch) -> None:
