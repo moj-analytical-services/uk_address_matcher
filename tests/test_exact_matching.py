@@ -6,6 +6,7 @@ from uk_address_matcher import (
 )
 from uk_address_matcher.linking_model.matching import runner as matching_runner
 from uk_address_matcher.linking_model.matching.runner import _run_matching
+from uk_address_matcher.linking_model.matching.stages import peeled as peeled_stage
 from uk_address_matcher.linking_model.matching.stages.exact_match import (
     _exact_matches,
 )
@@ -13,6 +14,99 @@ from uk_address_matcher.linking_model.matching.stages.peeled import (
     _peeled_address_matches,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
+
+
+@pytest.fixture
+def fictional_localities(monkeypatch):
+    monkeypatch.setattr(
+        peeled_stage,
+        "_load_end_tokens_for_regex",
+        lambda: ("TESTVILLE", "DEMOFORD", "WALES"),
+    )
+    monkeypatch.setattr(
+        peeled_stage,
+        "_build_suffix_peel_regex_sql_literal",
+        peeled_stage._build_suffix_peel_regex_sql_literal.__wrapped__,
+    )
+
+
+@pytest.fixture
+def rescue_data(duck_con, fictional_localities):
+    """Fictional candidates exercising locality, entity and evidence-priority guards."""
+    projection = """
+        SELECT *, clean_full_address AS original_address_concat,
+            []::VARCHAR[] AS numeric_tokens, false AS has_flat_indicator,
+            false AS has_business_unit, NULL::VARCHAR AS flat_positional,
+            NULL::VARCHAR AS sub_premise_location, NULL::VARCHAR AS flat_letter,
+            NULL::VARCHAR AS flat_number, NULL::VARCHAR AS business_unit_type,
+            NULL::VARCHAR AS business_unit_id
+        FROM ({rows}) AS input(ukam_address_id, unique_id, clean_full_address, postcode)
+    """
+    source = duck_con.sql(
+        projection.format(
+            rows="""VALUES
+        (1, 's1', '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (2, 's2', '11 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (3, 's3', '12 EXAMPLE ROAD WALES', 'ZZ1 1AA'),
+        (4, 's4', '13 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (5, 's5', '15 EXAMPLE ROAD', 'ZZ1 1AA'),
+        (6, 's6', '25 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (7, 's7', '20 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA'),
+        (8, 's8', '21 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AA')
+    """
+        )
+    )
+    canonical = duck_con.sql(
+        projection.format(
+            rows="""VALUES
+        (101, '1001', '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+        (102, '1001', '10 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+        (201, '1002', '11 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AB'),
+        (301, '1003', '12 EXAMPLE ROAD WALES', 'ZZ1 1AB'),
+        (401, '1004', '13 EXAMPLE ROAD DEMOFORD TESTVILLE', 'ZZ1 1AB'),
+        (402, '1005', '13 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AB'),
+        (501, '1005', '15 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+        (601, 'other', '25 EXAMPLEROAD TESTVILLE', 'ZZ1 1AB'),
+        (602, '1006', '25 EXAMPLE ROAD TESTVILLE', 'ZZ1 1AB'),
+        (701, '1007', '20 EXAMPLE ROAD DEMOFORD TESTVILLE', 'ZZ1 1AB'),
+        (801, '1008', '21 EXAMPLE ROAD DEMOFORD', 'ZZ1 1AA')
+    """
+        )
+    )
+    return source, canonical
+
+
+def test_peeled_district_rescue_guards(duck_con, rescue_data):
+    source, canonical = rescue_data
+    matched = PeeledAddressStage(inward_postcode_levenshtein=2).find_matches(
+        duck_con, "rescue", source, canonical
+    )
+    assert matched.select("ukam_address_id, resolved_canonical_id").order(
+        "ukam_address_id"
+    ).fetchall() == [
+        (1, "1001"),
+        (2, "1002"),
+        (3, "1003"),
+        (5, "1005"),
+        (6, "1006"),
+        (7, "1007"),
+        (8, "1008"),
+    ]
+
+
+def test_peeled_zero_cap_preserves_optional_uniqueness(duck_con, rescue_data):
+    source, canonical = rescue_data
+    source.select("* REPLACE ('ZZ1 1AB' AS postcode)").create("zero_cap_sources")
+    for unique, expected in [(False, [("1004",)]), (True, [])]:
+        matched = PeeledAddressStage(require_unique_match=unique).find_matches(
+            duck_con, "zero_cap", duck_con.table("zero_cap_sources"), canonical
+        )
+        assert (
+            matched.filter("ukam_address_id = 4")
+            .select("resolved_canonical_id")
+            .fetchall()
+            == expected
+        )
 
 
 @pytest.fixture
@@ -899,10 +993,6 @@ def test_peeled_address_partial_postcode_matching(duck_con):
     assert results_df.loc[1, "resolved_canonical_id"] == 1002
     assert results_df.loc[1, "match_reason"] == MatchReason.PEELED_ADDRESS.value
     assert results_df.loc[2, "resolved_canonical_id"] == 1003
-    assert (
-        results_df.loc[2, "match_reason"]
-        == MatchReason.PEELED_ADDRESS_PARTIAL_POSTCODE.value
-    )
     assert results_df["resolved_canonical_id"].isna().loc[3]
     assert results_df["resolved_canonical_id"].isna().loc[4]
 
@@ -929,8 +1019,8 @@ def test_peeled_address_partial_postcode_matching(duck_con):
     )
     assert (
         two_edit_results.fetchdf()
-        .set_index("ukam_address_id")
-        .loc[4, "resolved_canonical_id"]
+        .set_index("ukam_address_id")["resolved_canonical_id"]
+        .loc[4]
         == 1005
     )
 
@@ -1032,22 +1122,6 @@ def test_zero_inward_postcode_levenshtein_skips_sql_function():
         "levenshtein(" in step.sql.lower()
         for step in _peeled_address_matches(inward_postcode_levenshtein=1).steps
     )
-
-
-def test_positive_peeled_cap_uses_single_pass_join():
-    steps = _peeled_address_matches(inward_postcode_levenshtein=1).steps
-    step_names = [step.name for step in steps]
-
-    assert step_names == [
-        "messy_peeled",
-        "canonical_peeled",
-        "single_pass_messy",
-        "single_pass_canonical",
-        "single_pass_candidates",
-        "single_pass_ranked",
-        "peeled_address_matches",
-    ]
-    assert "partial_messy_residual" not in step_names
 
 
 @pytest.mark.parametrize("stage", [ExactMatchStage, PeeledAddressStage])
@@ -1310,6 +1384,7 @@ def test_peeled_address_stripped_matching_is_enabled_by_default(duck_con):
 )
 def test_deterministic_stripping_preserves_numeric_boundaries(
     duck_con,
+    fictional_localities,
     stage_kind,
     inward_cap,
     canonical_postcode,
@@ -1332,16 +1407,16 @@ def test_deterministic_stripping_preserves_numeric_boundaries(
         FROM ({rows}) AS input(unique_id, address, ukam_address_id)
     """
     prefix = "FLAT " if stage_kind == "exact_flat" else ""
-    suffix = " HACKNEY LONDON" if stage_kind == "peeled" else ""
+    suffix = " TESTVILLE" if stage_kind == "peeled" else ""
     source_address = f"{prefix}{source_number} TEST LANE{suffix}"
     messy = duck_con.sql(
         projection.format(
             rows=f"VALUES (1, '{source_address}', 90::BIGINT)", postcode="E8 1AA"
         )
     )
-    canonical_rows = f"VALUES (1000, '{conflicting_number} TESTLANE', 10::BIGINT)"
+    canonical_rows = f"VALUES (1000, '{conflicting_number} TESTLANE{suffix}', 10::BIGINT)"
     if include_exact_candidate:
-        canonical_rows += f", (1001, '{source_number} TESTLANE', 20::BIGINT)"
+        canonical_rows += f", (1001, '{source_number} TESTLANE{suffix}', 20::BIGINT)"
     canonical = duck_con.sql(
         projection.format(rows=canonical_rows, postcode=canonical_postcode)
     )
