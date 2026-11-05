@@ -3,6 +3,7 @@ import logging
 import re
 import tempfile
 from pathlib import Path
+from time import perf_counter
 from unittest.mock import Mock
 
 import duckdb
@@ -352,6 +353,69 @@ def test_matching_num_chunks_requires_positive_integer(
 ):
     with pytest.raises(error, match="matching_num_chunks"):
         AddressMatcher(canonical_data, messy_data, con=con, matching_num_chunks=value)
+
+
+def test_match_5000_rows_with_repeated_external_ids(
+    con, canonical_data, tmp_path, record_property
+):
+    canonical_folder = tmp_path / "canonical"
+    prepare_canonical_folder(
+        canonical_data,
+        con=con,
+        output_folder=canonical_folder,
+        show_progress="off",
+    )
+    records = [
+        {**MESSY_RECORDS[index % len(MESSY_RECORDS)], "unique_id": str(index)}
+        for index in range(5_000)
+    ]
+    source_path = tmp_path / "messy.csv"
+    input_rows = _make_addresses(con, records)
+    timings = {}
+
+    for repeated_ids in (False, True):
+        source = input_rows
+        if repeated_ids:
+            source = source.select("* REPLACE ('repeated' AS unique_id)")
+        source.write_csv(str(source_path))
+        source = con.read_csv(str(source_path), all_varchar=True)
+        started = perf_counter()
+        result = AddressMatcher(
+            canonical_addresses=canonical_folder,
+            addresses_to_match=source,
+            con=con,
+            cleaning_num_chunks=1,
+            stages=[ExactMatchStage(), SplinkStage()],
+            show_progress="off",
+        ).match()
+        try:
+            counts = (
+                result.matches(all_columns=True)
+                .aggregate("""
+                COUNT(*),
+                COUNT(DISTINCT ukam_address_id),
+                COUNT(DISTINCT unique_id),
+                COUNT(*) FILTER (
+                    WHERE resolved_canonical_id = CASE
+                        WHEN postcode = 'SW1A 1AA' THEN 'C1'
+                        ELSE 'C2'
+                    END
+                )
+            """)
+                .fetchone()
+            )
+            assert counts == (5_000, 5_000, 1 if repeated_ids else 5_000, 5_000)
+            elapsed = perf_counter() - started
+            case = "repeated_ids" if repeated_ids else "distinct_ids"
+            timings[case] = elapsed
+            record_property(f"{case}_seconds", elapsed)
+            logging.getLogger(__name__).info("5000-row %s: %.3fs", case, elapsed)
+        finally:
+            result.close()
+
+    runtime_ratio = timings["repeated_ids"] / timings["distinct_ids"]
+    record_property("repeated_to_distinct_runtime_ratio", runtime_ratio)
+    assert runtime_ratio < 5, f"Repeated IDs were {runtime_ratio:.2f}x slower"
 
 
 def test_stage_timing_logs_at_debug_level(con, canonical_data, messy_data, caplog):

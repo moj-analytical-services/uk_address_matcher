@@ -7,6 +7,7 @@ from benchmarking.constants import (
     BENCHMARK_RESULTS_ROOT,
     CANONICAL_FILTER_SQL,
     CLEANING_NUM_CHUNKS,
+    FILTER_OUT_MISSING_UPRNS,
     MATCHING_NUM_CHUNKS,
     SPLINK_BASELINE_WEIGHT,
     SPLINK_COMPARISON_WEIGHTS,
@@ -29,7 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # SELECTED_DATASETS: str | list[str] = "all"
-SELECTED_DATASETS: str | list[str] = ["hackney", "gwynedd"]
+SELECTED_DATASETS: str | list[str] = ["conwy"]
 # SELECTED_DATASETS: str | list[str] = "aberdeenshire"
 # SELECTED_DATASETS: str | list[str] = "lambeth_llpg"
 STAGES = [
@@ -64,6 +65,7 @@ results = run_selected_datasets(
     canonical_path=CANONICAL_PATH,
     stages=STAGES,
     sample_mode=SAMPLE_MODE,
+    filter_out_missing_uprns=FILTER_OUT_MISSING_UPRNS,
     canonical_address_filter=(CANONICAL_FILTER_SQL if APPLY_CANONICAL_FILTER else None),
     diagnostic_output_options=OUTPUT_OPTIONS,
     cleaning_num_chunks=CLEANING_NUM_CHUNKS,
