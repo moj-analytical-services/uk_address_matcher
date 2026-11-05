@@ -1,8 +1,9 @@
 import math
 
 import pytest
-from splink import DuckDBAPI
+from splink import DuckDBAPI, SettingsCreator
 from splink.comparison_level_library import CustomLevel
+from splink.internals.pipeline import CTEPipeline
 from splink.internals.testing import is_in_level
 
 from uk_address_matcher import AddressMatcher
@@ -18,9 +19,73 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
+    _HistogramDuckDBAPI,
     _sanitise_null_comparison_levels,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
+
+
+@pytest.mark.parametrize("with_local_guard", [False, True])
+def test_inline_histogram_keeps_guards_and_strict_thresholds(duck_con, with_local_guard):
+    settings = SettingsCreator.from_path_or_dict(_get_model_settings_dict())
+    comparison = next(
+        comparison
+        for comparison in settings.get_settings("duckdb").comparisons
+        if comparison.output_column_name == "token_rel_freq_arr_hist"
+    )
+    case_statement = comparison._case_statement
+    if with_local_guard:
+        case_statement = case_statement.replace(
+            "CASE", "CASE WHEN lk_eligible_r AND postcode_l = postcode_r THEN 35", 1
+        )
+    vectors = f"""
+        SELECT id, {case_statement}
+        FROM (
+            SELECT id, lk_eligible_r, postcode_l, postcode_r,
+                CASE WHEN left_present
+                    THEN map([struct_pack(rel_freq := frequency)], [1])
+                END AS token_rel_freq_arr_hist_l,
+                CASE WHEN right_present
+                    THEN map([struct_pack(rel_freq := frequency)], [1])
+                END AS token_rel_freq_arr_hist_r
+            FROM (VALUES
+                (1, true,  'AB1', 'AB1', false, false, 1e-29::DOUBLE),
+                (2, true,  'AB1', 'AB2', false, true,  1e-29::DOUBLE),
+                (3, false, 'AB1', 'AB1', true,  false, 1e-29::DOUBLE),
+                (4, false, 'AB1', 'AB1', true,  true,  1e-30::DOUBLE),
+                (5, false, 'AB1', 'AB1', true,  true,  1e-29::DOUBLE),
+                (6, false, 'AB1', 'AB1', true,  true,  1.1e-29::DOUBLE),
+                (7, true,  'AB1', NULL,  true,  true,  1e-30::DOUBLE)
+            ) AS t(id, lk_eligible_r, postcode_l, postcode_r,
+                   left_present, right_present, frequency)
+        )
+    """
+    results = []
+    for api in (DuckDBAPI(duck_con), _HistogramDuckDBAPI(duck_con)):
+        pipeline = CTEPipeline()
+        pipeline.enqueue_sql(vectors, "__splink__df_comparison_vectors")
+        pipeline.enqueue_sql(
+            "SELECT * FROM __splink__df_comparison_vectors ORDER BY id",
+            "__splink__df_predict",
+        )
+        result = api.sql_pipeline_to_splink_dataframe(pipeline, use_cache=False)
+        results.append(result.as_duckdbpyrelation().fetchall())
+        if isinstance(api, _HistogramDuckDBAPI):
+            assert result.sql_used_to_create.lower().count("list_reduce(") == 1
+
+    assert (
+        results[0]
+        == results[1]
+        == [
+            (1, 35 if with_local_guard else -1),
+            (2, -1),
+            (3, -1),
+            (4, 34),
+            (5, 33),
+            (6, 33),
+            (7, 34),
+        ]
+    )
 
 
 @pytest.fixture
