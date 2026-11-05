@@ -36,6 +36,7 @@ class PeeledAddressStage(MatchingStage):
 
     Set ``inward_postcode_levenshtein`` to a positive integer to enable the
     optional inward postcode phase; the default ``0`` skips it.
+    Cross-postcode matches require a unique entity and a specific shared locality.
 
     Example:
         ``"100 Test Street Hackney London"`` can match
@@ -46,7 +47,6 @@ class PeeledAddressStage(MatchingStage):
     enable_whitespace_punctuation_stripping: bool = True
     inward_postcode_levenshtein: int = 0
     require_unique_match: bool = False
-    require_shared_locality: bool = False
 
     def __post_init__(self) -> None:
         _validate_inward_postcode_levenshtein(self.inward_postcode_levenshtein)
@@ -76,7 +76,6 @@ class PeeledAddressStage(MatchingStage):
                     ),
                     inward_postcode_levenshtein=self.inward_postcode_levenshtein,
                     require_unique_match=self.require_unique_match,
-                    require_shared_locality=self.require_shared_locality,
                 ),
             ],
             stage_name=stage_name,
@@ -102,7 +101,6 @@ def _peeled_address_matches(
     enable_whitespace_punctuation_stripping: bool = True,
     inward_postcode_levenshtein: int = 0,
     require_unique_match: bool = False,
-    require_shared_locality: bool = False,
 ) -> list[CTEStep]:
     """Find matches using peeled addresses (after removing common UK end tokens).
 
@@ -147,13 +145,12 @@ def _peeled_address_matches(
     )
 
     if inward_postcode_levenshtein > 0:
-        if require_shared_locality:
-            canonical_peeled_sql = f"""
-                WITH cached_peeled AS MATERIALIZED (
-                    {canonical_peeled_sql}
-                )
-                SELECT * FROM cached_peeled
-            """
+        canonical_peeled_sql = f"""
+            WITH cached_peeled AS MATERIALIZED (
+                {canonical_peeled_sql}
+            )
+            SELECT * FROM cached_peeled
+        """
         single_pass_messy_sql = f"""
             SELECT
                 messy.*,
@@ -224,30 +221,26 @@ def _peeled_address_matches(
                 ) <= {inward_postcode_levenshtein}
             )
         """
-        candidate_source = "single_pass_candidates"
-        unique_steps = []
-        if require_unique_match or require_shared_locality:
-            unique_steps = [
-                CTEStep(
-                    "strongest_peeled_candidates",
-                    """
+        unique_steps = [
+            CTEStep(
+                "strongest_peeled_candidates",
+                """
                     SELECT * FROM {single_pass_candidates}
                     QUALIFY postcode_priority * 10 + key_priority = min(
                         postcode_priority * 10 + key_priority
                     ) OVER (PARTITION BY ukam_address_id)
                 """,
-                ),
-                CTEStep(
-                    "unique_peeled_candidates",
-                    """
+            ),
+            CTEStep(
+                "unique_peeled_candidates",
+                """
                     SELECT * FROM {strongest_peeled_candidates}
                     QUALIFY count(DISTINCT resolved_canonical_id)
                         OVER (PARTITION BY ukam_address_id) = 1
                 """,
-                ),
-            ]
-            candidate_source = "unique_peeled_candidates"
-        single_pass_ranked_sql = f"""
+            ),
+        ]
+        single_pass_ranked_sql = """
             SELECT
                 candidates.ukam_address_id,
                 candidates.canonical_ukam_address_id,
@@ -262,20 +255,8 @@ def _peeled_address_matches(
                         candidates.key_priority,
                         candidates.canonical_ukam_address_id
                 ) AS rn
-            FROM {{{candidate_source}}} AS candidates
+            FROM {unique_peeled_candidates} AS candidates
         """
-        locality_joins = ""
-        locality_filter = ""
-        if require_shared_locality:
-            locality_joins = """
-                JOIN {messy_peeled} AS messy
-                    ON messy.ukam_address_id = ranked.ukam_address_id
-                JOIN {canonical_peeled} AS canon
-                    ON canon.canonical_ukam_address_id = ranked.canonical_ukam_address_id
-            """
-            locality_filter = (
-                f"AND (ranked.same_postcode OR len({_shared_peeled_locality_sql()}) > 0)"
-            )
         single_pass_matches_sql = f"""
             SELECT
                 ranked.ukam_address_id,
@@ -283,8 +264,12 @@ def _peeled_address_matches(
                 ranked.resolved_canonical_id,
                 ranked.match_reason
             FROM {{single_pass_ranked}} AS ranked
-            {locality_joins}
-            WHERE ranked.rn = 1 {locality_filter}
+            JOIN {{messy_peeled}} AS messy
+                ON messy.ukam_address_id = ranked.ukam_address_id
+            JOIN {{canonical_peeled}} AS canon
+                ON canon.canonical_ukam_address_id = ranked.canonical_ukam_address_id
+            WHERE ranked.rn = 1
+                AND (ranked.same_postcode OR len({_shared_peeled_locality_sql()}) > 0)
         """
         return [
             CTEStep("messy_peeled", messy_peeled_sql),
