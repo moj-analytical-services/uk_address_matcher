@@ -1,5 +1,5 @@
 ---
-description: "Validate a fresh release end-to-end: national canonical preparation, pooled and local council benchmarks, resource monitoring, and an aggregate release manifest."
+description: "Validate a fresh release end-to-end: national preparation, filtered council benchmarks, laptop runtime manifest, and gated performance-documentation updates."
 agent: agent
 argument-hint: "Release/ref or wheel, raw canonical path, output root, optional DuckDB constraints"
 ---
@@ -33,7 +33,7 @@ any harness, read the applicable Python, SQL, and testing instructions.
   location when safe capacity cannot be established. Use a dedicated spill
   directory per job; record threads, spill cap, output chunks, and all resolved
   preparation options. Do not silently increase memory or reduce dataset size.
-- Resolve the four labelled dataset paths from private config/environment. Ask
+- Resolve the five labelled dataset paths from private config/environment. Ask
   for any missing paths; never silently skip a dataset or request credentials in chat.
 
 ## 1. Fresh Installation And National Preparation
@@ -109,12 +109,13 @@ Record current-run timings directly, not an older deduplicated persistence recei
 Persist pooled totals and member-council breakdowns where supported. Record the
 resolved pooled membership rather than assuming Mid Sussex belongs to it.
 
-## 4. Four Locally Filtered Canonical Runs
+## 4. Five Regionally Filtered Canonical Runs
 
-Run `hackney`, `rhondda`, `aberdeenshire`, and `mid_sussex` separately, unsampled,
-using this release's newly prepared data as the source. Follow the local-canonical
-workflow in [Performance overview](../../docs/site/performance.md), not its
-historical script text verbatim.
+Run `hackney`, `rhondda`, `aberdeenshire`, `mid_sussex`, and `gwynedd` separately,
+unsampled, reusing this release's newly prepared national folder. Follow the
+regional filtering SQL patterns in
+[Performance overview](../../docs/site/performance.md), not obsolete API calls
+or malformed SQL from its historical snippets. Do not run postcode-suppressed variants.
 
 | Dataset | Council | Expected GSS code | Classification |
 | --- | --- | --- | --- |
@@ -122,48 +123,50 @@ historical script text verbatim.
 | `rhondda` | Rhondda Cynon Taf | `W06000016` | Residential (`R`) |
 | `aberdeenshire` | Aberdeenshire | `S12000034` | Residential (`R`) |
 | `mid_sussex` | Mid Sussex | `E07000228` | Commercial (`C`) |
+| `gwynedd` | Gwynedd | `W06000002` | Residential (`R`) |
 
 Verify each code against available geographic metadata or an authoritative
 lookup. Validate non-empty subsets and label coverage before matching. Apply
 `lowertierlocalauthoritygsscode = '<code>'` and
-`substr(classificationcode, 1, 1) = '<classification>'` **before local preparation**.
+`substr(classificationcode, 1, 1) = '<classification>'` before matching.
 If those fields were not retained, use a read-only join to source metadata by
 UPRN; do not guess geography from address text or copy the malformed historical SQL.
 
-For each council, project the supported raw address columns from the newly
-prepared national addresses, preserve entity/alias semantics, and prepare a
-separate local folder with the same constraints. Recompute local term frequencies
-and indexes from that subset, then benchmark its prepared folder through the
-existing runner. This exercises the relation-based local preparation described
-for Mid Sussex while retaining the runner's folder-based interface. Merely
-filtering a national prepared folder retains national TF/index context and is
-**not** an equivalent local build. Keep the private config pointing to the
-national folder; pass local folders explicitly to these runs.
+Pass the same national prepared folder to the existing runner with a different
+`canonical_address_filter` for each council. Do not rebuild council folders or
+recompute local term frequencies/indexes. Preserve entity/alias semantics and
+keep the private config pointing to the national folder. These runs retain
+national TF/index context: record this origin explicitly and do not describe
+them as equivalent to the historical Mid Sussex raw-relation/local-TF setup.
+If a metadata join is necessary, materialise only the required filtered prepared
+view using the supported loading path; do not silently fall back to raw preparation.
 
 Use existing labelled-data loaders. Record raw rows, eligible labelled rows,
 missing labels, labels absent from the selected canonical, and exclusions with
 reasons. Preserve current loader behaviour unless a documented local eligibility
 filter is needed; never hide coverage losses by reporting only retained rows.
-Record local preparation time/resources separately from matching time/resources.
+Record regional filtering/initialisation separately from matching time/resources.
 Use the same stage/model/threshold settings as the pooled run, not obsolete
 settings from the historical examples.
 
 ## 5. Persist The Release Manifest And Verify
 
 Write one compact aggregate-only JSON manifest at
-`benchmarking/results/release_e2e/<UTC-timestamp>-<release-or-commit>/manifest.json`.
+`docs/experiments/release_e2e/<UTC-timestamp>-<release-or-commit>/manifest.json`.
 Create it at the start and update it after each completed step so failed runs
-also have evidence. Use a structured JSON writer. Include:
+also have evidence. This sanitised laptop record must live in the repository,
+not only in ignored benchmark results; keep detailed/private artefacts under the
+release-specific results root. Use a structured JSON writer. Include:
 
 - Schema version, release identifier, Git provenance/dirty state, UTC start/end,
   overall status (`passed`, `failed`, or `incomplete`), errors and limitations.
 - Laptop/OS/CPU/core/RAM specs, package/Python/DuckDB versions, install provenance,
   exact commands or runnable driver path, resolved DuckDB constraints and units.
-- National and local canonical manifest references, row counts, filters, options,
+- National canonical manifest references, regional row counts, filters, options,
   preparation timings, per-stage measurements, resource sampling method/interval,
   overall peak RSS/spill and cleanup status. Redact private input paths in shareable
   output; keep full commands/resource logs private when they contain such paths.
-- One run record for the pooled dataset and each of the four local datasets:
+- One run record for the pooled dataset and each of the five regional datasets:
   run ID/artefact paths, canonical scope, input/eligible/excluded counts, resolved
   stages/model/thresholds, total/initialisation/matching/reporting runtimes with
   boundaries, RSS/spill peaks, and overall precision, recall, F1, TP, FP, unmatched.
@@ -184,7 +187,7 @@ handling explicitly. Unmatched is not the same as FN: wrong predictions also
 lose a true match. Use existing accuracy/diagnostic tables; do not silently mix
 their curve denominators with headline denominators.
 
-Parse the saved JSON and verify all five required runs, every executed stage,
+Parse the saved JSON and verify all six required runs, every executed stage,
 metric reconciliations, existing artefact references, newly prepared provenance,
 effective connection constraints, and resource evidence. Keep raw addresses,
 row-level predictions and secrets out of the shareable manifest. Validate any
@@ -197,7 +200,60 @@ claim. Never compare these runs to historical documentation timings as a release
 Apply user-supplied regression budgets; otherwise report regressions without
 inventing numerical pass thresholds. Execution success is not an accuracy guarantee.
 
+## 6. Final Performance-Documentation Update
+
+Only after all runs and manifest checks finish, assess preparation runtime,
+stage timings, RSS/spill, label coverage, accuracy and unmatched counts against
+comparable persisted results. Document the assessment in the manifest, including
+baseline IDs, differences in hardware/constraints/cohorts, anomalies and the
+decision. Historical documentation figures are context, not a controlled baseline.
+If preparation is severely slower, matching looks anomalous, a required run or
+measurement is missing, or the evidence is inconclusive, **leave performance.md
+unchanged**, retain the manifest and ask the user to review before publishing.
+Do not silently bless suspicious results or choose an arbitrary regression budget.
+
+If the results are credible and the gate passes, update
+[performance.md](../../docs/site/performance.md) as the final step:
+
+- In the top timings table, replace the full-country step 4 preparation runtime
+  with this run's measured end-to-end preparation time and recalculate affected
+  setup totals/footnotes. Update matching timings only for the stated workload:
+  do not relabel a differently sized council cohort as 100,000 records. Keep
+  unmeasured download/install figures unchanged rather than inventing replacements.
+- In `Canonical preparation runtime` / `Show full canonical preparation runtime`,
+  replace the existing stage seconds, shares, cumulative seconds and total from
+  the same run. Update the existing date, row counts, laptop specs, versions,
+  constraints, chunk counts, harness/call timing and spill/cleanup notes in place.
+  Reconcile the table with the manifest; do not publish an incomplete stage
+  breakdown or combine old and new measurements. Preserve precise values here.
+- Refresh Hackney Council and Mid Sussex headline precision/recall/F1 figures,
+  labelled cohort sizes and runtimes from their new regionally filtered runs.
+  Update associated chart assets if retained, using those runs' persisted curves;
+  do not leave old charts presented as evidence for new numbers. Keep the same
+  documented operating points where supported and record them in the manifest.
+- Add short `### Aberdeenshire Council data` and `### Gwynedd Council data`
+  sections with the same summary metrics, cohort sizes and approximate runtime,
+  providing Scottish and Welsh data points. No long scripts, new postcode-less
+  sections, or explanatory essays. Do not refresh existing historical
+  postcode-suppressed examples as though they were rerun.
+- Use rough whole-second runtimes for council summaries, for example
+  `~6 seconds` when supported by the measurement, not separate `5.8 seconds total`
+  and `5.6 seconds matching` claims. Keep exact values and timing boundaries in
+  the manifest; do not force the example value onto different results. If repeated,
+  use the median and retain all repetitions in the manifest.
+- Reuse existing SQL/filter patterns and layout. Correct stale Mid Sussex
+  raw-relation/local-TF claims and affected snippets briefly to reflect the
+  prepared-folder regional filter. Otherwise replace existing figures/notes in
+  place, without extra paragraphs or unrelated prose cleanup. Add at most one
+  concise link to the repo-stored manifest for provenance.
+
+Validate updated tables, rounding, metric/curve consistency and the documentation
+diff against the manifest. Record `documentation_update` as `updated` or
+`withheld`, with its reason and paths, in the final JSON. No documentation timing
+or accuracy figures should change before this gate.
+
 Finish with a compact dataset/stage summary, manifest and driver links, config
-activation status, and a clear passed/failed/incomplete conclusion. Do not claim
+activation and documentation-update status, and a clear passed/failed/incomplete
+conclusion. Do not claim
 an end-to-end pass with a failed/skipped required run, invalid output, missing
 mandatory overall measurements, or failed manifest checks.
