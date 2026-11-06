@@ -38,7 +38,9 @@ The check covers:
    or the evidence is incomplete or inconclusive.
 
 Save sanitised JSON reports under
-`docs/runtime/<target-release>/<UTC-run-id>/`. A manifest records the release,
+`docs/runtime/<target-release>/`, keeping one report set per version and replacing
+it on a rerun. Keep timestamps in the reports, not directory names.
+A manifest records the release,
 source commit, laptop specifications, dependency versions, DuckDB constraints,
 timestamp, status and links to the stage reports. Preparation and matching-stage
 artefacts have explicit names and execution ordinals; dataset summaries contain

@@ -163,8 +163,11 @@ settings from the historical examples.
 ## 5. Persist The Release Manifest And Verify
 
 Write one compact aggregate-only JSON manifest at
-`docs/runtime/<target-release>/<UTC-run-id>/manifest.json`, for example under
-`docs/runtime/v1.6.0/2026-11-06T090000Z/`. Never overwrite earlier runs.
+`docs/runtime/<target-release>/manifest.json`, for example
+`docs/runtime/v1.6.0/manifest.json`. Keep one report set per release version:
+overwrite that version's existing generated reports on a rerun, removing obsolete
+stage artefacts so results from different runs are not mixed. Do not touch other
+versions. Keep timestamps and run IDs in the report metadata, not subdirectories.
 Create it at the start and update it after each completed step so failed runs
 also have evidence. This sanitised laptop record must live in the repository,
 not only in ignored benchmark results; keep detailed/private artefacts under the
