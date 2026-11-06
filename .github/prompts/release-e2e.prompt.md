@@ -1,7 +1,7 @@
 ---
 description: "Validate a fresh release end-to-end: national preparation, filtered council benchmarks, laptop runtime manifest, and gated performance-documentation updates."
 agent: agent
-argument-hint: "Release/ref or wheel, raw canonical path, output root, optional DuckDB constraints"
+argument-hint: "Target release v1.x.x, source ref or wheel, raw canonical path, optional DuckDB constraints"
 ---
 
 # Release end-to-end validation
@@ -15,6 +15,8 @@ Follow the [repository workflow](../instructions/repo-workflow.instructions.md),
 [data safety instructions](../instructions/data-handling.instructions.md), and
 [benchmark skill](../skills/benchmark-experiment/SKILL.md). Before implementing
 any harness, read the applicable Python, SQL, and testing instructions.
+The rationale is recorded in
+[Local pre-release validation](../../docs/adr/0005-local-pre-release-validation.md).
 
 ## Inputs And Defaults
 
@@ -22,8 +24,11 @@ any harness, read the applicable Python, SQL, and testing instructions.
   starting. Accept the formats supported by `prepare_canonical_folder`; inspect
   the schema, not address records. For a DuckDB database, ask for the source
   table/projection if ambiguous and attach it read-only.
-- Release: use the supplied version, ref, or wheel; otherwise confirm whether to
-  test the current checkout (including its dirty changes) or a published release.
+- Target release: **ask the user for the next release version before creating
+  reports or starting a run**, unless already supplied. Require an explicit
+  `v1.x.x` label such as `v1.6.0`; never infer it from the date, current package
+  version or Git ref. Record the source ref/wheel and installed package version
+  separately; confirm which source to test if ambiguous.
 - Preparation chunks: **10**, unless the user overrides this.
 - DuckDB memory limit: **`16GB`**, unless the user overrides this. This is not a
   hard process-RSS limit. Apply and read back constraints on every connection,
@@ -98,9 +103,15 @@ existing runner/persistence helpers. Set `SELECTED_DATASETS=['pooled_councils']`
 restrict the canonical. **Full canonical means no council or classification
 filter**, not just national residential addresses.
 
-Keep the entrypoint's current stage order, thresholds, and resolved model defaults
-unless the user explicitly overrides them. Record the complete resolved stage
-definition. Prefer a small repo-runnable driver reusing the runner if needed to
+Keep the entrypoint's current stage order and resolved model defaults. Report
+accuracy at **MW 8, 10 and 12**, recording effective thresholds and the complete
+resolved stage definition. Retain sufficient scored candidates to evaluate MW 8;
+do not derive lower-threshold results from output already pruned above MW 8.
+Prefer scoring once and evaluating the three operating points through existing
+metrics helpers. Include fixed exact/peeled matches at each point. If separate
+matching runs are needed, label their thresholds and timings separately; never
+present a shared runtime as three measured runs. Do not change production defaults.
+Prefer a small repo-runnable driver reusing the runner if needed to
 apply constraints/monitoring without permanent changes to benchmark defaults;
 do not invent a second matching or metrics implementation.
 
@@ -146,19 +157,20 @@ missing labels, labels absent from the selected canonical, and exclusions with
 reasons. Preserve current loader behaviour unless a documented local eligibility
 filter is needed; never hide coverage losses by reporting only retained rows.
 Record regional filtering/initialisation separately from matching time/resources.
-Use the same stage/model/threshold settings as the pooled run, not obsolete
+Use the same stage/model settings and MW 8, 10 and 12 reporting as the pooled run, not obsolete
 settings from the historical examples.
 
 ## 5. Persist The Release Manifest And Verify
 
 Write one compact aggregate-only JSON manifest at
-`docs/experiments/release_e2e/<UTC-timestamp>-<release-or-commit>/manifest.json`.
+`docs/runtime/<target-release>/<UTC-run-id>/manifest.json`, for example under
+`docs/runtime/v1.6.0/2026-11-06T090000Z/`. Never overwrite earlier runs.
 Create it at the start and update it after each completed step so failed runs
 also have evidence. This sanitised laptop record must live in the repository,
 not only in ignored benchmark results; keep detailed/private artefacts under the
 release-specific results root. Use a structured JSON writer. Include:
 
-- Schema version, release identifier, Git provenance/dirty state, UTC start/end,
+- Schema version, user-confirmed target release, Git provenance/dirty state, UTC start/end,
   overall status (`passed`, `failed`, or `incomplete`), errors and limitations.
 - Laptop/OS/CPU/core/RAM specs, package/Python/DuckDB versions, install provenance,
   exact commands or runnable driver path, resolved DuckDB constraints and units.
@@ -176,8 +188,29 @@ release-specific results root. Use a structured JSON writer. Include:
   repeated stage names distinct; if the existing API lacks stage-only accuracy,
   use supported cumulative results or mark unavailable with a reason, not a guessed split.
 
+Keep stage artefacts clearly labelled under the same run directory:
+
+- `preparation/stages.json`: ordered preparation-stage timings and resources.
+- `datasets/<scope>-<dataset>/stage-<ordinal>-<stage-name>.json`: one aggregate
+  report per executed matching stage, including repeated stages separately.
+- `datasets/<scope>-<dataset>/overall.json`: overall timings and the three
+  operating-point summaries for that dataset. Use `full` and `regional` scope labels.
+
+Each JSON report must carry `schema_version`, `target_release`, `run_id`,
+`dataset`, `canonical_scope`, `stage_ordinal`, `stage_name`, `metric_scope`,
+`elapsed_seconds`, `peak_rss_bytes`, `peak_spill_bytes` and an `operating_points`
+array where accuracy applies. Use `null` with a reason for inapplicable fields.
+Each operating point carries `match_weight` (8, 10 or 12) and the metric fields
+below; stage reports must distinguish stage-only from cumulative results. Link
+all reports from the manifest using relative paths. Keep names/units consistent
+across releases so these JSON files can drive runtime and precision/recall charts
+without parsing console logs. Retain exact numbers, not display-rounded strings.
+Do not generate dense curves or PR-AUC reports for this release check; more
+detailed curves can be run separately. Any automatically persisted detailed
+benchmark outputs remain outside these compact repo reports.
+
 Use metric records shaped as
-`{scope, denominator_rows, matched, tp, fp, unmatched, precision, recall, f1}`.
+`{match_weight, scope, denominator_rows, matched, tp, fp, unmatched, precision, recall, f1}`.
 Store precision/recall/F1 as fractions in `[0,1]`; label displayed percentages.
 Document label eligibility and denominators. For a cohort with one final outcome
 per eligible record, reconcile `tp + fp + unmatched = denominator_rows`,
@@ -189,12 +222,13 @@ their curve denominators with headline denominators.
 
 Parse the saved JSON and verify all six required runs, every executed stage,
 metric reconciliations, existing artefact references, newly prepared provenance,
-effective connection constraints, and resource evidence. Keep raw addresses,
+effective connection constraints, resource evidence, target release labels and
+the MW 8/10/12 records. Keep raw addresses,
 row-level predictions and secrets out of the shareable manifest. Validate any
 new driver with focused checks and leave its rerun command usable in this repo.
 
 If comparable persisted baselines exist, link their run IDs, report accuracy and
-runtime deltas and interpret the overlay precision-recall chart/PR-AUC. Different
+runtime deltas at the same three operating points. Different
 canonical data, cohorts, hardware, or constraints invalidate a controlled timing
 claim. Never compare these runs to historical documentation timings as a release gate.
 Apply user-supplied regression budgets; otherwise report regressions without
@@ -228,9 +262,10 @@ If the results are credible and the gate passes, update
   breakdown or combine old and new measurements. Preserve precise values here.
 - Refresh Hackney Council and Mid Sussex headline precision/recall/F1 figures,
   labelled cohort sizes and runtimes from their new regionally filtered runs.
-  Update associated chart assets if retained, using those runs' persisted curves;
-  do not leave old charts presented as evidence for new numbers. Keep the same
-  documented operating points where supported and record them in the manifest.
+  Use MW 8, 10 and 12 from the saved reports. If updating a chart, label it as
+  three operating points, not a full curve. Do not present historical curves as
+  evidence for new figures; keep them explicitly historical or replace them
+  with the compact summaries. Detailed curve generation is a separate task.
 - Add short `### Aberdeenshire Council data` and `### Gwynedd Council data`
   sections with the same summary metrics, cohort sizes and approximate runtime,
   providing Scottish and Welsh data points. No long scripts, new postcode-less
@@ -247,7 +282,7 @@ If the results are credible and the gate passes, update
   place, without extra paragraphs or unrelated prose cleanup. Add at most one
   concise link to the repo-stored manifest for provenance.
 
-Validate updated tables, rounding, metric/curve consistency and the documentation
+Validate updated tables, rounding, operating-point consistency and the documentation
 diff against the manifest. Record `documentation_update` as `updated` or
 `withheld`, with its reason and paths, in the final JSON. No documentation timing
 or accuracy figures should change before this gate.
