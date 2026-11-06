@@ -37,15 +37,15 @@ The check covers:
    those figures unchanged if preparation is severely slow, matching looks wrong
    or the evidence is incomplete or inconclusive.
 
-Save sanitised JSON reports under
-`docs/runtime/<target-release>/`, keeping one report set per version and replacing
-it on a rerun. Keep timestamps in the reports, not directory names.
-A manifest records the release,
-source commit, laptop specifications, dependency versions, DuckDB constraints,
-timestamp, status and links to the stage reports. Preparation and matching-stage
-artefacts have explicit names and execution ordinals; dataset summaries contain
-the three operating points. Keep exact values and consistent units so these
-reports can support runtime and precision/recall charts across releases.
+Save exactly two sanitised reports under `docs/runtime/<target-release>/`,
+replacing that version's pair on a rerun: a self-contained `manifest.json` and a
+readable `report.md` generated from its values. Keep timestamps in the reports,
+not directory names. The JSON contains provenance, constraints, exact statistics
+and ordered preparation/matching-stage arrays, without separate stage files.
+The Markdown follows the prompt's template: national preparation timings and
+resources, a dataset runtime table, and MW 8/10/12 precision, recall, F1, TP, FP
+and unmatched tables for all six datasets. Keep exact values and consistent units
+in the JSON so it can also support charts across releases.
 
 Keep failed-run evidence too. Do not store addresses, credentials or private
 paths in these reports; detailed private artefacts stay outside the shared docs.

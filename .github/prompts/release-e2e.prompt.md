@@ -24,6 +24,11 @@ The rationale is recorded in
   starting. Accept the formats supported by `prepare_canonical_folder`; inspect
   the schema, not address records. For a DuckDB database, ask for the source
   table/projection if ambiguous and attach it read-only.
+- If the input contains raw OS extract tables rather than UKAM's canonical
+  columns, use the existing `ukam-os-builder` conversion first, including its
+  alternate-address, Welsh-language, metadata and deduplication rules. Record
+  its version/provenance and time/resources separately from UKAM preparation;
+  do not improvise a union that drops address variants or geography metadata.
 - Target release: **ask the user for the next release version before creating
   reports or starting a run**, unless already supplied. Require an explicit
   `v1.x.x` label such as `v1.6.0`; never infer it from the date, current package
@@ -38,8 +43,23 @@ The rationale is recorded in
   location when safe capacity cannot be established. Use a dedicated spill
   directory per job; record threads, spill cap, output chunks, and all resolved
   preparation options. Do not silently increase memory or reduce dataset size.
+- Historical comparison runs must use a separate prepared-output directory and
+  must not replace the primary canonical. Preserve the private config byte-for-byte;
+  supply historical canonical and dataset paths through child-process environment
+  overrides instead of writing config, and skip activation in step 2.
+  If the user authorises reusing the current canonical instead of historical
+  preparation, record its producing version/commit and manifest, omit historical
+  preparation timings, and label the result as a cross-version canonical replay.
 - Resolve the five labelled dataset paths from private config/environment. Ask
   for any missing paths; never silently skip a dataset or request credentials in chat.
+- Before importing benchmark settings, check `benchmarking/.config.json`. If it
+  is absent, create a private JSON object; treat missing, null, blank or placeholder
+  values as unset. Ask for and validate the five dataset paths, then write their
+  `UKAM_*_DATA_PATH` values using a JSON parser, preserving unrelated settings.
+  Do not invent paths or store credentials. Set `UKAM_OS_CANONICAL_PREPARED` only
+  after the new prepared folder passes verification in step 2. Confirm usable
+  paths and resolve blank/conflicting environment overrides before benchmarking;
+  start a fresh process so cached config does not retain the old values.
 
 ## 1. Fresh Installation And National Preparation
 
@@ -82,6 +102,10 @@ The rationale is recorded in
    measurements/errors and stop dependent steps; do not claim success.
 
 ## 2. Activate The Newly Prepared Data
+
+Skip activation for a historical baseline: verify its separate bundle, pass it
+explicitly to its benchmark processes and verify the primary config is unchanged.
+The activation instructions below apply only to the intended new primary release.
 
 Only after successful verification, update **only** `UKAM_OS_CANONICAL_PREPARED`
 in `benchmarking/.config.json` to the new national prepared folder, using a JSON
@@ -156,28 +180,39 @@ Use existing labelled-data loaders. Record raw rows, eligible labelled rows,
 missing labels, labels absent from the selected canonical, and exclusions with
 reasons. Preserve current loader behaviour unless a documented local eligibility
 filter is needed; never hide coverage losses by reporting only retained rows.
+Retain observations with missing postcodes; postcode presence is not an eligibility
+criterion. Exclude missing input UPRN labels and labels absent from the selected
+canonical. Record missing-postcode row counts before and after canonical-label
+filtering. Keep genuinely missing postcodes distinct from artificial postcode
+suppression experiments; do not strip supplied postcodes.
 Record regional filtering/initialisation separately from matching time/resources.
 Use the same stage/model settings and MW 8, 10 and 12 reporting as the pooled run, not obsolete
 settings from the historical examples.
 
-## 5. Persist The Release Manifest And Verify
+## 5. Persist Two Release Reports And Verify
 
-Write one compact aggregate-only JSON manifest at
-`docs/runtime/<target-release>/manifest.json`, for example
-`docs/runtime/v1.6.0/manifest.json`. Keep one report set per release version:
-overwrite that version's existing generated reports on a rerun, removing obsolete
-stage artefacts so results from different runs are not mixed. Do not touch other
-versions. Keep timestamps and run IDs in the report metadata, not subdirectories.
-Create it at the start and update it after each completed step so failed runs
-also have evidence. This sanitised laptop record must live in the repository,
-not only in ignored benchmark results; keep detailed/private artefacts under the
-release-specific results root. Use a structured JSON writer. Include:
+Keep exactly two generated files in `docs/runtime/<target-release>/`:
+
+- `manifest.json`: one self-contained, aggregate-only JSON file containing all
+  core statistics, ordered stage breakdowns and provenance. Inline the data;
+  do not create separate dataset, stage, environment or activation JSON files.
+- `report.md`: the human-readable review report, generated from the same JSON
+  values using the format below. Do not calculate a second set of metrics.
+
+Keep one report pair per release version, overwriting both files on a rerun.
+Remove obsolete generated split reports only after validating their consolidation;
+keep private diagnostics under the ignored release-specific results root. Do not
+touch other versions. Keep timestamps and run IDs in metadata, not subdirectories.
+Create the JSON at the start and update it after each step so failed runs also
+have evidence; generate the Markdown with failed/incomplete states shown honestly.
+Use a structured JSON writer, retain exact numbers rather than rounded strings,
+and use stable field names and units across releases. Include:
 
 - Schema version, user-confirmed target release, Git provenance/dirty state, UTC start/end,
   overall status (`passed`, `failed`, or `incomplete`), errors and limitations.
 - Laptop/OS/CPU/core/RAM specs, package/Python/DuckDB versions, install provenance,
   exact commands or runnable driver path, resolved DuckDB constraints and units.
-- National canonical manifest references, regional row counts, filters, options,
+- National canonical manifest statistics, regional row counts, filters, options,
   preparation timings, per-stage measurements, resource sampling method/interval,
   overall peak RSS/spill and cleanup status. Redact private input paths in shareable
   output; keep full commands/resource logs private when they contain such paths.
@@ -191,26 +226,131 @@ release-specific results root. Use a structured JSON writer. Include:
   repeated stage names distinct; if the existing API lacks stage-only accuracy,
   use supported cumulative results or mark unavailable with a reason, not a guessed split.
 
-Keep stage artefacts clearly labelled under the same run directory:
+Use top-level `schema_version`, `target_release`, `run_id`, `status`, `provenance`,
+`hardware`, `constraints`, `sampling`, `raw_conversion`, `preparation`, `datasets`,
+`assessment` and `documentation_update` fields. `preparation.stages` is an ordered
+array. `datasets` contains six records, each with scope (`full` or `regional`),
+eligibility counts, runtime boundaries, resource peaks, `operating_points` and an
+ordered `stages` array. Stage records carry `stage_ordinal`, `stage_name`,
+`metric_scope`, `elapsed_seconds`, counts, `peak_rss_bytes`, `peak_spill_bytes`
+and `operating_points` where applicable. Inherit shared release metadata rather
+than duplicating it in each nested record. Use `null` with a reason when unavailable.
+Store the resolved stage/model fingerprint and source provenance; full resolved
+settings, dense curves and other detailed benchmark artefacts stay private.
 
-- `preparation/stages.json`: ordered preparation-stage timings and resources.
-- `datasets/<scope>-<dataset>/stage-<ordinal>-<stage-name>.json`: one aggregate
-  report per executed matching stage, including repeated stages separately.
-- `datasets/<scope>-<dataset>/overall.json`: overall timings and the three
-  operating-point summaries for that dataset. Use `full` and `regional` scope labels.
+Generate `report.md` in this order, filling the following template from the JSON:
 
-Each JSON report must carry `schema_version`, `target_release`, `run_id`,
-`dataset`, `canonical_scope`, `stage_ordinal`, `stage_name`, `metric_scope`,
-`elapsed_seconds`, `peak_rss_bytes`, `peak_spill_bytes` and an `operating_points`
-array where accuracy applies. Use `null` with a reason for inapplicable fields.
-Each operating point carries `match_weight` (8, 10 or 12) and the metric fields
-below; stage reports must distinguish stage-only from cumulative results. Link
-all reports from the manifest using relative paths. Keep names/units consistent
-across releases so these JSON files can drive runtime and precision/recall charts
-without parsing console logs. Retain exact numbers, not display-rounded strings.
-Do not generate dense curves or PR-AUC reports for this release check; more
-detailed curves can be run separately. Any automatically persisted detailed
-benchmark outputs remain outside these compact repo reports.
+```markdown
+# Release Validation: <target-release>
+
+Status: <passed/failed/incomplete>. Source: <commit>. Installed package: <version>.
+State explicitly if the report label differs from the installed package version.
+
+## National Preparation
+
+<Canonical rows, preparation/output chunks, memory limit and threads.>
+
+| Phase | Wall Time (s) | Sampled RSS (GB) | OS Peak RSS (GB) | Sampled Spill (GB) |
+| --- | ---: | ---: | ---: | ---: |
+| Raw OS conversion | ... | ... | ... | ... |
+| National preparation harness | ... | ... | ... | ... |
+
+| Preparation Stage | Seconds | Share of Call | Cumulative Seconds |
+| --- | ---: | ---: | ---: |
+| <one row per measured preparation stage> | ... | ... | ... |
+| Other uninstrumented work | ... | ... | ... |
+| Preparation Call Total | ... | 100.00% | ... |
+
+## Dataset Results
+
+### MW 10 Summary
+
+| Dataset | Precision | Recall | F1 | TP | FP | Unmatched | Workflow (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| <one row per dataset at MW 10> | ...% | ...% | ...% | ... | ... | ... | ... |
+
+### Version Comparison At MW 10
+
+<Include only after running the older version. Identify both exact versions/commits,
+canonical preparation and cohort differences; do not imply a controlled comparison
+when they differ. If unavailable, state that briefly instead of inventing results.>
+
+| Dataset | Older Precision | Main Precision | Difference (pp) | Older Recall | Main Recall | Difference (pp) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| <one row per comparable dataset> | ...% | ...% | ... | ...% | ...% | ... |
+
+### Workflow Runtime Comparison
+
+| Dataset | Older (s) | Current (s) | Difference (s) | Difference (%) |
+| --- | ---: | ---: | ---: | ---: |
+| <one row per dataset when baseline timings exist> | ... | ... | ... | ...% |
+
+### Source Foundational Precleaning Comparison
+
+| Dataset | Older (s) | Current (s) | Difference (s) | Difference (%) |
+| --- | ---: | ---: | ---: | ---: |
+| <one row per dataset; label log-derived intervals as approximate> | ... | ... | ... | ...% |
+
+### Matching Stage Runtime Comparison
+
+| Dataset / Stage | Older (s) | Current (s) | Difference (s) | Difference (%) |
+| --- | ---: | ---: | ---: | ---: |
+| <one row per pooled-councils execution stage only> | ... | ... | ... | ...% |
+
+### National Canonical Precleaning Comparison
+
+| Preparation Step | Older (s) | Current (s) | Difference (s) | Difference (%) |
+| --- | ---: | ---: | ---: | ---: |
+| <compare completed foundational cleaning/TF steps and full preparation where available> | ... | ... | ... | ...% |
+
+### Dataset Runtimes
+
+| Dataset | Workflow (s) | Match Pipeline (s) | Overall Harness (s) |
+| --- | ---: | ---: | ---: |
+| <one row per dataset, with timing boundaries explained above> | ... | ... | ... |
+
+## Accuracy Results: <target-release>
+
+### <dataset>
+
+<Canonical scope; source, eligible and excluded rows. Use readable dataset headings.>
+
+| MW | Precision | Recall | F1 | TP | FP | Unmatched |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | ...% | ...% | ...% | ... | ... | ... |
+| 10 | ...% | ...% | ...% | ... | ... | ... |
+| 12 | ...% | ...% | ...% | ... | ... | ... |
+
+<Repeat the dataset section for pooled_councils, hackney, rhondda,
+aberdeenshire, mid_sussex and gwynedd, in that order.>
+
+## Checks And Limitations
+
+<Validation outcome; exact loader/canonical exclusion rules and counts; records
+retained in the denominator; regional classification filters; baseline/cohort
+comparability; missing measurements; anomalies; documentation-update status;
+and a relative link to manifest.json.>
+```
+
+Use three decimal places for seconds and GB, two for displayed percentages, and
+integer TP/FP/unmatched counts with thousands separators. Show unavailable values
+as unavailable, never as zero. Keep this a review report, not a long narrative.
+Do not include a Spill Cleared column or explanatory timing/denominator paragraphs
+in the Markdown; retain technical boundaries and cleanup evidence in the JSON.
+Keep short comparison-scope and approximate-timing caveats where needed. Calculate
+all runtime differences as current minus older, using unrounded measurements.
+Store the comparison rows and timing provenance in the self-contained JSON.
+Limit the Matching Stage Runtime Comparison to pooled councils; retain all six
+datasets' ordered stage measurements in the JSON.
+Measure source foundational precleaning directly where possible; accepted-run log
+timestamps may supply approximate intervals with explicit scope and provenance.
+Never label workflow time minus matching-stage time as measured precleaning.
+Do not use invalid or superseded runs. For failed/skipped historical preparation,
+compare only completed steps, mark the full runtime unavailable and omit its delta.
+Put record-eligibility and exclusion explanations under Checks And Limitations.
+Validate every displayed value against the JSON, including rounded values,
+cumulative times and the three operating points for all six datasets.
+Do not generate dense curves or PR-AUC reports for this release check.
 
 Use metric records shaped as
 `{match_weight, scope, denominator_rows, matched, tp, fp, unmatched, precision, recall, f1}`.
@@ -222,6 +362,9 @@ per eligible record, reconcile `tp + fp + unmatched = denominator_rows`,
 handling explicitly. Unmatched is not the same as FN: wrong predictions also
 lose a true match. Use existing accuracy/diagnostic tables; do not silently mix
 their curve denominators with headline denominators.
+Accuracy rows can split one execution stage into sub-reasons, such as
+`exact_no_whitespace` or `peeled_address_stripped`. Aggregate every owning
+stage's sub-reasons before reconciling its counts with execution diagnostics.
 
 Parse the saved JSON and verify all six required runs, every executed stage,
 metric reconciliations, existing artefact references, newly prepared provenance,
@@ -290,7 +433,7 @@ diff against the manifest. Record `documentation_update` as `updated` or
 `withheld`, with its reason and paths, in the final JSON. No documentation timing
 or accuracy figures should change before this gate.
 
-Finish with a compact dataset/stage summary, manifest and driver links, config
+Finish with a compact dataset/stage summary, JSON/Markdown report and driver links, config
 activation and documentation-update status, and a clear passed/failed/incomplete
 conclusion. Do not claim
 an end-to-end pass with a failed/skipped required run, invalid output, missing
