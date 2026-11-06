@@ -570,7 +570,9 @@ def _parse_out_flat_position_and_letter():
             )
             ELSE NULL
         END AS flat_number,
-        regexp_matches(i.clean_full_address, '{explicit_flat_pattern}') AS __has_explicit_flat
+        regexp_matches(
+            i.clean_full_address, '{explicit_flat_pattern}'
+        ) AS __has_explicit_flat
     FROM (
         SELECT
             input.* EXCLUDE (clean_full_address),
