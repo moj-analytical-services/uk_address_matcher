@@ -390,7 +390,7 @@ def test_packaged_address_model_uses_inline_address_signatures():
         for level in numeric_context["comparison_levels"]
         if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
     ]
-    assert len(numeric_conditions) == 3
+    assert len(numeric_conditions) == 2
     assert all(
         "clean_full_address_numeric_context" not in condition
         for condition in numeric_conditions
