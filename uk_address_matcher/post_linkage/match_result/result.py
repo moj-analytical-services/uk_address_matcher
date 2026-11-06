@@ -8,10 +8,10 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher._typing import StageDiagnostics, _ColumnAlias
 from uk_address_matcher.analysis.accuracy_analysis import (
+    build_distinguishability_match_weight_chart_definition,
     build_match_weight_rounding_expression,
     build_precision_recall_chart_definition,
     build_threshold_selection_chart_definition,
-    build_distinguishability_match_weight_chart_definition,
     render_chart_definition,
 )
 from uk_address_matcher.analysis.accuracy_sql import build_threshold_metrics_sql
@@ -471,12 +471,12 @@ class MatchResult:
         self,
         *,
         match_weight_round_to_nearest: float | None = 0.1,
-        output_type: Literal["threshold_selection", "precision_recall", "distinguishability_match_weight", "table"] = (
+        output_type: Literal["threshold_selection", "precision_recall",
+                             "distinguishability_match_weight", "table"] = (
             "threshold_selection"
         ),
         add_metrics: List[
-            Literal["specificity", "npv", "accuracy", "f1", "f2", "f0_5", "p4", "phi", 
-                    "distinguishability", "match_weight"]
+            Literal["specificity", "npv", "accuracy", "f1", "f2", "f0_5", "p4", "phi"]
         ]
         | None = None,
     ) -> Any:
@@ -503,10 +503,8 @@ class MatchResult:
                 universe, making TN-dependent ROC interpretation unreliable.
 
             add_metrics: Extra metrics to include in the ``"threshold_selection"``
-                or the ``"distinguishability_match_weight"`` chart.  
-                Accepted values: ``"specificity"``, ``"npv"``, ``"accuracy"``, 
-                ``"f1"``, ``"f2"``, ``"f0_5"``, ``"p4"``, ``"phi"``,
-                ``"distinguishability"``, ``"match_weight"``.
+                chart.  Accepted values: ``"specificity"``, ``"npv"``,
+                ``"accuracy"``, ``"f1"``, ``"f2"``, ``"f0_5"``, ``"p4"``, ``"phi"``.
 
         Returns:
             An Altair chart, or a list of dicts when ``output_type="table"``.
@@ -548,7 +546,8 @@ class MatchResult:
             return render_chart_definition(chart_definition)
         raise ValueError(
             "Invalid output_type. Allowed values are: "
-            "'threshold_selection', 'precision_recall', 'distinguishability_match_weight', 'table'."
+            "'threshold_selection', 'precision_recall', "
+            "'distinguishability_match_weight', 'table'."
         )
 
     def _accuracy_table(
