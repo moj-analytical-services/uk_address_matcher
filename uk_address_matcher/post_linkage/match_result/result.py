@@ -8,6 +8,7 @@ from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher._typing import StageDiagnostics, _ColumnAlias
 from uk_address_matcher.analysis.accuracy_analysis import (
+    build_distinguishability_match_weight_chart_definition,
     build_match_weight_rounding_expression,
     build_precision_recall_chart_definition,
     build_threshold_selection_chart_definition,
@@ -470,7 +471,8 @@ class MatchResult:
         self,
         *,
         match_weight_round_to_nearest: float | None = 0.1,
-        output_type: Literal["threshold_selection", "precision_recall", "table"] = (
+        output_type: Literal["threshold_selection", "precision_recall",
+                             "distinguishability_match_weight", "table"] = (
             "threshold_selection"
         ),
         add_metrics: List[
@@ -492,6 +494,8 @@ class MatchResult:
                 - ``"threshold_selection"`` *(default)* — interactive panel
                   showing precision/recall curves against match-weight threshold.
                 - ``"precision_recall"`` — precision vs recall curve.
+                - ``"distinguishability_match_weight"`` - scatter plot of
+                  distinguishability vs match_weight.
                 - ``"table"`` — the raw truth-space data as a list of dicts.
 
                 ``"roc"`` is intentionally not supported here because this
@@ -508,6 +512,23 @@ class MatchResult:
         if add_metrics is None:
             add_metrics = []
 
+        # Scatter plot uses individual match results
+        if output_type == "distinguishability_match_weight":
+            result = self.matches(all_columns=True).df()
+
+            records = (
+                result[["match_weight", "distinguishability", "unique_id"]]
+                .replace([float("inf"), float("-inf")], None)
+                .dropna()
+                .to_dict(orient="records")
+            )
+
+            chart_definition = build_distinguishability_match_weight_chart_definition(
+                records,
+            )
+            return render_chart_definition(chart_definition)
+
+        # Existing accuracy plots use aggregated threshold data
         records = self.accuracy_data(
             match_weight_round_to_nearest=match_weight_round_to_nearest,
         )
@@ -525,7 +546,8 @@ class MatchResult:
             return render_chart_definition(chart_definition)
         raise ValueError(
             "Invalid output_type. Allowed values are: "
-            "'threshold_selection', 'precision_recall', 'table'."
+            "'threshold_selection', 'precision_recall', "
+            "'distinguishability_match_weight', 'table'."
         )
 
     def _accuracy_table(
