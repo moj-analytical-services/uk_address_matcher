@@ -1035,26 +1035,21 @@ def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, ca
     info_messages = [
         record.getMessage() for record in caplog.records if record.levelno == logging.INFO
     ]
-    assert any(
-        message.startswith("Cleaning and preprocessing:") and "records across" in message
-        for message in info_messages
-    )
+    assert "Cleaning and preprocessing: 3 records" in info_messages
     assert any(
         message.startswith("Cleaning and preprocessing completed:")
         for message in info_messages
     )
-    assert any(
-        message.startswith("Applying term frequencies:") and "records across" in message
-        for message in info_messages
-    )
+    assert "Applying term frequencies: 3 records" in info_messages
     assert any(
         message.startswith("Applying term frequencies completed:")
         for message in info_messages
     )
     assert any(
-        message.startswith("Cleaning and preprocessing:") and "chunk 1/1" in message
+        message.startswith("Building inverted index (bigram): chunk 1/10,")
         for message in info_messages
     )
+    assert all("chunk 1/1," not in message for message in info_messages)
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
