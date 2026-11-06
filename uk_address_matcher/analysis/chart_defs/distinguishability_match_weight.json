@@ -1,0 +1,67 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "description": "Scatter plot of match_weight vs distinguishability.",
+  "data": {
+    "values": []
+  },
+  "title": "Match Weight vs Distinguishability",
+  "padding": {
+    "top": 0,
+    "left": 5,
+    "right": 5,
+    "bottom": 5
+  },
+  "width": 620,
+  "height": 360,
+  "mark": {
+    "type": "point",
+    "filled": true,
+    "fillOpacity": 0.75,
+    "color": "#28A197"
+  },
+  "encoding": {
+    "x": {
+      "field": "match_weight",
+      "type": "quantitative",
+      "title": "Match Weight",
+      "axis": {
+        "format": ".0f"
+      },
+      "scale": {
+        "zero": false
+      },
+      "stack": false
+    },
+    "y": {
+      "field": "distinguishability",
+      "type": "quantitative",
+      "title": "Distinguishability",
+      "axis": {
+        "format": ".0f"
+      },
+      "scale": {
+        "zero": false
+      },
+      "stack": false
+    },
+    "tooltip": [
+      {
+        "field": "unique_id",
+        "type": "nominal",
+        "title": "unique ID"
+      },
+      {
+        "field": "match_weight",
+        "type": "quantitative",
+        "title": "Match Weight",
+        "format": ".2f"
+      },
+      {
+        "field": "distinguishability",
+        "type": "quantitative",
+        "title": "Distinguishability",
+        "format": ".2f"
+      }
+    ]
+  }
+}

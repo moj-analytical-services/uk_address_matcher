@@ -11,6 +11,7 @@ from uk_address_matcher.analysis.accuracy_analysis import (
     build_match_weight_rounding_expression,
     build_precision_recall_chart_definition,
     build_threshold_selection_chart_definition,
+    build_distinguishability_match_weight_chart_definition,
     render_chart_definition,
 )
 from uk_address_matcher.analysis.accuracy_sql import build_threshold_metrics_sql
@@ -464,11 +465,12 @@ class MatchResult:
         self,
         *,
         match_weight_round_to_nearest: float | None = 0.1,
-        output_type: Literal["threshold_selection", "precision_recall", "table"] = (
+        output_type: Literal["threshold_selection", "precision_recall", "distinguishability_match_weight", "table"] = (
             "threshold_selection"
         ),
         add_metrics: List[
-            Literal["specificity", "npv", "accuracy", "f1", "f2", "f0_5", "p4", "phi"]
+            Literal["specificity", "npv", "accuracy", "f1", "f2", "f0_5", "p4", "phi", 
+                    "distinguishability", "match_weight"]
         ]
         | None = None,
     ) -> Any:
@@ -486,6 +488,8 @@ class MatchResult:
                 - ``"threshold_selection"`` *(default)* — interactive panel
                   showing precision/recall curves against match-weight threshold.
                 - ``"precision_recall"`` — precision vs recall curve.
+                - ``"distinguishability_match_weight"`` - scatter plot of
+                  distinguishability vs match_weight.
                 - ``"table"`` — the raw truth-space data as a list of dicts.
 
                 ``"roc"`` is intentionally not supported here because this
@@ -493,8 +497,10 @@ class MatchResult:
                 universe, making TN-dependent ROC interpretation unreliable.
 
             add_metrics: Extra metrics to include in the ``"threshold_selection"``
-                chart.  Accepted values: ``"specificity"``, ``"npv"``,
-                ``"accuracy"``, ``"f1"``, ``"f2"``, ``"f0_5"``, ``"p4"``, ``"phi"``.
+                or the ``"distinguishability_match_weight"`` chart.  
+                Accepted values: ``"specificity"``, ``"npv"``, ``"accuracy"``, 
+                ``"f1"``, ``"f2"``, ``"f0_5"``, ``"p4"``, ``"phi"``,
+                ``"distinguishability"``, ``"match_weight"``.
 
         Returns:
             An Altair chart, or a list of dicts when ``output_type="table"``.
@@ -502,6 +508,23 @@ class MatchResult:
         if add_metrics is None:
             add_metrics = []
 
+        # Scatter plot uses individual match results
+        if output_type == "distinguishability_match_weight":
+            result = self.matches(all_columns=True).df()
+
+            records = (
+                result[["match_weight", "distinguishability", "unique_id"]]
+                .replace([float("inf"), float("-inf")], None)
+                .dropna()
+                .to_dict(orient="records")
+            )
+
+            chart_definition = build_distinguishability_match_weight_chart_definition(
+                records,
+            )
+            return render_chart_definition(chart_definition)
+
+        # Existing accuracy plots use aggregated threshold data
         records = self.accuracy_data(
             match_weight_round_to_nearest=match_weight_round_to_nearest,
         )
@@ -519,7 +542,7 @@ class MatchResult:
             return render_chart_definition(chart_definition)
         raise ValueError(
             "Invalid output_type. Allowed values are: "
-            "'threshold_selection', 'precision_recall', 'table'."
+            "'threshold_selection', 'precision_recall', 'distinguishability_match_weight', 'table'."
         )
 
     def _accuracy_table(
