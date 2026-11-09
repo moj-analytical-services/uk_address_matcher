@@ -9,6 +9,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     ROAD_FEATURE_COLUMNS,
+    add_road_blocking_features,
     add_top_1_road_features,
     derive_rightmost_numeric_position_sql,
     derive_top_1_road_keys,
@@ -442,6 +443,24 @@ def test_top_1_road_keys_reuse_equivalent_post_number_tails(duck_con):
     ).order("unique_id")
 
     assert keys.fetchall() == [("1", "HIGH STREET"), ("2", "HIGH STREET")]
+
+
+def test_road_blocking_preserves_rows_with_repeated_external_ids(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('same', 1, '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('same', 2, '14 OAK LANE', 'AB1 3CD', ['14'])
+        ) AS rows(
+            unique_id, ukam_address_id, clean_full_address, postcode, numeric_tokens
+        )
+    """)
+    result = add_road_blocking_features(
+        duck_con, source, roadlike_places=_catalogue_from_source(duck_con, source)
+    )
+
+    assert result.select("ukam_address_id, unique_id, road_1_norm").order(
+        "ukam_address_id"
+    ).fetchall() == [(1, "same", "HIGH STREET"), (2, "same", "OAK LANE")]
 
 
 @pytest.mark.parametrize("stored_ids", [False, True])

@@ -671,7 +671,8 @@ class TestPrepareDataForMatchingWithInvertedIndex:
 
         messy = duck_con.sql("""
             SELECT * FROM (VALUES
-                ('100', '9 LOVE LANE LONDON SW1A 1AA', 'SW1A 1AA')
+                ('100', '9 LOVE LANE LONDON SW1A 1AA', 'SW1A 1AA'),
+                ('100', '10 HIGH STREET OXFORD', 'OX1 1AA')
             ) AS t(unique_id, address_concat, postcode)
         """)
 
@@ -687,10 +688,17 @@ class TestPrepareDataForMatchingWithInvertedIndex:
 
         assert "exploding_unique_ids" in prepared_messy.columns
 
-        result = prepared_messy.select("exploding_unique_ids").fetchall()[0][0]
+        rows = (
+            prepared_messy.order("postcode")
+            .select("unique_id, exploding_unique_ids, signature_score_map")
+            .fetchall()
+        )
 
-        # Should contain canonical unique_id '1' (matching keys)
-        assert "1" in result
+        assert [(external_id, candidates) for external_id, candidates, _ in rows] == [
+            ("100", ["2"]),
+            ("100", ["1"]),
+        ]
+        assert [set(scores) for _, _, scores in rows] == [{"2"}, {"1"}]
 
     def test_prepare_data_without_inverted_index(self, duck_con):
         """Test data without inverted index gets [unique_id] as exploding_unique_ids."""

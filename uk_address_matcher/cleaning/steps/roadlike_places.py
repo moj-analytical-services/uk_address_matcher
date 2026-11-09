@@ -1144,9 +1144,15 @@ def add_road_blocking_features(
     """Attach the scalar road key used by the packaged blocker."""
     if "road_1_norm" in address_table.columns:
         return address_table
+    identity_column = (
+        "ukam_address_id" if "ukam_address_id" in address_table.columns else "unique_id"
+    )
+    road_input = address_table.select(
+        f"* EXCLUDE (unique_id), CAST({identity_column} AS VARCHAR) AS unique_id"
+    )
     road_keys = derive_top_1_road_keys(
         con,
-        address_table,
+        road_input,
         roadlike_places=roadlike_places,
         require_catalogue_support=require_catalogue_support,
     )
@@ -1154,7 +1160,7 @@ def add_road_blocking_features(
         SELECT input.*, road_keys.road_1_norm
         FROM ({address_table.sql_query()}) AS input
         LEFT JOIN ({road_keys.sql_query()}) AS road_keys
-            ON CAST(input.unique_id AS VARCHAR) = road_keys.unique_id
+            ON CAST(input.{identity_column} AS VARCHAR) = road_keys.unique_id
     """)
 
 

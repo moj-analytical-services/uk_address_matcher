@@ -173,7 +173,7 @@ def improve_predictions_using_distinguishing_tokens(
                     ) AS best
                 FROM df_predict
                 WHERE match_weight > {match_weight_threshold}
-                GROUP BY unique_id_l, unique_id_r
+                GROUP BY unique_id_l, unique_id_r, ukam_address_id_r
             )
             SELECT
                 unique_id_l,
@@ -207,7 +207,7 @@ def improve_predictions_using_distinguishing_tokens(
                         {candidate_search_depth}
                     ) AS candidates
                 FROM {good_match_keys_table}
-                GROUP BY unique_id_r
+                GROUP BY unique_id_r, ukam_address_id_r
             )
             SELECT
                 unique_id_r,
@@ -225,7 +225,7 @@ def improve_predictions_using_distinguishing_tokens(
              AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
             WHERE prediction.match_weight > {match_weight_threshold}
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+                PARTITION BY prediction.ukam_address_id_r, prediction.unique_id_l
                 ORDER BY
                     prediction.match_weight DESC,
                     prediction.ukam_address_id_r DESC,
@@ -282,7 +282,7 @@ def improve_predictions_using_distinguishing_tokens(
                 SELECT *
                 FROM {good_matches_table}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY unique_id_r
+                    PARTITION BY ukam_address_id_r
                     ORDER BY match_weight DESC, unique_id_l DESC
                 ) <= {top_n_matches}
             """).create(top_n_matches_table)

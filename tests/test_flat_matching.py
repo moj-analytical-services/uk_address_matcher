@@ -17,6 +17,8 @@ TEST_CASES = [
     ("m_flat_1", "FLAT 1 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
     ("m_flat_2", "FLAT 2 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
     ("m_flat_3", "FLAT 3 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", True),
+    ("m_fflat_2", "FFLAT 2 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
+    ("m_fflat_3", "FFLAT 3 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", True),
     # Combined number and letter
     ("m_flat_1a", "FLAT 1A 30 PARK LANE LONDON", "W1K 1BE", "c_flat_2b", False),
     # This one now scores around 16.8 because same-number/different-letter is a

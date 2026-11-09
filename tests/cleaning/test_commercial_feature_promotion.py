@@ -386,12 +386,7 @@ def test_packaged_settings_include_promoted_commercial_features():
         ]
         == 4.0
     )
-    assert (
-        numeric_context_levels["Numeric overlap with strong context (+1)"][
-            "m_probability"
-        ]
-        == 2.0
-    )
+    assert "Numeric overlap with strong context (+1)" not in numeric_context_levels
     assert (
         numeric_context_levels["Numeric conflict with strong context (-4)"][
             "m_probability"
@@ -404,7 +399,7 @@ def test_packaged_settings_include_promoted_commercial_features():
         for level in comparisons["address_structure_numeric_context"]["comparison_levels"]
         if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
     ]
-    assert len(numeric_context_conditions) == 3
+    assert len(numeric_context_conditions) == 2
     assert all(
         "numeric_tokens_r IS NOT NULL" in condition
         for condition in numeric_context_conditions

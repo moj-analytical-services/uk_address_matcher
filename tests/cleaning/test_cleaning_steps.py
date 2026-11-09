@@ -170,6 +170,7 @@ def test_parse_out_numbers_excludes_road_references():
                 ('1-3 FICTIONAL TEST ROAD C110S', NULL, ['1-3']),
                 ('UNIT A12 7 FICTIONAL TEST ROAD A96T', NULL, ['A12', '7']),
                 ('FLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
+                ('FFLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
                 ('FLAT A 12 8 FICTIONAL TEST ROAD A 952', NULL, ['12', '8']),
                 ('UNIT C4 FICTIONAL TEST ROAD A90T', NULL, ['C4']),
                 ('PLOT U123A 6 FICTIONAL TEST ROAD C110S', NULL, ['U123A', '6']),
@@ -191,7 +192,7 @@ def test_parse_out_numbers_excludes_road_references():
         """).fetchall()
             == []
         )
-        assert result.count("*").fetchall()[0][0] == 20
+        assert result.count("*").fetchall()[0][0] == 21
         assert "__numeric_token_address" not in result.columns
 
 
@@ -621,6 +622,7 @@ def test_parse_out_flat_positional():
     test_cases = [
         ("11A SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("FLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
+        ("FFLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("BASEMENT FLAT A 11 SPITFIRE COURT BIRMINGHAM", "BASEMENT", "A", None),
         (
             "BASEMENT FLAT 11 243 SPITFIRE COURT BIRMINGHAM",
@@ -635,6 +637,7 @@ def test_parse_out_flat_positional():
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
         ("FLAT 2 733 FICTIONAL ROAD", None, None, "2"),
+        ("FFLAT 2 733 FICTIONAL ROAD", None, None, "2"),
         (
             "2 7 FICTIONAL ROAD",
             None,
@@ -645,7 +648,9 @@ def test_parse_out_flat_positional():
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
         ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
+        ("FFLAT 3/2 41 DUMMY ROAD", None, None, "2"),
         ("FLAT THE CROWN TESTING ROAD", None, None, None),
+        ("FFLAT THE CROWN TESTING ROAD", None, None, None),
         (
             "FLAT 12A HIGH STREET",
             None,
@@ -679,6 +684,7 @@ def test_parse_out_flat_positional():
         ),
         # Floor-first single numbers remain ambiguous.
         ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
+        ("FIRST FLOOR FFLAT 120 TEST", "FIRST FLOOR", None, None),
         ("GROUND FLAT 4 HIGH STREET", None, None, None),
         # LOWER GROUND variants (canonicalised to GROUND FLOOR)
         ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
@@ -806,6 +812,7 @@ def test_parse_out_sub_premise_location():
         ("FLAT SECOND FLOOR CENTRE 5 MORESBY ROAD LONDON", "CENTRE"),
         ("FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON", "FRONT"),
         ("FLAT FIRST FLOOR REAR 176 LOWER CLAPTON ROAD LONDON", "REAR"),
+        ("FFLAT RIGHT MAIN ROAD", "RIGHT"),
         (
             "MAISONETTE BASEMENT AND GROUND FLOOR RIGHT 46 LANSDOWNE DRIVE LONDON",
             "RIGHT",
