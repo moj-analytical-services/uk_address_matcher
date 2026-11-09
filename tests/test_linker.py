@@ -1,7 +1,7 @@
 import math
 
 import pytest
-from splink import DuckDBAPI
+from splink import DuckDBAPI, SettingsCreator
 from splink.comparison_level_library import CustomLevel
 from splink.internals.testing import is_in_level
 
@@ -21,6 +21,55 @@ from uk_address_matcher.linking_model.splink_model import (
     _sanitise_null_comparison_levels,
 )
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
+
+
+@pytest.mark.parametrize(
+    "removed_level, expected",
+    [
+        (None, [35, -1, -1, 34, 33, 33, 34]),
+        (0, [-1, -1, -1, 34, 33, 33, 34]),
+        (2, [34, -1, -1, 33, 33, 33, 33]),
+    ],
+)
+def test_inline_histogram_keeps_guards_and_strict_thresholds(
+    duck_con, removed_level, expected
+):
+    histogram = next(
+        comparison
+        for comparison in _get_model_settings_dict()["comparisons"]
+        if comparison.get("output_column_name") == "token_rel_freq_arr_hist"
+    )
+    if removed_level is not None:
+        del histogram["comparison_levels"][removed_level]
+    settings = SettingsCreator(link_type="link_only", comparisons=[histogram])
+    case_statement = settings.get_settings("duckdb").comparisons[0]._case_statement
+    vectors = f"""
+        SELECT id, {case_statement}
+        FROM (
+            SELECT id, lk_eligible_r, postcode_l, postcode_r,
+                CASE WHEN left_present
+                    THEN map([struct_pack(rel_freq := frequency)], [1])
+                END AS token_rel_freq_arr_hist_l,
+                CASE WHEN right_present
+                    THEN map([struct_pack(rel_freq := frequency)], [1])
+                END AS token_rel_freq_arr_hist_r
+            FROM (VALUES
+                (1, true,  'AB1', 'AB1', false, false, 1e-29::DOUBLE),
+                (2, true,  'AB1', 'AB2', false, true,  1e-29::DOUBLE),
+                (3, false, 'AB1', 'AB1', true,  false, 1e-29::DOUBLE),
+                (4, false, 'AB1', 'AB1', true,  true,  1e-30::DOUBLE),
+                (5, false, 'AB1', 'AB1', true,  true,  1e-29::DOUBLE),
+                (6, false, 'AB1', 'AB1', true,  true,  1.1e-29::DOUBLE),
+                (7, true,  'AB1', NULL,  true,  true,  1e-30::DOUBLE)
+            ) AS t(id, lk_eligible_r, postcode_l, postcode_r,
+                   left_present, right_present, frequency)
+        )
+    """
+    assert [
+        gamma for _, gamma in duck_con.sql(vectors + " ORDER BY id").fetchall()
+    ] == expected
+    plan = duck_con.sql("EXPLAIN (FORMAT JSON) " + vectors).fetchone()[1]
+    assert plan.lower().count("list_reduce(") == 1
 
 
 @pytest.fixture
@@ -390,7 +439,7 @@ def test_packaged_address_model_uses_inline_address_signatures():
         for level in numeric_context["comparison_levels"]
         if "regexp_replace(regexp_replace(clean_full_address_l" in level["sql_condition"]
     ]
-    assert len(numeric_conditions) == 3
+    assert len(numeric_conditions) == 2
     assert all(
         "clean_full_address_numeric_context" not in condition
         for condition in numeric_conditions

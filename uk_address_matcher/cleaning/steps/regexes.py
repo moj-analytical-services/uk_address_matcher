@@ -19,8 +19,8 @@ def remove_multiple_spaces(input: str):
 
 def merge_split_flat_number(input: str):
     """Merge zero-padded split flat numbers such as ``FLAT 3 02 AT``."""
-    pattern = r"\bFLAT\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
-    return f"regexp_replace({input}, '{pattern}', 'FLAT \\1\\2 \\3', 'g')"
+    pattern = r"\b(F?FLAT)\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
+    return f"regexp_replace({input}, '{pattern}', '\\1 \\2\\3 \\4', 'g')"
 
 
 def standarise_num_dash_num(input: str):
