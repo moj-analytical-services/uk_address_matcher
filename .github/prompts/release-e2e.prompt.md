@@ -149,139 +149,60 @@ a controlled timing claim. Historical documentation timings are context, not a g
 Keep exactly two generated files in `docs/runtime/<target-release>/`: a self-contained
 aggregate-only `manifest.json` and `report.md` rendered from its values. Overwrite
 that version's pair on reruns, touching no other versions; remove obsolete split
-reports only after validating consolidation. Keep timestamps/run IDs in metadata
-and detailed/private artefacts under the ignored results root, not extra report files.
-Create JSON at the start and update after each step, including failures/incomplete
-states. Use structured JSON, stable field names/units and exact unrounded numbers.
+reports only after validating consolidation.
 
-Include top-level `schema_version`, `target_release`, `run_id`, `status`, `provenance`,
-`hardware`, `constraints`, `sampling`, `raw_conversion`, `preparation`, `datasets`,
-`assessment` and `documentation_update`: timestamps/errors/limitations, install and
-hardware provenance, commands/driver, effective constraints, canonical manifest,
-filters/options, timing boundaries and resource sampling/cleanup evidence.
-`preparation.stages` is ordered. `datasets` has all six runs with IDs/artefact paths,
-scope (`full`/`regional`), eligibility, total/initialisation/matching/reporting timings,
-resource peaks, `operating_points` and ordered `stages`. Stage records use
-`stage_ordinal`, `stage_name`, `metric_scope`, `elapsed_seconds`, input/output counts,
-`peak_rss_bytes`, `peak_spill_bytes` and applicable `operating_points`; preserve
-repeated names by ordinal. Inherit shared metadata; use `null` plus a reason for
-unavailable measurements. Store the resolved stage/model fingerprint and comparison
-timing provenance; keep full resolved settings and detailed benchmark artefacts private.
+Start from [manifest.template.json](../../docs/runtime/manifest.template.json).
+The shared manifest is a small summary, not a diagnostic log. Include only:
 
-Generate `report.md` in this order, filling the following template from the JSON:
+- `target_release`, installed `software_version`, and `status`.
+- `precleaning.canonical_rows` and `precleaning.e2e_seconds`: externally monitored
+  national preparation wall time including setup, writes and teardown, excluding
+  the separately measured raw OS conversion.
+- All six `datasets`, each with `eligible_rows`, `runtime_seconds` (benchmark
+  workflow time, excluding accuracy reporting and persistence), and three
+  `operating_points` for MW 8, 10 and 12.
+- Each operating point: `{match_weight, precision, recall, f1, tp, fp, unmatched}`.
+- Short `notes` only for material limitations, timing boundaries, cohort/filter
+  context, version mismatches and the performance-documentation decision.
 
-```markdown
-# Release Validation: <target-release>
+Use exact numbers, seconds and fractions in `[0,1]`; unavailable values are `null`
+with a short explanation in `notes`. Do not copy MW 10 outcomes into MW 8 if the
+run discarded candidates below MW 10. Mark those MW 8 results unavailable and the
+run incomplete; a genuine MW 8 evaluation requires retained candidates down to 8.
 
-Status: <passed/failed/incomplete>. Source: <commit>. Installed package: <version>.
-State explicitly if the report label differs from the installed package version.
+Keep all other evidence from sections 1-4 privately: commits, hashes, fingerprints,
+run IDs, timestamps, machine details, commands, file paths/names, resource samples,
+stage breakdowns, source/exclusion audits and diagnostic artefacts. Do not copy
+these into the shared pair, even as `private://` references or placeholders.
+Do not add security exceptions or suppressions to accommodate generated reports.
 
-## National Preparation
+Render a concise, human-readable `report.md` from the summary in this order:
 
-<Canonical rows, preparation/output chunks, memory limit and threads.>
+1. Release heading, installed software version and status; state version mismatches.
+2. National precleaning canonical count and E2E runtime.
+3. One MW 10 summary table: dataset, eligible count, runtime, precision, recall,
+   F1, TP, FP and unmatched.
+4. One MW 8/10/12 table per dataset: precision, recall, F1, TP, FP and unmatched.
+   Use readable headings in the order pooled councils, Hackney, Rhondda Cynon Taf,
+   Aberdeenshire, Mid Sussex and Gwynedd.
+5. Short notes and a relative link to `manifest.json`. No empty historical
+   comparison sections, dense curves, PR-AUC reports or diagnostic dumps.
 
-| Phase | Wall Time (s) | Sampled RSS (GB) | OS Peak RSS (GB) | Sampled Spill (GB) |
-| --- | ---: | ---: | ---: | ---: |
-| Raw OS conversion | ... | ... | ... | ... |
-| National preparation harness | ... | ... | ... | ... |
-
-| Preparation Stage | Seconds | Share of Call | Cumulative Seconds |
-| --- | ---: | ---: | ---: |
-| <one row per measured preparation stage> | ... | ... | ... |
-| Other uninstrumented work | ... | ... | ... |
-| Preparation Call Total | ... | 100.00% | ... |
-
-## Dataset Results
-
-### MW 10 Summary
-
-| Dataset | Precision | Recall | F1 | TP | FP | Unmatched | Workflow (s) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| <one row per dataset at MW 10> | ...% | ...% | ...% | ... | ... | ... | ... |
-
-### Version Comparison At MW 10
-
-<Include only after running the older version. Identify both exact versions/commits,
-canonical preparation and cohort differences; do not imply a controlled comparison
-when they differ. If unavailable, state that briefly instead of inventing results.>
-
-| Dataset | Older Precision | Main Precision | Difference (pp) | Older Recall | Main Recall | Difference (pp) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| <one row per comparable dataset> | ...% | ...% | ... | ...% | ...% | ... |
-
-### Workflow Runtime Comparison
-
-| Dataset | Older (s) | Current (s) | Difference (s) | Difference (%) |
-| --- | ---: | ---: | ---: | ---: |
-| <one row per dataset when baseline timings exist> | ... | ... | ... | ...% |
-
-### Source Foundational Precleaning Comparison
-
-| Dataset | Older (s) | Current (s) | Difference (s) | Difference (%) |
-| --- | ---: | ---: | ---: | ---: |
-| <one row per dataset; label log-derived intervals as approximate> | ... | ... | ... | ...% |
-
-### Matching Stage Runtime Comparison
-
-| Dataset / Stage | Older (s) | Current (s) | Difference (s) | Difference (%) |
-| --- | ---: | ---: | ---: | ---: |
-| <one row per pooled-councils execution stage only> | ... | ... | ... | ...% |
-
-### National Canonical Precleaning Comparison
-
-| Preparation Step | Older (s) | Current (s) | Difference (s) | Difference (%) |
-| --- | ---: | ---: | ---: | ---: |
-| <compare completed foundational cleaning/TF steps and full preparation where available> | ... | ... | ... | ...% |
-
-### Dataset Runtimes
-
-| Dataset | Workflow (s) | Match Pipeline (s) | Overall Harness (s) |
-| --- | ---: | ---: | ---: |
-| <one row per dataset, with timing boundaries explained above> | ... | ... | ... |
-
-## Accuracy Results: <target-release>
-
-### <dataset>
-
-<Canonical scope; source, eligible and excluded rows. Use readable dataset headings.>
-
-| MW | Precision | Recall | F1 | TP | FP | Unmatched |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | ...% | ...% | ...% | ... | ... | ... |
-| 10 | ...% | ...% | ...% | ... | ... | ... |
-| 12 | ...% | ...% | ...% | ... | ... | ... |
-
-<Repeat the dataset section for pooled_councils, hackney, rhondda,
-aberdeenshire, mid_sussex and gwynedd, in that order.>
-
-## Checks And Limitations
-
-<Validation outcome; exact loader/canonical exclusion rules and counts; records
-retained in the denominator; regional classification filters; baseline/cohort
-comparability; missing measurements; anomalies; documentation-update status;
-and a relative link to manifest.json.>
-```
-
-Display seconds/GB to three decimals, percentages to two, and integer counts with
-thousands separators; unavailable is never zero. Keep the report concise: no
-Spill Cleared column or explanatory timing/denominator paragraphs. Put eligibility
-rules under Checks And Limitations; retain short comparison/approximate-timing caveats.
-The matching-stage runtime comparison is pooled-only; JSON retains all six datasets'
-ordered stages. No dense curves or PR-AUC reports.
-
-Metric records use
-`{match_weight, scope, denominator_rows, matched, tp, fp, unmatched, precision, recall, f1}`.
-Use fractions in `[0,1]`, non-negative counts and one final outcome per eligible
-record. Reconcile `tp + fp + unmatched = denominator_rows`,
+Display seconds to three decimals, percentages to two, and integer counts with
+thousands separators; show `Unavailable` for nulls, never zero.
+Use one final outcome per eligible record and `eligible_rows` as the denominator.
+Reconcile `tp + fp + unmatched = denominator_rows`,
 `precision = tp / (tp + fp)`, `recall = tp / denominator_rows`,
 `f1 = 2 * precision * recall / (precision + recall)` and define zero-denominator
 handling. Wrong predictions also lose a true match: unmatched is not FN. Use
 existing accuracy/diagnostic tables without substituting curve denominators.
 
-Parse saved JSON and verify all six runs/every execution stage, MW 8/10/12 metrics,
-artefact references, release labels/provenance, effective constraints, resource
-evidence and privacy. Reconcile every Markdown value, rounding and cumulative time
-against JSON. Focused checks must validate any new driver and its rerun command.
+Verify all six runs, execution stages, constraints and resources against private
+evidence. Parse the shared summary and reconcile every Markdown value and rounding
+against it. Check the template's field set and exclude diagnostic metadata.
+Run the repository's secret checker on both reports before proposing a commit;
+if its tools are unavailable, install the pinned security tools or report the check
+as blocked, never claim it passed. Focused checks must validate any new driver.
 Apply user-supplied regression budgets; otherwise report regressions without invented
 pass thresholds. Execution success is not an accuracy guarantee.
 
@@ -305,13 +226,14 @@ Otherwise update [performance.md](../../docs/site/performance.md) as the final s
   update short Aberdeenshire/Gwynedd council sections in the existing style, without
   scripts, postcode-less sections or essays. Label old curves as historical or
   replace them with three-point summaries; do not imply suppression examples ran.
-- Use approximate whole-second council runtimes, retaining exact boundaries in JSON;
-  if repeated, report the median and retain all repetitions. Reuse existing layout/
+- Use approximate whole-second council runtimes, retaining exact timing boundaries
+  privately; if repeated, report the median and retain all repetitions privately. Reuse existing layout/
   filter patterns, briefly correct stale Mid Sussex raw-relation/local-TF claims,
   and add at most one manifest link. No unrelated edits or mixed-run measurements.
 
-Validate the documentation diff, tables and rounding against JSON; record
-`documentation_update` as `updated`/`withheld` with reason/paths. Finish with a compact
-dataset/stage summary, report/driver links, activation/documentation status and
-passed/failed/incomplete conclusion. Never claim an end-to-end pass with failed or
+Validate the documentation diff, tables and rounding against JSON; record the
+documentation decision with a brief reason in `notes`, keeping detailed review
+evidence private. Finish with a compact dataset summary, report links,
+activation/documentation status and passed/failed/incomplete conclusion.
+Never claim an end-to-end pass with failed or
 skipped required work, invalid metrics, missing overall measurements or failed checks.

@@ -39,16 +39,19 @@ The check covers:
 
 Save exactly two sanitised reports under `docs/runtime/<target-release>/`,
 replacing that version's pair on a rerun: a self-contained `manifest.json` and a
-readable `report.md` generated from its values. Keep timestamps in the reports,
-not directory names. The JSON contains provenance, constraints, exact statistics
-and ordered preparation/matching-stage arrays, without separate stage files.
-The Markdown follows the prompt's template: national preparation timings and
-resources, a dataset runtime table, and MW 8/10/12 precision, recall, F1, TP, FP
-and unmatched tables for all six datasets. Keep exact values and consistent units
-in the JSON so it can also support charts across releases.
+readable `report.md` generated from its values. Start from
+[manifest.template.json](../runtime/manifest.template.json). The JSON contains only
+the release label, installed software version, status, national precleaning count
+and E2E runtime, eligible counts and matching runtimes, MW 8/10/12 precision,
+recall, F1, TP, FP and unmatched for all six datasets, and short limitation notes.
+Keep exact values and consistent units. The Markdown presents these results as
+concise tables, not a diagnostic log.
 
-Keep failed-run evidence too. Do not store addresses, credentials or private
-paths in these reports; detailed private artefacts stay outside the shared docs.
+Keep detailed and failed-run evidence privately, including commits, fingerprints,
+timestamps, hardware, stage timings, resource samples and artefact references.
+Do not include these, addresses, credentials or private paths in shared reports.
+Run the repository secret checker before proposing report commits; do not add
+scanner exceptions for generated metadata.
 
 ## Consequences
 
