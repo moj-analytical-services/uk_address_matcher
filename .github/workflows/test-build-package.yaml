@@ -63,7 +63,7 @@ jobs:
         run: |
           uv venv .venv-wheeltest -p 3.10 --clear
           uv pip install --python .venv-wheeltest/bin/python dist/*.whl
-          .venv-wheeltest/bin/python -c "from uk_address_matcher.labelling.server import _static_root; assert (_static_root() / 'index.html').is_file()"
+          .venv-wheeltest/bin/python -I -c "from uk_address_matcher.labelling.server import _static_root; assert (_static_root() / 'index.html').is_file()"
 
       - name: Upload verified distributions
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
