@@ -2,14 +2,23 @@
   "target_release": null,
   "software_version": null,
   "status": "incomplete",
-  "precleaning": {"canonical_rows": null, "e2e_seconds": null},
+  "raw_conversion": {"e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null},
+  "precleaning": {"software_version": null, "canonical_rows": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": []},
   "datasets": {
-    "pooled_councils": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
-    "hackney": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
-    "rhondda": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
-    "aberdeenshire": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
-    "mid_sussex": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
-    "gwynedd": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []}
+    "pooled_councils": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "hackney": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "rhondda": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "aberdeenshire": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "mid_sussex": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "gwynedd": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []}
+  },
+  "postcodeless_datasets": {
+    "pooled_councils": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "hackney": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "rhondda": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "aberdeenshire": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "mid_sussex": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []},
+    "gwynedd": {"eligible_rows": null, "runtime_seconds": null, "e2e_seconds": null, "sampled_peak_rss_bytes": null, "os_peak_rss_bytes": null, "sampled_peak_spill_bytes": null, "final_spill_bytes": null, "stages": [], "operating_points": []}
   },
   "notes": []
 }
