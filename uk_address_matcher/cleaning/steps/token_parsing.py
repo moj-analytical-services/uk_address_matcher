@@ -113,6 +113,7 @@ _DISTINGUISHING_MARKER_VALUES = (
     "LOCK",
     "LOCKUP",
     "CONTAINER",
+    "FFLAT",
     "FLAT",
 )
 
@@ -345,7 +346,7 @@ def _parse_out_flat_position_and_letter():
     Robustly extracts flat positions, letters, and numbers from address strings.
 
     Strategy:
-      - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
+            - Detect a 'flat signal' (FLAT/FFLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
       - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
     - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
@@ -393,8 +394,14 @@ def _parse_out_flat_position_and_letter():
         + multi_floor_pattern
         + r")\b"
     )
+    flat_marker = r"F?FLAT"
+    explicit_flat_pattern = rf"\b{flat_marker}\b"
     floor_first_address_pattern = (
-        r"^\s*(?:" + floor_positions + "|" + "|".join(floor_with_suffix) + r")\s+FLAT\b"
+        r"^\s*(?:"
+        + floor_positions
+        + "|"
+        + "|".join(floor_with_suffix)
+        + rf")\s+{explicit_flat_pattern}"
     )
     leading_bare_floor_position = (
         r"^\s*(GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
@@ -408,19 +415,17 @@ def _parse_out_flat_position_and_letter():
     # Match all numbers (standalone digits, not part of ranges like 120-122)
     count_numbers = r"\b(\d{1,5})\b"
 
-    flat_num_after_flat = (
-        r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/]|$)"  # FLAT 12 / FLAT 12A / FLAT 12/2
-    )
+    flat_num_after_flat = rf"{explicit_flat_pattern}\s+(\d{{1,4}})(?:\s|[A-Za-z/]|$)"
     flat_letter_after_num_after_flat = (
-        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+        rf"{explicit_flat_pattern}\s+\d{{1,4}}\s*([A-Za-z])\b"
     )
-    flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
+    flat_letter_after_flat = rf"{explicit_flat_pattern}\s+([A-Za-z])\b"
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
-    scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
+    scottish_flat = rf"{explicit_flat_pattern}\s+(\d+)\s*/\s*(\d+)\b"
     address_for_parsing = _address_for_parsing("input.clean_full_address")
-    flat_number_delimiter_pattern = r"\bFLAT\s*[,;]\s*\d"
+    flat_number_delimiter_pattern = rf"{explicit_flat_pattern}\s*[,;]\s*\d"
 
     final_base_sql = f"""
     SELECT
@@ -565,7 +570,9 @@ def _parse_out_flat_position_and_letter():
             )
             ELSE NULL
         END AS flat_number,
-        regexp_matches(i.clean_full_address, '\\bFLAT\\b') AS __has_explicit_flat
+        regexp_matches(
+            i.clean_full_address, '{explicit_flat_pattern}'
+        ) AS __has_explicit_flat
     FROM (
         SELECT
             input.* EXCLUDE (clean_full_address),
@@ -661,6 +668,7 @@ def _parse_out_sub_premise_location():
                 OR flat_letter IS NOT NULL
                 OR flat_number IS NOT NULL
                 OR list_contains(clean_full_address_tokens, 'FLAT')
+                OR list_contains(clean_full_address_tokens, 'FFLAT')
                 OR list_contains(clean_full_address_tokens, 'MAISONETTE')
             ) THEN NULL
             WHEN list_contains(sub_premise_location_prefix_tokens, 'RIGHT')
@@ -788,7 +796,7 @@ def _parse_out_numbers():
         r"\b"  # Word boundary
     )
     road_code_pattern = (
-        r"\b((?:FLAT|APARTMENT|UNIT|SUITE|OFFICE|ROOM|BUILDING|BLOCK|PLOT|GARAGE|BAY|"
+        r"\b((?:F?FLAT|APARTMENT|UNIT|SUITE|OFFICE|ROOM|BUILDING|BLOCK|PLOT|GARAGE|BAY|"
         r"SHOP|FLOOR|LEVEL|WORKSHOP|WAREHOUSE|STUDIO|CONTAINER|PLATFORM|MAST|YARD|"
         r"PARKING SPACE)\s+[ABCU]\s*\d+[A-Z]?)\b"
         r"|\b[ABCU]\s*\d+[A-Z]?\b"
