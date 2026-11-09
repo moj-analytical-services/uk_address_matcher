@@ -11,8 +11,25 @@ from benchmarking.config.datasets import (
 )
 from benchmarking.insights.diagnostics import build_dataset_diagnostics
 from benchmarking.insights.reporting import print_benchmark_summary, print_diagnostics
+from benchmarking.insights.summary import fetch_overall_summary
 from benchmarking.insights.types import BenchmarkOutputOptions
 from benchmarking.runner import BenchmarkRunResult, resolve_dataset_selection
+
+
+def test_fetch_overall_summary_selects_overall_and_rejects_missing_row() -> None:
+    with duckdb.connect() as connection:
+        accuracy = connection.sql(
+            "SELECT * FROM (VALUES "
+            "('exact', 4, 4, 1.0, 0.4), ('overall', 5, 4, 0.8, 0.4)"
+            ") AS accuracy(stage, rows_matched_in_stage, correct_matches, precision, recall)"
+        )
+        assert fetch_overall_summary(connection, accuracy, total_input_rows=10) == (
+            10, 5, 4, 0.8, 0.4
+        )
+        with pytest.raises(ValueError, match="Expected an overall row"):
+            fetch_overall_summary(
+                connection, accuracy.filter("stage != 'overall'"), total_input_rows=10
+            )
 
 
 def test_resolve_dataset_selection_all() -> None:
