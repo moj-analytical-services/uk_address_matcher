@@ -7,24 +7,7 @@
 71,438,939 canonical rows; E2E runtime **570.039 seconds** (9 min 30 sec).
 Reused `1.5.3` preparation measurements; precleaning was not rerun.
 
-## Resource Usage
-
-| Job | E2E (s) | Sampled peak RSS (GB) | OS peak RSS (GB) | Sampled peak spill (GB) | Final spill (GB) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Raw OS conversion (reused) | 40.878 | 9.351 | 9.431 | 0.000 | 0.000 |
-| National precleaning (reused) | 570.039 | 15.191 | 15.188 | 43.130 | 0.000 |
-| Pooled councils (supplied) | 81.315 | 13.595 | 13.663 | 4.033 | 0.000 |
-| Hackney (supplied) | 25.315 | 7.074 | 7.075 | 0.000 | 0.000 |
-| Rhondda Cynon Taf (supplied) | 24.303 | 7.419 | 7.644 | 0.000 | 0.000 |
-| Aberdeenshire (supplied) | 18.221 | 6.665 | 6.696 | 0.000 | 0.000 |
-| Mid Sussex (supplied) | 11.132 | 5.007 | 5.008 | 0.000 | 0.000 |
-| Gwynedd (supplied) | 17.227 | 6.129 | 6.131 | 0.000 | 0.000 |
-| Pooled councils (postcode-less) | 104.741 | 14.981 | 14.995 | 14.541 | 0.000 |
-| Hackney (postcode-less) | 25.322 | 6.691 | 6.691 | 0.000 | 0.000 |
-| Rhondda Cynon Taf (postcode-less) | 25.307 | 7.246 | 7.345 | 0.000 | 0.000 |
-| Aberdeenshire (postcode-less) | 25.329 | 7.688 | 7.689 | 0.000 | 0.000 |
-| Mid Sussex (postcode-less) | 10.131 | 4.934 | 4.936 | 0.000 | 0.000 |
-| Gwynedd (postcode-less) | 19.252 | 6.278 | 6.279 | 0.000 | 0.000 |
+Sampled peak RSS **15.191 GB**; sampled peak allocated spill **43.130 GB**; final spill **0.000 GB**.
 
 ### Precleaning Stages
 
@@ -39,6 +22,17 @@ Reused `1.5.3` preparation measurements; precleaning was not rerun.
 | Canonical-address write | 116.369 | 12.191 | 43.130 |
 | Manifest finalisation | 1.577 | 7.691 | 38.841 |
 | Other preparation work | 12.530 | Unavailable | Unavailable |
+
+## Resource Usage
+
+Pooled councils against the full national canonical.
+
+| Mode | Sampled peak RSS (GB) | Sampled peak spill (GB) |
+| --- | ---: | ---: |
+| Supplied postcodes | 13.595 | 4.033 |
+| Postcode-less | 14.981 | 14.541 |
+
+Both runs finished with zero spill remaining.
 
 ## Supplied Postcodes
 
