@@ -3230,7 +3230,7 @@ wheels = [
 
 [[package]]
 name = "uk-address-matcher"
-version = "1.5.3"
+version = "1.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },

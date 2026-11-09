@@ -1,0 +1,15 @@
+{
+  "target_release": null,
+  "software_version": null,
+  "status": "incomplete",
+  "precleaning": {"canonical_rows": null, "e2e_seconds": null},
+  "datasets": {
+    "pooled_councils": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
+    "hackney": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
+    "rhondda": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
+    "aberdeenshire": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
+    "mid_sussex": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []},
+    "gwynedd": {"eligible_rows": null, "runtime_seconds": null, "operating_points": []}
+  },
+  "notes": []
+}

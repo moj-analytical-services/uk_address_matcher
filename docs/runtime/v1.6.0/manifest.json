@@ -1,0 +1,218 @@
+{
+  "target_release": "v1.6.0",
+  "software_version": "1.5.3",
+  "status": "incomplete",
+  "precleaning": {
+    "canonical_rows": 71438939,
+    "e2e_seconds": 570.0391771249706
+  },
+  "datasets": {
+    "pooled_councils": {
+      "eligible_rows": 348284,
+      "runtime_seconds": 67.80109262501355,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9890888873444993,
+          "recall": 0.9807168862192923,
+          "f1": 0.9848850955854791,
+          "tp": 341568,
+          "fp": 3768,
+          "unmatched": 2948
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9898510774879238,
+          "recall": 0.9784514936086642,
+          "f1": 0.9841182747412849,
+          "tp": 340779,
+          "fp": 3494,
+          "unmatched": 4011
+        }
+      ]
+    },
+    "hackney": {
+      "eligible_rows": 113837,
+      "runtime_seconds": 21.72742912499234,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9971834457021141,
+          "recall": 0.9952300218733804,
+          "f1": 0.9962057761891573,
+          "tp": 113294,
+          "fp": 320,
+          "unmatched": 223
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9973306786947636,
+          "recall": 0.9944833402145172,
+          "f1": 0.9959049742906281,
+          "tp": 113209,
+          "fp": 303,
+          "unmatched": 325
+        }
+      ]
+    },
+    "rhondda": {
+      "eligible_rows": 111247,
+      "runtime_seconds": 20.84903783397749,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9913018107551196,
+          "recall": 0.9773207367389682,
+          "f1": 0.9842616272490665,
+          "tp": 108724,
+          "fp": 954,
+          "unmatched": 1569
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9923138862455164,
+          "recall": 0.9748397709601158,
+          "f1": 0.9834992178112317,
+          "tp": 108448,
+          "fp": 840,
+          "unmatched": 1959
+        }
+      ]
+    },
+    "aberdeenshire": {
+      "eligible_rows": 122301,
+      "runtime_seconds": 14.78582120797364,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9917377157214053,
+          "recall": 0.9843909698203612,
+          "f1": 0.9880506861007156,
+          "tp": 120392,
+          "fp": 1003,
+          "unmatched": 906
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9923402007395669,
+          "recall": 0.9830173097521688,
+          "f1": 0.9876567551026275,
+          "tp": 120224,
+          "fp": 928,
+          "unmatched": 1149
+        }
+      ]
+    },
+    "mid_sussex": {
+      "eligible_rows": 3717,
+      "runtime_seconds": 7.441991208004765,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.965405085748078,
+          "recall": 0.878396556362658,
+          "f1": 0.919847865896605,
+          "tp": 3265,
+          "fp": 117,
+          "unmatched": 335
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9688622754491018,
+          "recall": 0.8705945655098197,
+          "f1": 0.9171035850928156,
+          "tp": 3236,
+          "fp": 104,
+          "unmatched": 377
+        }
+      ]
+    },
+    "gwynedd": {
+      "eligible_rows": 62103,
+      "runtime_seconds": 14.119654208014254,
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "tp": null,
+          "fp": null,
+          "unmatched": null
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9795260600190377,
+          "recall": 0.9444793327214466,
+          "f1": 0.961683499475341,
+          "tp": 58655,
+          "fp": 1226,
+          "unmatched": 2222
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9805940859764177,
+          "recall": 0.9414037969180233,
+          "f1": 0.9605993887811771,
+          "tp": 58464,
+          "fp": 1157,
+          "unmatched": 2482
+        }
+      ]
+    }
+  },
+  "notes": [
+    "Target v1.6.0 was tested using package 1.5.3 from a modified checkout, not a v1.6.0 release artifact.",
+    "Precleaning E2E is the monitored national preparation process, including setup and teardown; raw OS conversion is excluded.",
+    "Matching runtime is the benchmark workflow time, excluding accuracy reporting and persistence; one run per dataset.",
+    "MW 8 is unavailable: the runs retained candidates only down to MW 10. The earlier MW 8 figures repeated MW 10 and were not valid MW 8 measurements.",
+    "Pooled councils used the full national canonical; other datasets used regional residential filters, except Mid Sussex commercial.",
+    "Missing postcodes were retained. Missing labels and labels absent from the selected canonical were excluded; eligible rows are the accuracy denominator.",
+    "Rejected-row accounting and differences from historical derived counts remain unresolved. Performance documentation is unchanged."
+  ]
+}
