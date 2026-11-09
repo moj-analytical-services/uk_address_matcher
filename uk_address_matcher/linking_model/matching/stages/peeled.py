@@ -37,6 +37,7 @@ class PeeledAddressStage(MatchingStage):
     Set ``inward_postcode_levenshtein`` to a positive integer to enable the
     optional inward postcode phase; the default ``0`` skips it.
     Cross-postcode matches require a unique entity within the postcode district.
+    Exact-postcode matches also require one distinct canonical entity.
 
     Example:
         ``"100 Test Street Hackney London"`` can match
@@ -46,7 +47,6 @@ class PeeledAddressStage(MatchingStage):
 
     enable_whitespace_punctuation_stripping: bool = True
     inward_postcode_levenshtein: int = 0
-    require_unique_match: bool = False
 
     def __post_init__(self) -> None:
         _validate_inward_postcode_levenshtein(self.inward_postcode_levenshtein)
@@ -75,7 +75,6 @@ class PeeledAddressStage(MatchingStage):
                         self.enable_whitespace_punctuation_stripping
                     ),
                     inward_postcode_levenshtein=self.inward_postcode_levenshtein,
-                    require_unique_match=self.require_unique_match,
                 ),
             ],
             stage_name=stage_name,
@@ -100,7 +99,6 @@ def _peeled_address_matches(
     *,
     enable_whitespace_punctuation_stripping: bool = True,
     inward_postcode_levenshtein: int = 0,
-    require_unique_match: bool = False,
 ) -> list[CTEStep]:
     """Find matches using peeled addresses (after removing common UK end tokens).
 
@@ -223,21 +221,12 @@ def _peeled_address_matches(
         WHERE messy.did_peel OR canon.did_peel
     """
 
-    peeled_candidate_source = "peeled_address_candidates"
-    unique_steps = []
-    if require_unique_match:
-        unique_steps = [
-            CTEStep(
-                "unique_peeled_candidates",
-                """
-            SELECT * FROM {peeled_address_candidates}
-            QUALIFY count(DISTINCT resolved_canonical_id)
-                OVER (PARTITION BY ukam_address_id) = 1
-        """,
-            )
-        ]
-        peeled_candidate_source = "unique_peeled_candidates"
-    ranked_peeled_candidates_sql = f"""
+    unique_peeled_candidates_sql = """
+        SELECT * FROM {peeled_address_candidates}
+        QUALIFY count(DISTINCT resolved_canonical_id)
+            OVER (PARTITION BY ukam_address_id) = 1
+        """
+    ranked_peeled_candidates_sql = """
         SELECT
             candidates.ukam_address_id,
             candidates.canonical_ukam_address_id,
@@ -249,7 +238,7 @@ def _peeled_address_matches(
                     candidates.match_priority,
                     candidates.canonical_ukam_address_id
             ) AS rn
-        FROM {{{peeled_candidate_source}}} AS candidates
+        FROM {unique_peeled_candidates} AS candidates
     """
 
     pre_stripped_matches_sql = """
@@ -266,7 +255,7 @@ def _peeled_address_matches(
         CTEStep("messy_peeled", messy_peeled_sql),
         CTEStep("canonical_peeled", canonical_peeled_sql),
         CTEStep("peeled_address_candidates", peeled_candidates_sql),
-        *unique_steps,
+        CTEStep("unique_peeled_candidates", unique_peeled_candidates_sql),
         CTEStep("ranked_peeled_candidates", ranked_peeled_candidates_sql),
         CTEStep("pre_stripped_matches", pre_stripped_matches_sql),
     ]
@@ -335,15 +324,14 @@ def _peeled_address_matches(
             )
         """
 
-        if require_unique_match:
-            stripped_candidates_sql += """
-                QUALIFY count(DISTINCT canon.canonical_unique_id)
-                    OVER (PARTITION BY messy.ukam_address_id) = 1
-                    AND row_number() OVER (
-                        PARTITION BY messy.ukam_address_id
-                        ORDER BY canon.canonical_ukam_address_id
-                    ) = 1
-            """
+        stripped_candidates_sql += """
+            QUALIFY count(DISTINCT canon.canonical_unique_id)
+                OVER (PARTITION BY messy.ukam_address_id) = 1
+                AND row_number() OVER (
+                    PARTITION BY messy.ukam_address_id
+                    ORDER BY canon.canonical_ukam_address_id
+                ) = 1
+        """
 
         steps.extend(
             [

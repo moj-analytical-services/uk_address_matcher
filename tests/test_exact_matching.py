@@ -94,19 +94,13 @@ def test_peeled_district_rescue_guards(duck_con, rescue_data):
     ]
 
 
-def test_peeled_zero_cap_preserves_optional_uniqueness(duck_con, rescue_data):
+def test_peeled_zero_cap_rejects_multiple_entities_by_default(duck_con, rescue_data):
     source, canonical = rescue_data
     source.select("* REPLACE ('ZZ1 1AB' AS postcode)").create("zero_cap_sources")
-    for unique, expected in [(False, [("1004",)]), (True, [])]:
-        matched = PeeledAddressStage(require_unique_match=unique).find_matches(
-            duck_con, "zero_cap", duck_con.table("zero_cap_sources"), canonical
-        )
-        assert (
-            matched.filter("ukam_address_id = 4")
-            .select("resolved_canonical_id")
-            .fetchall()
-            == expected
-        )
+    matched = PeeledAddressStage().find_matches(
+        duck_con, "zero_cap", duck_con.table("zero_cap_sources"), canonical
+    )
+    assert matched.filter("ukam_address_id = 4").fetchall() == []
 
 
 @pytest.fixture
@@ -1131,7 +1125,7 @@ def test_inward_postcode_levenshtein_requires_non_negative_integer(stage, value)
         stage(inward_postcode_levenshtein=value)
 
 
-def test_exact_matching_can_reject_multiple_canonical_entities(duck_con):
+def test_exact_matching_rejects_multiple_canonical_entities_by_default(duck_con):
     df_messy = _address_relation_from_values(duck_con, NO_WS_MESSY_ROW_SQL)
     df_canonical = _address_relation_from_values(
         duck_con,
@@ -1160,7 +1154,7 @@ def test_exact_matching_can_reject_multiple_canonical_entities(duck_con):
         con=duck_con,
         df_messy_clean=df_messy,
         df_canonical_clean=df_canonical,
-        stages=[ExactMatchStage(require_unique_match=True)],
+        stages=[ExactMatchStage()],
     )
 
     assert results.fetchdf()["resolved_canonical_id"].isna().all()
