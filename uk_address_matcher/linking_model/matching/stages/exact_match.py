@@ -222,7 +222,7 @@ def _exact_matches(
             CASE
                 WHEN contains(base.clean_full_address, 'FLAT')
                 THEN regexp_replace(
-                    base.clean_full_address, '\bFLAT\b|\s+', '', 'g'
+                    base.clean_full_address, '\bF?FLAT\b|\s+', '', 'g'
                 )
                 ELSE base.clean_full_address_no_ws
             END AS clean_full_address_no_flat_no_ws"""
