@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+
 from dev_scripts.check_secrets import main
 from security import check_security_policy
 from security.check_security_policy import is_security_maintainer, protected_changes
@@ -65,11 +66,7 @@ def test_secrets_check_requires_maintained_baseline(tmp_path: Path) -> None:
         "frontend/labelling/package-lock.json",
         "frontend/labelling/vite.config.js",
         "frontend/labelling/.npmrc",
-        "scripts/release.py",
-        "scripts/prepare-release.sh",
         "tests/test_release_process.py",
-        ".github/release-candidate.json",
-        ".github/release-publish.json",
     ],
 )
 def test_policy_protects_security_controls(filename: str) -> None:
@@ -458,7 +455,6 @@ def test_workflows_enforce_actions_security_policy(workflow_path: Path) -> None:
     allowed_writes = {
         ("docs.yml", "deploy"): {"pages", "id-token"},
         ("pypi-release.yaml", "publish"): {"id-token"},
-        ("pypi-release.yaml", "finalise"): {"contents"},
         ("edge_cases_publish_comment.yml", "comment"): {"pull-requests"},
     }
     for name, job in workflow["jobs"].items():
@@ -644,41 +640,27 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     workflow = yaml.load(
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
-    assert set(workflow["on"]) == {"push"}
-    assert workflow["on"]["push"] == {
-        "branches": ["main", "build/**"],
-        "paths": [".github/release-publish.json"],
-    }
-    assert workflow["concurrency"]["group"] == "publish-draft-release"
+    assert workflow["on"] == {"release": {"types": ["published"]}}
     assert workflow["concurrency"]["cancel-in-progress"] == "false"
     job = workflow["jobs"]["publish"]
-    assert set(workflow["jobs"]) == {"inspect", "publish", "finalise"}
-    assert job["needs"] == "inspect"
+    assert set(workflow["jobs"]) == {"publish"}
     assert job["environment"]["name"] == "release"
     assert job["permissions"] == {
         "contents": "read",
         "actions": "read",
         "id-token": "write",
     }
-    inspect = workflow["jobs"]["inspect"]
-    assert inspect["if"] == (
-        "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')"
-    )
+    assert job["if"] == "github.event.release.draft == false"
     steps = job["steps"]
-    assert "publish-check" in steps[-2]["run"]
+    assert steps[1]["with"]["run-id"] == "${{ steps.candidate.outputs.run_id }}"
+    assert "head_sha: context.sha" in steps[0]["with"]["script"]
+    assert not any("actions/checkout@" in step.get("uses", "") for step in steps)
     assert steps[-1]["run"] == (
         "uv publish --trusted-publishing always "
         "--check-url https://pypi.org/simple/ dist/*"
     )
-    finalise = workflow["jobs"]["finalise"]
-    assert set(finalise["needs"]) == {"inspect", "publish"}
-    assert "if" not in finalise
-    assert finalise["permissions"] == {"contents": "write", "actions": "read"}
-    for candidate in (job, finalise):
-        assert (
-            candidate["env"]["MANIFEST_ID"]
-            == "${{ needs.inspect.outputs.manifest_id }}"
-        )
+    for candidate in workflow["jobs"].values():
+        assert candidate["permissions"]["contents"] == "read"
         assert not any("build" in step.get("run", "") for step in candidate["steps"])
 
 
@@ -687,11 +669,7 @@ def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
     candidate = yaml.load(
         (directory / "release-candidate.yml").read_text(), Loader=yaml.BaseLoader
     )
-    assert set(candidate["on"]) == {"push"}
-    assert candidate["on"]["push"] == {
-        "branches": ["main", "build/**"],
-        "paths": [".github/release-candidate.json"],
-    }
+    assert set(candidate["on"]) == {"workflow_dispatch"}
     assert candidate["jobs"]["proposal"]["if"] == (
         "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')"
     )
@@ -699,17 +677,13 @@ def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
         "${{ steps.proposal.outputs.target_sha }}"
     )
     gates = {"run-pytest", "test-build-package", "test-labelling", "security"}
-    assert set(candidate["jobs"]["verified"]["needs"]) == gates
+    assert set(candidate["jobs"]["verified"]["needs"]) == gates | {"proposal"}
     assert candidate["jobs"]["verified"]["if"] == "always()"
-    assert candidate["jobs"]["verified"]["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-    }
+    assert candidate["jobs"]["verified"]["permissions"] == {}
+    assert "scripts/release.py" not in str(candidate)
     for name in gates:
         job = candidate["jobs"][name]
-        assert job["with"] == {
-            "target_sha": "${{ needs.proposal.outputs.target_sha }}"
-        }
+        assert job["with"] == {"target_sha": "${{ needs.proposal.outputs.target_sha }}"}
         workflow = yaml.load(
             (directory / job["uses"].split("/")[-1]).read_text(), Loader=yaml.BaseLoader
         )
