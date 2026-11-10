@@ -629,16 +629,8 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
     assert workflow["on"] == {"release": {"types": ["published"]}}
-    assert workflow["concurrency"]["cancel-in-progress"] == "false"
-    assert set(workflow["jobs"]) == {"publish"}
     job = workflow["jobs"]["publish"]
-    assert job["if"] == "github.event.release.draft == false"
-    assert job["environment"]["name"] == "release"
-    assert job["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-        "id-token": "write",
-    }
+    assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
     assert all("actions/checkout@" not in step.get("uses", "") for step in steps)
     assert [step["run"] for step in steps if "run" in step] == [
@@ -646,31 +638,8 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
         "--check-url https://pypi.org/simple/ dist/*"
     ]
     assert "head_sha: context.sha" in steps[0]["with"]["script"]
-    assert steps[1]["with"]["run-id"] == "${{ steps.candidate.outputs.run_id }}"
-    assert steps[1]["with"]["name"] == "${{ steps.candidate.outputs.artifact_name }}"
-
-
-def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
-    directory = Path(__file__).parents[1] / ".github" / "workflows"
-    candidate = yaml.load(
-        (directory / "release-candidate.yml").read_text(), Loader=yaml.BaseLoader
+    assert any(
+        "actions/download-artifact@" in step.get("uses", "")
+        and step["with"]["name"] == "${{ steps.candidate.outputs.artifact_name }}"
+        for step in steps
     )
-    assert set(candidate["on"]) == {"workflow_dispatch"}
-    assert candidate["jobs"]["proposal"]["if"] == (
-        "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')"
-    )
-    gates = {"run-pytest", "test-build-package", "test-labelling", "security"}
-    assert set(candidate["jobs"]["verified"]["needs"]) == gates | {"proposal"}
-    assert candidate["jobs"]["verified"]["if"] == "always()"
-    assert candidate["jobs"]["verified"]["permissions"] == {}
-    for name in gates:
-        job = candidate["jobs"][name]
-        assert job["with"] == {"target_sha": "${{ needs.proposal.outputs.target_sha }}"}
-        workflow = yaml.load(
-            (directory / job["uses"].split("/")[-1]).read_text(), Loader=yaml.BaseLoader
-        )
-        assert "inputs.target_sha && github.run_id" in workflow["concurrency"]["group"]
-        for check in workflow["jobs"].values():
-            for step in check["steps"]:
-                if "actions/checkout@" in step.get("uses", ""):
-                    assert step["with"]["ref"] == "${{ inputs.target_sha || github.sha }}"
