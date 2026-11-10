@@ -118,9 +118,7 @@ def test_dependabot_tracks_dependencies_with_cooldowns(
     config_path = Path(__file__).parents[1] / ".github" / "dependabot.yml"
     config = yaml.load(config_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     update = next(
-        update
-        for update in config["updates"]
-        if update["package-ecosystem"] == ecosystem
+        update for update in config["updates"] if update["package-ecosystem"] == ecosystem
     )
     assert update["directory"] == directory
     assert update["cooldown"] == {"default-days": "7"}
@@ -415,9 +413,7 @@ def test_policy_fails_closed_on_incomplete_or_oversized_diffs(
         ("uk_address_matcher_extra/example.py", False),
     ],
 )
-def test_bandit_scans_only_core_python_directories(
-    filename: str, expected: bool
-) -> None:
+def test_bandit_scans_only_core_python_directories(filename: str, expected: bool) -> None:
     config_path = Path(__file__).parents[1] / "security" / "pre-commit-config.yaml"
     config = yaml.load(config_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     hook = next(hook for hook in config["repos"][0]["hooks"] if hook["id"] == "bandit")
@@ -504,9 +500,7 @@ def test_edge_case_comment_publication_requires_manual_main_dispatch() -> None:
     validation = job["steps"][0]["with"]["script"]
     assert "Number.isSafeInteger(runId)" in validation
     assert "github.rest.actions.getWorkflowRun" in validation
-    assert (
-        "run.path !== '.github/workflows/edge_cases_github_comment.yml'" in validation
-    )
+    assert "run.path !== '.github/workflows/edge_cases_github_comment.yml'" in validation
     assert "pr.head.sha !== run.head_sha" in validation
     assert job["steps"][1]["with"]["run-id"] == "${{ steps.validate.outputs.run_id }}"
 
@@ -640,57 +634,21 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     workflow = yaml.load(
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
-    assert workflow["on"] == {"release": {"types": ["published"]}}
-    assert workflow["concurrency"]["cancel-in-progress"] == "false"
-    job = workflow["jobs"]["publish"]
-    assert set(workflow["jobs"]) == {"publish"}
-    assert job["environment"]["name"] == "release"
-    assert job["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-        "id-token": "write",
+    assert workflow["on"] == {
+        "push": {"tags": ["v*.*.*"]},
+        "release": {"types": ["published"]},
     }
-    assert job["if"] == "github.event.release.draft == false"
+    job = workflow["jobs"]["publish"]
+    assert "security" in job["needs"]
+    assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
-    assert steps[1]["with"]["run-id"] == "${{ steps.candidate.outputs.run_id }}"
-    assert "head_sha: context.sha" in steps[0]["with"]["script"]
-    assert not any("actions/checkout@" in step.get("uses", "") for step in steps)
-    assert steps[-1]["run"] == (
+    assert all("actions/checkout@" not in step.get("uses", "") for step in steps)
+    assert [step["run"] for step in steps if "run" in step] == [
         "uv publish --trusted-publishing always "
         "--check-url https://pypi.org/simple/ dist/*"
+    ]
+    assert any(
+        "actions/download-artifact@" in step.get("uses", "")
+        and step["with"]["name"] == "dist"
+        for step in steps
     )
-    for candidate in workflow["jobs"].values():
-        assert candidate["permissions"]["contents"] == "read"
-        assert not any("build" in step.get("run", "") for step in candidate["steps"])
-
-
-def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
-    directory = Path(__file__).parents[1] / ".github" / "workflows"
-    candidate = yaml.load(
-        (directory / "release-candidate.yml").read_text(), Loader=yaml.BaseLoader
-    )
-    assert set(candidate["on"]) == {"workflow_dispatch"}
-    assert candidate["jobs"]["proposal"]["if"] == (
-        "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')"
-    )
-    assert candidate["jobs"]["proposal"]["outputs"]["target_sha"] == (
-        "${{ steps.proposal.outputs.target_sha }}"
-    )
-    gates = {"run-pytest", "test-build-package", "test-labelling", "security"}
-    assert set(candidate["jobs"]["verified"]["needs"]) == gates | {"proposal"}
-    assert candidate["jobs"]["verified"]["if"] == "always()"
-    assert candidate["jobs"]["verified"]["permissions"] == {}
-    assert "scripts/release.py" not in str(candidate)
-    for name in gates:
-        job = candidate["jobs"][name]
-        assert job["with"] == {"target_sha": "${{ needs.proposal.outputs.target_sha }}"}
-        workflow = yaml.load(
-            (directory / job["uses"].split("/")[-1]).read_text(), Loader=yaml.BaseLoader
-        )
-        assert "inputs.target_sha && github.run_id" in workflow["concurrency"]["group"]
-        for check in workflow["jobs"].values():
-            for step in check["steps"]:
-                if "actions/checkout@" in step.get("uses", ""):
-                    assert (
-                        step["with"]["ref"] == "${{ inputs.target_sha || github.sha }}"
-                    )

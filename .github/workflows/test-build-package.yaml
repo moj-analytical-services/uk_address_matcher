@@ -11,13 +11,7 @@ on:
         value: ${{ jobs.build.outputs.dist-artifact-id }}
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - "uk_address_matcher/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "frontend/labelling/**"
-      - ".github/workflows/**"
+    branches: [main, "build/*", "dev/*"]
 
 permissions: {}
 
