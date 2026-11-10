@@ -1,59 +1,51 @@
 # Releasing UK Address Matcher
 
-An ordinary code push does **not** start a release. Both release stages run on the
-selected `main` or trusted `build/*` branch; no merge into `main` is required.
+An ordinary code push does **not** start a release. Pushes to `main`, `build/*`
+and `dev/*` build the package independently of release validation.
 
 ```text
-Push code and release tooling to the selected trusted branch
+Run dev_scripts/shell/prepare-release.sh
    |
-   +--> No release starts
+   v
+Create draft pinned to the remote source commit
    |
-   +--> Run dev_scripts/shell/prepare-release.sh
-             |
-             v
-          Create draft + commit candidate request to remote branch
-             |
-             v
-          Validate pinned SHA: Python, package, labelling, security
-             |
-             +--> Failure: draft retained; nothing published
-             |
-             v
-          All checks pass: retain verified artefacts
-             |
-             v
-          Maintainer creates tag at the verified source SHA
-             |
-             v
-          Run request-publish with successful candidate run ID
-             |
-             v
-          Commit publish request to remote branch; verify artefacts
-             |
-             v
-          Reviewer approval + 60-minute environment wait
-             |
-             v
-          Publish original files to PyPI
-             |
-             v
-          Verify GitHub assets; publish immutable GitHub release last
+   v
+Dispatch validation: Python, package, labelling, security
+   |
+   +--> Failure: draft retained; nothing published
+   |
+   v
+All four checks pass: retain tested package artefacts
+   |
+   v
+Maintainer publishes the draft in GitHub
+   |
+   v
+Publisher requires successful validation of the exact tagged commit
+   |
+   v
+Reviewer approval + 60-minute environment wait
+   |
+   v
+Download the tested package and upload to PyPI without rebuilding
 ```
 
 ## Before starting
 
-- Install `git`, `gh` and `uv`; authenticate with `gh auth login` as a maintainer.
-   Do not use an Actions `GITHUB_TOKEN`: its pushes do not trigger these workflows.
-- Set a fresh package version in `pyproject.toml`, then commit and push it with the
-   release tooling. `v2.0.0.dev1` is permanently reserved, even after deletion.
+- Install `git` and `gh`; authenticate with `gh auth login` as a maintainer.
+- Deploy `release-validation.yml` and `pypi-release.yaml` to `main` and the selected
+   release branch first. GitHub must register the validation workflow on the default
+   branch before it can be dispatched. Release branches must be `main` or `build/*`.
+- Set a fresh package version, then commit and push the source and release tooling.
+   `v2.0.0.dev1` is permanently reserved, even after deletion.
 - Keep PyPI Trusted Publishing configured for `pypi-release.yaml` and environment
    `release`. Retain reviewer approval, prevention of self-review, the 60-minute wait
    and permission for the chosen branch. Review build-branch release code as carefully
    as `main`.
-- Ruleset `25231059` blocks workflow-token tag creation. A maintainer with its existing
-   bypass permission must create the verified tag before requesting publication.
-   Keep tag-update/deletion protection and native release immutability. Verify the
-   full flow with TestPyPI first; local tests do not prove platform permissions.
+- Keep tag-update/deletion protection and native release immutability. Publishing
+   the draft is a human action; the workflows do not create or move tags.
+- Verify the full flow with TestPyPI first; local tests do not prove platform
+   permissions or PyPI Trusted Publishing configuration.
 
 ## Prepare and validate
 
@@ -63,58 +55,47 @@ From the trusted checkout, run:
 bash dev_scripts/shell/prepare-release.sh
 ```
 
-Enter the package version, source branch (default: current branch) and prerelease
-designation (default: `no`). For `2.0.0.dev2`, choose `yes`; for `2.0.0`, choose `no`.
+Enter the release tag, source branch (default: current branch) and `yes` or `no` for
+the prerelease designation. Use `v2.0.0.dev2` with `yes`, or `v2.0.0` with `no`.
 
-The script pins the remote source SHA, creates a draft and commits
-`.github/release-candidate.json` to that remote branch, triggering validation.
-Draft creation alone does not trigger it. Your local working tree is unchanged.
+The script pins the remote source SHA, creates a draft and dispatches validation
+on the selected branch. Draft creation alone does not trigger validation. Your
+local working tree is unchanged. Add `--dry-run` to preview without GitHub requests.
 
 In [Actions](https://github.com/moj-analytical-services/uk_address_matcher/actions),
-wait for **Release candidate verified** to succeed, then copy the run ID from the
-URL. All four checks must pass. Verified artefacts are retained for 30 days.
+wait for **Validate release** to succeed. All four checks must pass; tested package
+artefacts are retained for 30 days. No run ID needs to be copied.
+
+To validate an existing draft's source without creating another draft:
+
+```bash
+bash dev_scripts/shell/prepare-release.sh --validate-only
+```
 
 ## Publish
 
-After all checks pass, create the tag at the draft's verified source SHA using your
-maintainer account. This creates only the tag; the release must remain a draft:
+After all checks pass, confirm that the draft targets the exact validated commit,
+then publish the draft manually in GitHub. If the branch advanced after draft
+creation, align the draft target and validation before publishing.
 
-```bash
-TAG=v2.0.0.dev2
-REPO=moj-analytical-services/uk_address_matcher
-SHA=$(gh release view "$TAG" --repo "$REPO" --json targetCommitish --jq .targetCommitish)
-gh api --method POST "repos/$REPO/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$SHA"
-```
+The publisher requires the latest validation run for that exact commit to have
+succeeded on `main` or a trusted `build/*` branch. It downloads that run's tested
+package and uploads it to PyPI without building or running the checks again.
+Approve the `release` environment when requested. Version-tag pushes remain a
+fallback trigger with the same validation requirement, not a required extra step.
 
-If tag creation is denied, stop and ask a maintainer with bypass permission. Do not
-request publication or weaken the rules. Never recreate or move an existing tag.
-
-Replace the example version and `REPLACE_WITH_RUN_ID` with your verified candidate:
-
-```bash
-uv run --no-project --python 3.12 --with packaging==25.0 \
-   python -I scripts/release.py request-publish \
-   --branch build/ukam_2.0 --tag v2.0.0.dev2 --run-id REPLACE_WITH_RUN_ID
-```
-
-This commits `.github/release-publish.json` to the remote branch, starting
-**Publish draft release to PyPI**. Review the draft and source SHA in Actions, then
-approve the `release` environment. After approval and the wait, the workflow rechecks
-and publishes the original artefacts without rebuilding. GitHub publication is last.
-
-**Do not click GitHub's Publish release button directly.** Confirm the PyPI files
-and GitHub release afterwards. When your working tree permits, fast-forward your
-local branch to include the remote request commits. The tag identifies the tested
-source SHA, not the request commits.
+**GitHub publication makes the release and tag immutable before PyPI upload.** A
+failed publisher does not undo that publication. Confirm the PyPI files afterwards;
+never delete, recreate or move a published tag as a rollback.
 
 ## If something fails
 
-- **Request commit fails:** the draft remains; use the retry command printed by the
-   script. Do not run preparation again against the existing draft.
+- **Validation does not start:** the draft remains; use `--validate-only` after
+   resolving workflow registration or dispatch permissions.
 - **Validation fails:** fix the failure before publishing. Retry infrastructure
-   failures against the same SHA; source changes require a newly pinned candidate.
+   failures against the same SHA; source changes require an updated draft target
+   and successful validation of the new commit.
 - **Publishing fails:** use **Re-run failed jobs** on the same publishing run.
-   Matching PyPI uploads are reused; never rebuild, delete the draft or move a tag
-   as a rollback. PyPI uploads cannot be undone.
-- **Artefacts expire:** stop and arrange recovery of the original files. Do not
-   assume a rebuild is identical.
+   Matching PyPI uploads are reused. PyPI uploads cannot be undone.
+- **Artefacts expire:** run fresh validation before publication. The publisher
+   cannot rebuild or substitute an untested package.

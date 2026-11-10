@@ -66,6 +66,7 @@ def test_secrets_check_requires_maintained_baseline(tmp_path: Path) -> None:
         "frontend/labelling/package-lock.json",
         "frontend/labelling/vite.config.js",
         "frontend/labelling/.npmrc",
+        "dev_scripts/shell/prepare-release.sh",
         "tests/test_release_process.py",
     ],
 )
@@ -635,15 +636,15 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
     assert workflow["on"] == {
-        "workflow_dispatch": "",
         "push": {"tags": ["v*.*.*"]},
         "release": {"types": ["published"]},
     }
     job = workflow["jobs"]["publish"]
-    assert job["if"] == "github.event_name == 'release' || github.event_name == 'push'"
-    assert "security" in job["needs"]
+    assert set(workflow["jobs"]) == {"publish"}
     assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
+    assert "head_sha: context.sha" in steps[0]["with"]["script"]
+    assert steps[1]["with"]["run-id"] == "${{ steps.validation.outputs.run_id }}"
     assert all("actions/checkout@" not in step.get("uses", "") for step in steps)
     assert [step["run"] for step in steps if "run" in step] == [
         "uv publish --trusted-publishing always "
@@ -651,6 +652,6 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     ]
     assert any(
         "actions/download-artifact@" in step.get("uses", "")
-        and step["with"]["name"] == "dist"
+        and step["with"]["name"] == "${{ steps.validation.outputs.artifact_name }}"
         for step in steps
     )
