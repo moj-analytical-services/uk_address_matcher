@@ -628,13 +628,18 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     workflow = yaml.load(
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
+    assert workflow["on"] == {
+        "push": {"tags": ["v*.*.*"]},
+        "release": {"types": ["published"]},
+    }
     job = workflow["jobs"]["publish"]
     assert "security" in job["needs"]
     assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
     assert all("actions/checkout@" not in step.get("uses", "") for step in steps)
     assert [step["run"] for step in steps if "run" in step] == [
-        "uv publish --trusted-publishing always dist/*"
+        "uv publish --trusted-publishing always "
+        "--check-url https://pypi.org/simple/ dist/*"
     ]
     assert any(
         "actions/download-artifact@" in step.get("uses", "")
