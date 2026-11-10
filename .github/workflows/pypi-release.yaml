@@ -1,6 +1,7 @@
 name: Publish release to PyPI
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*.*.*"
@@ -39,6 +40,7 @@ jobs:
     uses: ./.github/workflows/security.yml
 
   publish:
+    if: github.event_name == 'release' || github.event_name == 'push'
     needs: [run-pytest, test-build-package, test-labelling, security]
     runs-on: ubuntu-latest
     permissions:

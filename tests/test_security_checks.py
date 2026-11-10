@@ -635,10 +635,12 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
     assert workflow["on"] == {
+        "workflow_dispatch": "",
         "push": {"tags": ["v*.*.*"]},
         "release": {"types": ["published"]},
     }
     job = workflow["jobs"]["publish"]
+    assert job["if"] == "github.event_name == 'release' || github.event_name == 'push'"
     assert "security" in job["needs"]
     assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
