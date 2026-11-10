@@ -8,7 +8,7 @@ Push code and release tooling to the selected trusted branch
    |
    +--> No release starts
    |
-   +--> Run prepare-release.sh
+   +--> Run dev_scripts/shell/prepare-release.sh
              |
              v
           Create draft + commit candidate request to remote branch
@@ -60,7 +60,7 @@ Push code and release tooling to the selected trusted branch
 From the trusted checkout, run:
 
 ```bash
-./scripts/prepare-release.sh
+bash dev_scripts/shell/prepare-release.sh
 ```
 
 Enter the package version, source branch (default: current branch) and prerelease

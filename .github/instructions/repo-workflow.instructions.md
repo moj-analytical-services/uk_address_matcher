@@ -7,7 +7,7 @@ applyTo:
   - "docs/findings/**/*.md"
   - "docs/CHANGELOG.md"
   - "pyproject.toml"
-  - "shell/**/*.sh"
+  - "dev_scripts/shell/**/*.sh"
   - ".github/workflows/**/*.yml"
   - ".github/workflows/**/*.yaml"
 ---

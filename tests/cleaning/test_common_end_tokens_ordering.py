@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 REORDER_INSTRUCTION = (
-    "Token ordering is stale. Run ./shell/order_common_end_tokens_for_regex.sh "
+    "Token ordering is stale. Run ./dev_scripts/shell/order_common_end_tokens_for_regex.sh "
     "from repository root and re-run tests."
 )
 

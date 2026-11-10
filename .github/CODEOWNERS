@@ -19,7 +19,7 @@
 /dev_scripts/*security*.py @moj-analytical-services/uk_address_matcher
 /tests/test_security_checks.py @moj-analytical-services/uk_address_matcher
 /scripts/release.py @moj-analytical-services/uk_address_matcher
-/scripts/prepare-release.sh @moj-analytical-services/uk_address_matcher
+/dev_scripts/shell/prepare-release.sh @moj-analytical-services/uk_address_matcher
 /tests/test_release_process.py @moj-analytical-services/uk_address_matcher
 /.github/release-*.json @moj-analytical-services/uk_address_matcher
 /SECURITY.md @moj-analytical-services/uk_address_matcher
