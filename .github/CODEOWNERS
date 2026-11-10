@@ -21,5 +21,6 @@
 /scripts/release.py @moj-analytical-services/uk_address_matcher
 /scripts/prepare-release.sh @moj-analytical-services/uk_address_matcher
 /tests/test_release_process.py @moj-analytical-services/uk_address_matcher
+/.github/release-*.json @moj-analytical-services/uk_address_matcher
 /SECURITY.md @moj-analytical-services/uk_address_matcher
 /MANIFEST.in @moj-analytical-services/uk_address_matcher

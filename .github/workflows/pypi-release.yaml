@@ -1,26 +1,15 @@
 name: Publish draft release to PyPI
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Draft release tag, such as v2.0.0.dev2
-        required: true
-        type: string
-      validation_run_id:
-        description: Successful Release candidate workflow run ID
-        required: true
-        type: string
+  push:
+    branches: [main, "build/**"]
+    paths: [.github/release-publish.json]
 
 permissions: {}
 
 concurrency:
-  group: publish-draft-${{ inputs.release_tag }}
+  group: publish-draft-release
   cancel-in-progress: false
-
-env:
-  RELEASE_TAG: ${{ inputs.release_tag }}
-  VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
 
 jobs:
   inspect:

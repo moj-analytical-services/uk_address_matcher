@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -11,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import uuid
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
@@ -161,7 +163,64 @@ def write_outputs(**values) -> None:
             output.writelines(f"{name}={value}\n" for name, value in values.items())
 
 
+def trusted_branch(branch: str) -> bool:
+    return branch == "main" or branch.startswith("build/")
+
+
+def push_request(kind: str, branch: str, request: dict) -> None:
+    if not trusted_branch(branch):
+        raise ValueError("Release requests require main or a trusted build branch.")
+    path = f"contents/.github/release-{kind}.json"
+    try:
+        existing = api(f"{path}?ref={quote(branch, safe='')}")
+    except subprocess.CalledProcessError as error:
+        if json.loads(error.output or b"{}").get("status") != "404":
+            raise
+        existing = {}
+    request = dict(request, request_id=uuid.uuid4().hex)
+    payload = {
+        "branch": branch,
+        "message": f"chore(release): request {kind} for {request['release_tag']}",
+        "content": base64.b64encode(
+            (json.dumps(request, indent=2) + "\n").encode()
+        ).decode(),
+    }
+    if existing.get("sha"):
+        payload["sha"] = existing["sha"]
+    gh(
+        "api", "--method", "PUT", f"repos/{REPOSITORY}/{path}", "--input", "-",
+        input=json.dumps(payload).encode(),
+    )
+    logging.info("Committed %s request to remote branch %s.", kind, branch)
+
+
+def load_request(kind: str) -> None:
+    if not trusted_branch(os.environ["GITHUB_REF_NAME"]):
+        raise ValueError("Release requests require main or a trusted build branch.")
+    request = json.loads(Path(f".github/release-{kind}.json").read_text())
+    tag, _ = normalise_version(request["release_tag"])
+    if tag != request["release_tag"]:
+        raise ValueError("Use the normalised v<version> release tag.")
+    os.environ["RELEASE_TAG"] = tag
+    if kind == "candidate":
+        if (
+            not isinstance(request["prerelease"], bool)
+            or request["source_branch"] != os.environ["GITHUB_REF_NAME"]
+        ):
+            raise ValueError("Candidate branch or prerelease designation is invalid.")
+        os.environ["TARGET_SHA"] = request["target_sha"]
+        os.environ["SOURCE_BRANCH"] = request["source_branch"]
+        os.environ["PRERELEASE"] = str(request["prerelease"]).lower()
+    else:
+        run_id = request["validation_run_id"]
+        if type(run_id) is not int or run_id < 1:
+            raise ValueError("A positive candidate run ID is required.")
+        os.environ["VALIDATION_RUN_ID"] = str(run_id)
+
+
 def prepare(version_text: str, branch: str, prerelease: bool) -> None:
+    if not trusted_branch(branch):
+        raise ValueError("Release requests require main or a trusted build branch.")
     tag, version = normalise_version(version_text)
     if version.is_prerelease != prerelease:
         raise ValueError("Development/prerelease versions require Pre-release: yes.")
@@ -194,36 +253,28 @@ def prepare(version_text: str, branch: str, prerelease: bool) -> None:
     if prerelease:
         arguments.append("--prerelease")
     logging.info(gh(*arguments).decode().strip())
-    dispatch = [
-        "workflow",
-        "run",
-        "release-candidate.yml",
-        "--repo",
-        REPOSITORY,
-        "--ref",
-        "main",
-        "-f",
-        f"release_tag={tag}",
-        "-f",
-        f"target_sha={sha}",
-        "-f",
-        f"source_branch={branch}",
-        "-f",
-        f"prerelease={str(prerelease).lower()}",
+    retry = [
+        "uv", "run", "--no-project", "--python", "3.12", "--with",
+        "packaging==25.0", "python", "-I", "scripts/release.py",
+        "request-candidate", "--branch", branch, "--tag", tag,
+        "--target-sha", sha, "--prerelease", "yes" if prerelease else "no",
     ]
     logging.info("Source: %s\nTarget SHA: %s", branch, sha)
     try:
-        gh(*dispatch)
+        push_request("candidate", branch, {
+            "release_tag": tag, "target_sha": sha, "source_branch": branch,
+            "prerelease": prerelease,
+        })
     except subprocess.CalledProcessError:
         logging.error(
-            "Draft retained. Re-dispatch with:\n%s", shlex.join(["gh", *dispatch])
+            "Draft retained. Retry the request with:\n%s", shlex.join(retry)
         )
         raise
     logging.info(
         f"Validation runs: https://github.com/{REPOSITORY}/actions/workflows/release-candidate.yml"
     )
     logging.info(
-        "After validation succeeds, run Publish draft release to PyPI with its run ID."
+        "After validation succeeds, use request-publish with its run ID."
     )
 
 
@@ -279,16 +330,17 @@ def proposal() -> None:
     api(f"branches/{branch}")
     if api(f"compare/{sha}...{branch}")["status"] not in ("ahead", "identical"):
         raise ValueError("The target SHA is not on the selected source branch.")
+    write_outputs(target_sha=sha)
 
 
 def verify(tag: str, run_id: int, manifest_id: int | None, *, published=False) -> dict:
     run = api(f"actions/runs/{run_id}")
     if (
         run["path"] != ".github/workflows/release-candidate.yml"
-        or run["event"] != "workflow_dispatch"
-        or run["head_branch"] != "main"
+        or run["event"] != "push"
+        or not trusted_branch(run["head_branch"])
     ):
-        raise ValueError("Expected a candidate workflow dispatched on trusted main.")
+        raise ValueError("Expected a candidate push on main or a trusted build branch.")
     artifacts = api(
         f"actions/runs/{run_id}/artifacts?per_page=100",
         paginate=True,
@@ -399,6 +451,8 @@ def main() -> None:
         "command",
         choices=(
             "prepare",
+            "request-candidate",
+            "request-publish",
             "proposal",
             "candidate",
             "verify",
@@ -407,7 +461,8 @@ def main() -> None:
         ),
     )
     parser.add_argument("--version")
-    parser.add_argument("--branch", default="main")
+    parser.add_argument("--target-sha")
+    parser.add_argument("--branch")
     parser.add_argument("--prerelease", choices=("yes", "no"), default="no")
     parser.add_argument("--tag", default=os.environ.get("RELEASE_TAG"))
     parser.add_argument(
@@ -417,10 +472,40 @@ def main() -> None:
         "--manifest-id", type=int, default=os.environ.get("MANIFEST_ID") or None
     )
     arguments = parser.parse_args()
+    if arguments.command in {"prepare", "request-candidate", "request-publish"}:
+        if not arguments.branch:
+            parser.error("--branch is required; release requests create remote commits")
+    if arguments.command in {"proposal", "candidate", "publish-check", "finalise"}:
+        kind = (
+            "candidate" if arguments.command in {"proposal", "candidate"} else "publish"
+        )
+        load_request(kind)
+        arguments.tag = os.environ["RELEASE_TAG"]
+        if kind == "publish":
+            arguments.run_id = int(os.environ["VALIDATION_RUN_ID"])
     if arguments.command == "prepare":
         if not arguments.version:
             parser.error("--version is required")
         prepare(arguments.version, arguments.branch, arguments.prerelease == "yes")
+    elif arguments.command == "request-candidate":
+        if not arguments.tag or not arguments.target_sha:
+            parser.error("A release tag and target SHA are required")
+        tag, version = normalise_version(arguments.tag)
+        prerelease = arguments.prerelease == "yes"
+        if version.is_prerelease != prerelease:
+            parser.error("Version and prerelease designation disagree")
+        check_release(release_for(tag), arguments.target_sha, prerelease)
+        push_request("candidate", arguments.branch, {
+            "release_tag": tag, "target_sha": arguments.target_sha,
+            "source_branch": arguments.branch, "prerelease": prerelease,
+        })
+    elif arguments.command == "request-publish":
+        if not arguments.tag or not arguments.run_id or arguments.run_id < 1:
+            parser.error("A release tag and positive validation run ID are required")
+        push_request("publish", arguments.branch, {
+            "release_tag": normalise_version(arguments.tag)[0],
+            "validation_run_id": arguments.run_id,
+        })
     elif arguments.command == "candidate":
         candidate()
     elif arguments.command == "proposal":

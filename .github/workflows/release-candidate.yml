@@ -1,40 +1,20 @@
 name: Release candidate
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Normalised release tag, such as v2.0.0.dev2
-        required: true
-        type: string
-      target_sha:
-        description: Exact source commit SHA
-        required: true
-        type: string
-      source_branch:
-        description: Remote source branch containing the commit
-        required: true
-        type: string
-      prerelease:
-        description: Development or prerelease version
-        required: true
-        type: boolean
-        default: false
+  push:
+    branches: [main, "build/**"]
+    paths: [.github/release-candidate.json]
 
 permissions: {}
 
-env:
-  RELEASE_TAG: ${{ inputs.release_tag }}
-  TARGET_SHA: ${{ inputs.target_sha }}
-  SOURCE_BRANCH: ${{ inputs.source_branch }}
-  PRERELEASE: ${{ inputs.prerelease }}
-
 jobs:
   proposal:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      target_sha: ${{ steps.proposal.outputs.target_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,6 +24,7 @@ jobs:
           version: "0.11.3"
           enable-cache: false
       - name: Require a matching mutable draft and source SHA
+        id: proposal
         env:
           GH_TOKEN: ${{ github.token }}
         run: uv run --no-project --python 3.12 --with packaging==25.0 python -I scripts/release.py proposal
@@ -54,7 +35,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/run_pytest.yml
     with:
-      target_sha: ${{ inputs.target_sha }}
+      target_sha: ${{ needs.proposal.outputs.target_sha }}
 
   test-build-package:
     needs: proposal
@@ -62,7 +43,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/test-build-package.yaml
     with:
-      target_sha: ${{ inputs.target_sha }}
+      target_sha: ${{ needs.proposal.outputs.target_sha }}
 
   test-labelling:
     needs: proposal
@@ -70,7 +51,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/labelling.yml
     with:
-      target_sha: ${{ inputs.target_sha }}
+      target_sha: ${{ needs.proposal.outputs.target_sha }}
 
   security:
     needs: proposal
@@ -78,7 +59,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/security.yml
     with:
-      target_sha: ${{ inputs.target_sha }}
+      target_sha: ${{ needs.proposal.outputs.target_sha }}
 
   verified:
     name: Release candidate verified

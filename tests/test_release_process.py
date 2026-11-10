@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -94,7 +95,7 @@ def candidate(release, distributions, monkeypatch):
         "RELEASE_TAG": "v2.0.0.dev2",
         "TARGET_SHA": sha,
         "PRERELEASE": "true",
-        "SOURCE_BRANCH": "feature",
+        "SOURCE_BRANCH": "build/ukam_2.0",
         "VALIDATION_RESULTS": json.dumps(gates),
         "GITHUB_RUN_ID": "50",
         "GITHUB_RUN_ATTEMPT": "1",
@@ -112,9 +113,9 @@ def candidate(release, distributions, monkeypatch):
     state = {
         "run": {
             "path": ".github/workflows/release-candidate.yml",
-            "head_branch": "main",
+            "head_branch": "build/ukam_2.0",
             "head_sha": "b" * 40,
-            "event": "workflow_dispatch",
+            "event": "push",
             "run_attempt": 1,
         },
         "draft": draft,
@@ -165,13 +166,20 @@ def candidate(release, distributions, monkeypatch):
 
 @pytest.mark.parametrize(
     "problem",
-    ["none", "workflow", "sha", "gate", "run", "expired", "published", "tampered"],
+    [
+        "none", "workflow", "branch", "event", "sha", "gate", "run",
+        "expired", "published", "tampered",
+    ],
 )
 def test_publisher_binds_the_run_draft_and_original_distributions(
     release, candidate, problem
 ):
     if problem == "workflow":
         candidate["run"]["path"] = ".github/workflows/unrelated.yml"
+    elif problem == "branch":
+        candidate["run"]["head_branch"] = "feature/untrusted"
+    elif problem == "event":
+        candidate["run"]["event"] = "pull_request"
     elif problem == "sha":
         candidate["draft"]["target_commitish"] = "c" * 40
     elif problem == "gate":
@@ -196,6 +204,7 @@ def test_publisher_binds_the_run_draft_and_original_distributions(
 
 
 def test_recovery_can_select_the_original_verified_attempt(release, candidate):
+    candidate["run"]["head_branch"] = "main"
     candidate["run"]["run_attempt"] = 2
     manifest = release.verify("v2.0.0.dev2", 50, 10)
     assert manifest["run_attempt"] == 1
@@ -213,7 +222,7 @@ def test_candidate_rejects_non_successful_gates(
         release.candidate()
 
 
-def test_prepare_pins_branch_and_retains_draft_on_dispatch_failure(
+def test_prepare_pins_branch_and_retains_draft_on_request_failure(
     release, monkeypatch
 ):
     calls = []
@@ -223,24 +232,108 @@ def test_prepare_pins_branch_and_retains_draft_on_dispatch_failure(
         release,
         "api",
         lambda path, **kwargs: (
-            {"commit": {"sha": "a" * 40}} if path.startswith("branches/") else []
+            {"commit": {"sha": "a" * 40}} if path.startswith("branches/")
+            else {} if path.startswith("contents/") else []
         ),
     )
 
-    def gh(*args):
+    def gh(*args, **kwargs):
         calls.append(args)
-        if args[:2] == ("workflow", "run"):
+        if args[:3] == ("api", "--method", "PUT"):
             raise subprocess.CalledProcessError(1, args)
         return b"draft-url"
 
     monkeypatch.setattr(release, "gh", gh)
     with pytest.raises(subprocess.CalledProcessError):
-        release.prepare("2.0.0.dev2", "feature", True)
+        release.prepare("2.0.0.dev2", "build/ukam_2.0", True)
     create = next(args for args in calls if args[:2] == ("release", "create"))
     assert create[create.index("--target") + 1] == "a" * 40
     assert "--draft" in create and "--prerelease" in create
-    assert "--ref" in calls[-1] and "target_sha=" + "a" * 40 in calls[-1]
+    assert calls[-1][:3] == ("api", "--method", "PUT")
     assert not any("delete" in args for args in calls)
+
+
+def test_branch_requests_pin_source_and_keep_publishing_separate(
+    release, monkeypatch, tmp_path
+):
+    branch = "build/ukam_2.0"
+    sha = "a" * 40
+    requests = []
+    draft = []
+    monkeypatch.setattr(release, "pypi_files", lambda version: {})
+
+    def gh(*args, **kwargs):
+        if args[:2] == ("release", "create"):
+            draft.append({
+                "tag_name": "v2.0.0.dev2", "target_commitish": sha,
+                "prerelease": True, "draft": True,
+            })
+            return b"draft-url"
+        if args[:3] == ("api", "--method", "PUT"):
+            payload = json.loads(kwargs["input"])
+            requests.append((args[3], payload))
+            return b"{}"
+        if args[0] == "api":
+            path = args[1].removeprefix(f"repos/{release.REPOSITORY}/")
+            if path.startswith("branches/"):
+                return json.dumps({"commit": {"sha": sha}}).encode()
+            if path.startswith("releases?"):
+                return json.dumps([draft] if "--slurp" in args else draft).encode()
+            if path.startswith("git/matching-refs/"):
+                return b"[]"
+            if path.startswith("contents/"):
+                if "release-candidate.json" in path:
+                    raise subprocess.CalledProcessError(
+                        1, args, output=b'{"status":"404"}'
+                    )
+                return b'{"sha":"previous-publish-request"}'
+            if path.startswith("compare/"):
+                return b'{"status":"ahead"}'
+            raise AssertionError(path)
+        assert args == ("auth", "status")
+        return b""
+
+    monkeypatch.setattr(release, "gh", gh)
+    release.prepare("2.0.0.dev2", branch, True)
+    assert len(requests) == 1
+    path, payload = requests[0]
+    assert path.endswith("/.github/release-candidate.json")
+    assert payload["branch"] == branch and "sha" not in payload
+    request = json.loads(base64.b64decode(payload["content"]))
+    assert request["target_sha"] == sha
+    assert request["source_branch"] == branch
+    assert request["prerelease"] is True
+
+    monkeypatch.chdir(tmp_path)
+    for name in (
+        "RELEASE_TAG", "TARGET_SHA", "SOURCE_BRANCH", "PRERELEASE", "VALIDATION_RUN_ID"
+    ):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github/release-candidate.json").write_text(json.dumps(request))
+    monkeypatch.setenv("GITHUB_REF_NAME", branch)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.setattr(release.sys, "argv", ["release.py", "proposal"])
+    release.main()
+    assert (tmp_path / "outputs").read_text() == f"target_sha={sha}\n"
+
+    monkeypatch.setattr(release.sys, "argv", [
+        "release.py", "request-publish", "--branch", branch,
+        "--tag", "v2.0.0.dev2", "--run-id", "50",
+    ])
+    release.main()
+    path, payload = requests[1]
+    assert path.endswith("/.github/release-publish.json")
+    assert payload["branch"] == branch
+    assert payload["sha"] == "previous-publish-request"
+    request = json.loads(base64.b64decode(payload["content"]))
+    (tmp_path / ".github/release-publish.json").write_text(json.dumps(request))
+    release.load_request("publish")
+    assert os.environ["VALIDATION_RUN_ID"] == "50"
+    assert os.environ["RELEASE_TAG"] == "v2.0.0.dev2"
+    with pytest.raises(ValueError, match="trusted build branch"):
+        release.push_request("publish", "feature/untrusted", request)
+    assert len(requests) == 2
 
 
 def test_finalisation_retains_draft_on_failure_and_reuses_original_files(
@@ -301,6 +394,9 @@ def test_prepare_script_defaults_and_explicit_prerelease(tmp_path):
         executable = tools / tool
         executable.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n")
         executable.chmod(0o755)
+    git = tools / "git"
+    git.write_text("#!/usr/bin/env bash\nprintf '%s\\n' 'build/ukam_2.0'\n")
+    git.chmod(0o755)
     result = subprocess.run(
         ["bash", str(script)],
         input="2.0.0\n\n\n",
@@ -309,7 +405,7 @@ def test_prepare_script_defaults_and_explicit_prerelease(tmp_path):
         env=dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}"),
         check=True,
     )
-    assert "--branch\nmain\n--prerelease\nno\n" in result.stdout
+    assert "--branch\nbuild/ukam_2.0\n--prerelease\nno\n" in result.stdout
 
 
 @pytest.mark.parametrize("collision", ["tag", "release", "pypi", "prerelease"])

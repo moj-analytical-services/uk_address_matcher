@@ -68,6 +68,8 @@ def test_secrets_check_requires_maintained_baseline(tmp_path: Path) -> None:
         "scripts/release.py",
         "scripts/prepare-release.sh",
         "tests/test_release_process.py",
+        ".github/release-candidate.json",
+        ".github/release-publish.json",
     ],
 )
 def test_policy_protects_security_controls(filename: str) -> None:
@@ -642,7 +644,12 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     workflow = yaml.load(
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]) == {"push"}
+    assert workflow["on"]["push"] == {
+        "branches": ["main", "build/**"],
+        "paths": [".github/release-publish.json"],
+    }
+    assert workflow["concurrency"]["group"] == "publish-draft-release"
     assert workflow["concurrency"]["cancel-in-progress"] == "false"
     job = workflow["jobs"]["publish"]
     assert set(workflow["jobs"]) == {"inspect", "publish", "finalise"}
@@ -680,8 +687,17 @@ def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
     candidate = yaml.load(
         (directory / "release-candidate.yml").read_text(), Loader=yaml.BaseLoader
     )
-    assert set(candidate["on"]) == {"workflow_dispatch"}
-    assert candidate["jobs"]["proposal"]["if"] == "github.ref == 'refs/heads/main'"
+    assert set(candidate["on"]) == {"push"}
+    assert candidate["on"]["push"] == {
+        "branches": ["main", "build/**"],
+        "paths": [".github/release-candidate.json"],
+    }
+    assert candidate["jobs"]["proposal"]["if"] == (
+        "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/')"
+    )
+    assert candidate["jobs"]["proposal"]["outputs"]["target_sha"] == (
+        "${{ steps.proposal.outputs.target_sha }}"
+    )
     gates = {"run-pytest", "test-build-package", "test-labelling", "security"}
     assert set(candidate["jobs"]["verified"]["needs"]) == gates
     assert candidate["jobs"]["verified"]["if"] == "always()"
@@ -691,7 +707,9 @@ def test_candidate_checks_use_the_source_sha_without_ci_cancellation() -> None:
     }
     for name in gates:
         job = candidate["jobs"][name]
-        assert job["with"] == {"target_sha": "${{ inputs.target_sha }}"}
+        assert job["with"] == {
+            "target_sha": "${{ needs.proposal.outputs.target_sha }}"
+        }
         workflow = yaml.load(
             (directory / job["uses"].split("/")[-1]).read_text(), Loader=yaml.BaseLoader
         )
