@@ -28,6 +28,9 @@ PROTECTED_PATHS = (
     "dev_scripts/audit_dependencies.py",
     "dev_scripts/*security*.py",
     "tests/test_security_checks.py",
+    "scripts/release.py",
+    "scripts/prepare-release.sh",
+    "tests/test_release_process.py",
     "SECURITY.md",
     "MANIFEST.in",
 )
@@ -122,7 +125,10 @@ def protected_changes(files: list[dict[str, object]]) -> list[str]:
             continue
         patch = file.get("patch")
         if not isinstance(patch, str):
-            if filename.endswith(REVIEWABLE_SUFFIXES) and file.get("status") != "removed":
+            if (
+                filename.endswith(REVIEWABLE_SUFFIXES)
+                and file.get("status") != "removed"
+            ):
                 changes.append(filename)
             continue
         additions = (
@@ -198,7 +204,9 @@ def main() -> int:
         author = current["user"]["login"]
         for login in {author, event["sender"]["login"]}:
             permission = github_request(f"{prefix}/collaborators/{login}/permission")
-            if not isinstance(permission, dict) or not is_security_maintainer(permission):
+            if not isinstance(permission, dict) or not is_security_maintainer(
+                permission
+            ):
                 sys.stderr.write(
                     "Security controls are maintained exclusively by maintainers.\n"
                     "Remove these changes and ask a maintainer for a separate "

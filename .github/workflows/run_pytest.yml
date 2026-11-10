@@ -2,6 +2,10 @@ name: Run pytest
 
 on:
   workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        default: ""
   pull_request:
     paths:
       - "uk_address_matcher/**"
@@ -21,7 +25,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: run-pytest-${{ github.event.pull_request.number || github.ref }}
+  group: run-pytest-${{ inputs.target_sha && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -81,6 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
