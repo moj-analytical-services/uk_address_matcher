@@ -1,46 +1,22 @@
-name: Release to PyPI
+name: Publish release to PyPI
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [published]
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: publish-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
-  run-pytest:
-    name: Run pytest matrix checks
-    permissions:
-      contents: read
-    uses: ./.github/workflows/run_pytest.yml
-
-  test-build-package:
-    name: Test build package
-    permissions:
-      contents: read
-    uses: ./.github/workflows/test-build-package.yaml
-
-  test-labelling:
-    name: Test labelling app
-    permissions:
-      contents: read
-    uses: ./.github/workflows/labelling.yml
-
-  security:
-    name: Run security checks
-    permissions:
-      contents: read
-    uses: ./.github/workflows/security.yml
-
   publish:
-    needs: [run-pytest, test-build-package, test-labelling, security]
+    if: github.event.release.draft == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       id-token: write
 
     # The `release` environment requires a 60-minute wait and approval
@@ -49,38 +25,34 @@ jobs:
       name: release
 
     steps:
-      - name: Ensure tag commit is latest on main
-        id: main_guard
+      - name: Require successful validation of the published commit
+        id: candidate
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const { owner, repo } = context.repo;
-            const main = await github.rest.repos.getBranch({
-              owner,
-              repo,
-              branch: 'main',
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo,
+              workflow_id: 'release-candidate.yml',
+              event: 'workflow_dispatch',
+              head_sha: context.sha,
+              per_page: 1
             });
-
-            const mainSha = main.data.commit.sha;
-            const tagSha = context.sha;
-
-            core.info(`main HEAD: ${mainSha}`);
-            core.info(`tag commit: ${tagSha}`);
-
-            if (mainSha !== tagSha) {
-              core.setFailed(
-                `Tag commit (${tagSha}) is not the latest commit on main (${mainSha}). ` +
-                'Create the release tag from current main HEAD to ensure the publish uses the newest source.'
-              );
-              return;
+            const run = data.workflow_runs[0];
+            if (!run || run.status !== 'completed' || run.conclusion !== 'success' ||
+                run.head_sha !== context.sha ||
+                run.head_repository.full_name !== context.payload.repository.full_name ||
+                !(run.head_branch === 'main' || run.head_branch.startsWith('build/'))) {
+              throw new Error('The latest candidate run for this commit must succeed before publishing to PyPI.');
             }
+            core.setOutput('run_id', run.id);
+            core.setOutput('artifact_name', `dist-${run.run_attempt}`);
 
-            core.setOutput('release_sha', tagSha);
-
-      - name: Download verified distributions from this release run
+      - name: Download the tested package without rebuilding
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.candidate.outputs.run_id }}
+          name: ${{ steps.candidate.outputs.artifact_name }}
           path: dist
 
       - name: Install uv
@@ -90,4 +62,4 @@ jobs:
           enable-cache: false
 
       - name: Publish to PyPI using Trusted Publishing
-        run: uv publish --trusted-publishing always dist/*
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
