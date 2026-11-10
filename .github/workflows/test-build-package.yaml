@@ -2,24 +2,14 @@ name: Test build package
 
 on:
   workflow_call:
-    inputs:
-      target_sha:
-        type: string
-        default: ""
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - "uk_address_matcher/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "frontend/labelling/**"
-      - ".github/workflows/**"
+    branches: [main, "build/*", "dev/*"]
 
 permissions: {}
 
 concurrency:
-  group: test-build-package-${{ inputs.target_sha && github.run_id || github.ref }}
+  group: test-build-package-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,7 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Node
@@ -73,7 +62,7 @@ jobs:
       - name: Upload verified distributions
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ inputs.target_sha && format('dist-{0}', github.run_attempt) || 'dist' }}
+          name: dist
           path: dist/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3

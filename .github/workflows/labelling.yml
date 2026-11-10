@@ -2,10 +2,6 @@ name: Test labelling app
 
 on:
   workflow_call:
-    inputs:
-      target_sha:
-        type: string
-        default: ""
   pull_request:
     paths:
       - "uk_address_matcher/labelling/**"
@@ -27,7 +23,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: test-labelling-${{ inputs.target_sha && github.run_id || github.event.pull_request.number || github.ref }}
+  group: test-labelling-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Node
