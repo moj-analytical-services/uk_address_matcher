@@ -80,3 +80,4 @@ class PersistedBenchmarkRun:
     git_commit_hash: str | None
     comparison: BenchmarkComparisonSummary | None = None
     comparison_warning: str | None = None
+    precision_recall_chart_path: str | None = None

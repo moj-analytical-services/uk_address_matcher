@@ -11,8 +11,8 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage, pipeline_stage
 # ---------- Helpers ----------
 @pytest.fixture
 def base_rel(duck_con):
-    duck_con.execute("CREATE TABLE base (id INTEGER, val INTEGER)")
-    duck_con.execute("INSERT INTO base VALUES (1,10),(2,20),(3,30)")
+    duck_con.execute("CREATE TABLE base (id INTEGER, val INTEGER)").fetchall()
+    duck_con.execute("INSERT INTO base VALUES (1,10),(2,20),(3,30)").fetchall()
     return duck_con.table("base")
 
 
@@ -170,8 +170,8 @@ def select_extra_col():
 def test_projected_input_relation_columns_preserved(duck_con):
     """A projected relation (e.g. _ensure_postcode_column) must not be silently
     collapsed back to the base table alias, which would drop the new column."""
-    duck_con.execute("CREATE TABLE src_tbl (id INTEGER, val INTEGER)")
-    duck_con.execute("INSERT INTO src_tbl VALUES (1, 10)")
+    duck_con.execute("CREATE TABLE src_tbl (id INTEGER, val INTEGER)").fetchall()
+    duck_con.execute("INSERT INTO src_tbl VALUES (1, 10)").fetchall()
     base = duck_con.table("src_tbl")
     # Project an extra column on top of the base table
     projected = base.select("*, 99 AS extra")
@@ -180,4 +180,4 @@ def test_projected_input_relation_columns_preserved(duck_con):
     pipe.add_step(select_extra_col())
     result = pipe.run()
     assert "extra" in result.columns
-    assert result.fetchone()[2] == 99
+    assert result.fetchall()[0][2] == 99

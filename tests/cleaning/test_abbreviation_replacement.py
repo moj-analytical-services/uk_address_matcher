@@ -210,6 +210,26 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
     ]
 
 
+def test_first_pass_handles_fflat_marker(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FFLAT 3 02 AT TOWN')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "FFLAT 302 AT TOWN",
+    ]
+
+
 def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     input_rel = duck_con.sql(
         """
@@ -325,7 +345,7 @@ def test_letter_dash_split_is_enabled_by_default(duck_con):
         stage_specs=[_split_letter_dash_letter],
     )
 
-    assert pipeline.run().fetchone()[0] == "PEN Y GRAIG"
+    assert pipeline.run().fetchall()[0][0] == "PEN Y GRAIG"
 
 
 def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_con):

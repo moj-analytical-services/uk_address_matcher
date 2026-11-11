@@ -60,7 +60,10 @@ def test_chunking_yields_same_result_as_no_chunking(
     """
 
     # Get baseline metrics
-    baseline_stats = duck_con.sql(query.format(relation="baseline_rel")).fetchone()
+    baseline_stats = next(
+        iter(duck_con.sql(query.format(relation="baseline_rel")).limit(1).fetchall()),
+        None,
+    )
 
     (
         baseline_count,
@@ -71,7 +74,9 @@ def test_chunking_yields_same_result_as_no_chunking(
     ) = baseline_stats
 
     # Get chunked metrics
-    chunked_stats = duck_con.sql(query.format(relation="chunked_rel")).fetchone()
+    chunked_stats = next(
+        iter(duck_con.sql(query.format(relation="chunked_rel")).limit(1).fetchall()), None
+    )
 
     (
         chunked_count,
@@ -148,10 +153,10 @@ def test_clean_data_using_precomputed_rel_tok_freq(
     duck_con, fhrs_data, mock_chunk_size_1k
 ):
     no_chunk_rel = prepare_data_for_matching(fhrs_data, con=duck_con)
-    no_chunk_count = no_chunk_rel.count("*").fetchone()[0]
+    no_chunk_count = no_chunk_rel.count("*").fetchall()[0][0]
 
     chunked_rel = prepare_data_for_matching(fhrs_data, con=duck_con, num_of_chunks=5)
-    chunked_count = chunked_rel.count("*").fetchone()[0]
+    chunked_count = chunked_rel.count("*").fetchall()[0][0]
 
     # Confirm we get the expected number of records out
     assert no_chunk_count == chunked_count == 5000

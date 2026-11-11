@@ -179,9 +179,11 @@ def _write_parquet_artefact(
     original_threads = None
     if settings.max_threads is not None:
         original_threads = int(
-            con.execute("SELECT current_setting('threads')").fetchone()[0]
+            con.execute("SELECT current_setting('threads')").fetchall()[0][0]
         )
-        con.execute("SET threads = ?", [min(original_threads, settings.max_threads)])
+        con.execute(
+            "SET threads = ?", [min(original_threads, settings.max_threads)]
+        ).fetchall()
     try:
         con.execute(
             f"COPY (SELECT *{drop_clause} "
@@ -191,10 +193,10 @@ def _write_parquet_artefact(
             f"COMPRESSION {settings.compression}, "
             f"COMPRESSION_LEVEL {settings.compression_level}, "
             f"ROW_GROUP_SIZE {settings.row_group_size})"
-        )
+        ).fetchall()
     finally:
         if original_threads is not None:
-            con.execute("SET threads = ?", [original_threads])
+            con.execute("SET threads = ?", [original_threads]).fetchall()
 
 
 def _describe_prepare_input(data: PrepareCanonicalInput) -> str:
@@ -243,7 +245,7 @@ def _remote_output_exists(
 
     for candidate_path in candidate_paths:
         try:
-            con.read_parquet(candidate_path).limit(1).fetchone()
+            con.read_parquet(candidate_path).limit(1).fetchall()
             return True
         except Exception as exc:
             _rollback_if_needed(con)
@@ -279,7 +281,7 @@ def _is_permission_error(exc: Exception) -> bool:
 def _rollback_if_needed(con: duckdb.DuckDBPyConnection) -> None:
     """Best-effort rollback to clear aborted transaction state."""
     try:
-        con.execute("ROLLBACK")
+        con.execute("ROLLBACK").fetchall()
     except Exception:
         # Ignore when there is no active transaction.
         pass
@@ -371,9 +373,9 @@ def _load_prepared_canonical_data_remote(
 
     try:
         term_frequencies = con.read_parquet(tf_uri)
-        term_frequencies.limit(1).fetchone()
+        term_frequencies.limit(1).fetchall()
         inverted_index = con.read_parquet(idx_uri)
-        inverted_index.limit(1).fetchone()
+        inverted_index.limit(1).fetchall()
     except Exception as exc:
         _rollback_if_needed(con)
         if _is_permission_error(exc):
@@ -400,7 +402,7 @@ def _load_prepared_canonical_data_remote(
     for candidate_uri in address_candidates:
         try:
             addresses = con.read_parquet(candidate_uri)
-            addresses.limit(1).fetchone()
+            addresses.limit(1).fetchall()
             break
         except Exception as exc:
             read_errors.append(exc)
@@ -432,7 +434,7 @@ def _load_prepared_canonical_data_remote(
     roadlike_places: duckdb.DuckDBPyRelation | None = None
     try:
         roadlike_places = con.read_parquet(roadlike_places_uri)
-        roadlike_places.limit(1).fetchone()
+        roadlike_places.limit(1).fetchall()
     except Exception as exc:
         _rollback_if_needed(con)
         if _is_permission_error(exc):
@@ -776,7 +778,7 @@ def _prepare_canonical_folder(
         for column in canonical_storage_relation.columns
         if column not in canonical_drop_columns
     ]
-    addr_count = df_clean.count("*").fetchone()[0]
+    addr_count = df_clean.count("*").fetchall()[0][0]
 
     # Write parquet files
     tf_path = (
@@ -870,8 +872,8 @@ def _prepare_canonical_folder(
             )
 
     # Compute row counts once (avoids repeated full scans)
-    tf_count = tf_table.count("*").fetchone()[0]
-    idx_count = inverted_index.count("*").fetchone()[0]
+    tf_count = tf_table.count("*").fetchall()[0][0]
+    idx_count = inverted_index.count("*").fetchall()[0][0]
 
     logger.debug(
         "Wrote artefacts to '%s': %d addresses, %d term frequencies, %d index rows",
@@ -912,7 +914,7 @@ def _prepare_canonical_folder(
     }
     artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
     if roadlike_places is not None:
-        roadlike_count = roadlike_places.count("*").fetchone()[0]
+        roadlike_count = roadlike_places.count("*").fetchall()[0][0]
         manifest_row_counts["roadlike_places"] = roadlike_count
         artefact_paths.append(roadlike_places_path)
 
@@ -1031,14 +1033,14 @@ def _write_manifest_remote(
             json.dumps(manifest["inverted_index_portfolio"]),
             json.dumps(manifest["files"]),
         ],
-    )
+    ).fetchall()
     try:
         con.execute(
             f"COPY {manifest_table} TO '{escaped_manifest_uri}' "
             "(FORMAT JSON, ARRAY false)"
-        )
+        ).fetchall()
     finally:
-        con.execute(f"DROP TABLE IF EXISTS {manifest_table}")
+        con.execute(f"DROP TABLE IF EXISTS {manifest_table}").fetchall()
 
     logger.debug("Manifest written to '%s'", manifest_uri)
 
@@ -1142,7 +1144,7 @@ def _validate_prepared_folder(
     for path in [*canonical_paths, *required_paths, *optional_paths]:
         relative_name = str(path.relative_to(folder))
         try:
-            con.read_parquet(str(path)).limit(1).fetchone()
+            con.read_parquet(str(path)).limit(1).fetchall()
         except Exception as exc:
             raise FileNotFoundError(
                 f"Artefact '{relative_name}' in '{folder}' exists but is not a valid "

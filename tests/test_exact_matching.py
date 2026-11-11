@@ -284,6 +284,29 @@ def test_exact_matching_applies_flat_retraction_with_heuristics(duck_con):
     assert row["match_reason"] == MatchReason.EXACT_FLAT_RETRACTION.value
 
 
+def test_exact_matching_applies_fflat_retraction_with_heuristics(duck_con):
+    df_messy = _address_relation_from_values(duck_con, FLAT_MESSY_ROW_SQL).select(
+        """
+        * EXCLUDE (original_address_concat, clean_full_address),
+        regexp_replace(original_address_concat, '^FLAT', 'FFLAT')
+            AS original_address_concat,
+        regexp_replace(clean_full_address, '^FLAT', 'FFLAT') AS clean_full_address
+        """
+    )
+    df_canonical = _address_relation_from_values(duck_con, FLAT_CANONICAL_ROW_SQL)
+
+    results, _ = _run_matching(
+        con=duck_con,
+        df_messy_clean=df_messy,
+        df_canonical_clean=df_canonical,
+        stages=[ExactMatchStage()],
+    )
+
+    row = results.fetchdf().iloc[0]
+    assert row["resolved_canonical_id"] == 1002
+    assert row["match_reason"] == MatchReason.EXACT_FLAT_RETRACTION.value
+
+
 def test_exact_matching_skips_flat_retraction_when_disabled(duck_con):
     df_messy = _address_relation_from_values(duck_con, FLAT_MESSY_ROW_SQL)
     df_canonical = _address_relation_from_values(duck_con, FLAT_CANONICAL_ROW_SQL)
@@ -676,7 +699,7 @@ def test_run_matching_handles_non_identifier_uid(duck_con, peeled_test_data, mon
         stages=[ExactMatchStage(), PeeledAddressStage()],
     )
 
-    assert results.count("*").fetchone()[0] == df_fuzzy.count("*").fetchone()[0]
+    assert results.count("*").fetchall()[0][0] == df_fuzzy.count("*").fetchall()[0][0]
 
 
 def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data):
@@ -690,8 +713,8 @@ def test_peeled_address_matching_preserves_row_count(duck_con, peeled_test_data)
         stages=[ExactMatchStage(), PeeledAddressStage()],
     )
 
-    input_row_count = df_fuzzy.count("*").fetchone()[0]
-    output_row_count = results.count("*").fetchone()[0]
+    input_row_count = df_fuzzy.count("*").fetchall()[0][0]
+    output_row_count = results.count("*").fetchall()[0][0]
 
     assert output_row_count == input_row_count, (
         f"Row count changed: input={input_row_count}, output={output_row_count}"
@@ -1283,7 +1306,7 @@ def test_peeled_address_stripped_matching_is_enabled_by_default(duck_con):
     )
 
     default_row = default_results.fetchdf().iloc[0]
-    disabled_row = disabled_results.select("resolved_canonical_id").fetchone()[0]
+    disabled_row = disabled_results.select("resolved_canonical_id").fetchall()[0][0]
 
     assert default_row["resolved_canonical_id"] == 1000
     assert default_row["match_reason"] == (
@@ -1352,6 +1375,6 @@ def test_deterministic_stripping_preserves_numeric_boundaries(
         df_canonical_clean=canonical,
         stages=[stage_type(inward_postcode_levenshtein=inward_cap)],
     )
-    assert results.select("resolved_canonical_id").fetchone()[0] == (
+    assert results.select("resolved_canonical_id").fetchall()[0][0] == (
         1001 if include_exact_candidate else None
     )

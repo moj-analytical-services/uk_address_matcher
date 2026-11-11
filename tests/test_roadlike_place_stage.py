@@ -9,6 +9,7 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 )
 from uk_address_matcher.cleaning.steps.roadlike_places import (
     ROAD_FEATURE_COLUMNS,
+    add_road_blocking_features,
     add_top_1_road_features,
     derive_rightmost_numeric_position_sql,
     derive_top_1_road_keys,
@@ -83,7 +84,7 @@ def test_supported_road_candidates_do_not_cross_districts(duck_con):
         CREATE TEMPORARY TABLE district_catalogue AS
         SELECT 'AB1' AS postcode_district, 'HIGH STREET' AS candidate_phrase,
             'STREET' AS terminal_token
-    """)
+    """).fetchall()
 
     candidates = duck_con.sql(
         roadlike_place_prepared_candidate_sql(
@@ -116,7 +117,7 @@ def test_materialized_prepared_candidate_sources_match_inline_candidates(duck_co
         ) AS candidate_sources
     """
         % roadlike_place_prepared_candidate_sources_sql("materialized_candidate_prepared")
-    )
+    ).fetchall()
 
     inline = duck_con.sql(
         roadlike_place_prepared_candidate_sql("materialized_candidate_prepared")
@@ -235,7 +236,7 @@ def test_single_roadlike_batch_does_not_write_partition_files(
 
     catalogue = derive_roadlike_places(source, duck_con, show_progress="off")
 
-    assert catalogue.count("*").fetchone() == (1,)
+    assert (catalogue.count("*").limit(1).fetchall())[0] == (1,)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -255,7 +256,7 @@ def test_roadlike_default_prepares_at_most_128_districts_per_batch(duck_con, mon
 
     def record_prepared_batch(table_name, **kwargs):
         batch_rows.append(
-            duck_con.sql(f"SELECT count(*) FROM {table_name}").fetchone()[0]
+            duck_con.sql(f"SELECT count(*) FROM {table_name}").fetchall()[0][0]
         )
         return original(table_name, **kwargs)
 
@@ -265,7 +266,7 @@ def test_roadlike_default_prepares_at_most_128_districts_per_batch(duck_con, mon
     catalogue = derive_roadlike_places(source, duck_con, show_progress="off")
 
     assert batch_rows == [128, 1]
-    assert catalogue.count("*").fetchone() == (129,)
+    assert (catalogue.count("*").limit(1).fetchall())[0] == (129,)
 
 
 def test_derive_roadlike_places_filters_before_district_batching(duck_con):
@@ -423,8 +424,8 @@ def test_top_1_road_keys_can_require_catalogue_support(duck_con):
         require_catalogue_support=True,
     )
 
-    assert unrestricted.select("road_1_norm").fetchone() == ("XYZZY QUUX",)
-    assert supported.count("*").fetchone() == (0,)
+    assert (unrestricted.select("road_1_norm").limit(1).fetchall())[0] == ("XYZZY QUUX",)
+    assert (supported.count("*").limit(1).fetchall())[0] == (0,)
 
 
 def test_top_1_road_keys_reuse_equivalent_post_number_tails(duck_con):
@@ -444,9 +445,27 @@ def test_top_1_road_keys_reuse_equivalent_post_number_tails(duck_con):
     assert keys.fetchall() == [("1", "HIGH STREET"), ("2", "HIGH STREET")]
 
 
+def test_road_blocking_preserves_rows_with_repeated_external_ids(duck_con):
+    source = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('same', 1, '12 HIGH STREET', 'AB1 2CD', ['12']),
+            ('same', 2, '14 OAK LANE', 'AB1 3CD', ['14'])
+        ) AS rows(
+            unique_id, ukam_address_id, clean_full_address, postcode, numeric_tokens
+        )
+    """)
+    result = add_road_blocking_features(
+        duck_con, source, roadlike_places=_catalogue_from_source(duck_con, source)
+    )
+
+    assert result.select("ukam_address_id, unique_id, road_1_norm").order(
+        "ukam_address_id"
+    ).fetchall() == [(1, "same", "HIGH STREET"), (2, "same", "OAK LANE")]
+
+
 @pytest.mark.parametrize("stored_ids", [False, True])
 def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con, stored_ids):
-    duck_con.execute("SET preserve_insertion_order = true")
+    duck_con.execute("SET preserve_insertion_order = true").fetchall()
     source = duck_con.sql("""
         SELECT * FROM (VALUES
             ('1', 1, '12 WRONG ROAD', 'AB1 2CD', ['12'], [], 'CUSTOM_LEVEL', '12'),
@@ -478,9 +497,9 @@ def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con, sto
 
     assert len(rows) == 2
     assert [row[8] for row in rows] == ["HIGH STREET", "HIGH STREET"]
-    assert duck_con.execute(
-        "SELECT current_setting('preserve_insertion_order')"
-    ).fetchone() == (True,)
+    assert (
+        duck_con.execute("SELECT current_setting('preserve_insertion_order')").fetchall()
+    )[0] == (True,)
     assert duck_con.sql("""
         SELECT temporary FROM duckdb_views()
         WHERE starts_with(view_name, '__ukam_canonical_with_road_')
@@ -537,10 +556,14 @@ def test_road_features_without_catalogue_are_neutral(duck_con):
 
     features = add_top_1_road_features(duck_con, source)
 
-    assert features.select(
-        "road_1_norm, road_1_confidence, road_1_token_count, "
-        "road_1_margin, road_1_distinctive_tokens"
-    ).fetchone() == (None, None, None, None, None)
+    assert (
+        features.select(
+            "road_1_norm, road_1_confidence, road_1_token_count, "
+            "road_1_margin, road_1_distinctive_tokens"
+        )
+        .limit(1)
+        .fetchall()
+    )[0] == (None, None, None, None, None)
 
 
 @pytest.mark.parametrize("district_catalogue", [False, True])
@@ -663,9 +686,12 @@ def test_catalogue_road_tails_preserve_variant_support(duck_con, id_type):
     actual = derive_roadlike_places(source, duck_con, show_progress="off")
     assert actual.types == expected.types
     assert actual.order("ALL").fetchall() == expected.order("ALL").fetchall()
-    assert actual.filter("candidate_phrase = 'HIGH STREET'").select(
-        "phrase_support, phrase_addresses"
-    ).fetchone() == (3, 2)
+    assert (
+        actual.filter("candidate_phrase = 'HIGH STREET'")
+        .select("phrase_support, phrase_addresses")
+        .limit(1)
+        .fetchall()
+    )[0] == (3, 2)
 
 
 def test_fallback_validity_is_shared_across_null_identifiers(duck_con):
@@ -753,7 +779,9 @@ def test_fallback_exclusion_preserves_duplicate_and_null_ids(duck_con):
 def test_canonical_road_keys_restore_order_after_view_creation_error(
     duck_con, monkeypatch, preserve_order, error_type
 ):
-    duck_con.execute(f"SET preserve_insertion_order = {str(preserve_order).lower()}")
+    duck_con.execute(
+        f"SET preserve_insertion_order = {str(preserve_order).lower()}"
+    ).fetchall()
     source = duck_con.sql("""
         SELECT '1' AS unique_id, 1 AS ukam_address_id,
             '12 HIGH STREET' AS clean_full_address, 'AB1 2CD' AS postcode,
@@ -765,26 +793,38 @@ def test_canonical_road_keys_restore_order_after_view_creation_error(
 
     def fail_view_creation(connection, query, *args, **kwargs):
         if query.startswith("CREATE TEMPORARY VIEW __ukam_canonical_with_road_"):
-            assert original_execute(
-                connection, "SELECT current_setting('preserve_insertion_order')"
-            ).fetchone() == (preserve_order,)
+            assert (
+                original_execute(
+                    connection, "SELECT current_setting('preserve_insertion_order')"
+                ).fetchall()
+            )[0] == (preserve_order,)
             raise error_type("view creation failed")
         return original_execute(connection, query, *args, **kwargs)
 
     monkeypatch.setattr(type(duck_con), "execute", fail_view_creation)
     with pytest.raises(error_type, match="view creation failed"):
         _add_canonical_road_blocking_keys(source, duck_con, roadlike_places=catalogue)
-    assert duck_con.sql(
-        "SELECT current_setting('preserve_insertion_order')"
-    ).fetchone() == (preserve_order,)
-    assert duck_con.sql("""
+    assert (
+        duck_con.sql("SELECT current_setting('preserve_insertion_order')")
+        .limit(1)
+        .fetchall()
+    )[0] == (preserve_order,)
+    assert (
+        duck_con.sql("""
         SELECT count(*) FROM duckdb_tables()
         WHERE starts_with(table_name, '__ukam_canonical_road_')
-    """).fetchone() == (0,)
-    assert duck_con.sql("""
+    """)
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
+    assert (
+        duck_con.sql("""
         SELECT count(*) FROM duckdb_views()
         WHERE starts_with(view_name, '__ukam_canonical_with_road_')
-    """).fetchone() == (0,)
+    """)
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
 
 
 def test_terminal_templates_include_numeric_anchor_and_district(duck_con):

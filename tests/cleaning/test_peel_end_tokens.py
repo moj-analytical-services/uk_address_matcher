@@ -17,8 +17,10 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> tuple[str,
     pattern_sql = _build_suffix_peel_regex_sql_literal()
     escaped_address = address.replace("'", "''")
 
-    row = con.sql(
-        f"""
+    row = next(
+        iter(
+            con.sql(
+                f"""
         WITH input AS (
             SELECT
                 regexp_replace(
@@ -33,7 +35,12 @@ def _run_peel_single(address: str, con: duckdb.DuckDBPyConnection) -> tuple[str,
             trim(regexp_replace(address, '{pattern_sql}', '')) <> address AS did_peel
         FROM input
         """
-    ).fetchone()
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
     return row[0], row[1]
 
 

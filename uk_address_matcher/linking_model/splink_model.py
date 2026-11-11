@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.resources as pkg_resources
 import json
+from pathlib import Path
 
 from duckdb import (
     ColumnExpression,
@@ -9,12 +10,13 @@ from duckdb import (
     DuckDBPyConnection,
     DuckDBPyRelation,
     FunctionExpression,
-    InvalidInputException,
     SQLExpression,
     StarExpression,
 )
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
+from sqlglot import exp, parse_one
 
+from uk_address_matcher.cleaning.materialisation import _parquet_preserves_type
 from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
@@ -22,7 +24,11 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     ensure_numeric_range_struct,
 )
-from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
+from uk_address_matcher.sql_pipeline.helpers import (
+    _quote_identifier,
+    _uid,
+    package_resource_read_sql,
+)
 
 
 def _get_model_settings_dict(*, include_directional_premise_roles: bool = False):
@@ -366,19 +372,19 @@ def _align_postcode_name_columns(
     df_addresses_to_search_within: DuckDBPyRelation,
 ) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
     """Add neutral typed evidence fields where prepared inputs lack them."""
-    for column, value in (
-        ("lk_level_by_alias", FunctionExpression("map").cast("MAP(VARCHAR, INTEGER)")),
-        ("lk_anchor_uprns", ConstantExpression([]).cast("VARCHAR[]")),
-        ("lk_eligible", ConstantExpression(False)),
+    for column, expression in (
+        ("lk_level_by_alias", "MAP([]::VARCHAR[], []::INTEGER[])"),
+        ("lk_anchor_uprns", "[]::VARCHAR[]"),
+        ("lk_word_support_by_uprn", "MAP([]::VARCHAR[], []::INTEGER[])"),
+        ("lk_eligible", "false"),
     ):
-        expression = value.alias(column)
         if column not in df_addresses_to_match.columns:
             df_addresses_to_match = df_addresses_to_match.select(
-                StarExpression(), expression
+                f"*, {expression} AS {column}"
             )
         if column not in df_addresses_to_search_within.columns:
             df_addresses_to_search_within = df_addresses_to_search_within.select(
-                StarExpression(), expression
+                f"*, {expression} AS {column}"
             )
     return df_addresses_to_match, df_addresses_to_search_within
 
@@ -397,6 +403,7 @@ def _get_linker(
     settings: SettingsCreator | None = None,
     owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
+    canonical_cache_path: str | None = None,
 ) -> Linker:
     """Build a configured Splink linker for the given relations.
 
@@ -444,15 +451,13 @@ def _get_linker(
             StarExpression(exclude=["original_address_concat"])
         )
 
-    unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
-    if unresolved_count == 0:
+    if not df_addresses_to_match.select("1").limit(1).fetchall():
         raise ValueError(
             "No unresolved records remain after deterministic matching. Either "
             "skip Splink or provide rows with unresolved matches."
         )
 
-    canonical_count = df_addresses_to_search_within.count("*").fetchall()[0][0]
-    if canonical_count == 0:
+    if not df_addresses_to_search_within.select("1").limit(1).fetchall():
         raise ValueError(
             "Canonical relation is empty - Splink requires at least one search record."
         )
@@ -698,39 +703,97 @@ def _get_linker(
 
     settings = SettingsCreator.from_path_or_dict(settings_as_dict)
 
-    df_addresses_to_match_fix = df_addresses_to_match
+    shared_columns = ", ".join(
+        column
+        for column in df_addresses_to_match.columns
+        if column != "original_address_concat"
+        and column in df_addresses_to_search_within.columns
+    )
+    df_addresses_to_match_fix = df_addresses_to_match.select(shared_columns)
 
-    # See https://github.com/moj-analytical-services/uk_address_matcher/issues/253
-    # con.register("df_addresses_to_search_within_fix", df_addresses_to_search_within)
-    # df_addresses_to_search_within_fix = con.table("df_addresses_to_search_within_fix")
-    df_addresses_to_search_within_fix = df_addresses_to_search_within
+    df_addresses_to_search_within_fix = df_addresses_to_search_within.select(
+        shared_columns
+    )
 
-    # Splink expects the prediction-side dataset labels to be `m_` and `c_`.
-    # Register the matching relations under those names for the duration of the
-    # Splink run instead of dropping any user table that happens to share the
-    # name. The caller (SplinkStage) is responsible for unregistering both
-    # names once Splink has materialised its outputs, restoring any shadowed
-    # user tables. Registration order: unregister first so a stale
-    # registration from a previous (possibly failed) run is replaced.
-    messy_name, canonical_name = "m_", "c_"
-    for table_name, relation in (
-        (messy_name, df_addresses_to_match_fix),
-        (canonical_name, df_addresses_to_search_within_fix),
-    ):
-        try:
-            con.unregister(table_name)
-        except InvalidInputException:
-            pass
-        con.register(table_name, relation)
+    if canonical_cache_path is not None:
+        model_settings = settings.get_settings("duckdb")
+        queries = [
+            "SELECT " + ", ".join(model_settings._columns_to_select_for_blocking)
+        ]
+        for rule in model_settings._blocking_rules_to_generate_predictions:
+            definition = rule.as_dict()
+            queries.append("SELECT 1 WHERE " + definition["blocking_rule"])
+            queries.extend(
+                "SELECT " + column for column in definition.get("arrays_to_explode", [])
+            )
+        required_columns = {
+            column.name
+            for query in queries
+            for column in parse_one(query, read="duckdb").find_all(exp.Column)
+        }
+        columns = [
+            column
+            for column in df_addresses_to_search_within_fix.columns
+            if column in required_columns
+        ]
+        encoded_types = {
+            column: kind
+            for column, kind in zip(
+                df_addresses_to_search_within_fix.columns,
+                df_addresses_to_search_within_fix.types,
+                strict=True,
+            )
+            if column in columns and not _parquet_preserves_type(kind)
+        }
+        projection = ", ".join(_quote_identifier(column) for column in columns)
+        cache_path = Path(canonical_cache_path)
+        if not cache_path.exists():
+            cache_projection = ", ".join(
+                f"to_json({_quote_identifier(column)})::VARCHAR "
+                f"AS {_quote_identifier(column)}"
+                if column in encoded_types
+                else _quote_identifier(column)
+                for column in columns
+            )
+            df_addresses_to_search_within_fix.project(cache_projection).write_parquet(
+                str(cache_path), compression="zstd"
+            )
+        cached_canonical = con.read_parquet(str(cache_path))
+        if cached_canonical.columns != columns:
+            raise ValueError("Canonical matching cache schema changed between chunks.")
+        if encoded_types:
+            restored = []
+            for column, kind in encoded_types.items():
+                quoted = _quote_identifier(column)
+                expression = f"{quoted}::JSON"
+                if kind.id == "enum":
+                    expression = f"json_extract_string({expression}, '$')"
+                restored.append(f"CAST({expression} AS {kind}) AS {quoted}")
+            cached_canonical = cached_canonical.project(
+                f"* REPLACE ({', '.join(restored)})"
+            )
+        df_addresses_to_search_within_fix = cached_canonical
+        df_addresses_to_match_fix = df_addresses_to_match_fix.project(projection)
 
     db_api = DuckDBAPI(connection=con)
+    input_frames = []
+    for table_name, relation in (
+        ("m_", df_addresses_to_match_fix),
+        ("c_", df_addresses_to_search_within_fix),
+    ):
+        frame = db_api.register(
+            relation,
+            dataset_display_name=table_name,
+            table_name=f"__splink__input_{table_name}{_uid()}",
+        )
+        input_frames.append(frame)
+        if owned_splink_frames is not None:
+            owned_splink_frames.append(frame)
 
     linker = Linker(
-        [messy_name, canonical_name],
+        input_frames,
         settings=settings,
-        db_api=db_api,
-        input_table_aliases=[messy_name, canonical_name],
-        set_up_basic_logging=False,
+        log_level=None,
     )
 
     for i in range(1, 4):
@@ -739,29 +802,10 @@ def _get_linker(
             ColumnExpression("tf_numeric_token").alias(f"tf_numeric_token_{i}"),
         )
         tf_frame = linker.table_management.register_term_frequency_lookup(
-            df, f"numeric_token_{i}", overwrite=True
+            db_api.register(df, table_name=f"__splink__numeric_tf_{i}_{_uid()}"),
+            f"numeric_token_{i}",
         )
         if owned_splink_frames is not None:
             owned_splink_frames.append(tf_frame)
-
-    cols_to_select = [
-        column
-        for column in df_addresses_to_match.columns
-        if column != "original_address_concat"
-        and column in df_addresses_to_search_within.columns
-    ]
-    columns = [ColumnExpression(column) for column in cols_to_select]
-    concat_with_tf = df_addresses_to_match.select(
-        *columns, ConstantExpression(messy_name).alias("source_dataset")
-    ).union(
-        df_addresses_to_search_within.select(
-            *columns, ConstantExpression(canonical_name).alias("source_dataset")
-        )
-    )
-    concat_frame = linker.table_management.register_table_input_nodes_concat_with_tf(
-        concat_with_tf
-    )
-    if owned_splink_frames is not None:
-        owned_splink_frames.append(concat_frame)
 
     return linker

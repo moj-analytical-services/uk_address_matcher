@@ -2,6 +2,10 @@ name: Run pytest
 
 on:
   workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        default: ""
   pull_request:
     paths:
       - "uk_address_matcher/**"
@@ -21,31 +25,28 @@ on:
 permissions: {}
 
 concurrency:
-  group: run-pytest-${{ github.event.pull_request.number || github.ref }}
+  group: run-pytest-${{ inputs.target_sha && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  run-pytest:
+  run-pytest-primary:
+    name: Python 3.11 / locked dependencies
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.11.3"
           enable-cache: false
@@ -58,3 +59,57 @@ jobs:
 
       - name: Run pytest
         run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+  run-pytest-follow-up:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.test-label }}
+    needs: run-pytest-primary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            test-label: locked dependencies
+            use-project-deps: true
+          - python-version: "3.11"
+            test-label: DuckDB 1.5.0 override
+            use-project-deps: false
+            duckdb-version: "1.5.0"
+          - python-version: "3.12"
+            test-label: locked dependencies
+            use-project-deps: true
+          - python-version: "3.13"
+            test-label: locked dependencies
+            use-project-deps: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --group model-training --locked
+
+      - name: Install project in editable mode
+        run: uv pip install -e .
+
+      - name: Run pytest with project dependencies
+        if: ${{ matrix.use-project-deps }}
+        run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+      - name: Run pytest with DuckDB override
+        if: ${{ matrix.use-project-deps == false }}
+        run: uv run --with "duckdb==${{ matrix.duckdb-version }}" pytest tests/ --ignore=tests/labelling -vv

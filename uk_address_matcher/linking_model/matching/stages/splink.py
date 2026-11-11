@@ -87,17 +87,23 @@ def _preserve_anchored_name_aliases(
     predictions: duckdb.DuckDBPyRelation,
     source: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    if "bf_postcode_distinguishing_name" not in predictions.columns:
+    if "mw_postcode_distinguishing_name" not in predictions.columns:
         return predictions
-    factor = "bf_postcode_distinguishing_name"
-    if "bf_tf_postcode_distinguishing_name" in predictions.columns:
-        factor += " * coalesce(bf_tf_postcode_distinguishing_name, 1.0)"
+    contribution = "mw_postcode_distinguishing_name"
+    if "mw_tf_adj_postcode_distinguishing_name" in predictions.columns:
+        contribution += " + coalesce(mw_tf_adj_postcode_distinguishing_name, 0.0)"
+    factor = f"pow(2.0, ({contribution}))"
     if (
-        source.filter("""
+        next(
+            iter(
+                source.filter("""
         len(lk_anchor_uprns) = 1 AND list_contains(map_values(lk_level_by_alias), 2)
     """)
-        .limit(1)
-        .fetchone()
+                .limit(1)
+                .fetchall()
+            ),
+            None,
+        )
         is None
     ):
         return predictions
@@ -123,7 +129,9 @@ def _preserve_anchored_name_aliases(
         pipeline_name="Preserve exact anchored name aliases",
     ).run()
     excluded_name = f"__ukam__name_alias_exclusions_{_uid()}"
-    con.execute(f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}')
+    con.execute(
+        f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}'
+    ).fetchall()
     excluded = con.table(excluded_name)
     prediction_alias = f"local_key_source_unfiltered_predictions_{_uid()}"
     return predictions.query(
@@ -280,6 +288,9 @@ class SplinkStage(MatchingStage):
     best_matches_table: str | None = field(default=None, init=False, repr=False)
 
     _owned_splink_frames: tuple = field(default=(), init=False, repr=False)
+    _canonical_cache_path: str | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def _release_splink_tables(self) -> None:
         """Drop this run's Splink tables via Splink's public API."""
@@ -317,7 +328,7 @@ class SplinkStage(MatchingStage):
         if explain:
             return None
 
-        unmatched_count = df_unmatched.count("*").fetchone()[0]
+        unmatched_count = df_unmatched.count("*").fetchall()[0][0]
         if unmatched_count == 0:
             return None
 
@@ -384,11 +395,15 @@ class SplinkStage(MatchingStage):
                 settings=self.settings,
                 owned_splink_frames=owned_frames,
                 retain_matching_columns=False,
+                canonical_cache_path=self._canonical_cache_path,
             )
 
             self.linker = linker
 
             # Step 2: Predict
+            blocked_pairs = linker.inference.compute_blocked_pairs_for_predict_chunk()
+            owned_frames.append(blocked_pairs)
+            linker.table_management.register_blocked_pairs_for_predict(blocked_pairs)
             df_predict = linker.inference.predict(
                 threshold_match_weight=self.predict_threshold_match_weight
             )
@@ -409,7 +424,7 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + prediction_output.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.predictions_table = table_name
             df_predict_ddb = con.table(table_name)
             df_predict_for_improvement = _preserve_anchored_name_aliases(
@@ -456,7 +471,7 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + df_improved.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.improved_predictions_table = improved_table_name
             df_improved = con.table(improved_table_name)
 
@@ -476,7 +491,7 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + df_best.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.best_matches_table = df_best_name
 
             # Step 5: Apply thresholds and project to standard columns
@@ -525,13 +540,9 @@ class SplinkStage(MatchingStage):
             completed = True
             return result
         finally:
-            # Unregister both aliases even if linker setup failed before registration.
-            for input_name in ("m_", "c_"):
-                with suppress(InvalidInputException):
-                    con.unregister(input_name)
             for input_name in _local_key_input_aliases(con) - local_key_aliases_before:
                 if input_name.startswith("__ukam__name_"):
-                    con.execute(f'DROP TABLE "{input_name}"')
+                    con.execute(f'DROP TABLE "{input_name}"').fetchall()
                     continue
                 with suppress(InvalidInputException):
                     con.unregister(input_name)

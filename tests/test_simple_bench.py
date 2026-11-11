@@ -4,20 +4,86 @@ import duckdb
 import pytest
 
 import benchmarking.insights.reporting as reporting_module
-from benchmarking.config.datasets import _clean_output
+from benchmarking.config.datasets import (
+    _clean_output,
+    filter_dataset_to_canonical_labels,
+    load_dataset,
+)
 from benchmarking.insights.diagnostics import build_dataset_diagnostics
 from benchmarking.insights.reporting import print_benchmark_summary, print_diagnostics
+from benchmarking.insights.summary import fetch_overall_summary
 from benchmarking.insights.types import BenchmarkOutputOptions
 from benchmarking.runner import BenchmarkRunResult, resolve_dataset_selection
+
+
+def test_fetch_overall_summary_selects_overall_and_rejects_missing_row() -> None:
+    with duckdb.connect() as connection:
+        accuracy = connection.sql(
+            "SELECT * FROM (VALUES "
+            "('exact', 4, 4, 1.0, 0.4), ('overall', 5, 4, 0.8, 0.4)"
+            ") AS accuracy(stage, rows_matched_in_stage, correct_matches, precision, recall)"
+        )
+        assert fetch_overall_summary(connection, accuracy, total_input_rows=10) == (
+            10, 5, 4, 0.8, 0.4
+        )
+        with pytest.raises(ValueError, match="Expected an overall row"):
+            fetch_overall_summary(
+                connection, accuracy.filter("stage != 'overall'"), total_input_rows=10
+            )
 
 
 def test_resolve_dataset_selection_all() -> None:
     selected = resolve_dataset_selection("all")
 
     assert "hackney" in selected
+    assert "conwy" in selected
     assert "lambeth_council_tax" in selected
     assert "lambeth_electoral_register" in selected
     assert "lambeth_llpg" in selected
+
+
+def test_filter_conwy_to_canonical_preserves_repeated_rows(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "conwy-data.csv"
+    source.write_text(
+        "uprn,addr1,addr2,addr3,addr4,postcode\n"
+        "10000000001,10 Example Street,Flat 1,Town,County,AB1 2CD\n"
+        "10000000002,20 Example Street,Flat 1,Town,County,AB2 3CD\n"
+        "10000000001,11 Example Street,Flat 2,Town,County,AB1 2CD\n"
+        ",30 Example Street,,,,AB3 4CD\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UKAM_CONWY_DATA_PATH", str(tmp_path))
+    con = duckdb.connect(database=":memory:")
+
+    canonical_relation = con.sql(
+        "SELECT * FROM (VALUES ('10000000001')) AS canonical(unique_id)"
+    )
+    rows = (
+        filter_dataset_to_canonical_labels(
+            con,
+            load_dataset(con, dataset_key="conwy"),
+            canonical_relation,
+        )
+        .order("address_concat")
+        .fetchall()
+    )
+
+    assert rows == [
+        (
+            "10000000001",
+            "10 example street flat 1 town county",
+            "10000000001",
+            "AB1 2CD",
+        ),
+        (
+            "10000000001",
+            "11 example street flat 2 town county",
+            "10000000001",
+            "AB1 2CD",
+        ),
+    ]
 
 
 def test_resolve_dataset_selection_errors_on_unknown() -> None:
@@ -478,7 +544,7 @@ def test_clean_output_lowercases_address_concat() -> None:
     )
 
     cleaned = _clean_output(con, relation)
-    row = cleaned.select("address_concat").fetchone()
+    row = next(iter(cleaned.select("address_concat").limit(1).fetchall()), None)
     assert row[0] == "10 high street"
 
 

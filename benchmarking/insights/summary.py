@@ -13,7 +13,7 @@ def fetch_overall_summary(
     total_input_rows: int,
 ) -> tuple[int, int, int, float | None, float | None]:
     """Return overall benchmark summary tuple from the accuracy table."""
-    row = con.sql(
+    rows = con.sql(
         f"""
         SELECT
             rows_matched_in_stage,
@@ -23,11 +23,12 @@ def fetch_overall_summary(
         FROM ({accuracy_relation.sql_query()}) AS accuracy
         WHERE stage = 'overall'
         """
-    ).fetchone()
+    ).limit(1).fetchall()
 
-    if row is None:
+    if not rows:
         raise ValueError("Expected an overall row in the accuracy table.")
 
+    row = rows[0]
     return (
         int(total_input_rows),
         int(row[0]),

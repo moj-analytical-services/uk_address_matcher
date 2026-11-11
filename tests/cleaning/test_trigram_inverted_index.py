@@ -13,14 +13,14 @@ class TestTrigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 2),
-                    i ->
+                    lambda i:
                         tokenised[i] || ' ' || tokenised[i + 1] || ' ' || tokenised[i + 2]
                 ) AS trigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["9 LOVE LANE", "LOVE LANE LONDON"]
 
@@ -38,7 +38,7 @@ class TestTrigramGeneration:
                     WHEN len(tokenised) >= 3 THEN
                         list_transform(
                             generate_series(1, len(tokenised) - 2),
-                            i ->
+                            lambda i:
                                 tokenised[i]
                                 || ' '
                                 || tokenised[i + 1]
@@ -51,7 +51,7 @@ class TestTrigramGeneration:
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == []
 
@@ -67,14 +67,14 @@ class TestTrigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 2),
-                    i ->
+                    lambda i:
                         tokenised[i] || ' ' || tokenised[i + 1] || ' ' || tokenised[i + 2]
                 ) AS trigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["1 HIGH STREET"]
 
@@ -91,14 +91,14 @@ class TestBigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 1),
-                    i ->
+                    lambda i:
                         tokenised[i] || ' ' || tokenised[i + 1]
                 ) AS bigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["9 LOVE", "LOVE LANE", "LANE LONDON"]
 
@@ -113,7 +113,7 @@ class TestBigramGeneration:
                     WHEN len(tokenised) >= 2 THEN
                         list_transform(
                             generate_series(1, len(tokenised) - 1),
-                            i -> tokenised[i] || ' ' || tokenised[i + 1]
+                            lambda i: tokenised[i] || ' ' || tokenised[i + 1]
                         )
                     ELSE []
                 END AS bigrams
@@ -121,7 +121,7 @@ class TestBigramGeneration:
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == []
 
@@ -134,13 +134,13 @@ class TestBigramGeneration:
             SELECT
                 list_transform(
                     generate_series(1, len(tokenised) - 1),
-                    i -> tokenised[i] || ' ' || tokenised[i + 1]
+                    lambda i: tokenised[i] || ' ' || tokenised[i + 1]
                 ) AS bigrams
             FROM (
                 SELECT string_split(clean_full_address, ' ') AS tokenised
                 FROM input
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["HIGH STREET"]
 
@@ -174,7 +174,7 @@ class TestIndexingStrategySqlExpressions:
             ],
         )
 
-        assert pipeline.run().fetchone()[1] == [
+        assert pipeline.run().fetchall()[0][1] == [
             "9 LOVE LANE",
             "LOVE LANE LONDON",
         ]
@@ -191,7 +191,7 @@ class TestIndexingStrategySqlExpressions:
             )
             SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["9 LOVE LANE", "LOVE LANE LONDON"]
 
@@ -207,7 +207,7 @@ class TestIndexingStrategySqlExpressions:
             )
             SELECT {TRIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == []
 
@@ -223,7 +223,7 @@ class TestIndexingStrategySqlExpressions:
             )
             SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == ["9 LOVE", "LOVE LANE", "LANE LONDON"]
 
@@ -239,7 +239,7 @@ class TestIndexingStrategySqlExpressions:
             )
             SELECT {BIGRAM_INDEX.keys_sql_expr} AS keys
             FROM input
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
         assert result == []
 
@@ -262,7 +262,7 @@ class TestInvertedIndexBuilding:
                     unique_id,
                     list_transform(
                         generate_series(1, len(tokenised) - 2),
-                        i ->
+                        lambda i:
                             tokenised[i]
                             || ' '
                             || tokenised[i + 1]
@@ -323,7 +323,7 @@ class TestInvertedIndexBuilding:
                     unique_id,
                     list_transform(
                         generate_series(1, len(tokenised) - 2),
-                        i ->
+                        lambda i:
                             tokenised[i]
                             || ' '
                             || tokenised[i + 1]
@@ -395,7 +395,7 @@ class TestDeriveInvertedIndexFunction:
         assert "index_strategy" in inverted_idx.columns
 
         # Check that we have results from both strategies
-        count = inverted_idx.count("*").fetchone()[0]
+        count = inverted_idx.count("*").fetchall()[0][0]
         assert count > 0
 
         strategies = duck_con.sql("""
@@ -671,7 +671,8 @@ class TestPrepareDataForMatchingWithInvertedIndex:
 
         messy = duck_con.sql("""
             SELECT * FROM (VALUES
-                ('100', '9 LOVE LANE LONDON SW1A 1AA', 'SW1A 1AA')
+                ('100', '9 LOVE LANE LONDON SW1A 1AA', 'SW1A 1AA'),
+                ('100', '10 HIGH STREET OXFORD', 'OX1 1AA')
             ) AS t(unique_id, address_concat, postcode)
         """)
 
@@ -687,10 +688,17 @@ class TestPrepareDataForMatchingWithInvertedIndex:
 
         assert "exploding_unique_ids" in prepared_messy.columns
 
-        result = prepared_messy.select("exploding_unique_ids").fetchone()[0]
+        rows = (
+            prepared_messy.order("postcode")
+            .select("unique_id, exploding_unique_ids, signature_score_map")
+            .fetchall()
+        )
 
-        # Should contain canonical unique_id '1' (matching keys)
-        assert "1" in result
+        assert [(external_id, candidates) for external_id, candidates, _ in rows] == [
+            ("100", ["2"]),
+            ("100", ["1"]),
+        ]
+        assert [set(scores) for _, _, scores in rows] == [{"2"}, {"1"}]
 
     def test_prepare_data_without_inverted_index(self, duck_con):
         """Test data without inverted index gets [unique_id] as exploding_unique_ids."""
@@ -742,6 +750,6 @@ class TestPrepareDataForMatchingWithInvertedIndex:
             messy, duck_con, num_of_chunks=1, inverted_index=inverted_idx
         )
 
-        result = prepared_messy.select("exploding_unique_ids").fetchone()[0]
+        result = prepared_messy.select("exploding_unique_ids").fetchall()[0][0]
 
         assert result == []

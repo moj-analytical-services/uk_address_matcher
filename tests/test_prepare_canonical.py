@@ -80,7 +80,7 @@ def _write_raw_canonical_csv(path: Path, records: list[dict[str, str]]) -> None:
 def _fake_relation(*, columns: list[str], row_count: int) -> MagicMock:
     relation = MagicMock()
     relation.columns = columns
-    relation.count.return_value.fetchone.return_value = (row_count,)
+    relation.count.return_value.fetchall.return_value = [(row_count,)]
     return relation
 
 
@@ -185,11 +185,14 @@ def test_prepare_accepts_minimal_columns_and_optional_metadata(
     assert prepared.addresses.project("unique_id").order("unique_id").fetchall() == [
         (record["unique_id"],) for record in CANONICAL_RECORDS
     ]
-    assert prepared.addresses.filter(
-        "clean_full_address IS NULL OR clean_full_address = ''"
-    ).count("*").fetchone() == (0,)
+    assert (
+        prepared.addresses.filter("clean_full_address IS NULL OR clean_full_address = ''")
+        .count("*")
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
     assert prepared.roadlike_places is not None
-    assert prepared.roadlike_places.count("*").fetchone()[0] > 0
+    assert prepared.roadlike_places.count("*").fetchall()[0][0] > 0
     for column, value in optional_columns.items():
         assert prepared.addresses.project(column).fetchall() == [(value,)] * len(
             CANONICAL_RECORDS
@@ -218,7 +221,7 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
     index = (
         loaded.addresses.filter("unique_id = '001'")
         .select("local_key_index")
-        .fetchone()[0]
+        .fetchall()[0][0]
     )
     meadow = next(
         key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
@@ -349,7 +352,7 @@ def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
     tokens = (
         prepared.addresses.filter("unique_id = 'C-DASH'")
         .project("clean_full_address_tokens")
-        .fetchone()[0]
+        .fetchall()[0][0]
     )
 
     assert tokens == ["PEN", "Y", "GRAIG", "TONYPANDY"]
@@ -362,7 +365,7 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
         "road_1_norm",
     }.issubset(prepared.addresses.columns)
     assert prepared.roadlike_places is not None
-    assert prepared.roadlike_places.count("*").fetchone()[0] > 0
+    assert prepared.roadlike_places.count("*").fetchall()[0][0] > 0
 
 
 def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
@@ -376,7 +379,9 @@ def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
     )
     prepared = load_prepared_canonical_data(output_folder, con)
 
-    assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
+    assert (prepared.addresses.count("*").limit(1).fetchall())[0] == (
+        len(CANONICAL_RECORDS),
+    )
     assert not (output_folder / "roadlike_places.parquet").exists()
     assert prepared.roadlike_places is None
     assert {
@@ -410,10 +415,16 @@ def test_prepare_uses_roads_without_valid_postcode(con, tmp_path, source_postcod
 
     assert prepared.roadlike_places is not None
     assert (output_folder / "roadlike_places.parquet").exists()
-    assert prepared.roadlike_places.project("postcode_district").fetchone() == ("",)
+    assert (prepared.roadlike_places.project("postcode_district").limit(1).fetchall())[
+        0
+    ] == ("",)
     assert "postcode_district" not in prepared.addresses.columns
-    assert prepared.addresses.project("road_1_norm").fetchone() == ("HIGH STREET",)
-    assert prepared.addresses.project("postcode").fetchone() == (source_postcode,)
+    assert (prepared.addresses.project("road_1_norm").limit(1).fetchall())[0] == (
+        "HIGH STREET",
+    )
+    assert (prepared.addresses.project("postcode").limit(1).fetchall())[0] == (
+        source_postcode,
+    )
 
 
 def test_prepare_derives_road_catalogue_by_default(canonical_data, con, tmp_path):
@@ -667,7 +678,7 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
 
 
 def test_prepare_sorts_canonical_parquet_for_compression(con, canonical_data, tmp_path):
-    con.execute("SET threads = 8")
+    con.execute("SET threads = 8").fetchall()
     prepare_canonical_folder(
         canonical_data,
         output_folder=tmp_path,
@@ -682,7 +693,7 @@ def test_prepare_sorts_canonical_parquet_for_compression(con, canonical_data, tm
         ("M1 1AA", "C2"),
         ("SW1A 1AA", "C1"),
     ]
-    assert con.execute("SELECT current_setting('threads')").fetchone()[0] == 8
+    assert con.execute("SELECT current_setting('threads')").fetchall()[0][0] == 8
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 3])
@@ -721,11 +732,11 @@ def test_prepared_canonical_schema_matches_debug_option(
         unique_id,
         list_transform(
             distinguishing_token_parts,
-            part -> part.token
+            lambda part: part.token
         ) AS distinguishing_adj_start_tokens,
         list_transform(
-            list_filter(distinguishing_token_parts, part -> part.is_lexical),
-            part -> part.token
+            list_filter(distinguishing_token_parts, lambda part: part.is_lexical),
+            lambda part: part.token
         ) AS distinguishing_lexical_tokens
         """
         )
@@ -814,7 +825,7 @@ def test_prepared_canonical_schema_matches_debug_option(
         .fetchall()
     )
     assert actual_clean_address_views == expected_clean_address_views
-    assert canonical_relation.count("*").fetchone()[0] == 3
+    assert canonical_relation.count("*").fetchall()[0][0] == 3
     assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
 
     for canonical_path in canonical_paths:
@@ -831,7 +842,7 @@ def test_old_manifest_without_preparation_options_still_loads(con, prepared_fold
 
     loaded = load_prepared_canonical_data(prepared_folder, con=con)
 
-    assert loaded.addresses.count("*").fetchone()[0] == 3
+    assert loaded.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
@@ -846,7 +857,7 @@ def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
             FROM read_parquet('{canonical_path}')
         ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
     canonical_path.unlink()
     legacy_path.rename(canonical_path)
 
@@ -854,9 +865,12 @@ def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
 
     assert "clean_full_address" in loaded.addresses.columns
     assert "clean_full_address_tokens" in loaded.addresses.columns
-    assert loaded.addresses.order("unique_id").select(
-        "clean_full_address_tokens"
-    ).fetchone() == (["1", "HIGH", "STREET", "LONDON"],)
+    assert (
+        loaded.addresses.order("unique_id")
+        .select("clean_full_address_tokens")
+        .limit(1)
+        .fetchall()
+    )[0] == (["1", "HIGH", "STREET", "LONDON"],)
 
 
 def test_v1_2_0_prepared_canonical_rehydrates_sub_premise_location(con):
@@ -868,9 +882,12 @@ def test_v1_2_0_prepared_canonical_rehydrates_sub_premise_location(con):
         )
 
     assert "sub_premise_location" in loaded.addresses.columns
-    assert loaded.addresses.filter("sub_premise_location IS NOT NULL").count(
-        "*"
-    ).fetchone() == (0,)
+    assert (
+        loaded.addresses.filter("sub_premise_location IS NOT NULL")
+        .count("*")
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
 
 
 def test_prepare_show_progress_false_suppresses_live_output(
@@ -1042,26 +1059,21 @@ def test_prepare_logs_stage_and_batch_progress(con, canonical_data, tmp_path, ca
     info_messages = [
         record.getMessage() for record in caplog.records if record.levelno == logging.INFO
     ]
-    assert any(
-        message.startswith("Cleaning and preprocessing:") and "records across" in message
-        for message in info_messages
-    )
+    assert "Cleaning and preprocessing: 3 records" in info_messages
     assert any(
         message.startswith("Cleaning and preprocessing completed:")
         for message in info_messages
     )
-    assert any(
-        message.startswith("Applying term frequencies:") and "records across" in message
-        for message in info_messages
-    )
+    assert "Applying term frequencies: 3 records" in info_messages
     assert any(
         message.startswith("Applying term frequencies completed:")
         for message in info_messages
     )
     assert any(
-        message.startswith("Cleaning and preprocessing:") and "chunk 1/1" in message
+        message.startswith("Building inverted index (bigram): chunk 1/10,")
         for message in info_messages
     )
+    assert all("chunk 1/1," not in message for message in info_messages)
     progress_glyphs = ("█", "░", "▕", "▏", "▮", "▯")
     assert all(
         all(glyph not in message for glyph in progress_glyphs)
@@ -1467,7 +1479,7 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
     addresses = con.read_parquet([str(path) for path in chunk_paths])
     physical_ids = addresses.select("ukam_address_id").fetchall()
 
-    assert addresses.count("*").fetchone()[0] == 4
+    assert addresses.count("*").fetchall()[0][0] == 4
     assert sorted(physical_ids) == [(1,), (2,), (3,), (4,)]
     assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
 
@@ -1491,7 +1503,7 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
     id_type = con.execute(
         "DESCRIBE SELECT ukam_address_id FROM read_parquet(?)",
         [str(chunk_paths[0])],
-    ).fetchone()[1]
+    ).fetchall()[0][1]
     assert id_type == "INTEGER"
 
     inverted_index_path = tmp_path / "ukam_inverted_index.parquet"
@@ -1502,10 +1514,13 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
         "BIGINT[]",
         "VARCHAR",
     ]
-    inverted_index_row_count = inverted_index.count("*").fetchone()[0]
+    inverted_index_row_count = inverted_index.count("*").fetchall()[0][0]
     assert inverted_index_row_count > 0
     assert (
-        inverted_index.select("key, index_strategy").distinct().count("*").fetchone()[0]
+        inverted_index.select("key, index_strategy")
+        .distinct()
+        .count("*")
+        .fetchall()[0][0]
         == inverted_index_row_count
     )
     assert (
@@ -1625,9 +1640,9 @@ def test_load_returns_prepared_canonical(con, prepared_folder):
 def test_load_prepared_data_has_expected_row_counts(con, prepared_folder):
     result = load_prepared_canonical_data(prepared_folder, con=con)
 
-    assert result.addresses.count("*").fetchone()[0] == 3
-    assert result.term_frequencies.count("*").fetchone()[0] > 0
-    assert result.inverted_index.count("*").fetchone()[0] > 0
+    assert result.addresses.count("*").fetchall()[0][0] == 3
+    assert result.term_frequencies.count("*").fetchall()[0][0] > 0
+    assert result.inverted_index.count("*").fetchall()[0][0] > 0
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 2])
@@ -1710,7 +1725,7 @@ def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):
     chunk_files = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
 
     total_rows_across_chunks = sum(
-        con.read_parquet(str(chunk_path)).count("*").fetchone()[0]
+        con.read_parquet(str(chunk_path)).count("*").fetchall()[0][0]
         for chunk_path in chunk_files
     )
 
@@ -1731,12 +1746,12 @@ def test_load_reads_chunked_canonical_layout(con, canonical_data, tmp_path):
     result = load_prepared_canonical_data(tmp_path, con=con)
 
     assert isinstance(result, _PreparedCanonical)
-    assert result.addresses.count("*").fetchone()[0] == 3
+    assert result.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_load_accepts_string_path(con, prepared_folder):
     result = load_prepared_canonical_data(str(prepared_folder), con=con)
-    assert result.addresses.count("*").fetchone()[0] == 3
+    assert result.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_invalid_folder_raises(con):
@@ -1906,7 +1921,7 @@ def test_load_remote_folder_permission_error_raises_permissionerror():
         ("[1, 2]::INTEGER[2]", True),
         ("'left'::ENUM('left', 'right')", True),
         ("TIMESTAMP '2020-01-01'::TIMESTAMP_S", True),
-        ("NULL", False),
+        ("NULL::INTEGER", False),
     ],
 )
 def test_canonical_intermediate_types_and_cleanup(con, expression, native):
@@ -1919,25 +1934,25 @@ def test_canonical_intermediate_types_and_cleanup(con, expression, native):
         assert result.fetchall() == expected.fetchall()
         assert ("intermediate" in storage._native) == native
         storage.write(source, "intermediate", append=True)
-        assert con.table("intermediate").count("*").fetchone()[0] == 2
+        assert con.table("intermediate").count("*").fetchall()[0][0] == 2
         storage.drop("intermediate")
         assert not list(storage.directory.iterdir())
     assert not storage.directory.exists()
-    assert con.table("caller_owned_type_reference").count("*").fetchone()[0] == 1
+    assert con.table("caller_owned_type_reference").count("*").fetchall()[0][0] == 1
 
 
 def test_canonical_intermediate_empty_and_failed_append(con):
     with _CanonicalIntermediates(con) as storage:
         source = con.sql("SELECT 1::INTEGER AS part WHERE false")
         result = storage.write(source, "empty", partition_by="part")
-        assert result.types == source.types and result.count("*").fetchone()[0] == 0
+        assert result.types == source.types and result.count("*").fetchall()[0][0] == 0
         paths = list(storage.directory.rglob("*.parquet"))
         with pytest.raises(duckdb.InvalidInputException):
             storage.write(
                 con.sql("SELECT error('expected')::INTEGER AS part"), "empty", append=True
             )
         assert list(storage.directory.rglob("*.parquet")) == paths
-        assert con.table("empty").count("*").fetchone()[0] == 0
+        assert con.table("empty").count("*").fetchall()[0][0] == 0
     assert not storage.directory.exists()
 
 

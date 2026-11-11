@@ -22,7 +22,7 @@ def test_duplicate_records_get_unique_ukam_address_id(duck_con):
         ('1', '10 DOWNING STREET LONDON', 'SW1A 2AA')
     ) AS t(unique_id, address_concat, postcode)
     """
-    duck_con.execute(sql)
+    duck_con.execute(sql).fetchall()
     test_data = duck_con.table("test_data")
 
     # Clean the data (single chunk to isolate the ID generation logic)
@@ -80,7 +80,7 @@ def test_chunking_with_duplicates_across_chunk_boundaries(duck_con):
         ('20', '10 DOWNING STREET', 'SW1A 2AA')
     ) AS t(unique_id, address_concat, postcode)
     """
-    duck_con.execute(sql)
+    duck_con.execute(sql).fetchall()
     test_data = duck_con.table("test_data")
 
     # Process with 4 chunks (5 records each)
@@ -91,7 +91,7 @@ def test_chunking_with_duplicates_across_chunk_boundaries(duck_con):
         SELECT COUNT(DISTINCT CAST(abs(hash(address_concat)) % 4 AS INTEGER))
         FROM test_data
         """
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert nonempty_chunks == 1
 
     # Get all ukam_address_id values
@@ -110,7 +110,7 @@ def test_chunking_with_duplicates_across_chunk_boundaries(duck_con):
     assert all(ukam_address_id is not None for ukam_address_id in ukam_ids)
     assert all(isinstance(ukam_address_id, int) for ukam_address_id in ukam_ids)
     assert (
-        duck_con.execute("DESCRIBE SELECT ukam_address_id FROM cleaned").fetchone()[1]
+        duck_con.execute("DESCRIBE SELECT ukam_address_id FROM cleaned").fetchall()[0][1]
         == "INTEGER"
     )
 
@@ -124,7 +124,7 @@ def test_existing_ukam_address_id_is_replaced_with_fresh_integer(duck_con):
             ('2', '11 DOWNING STREET', 'SW1A 2AA', 102::BIGINT)
         ) AS t(unique_id, address_concat, postcode, ukam_address_id)
         """
-    )
+    ).fetchall()
 
     cleaned = clean_data_pre_term_frequencies(
         duck_con.table("test_data"),
@@ -148,7 +148,7 @@ def test_ids_are_unique_and_contiguous(duck_con):
             ('3', '1 HIGH STREET OXFORD', 'OX1 1AA')
         ) AS t(unique_id, address_concat, postcode)
         """
-    )
+    ).fetchall()
 
     cleaned = clean_data_pre_term_frequencies(
         duck_con.table("test_data"),
@@ -162,7 +162,7 @@ def test_ids_are_unique_and_contiguous(duck_con):
     assert len(set(ids)) == len(ids)
     assert all(identifier is not None for identifier in ids)
     assert (
-        duck_con.execute("DESCRIBE SELECT ukam_address_id FROM cleaned").fetchone()[1]
+        duck_con.execute("DESCRIBE SELECT ukam_address_id FROM cleaned").fetchall()[0][1]
         == "INTEGER"
     )
 
@@ -178,7 +178,7 @@ def test_multi_chunk_id_association_matches_legacy_chunk_order(duck_con):
             'SW1A 2AA' AS postcode
         FROM range(32) AS addresses(address_number)
         """
-    )
+    ).fetchall()
     num_chunks = 4
     duck_con.execute(
         f"""
@@ -188,7 +188,7 @@ def test_multi_chunk_id_association_matches_legacy_chunk_order(duck_con):
             CAST(abs(hash(address_concat)) % {num_chunks} AS INTEGER) AS chunk_index
         FROM test_data
         """
-    )
+    ).fetchall()
 
     legacy_unique_ids = []
     for chunk_index in range(num_chunks):
@@ -227,7 +227,7 @@ def test_multi_chunk_physical_scan_has_ascending_ids(duck_con):
             'SW1A 2AA' AS postcode
         FROM range(32) AS addresses(address_number)
         """
-    )
+    ).fetchall()
 
     cleaned = clean_data_pre_term_frequencies(
         duck_con.table("test_data"),
@@ -248,7 +248,7 @@ def test_multi_chunk_physical_scan_has_ascending_ids(duck_con):
         WHERE previous_id IS NOT NULL
           AND ukam_address_id <= previous_id
         """
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
     assert out_of_order_count == 0
 
@@ -264,14 +264,14 @@ def test_chunk_cleaning_failure_drops_materialised_chunks(duck_con):
             'SW1A 2AA' AS postcode
         FROM range(64) AS addresses(address_number)
         """
-    )
+    ).fetchall()
     assert (
         duck_con.execute(
             """
             SELECT COUNT(DISTINCT CAST(abs(hash(address_concat)) % 4 AS INTEGER))
             FROM test_data
             """
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         > 1
     )
 

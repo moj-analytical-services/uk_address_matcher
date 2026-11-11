@@ -41,7 +41,7 @@ def create_test_bundle(root: Path, existing_label: str | None = None) -> Path:
                 "__IMPORTED_LABEL__", imported_label
             ).replace("__HAS_EXISTING_LABEL__", has_existing_label),
             [str(data_file)],
-        )
+        ).fetchall()
     finally:
         connection.close()
     (root / "manifest.json").write_text(

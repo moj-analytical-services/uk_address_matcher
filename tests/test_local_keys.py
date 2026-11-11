@@ -6,6 +6,7 @@ from splink import SettingsCreator
 from uk_address_matcher import (
     AddressMatcher,
     SplinkStage,
+    prepare_canonical_folder,
     prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.local_keys import (
@@ -56,15 +57,19 @@ def test_local_key_evidence_uses_canonical_postcode_rarity(
     assert featured.select("ukam_address_id, lk_level_by_alias, lk_anchor_uprns").order(
         "ukam_address_id"
     ).fetchall() == [
-        ("literal", {"a1": 6}, ["001"]) if postcode == "ZZ1 1ZZ" else ("literal", {}, []),
-        ("spacing", {"b1": 2}, []) if postcode == "ZZ1 1ZZ" else ("spacing", {}, []),
+        ("literal", {"a1": 6}, ["001"])
+        if prepared_index and postcode == "ZZ1 1ZZ"
+        else ("literal", {}, []),
+        ("spacing", {"b1": 2}, [])
+        if prepared_index and postcode == "ZZ1 1ZZ"
+        else ("spacing", {}, []),
     ]
 
 
 def test_local_key_lookup_avoids_expanding_unrelated_postcodes(duck_con):
-    duck_con.execute("SET memory_limit = '64MB'")
-    duck_con.execute("SET max_temp_directory_size = '0B'")
-    duck_con.execute("SET threads = 1")
+    duck_con.execute("SET memory_limit = '64MB'").fetchall()
+    duck_con.execute("SET max_temp_directory_size = '0B'").fetchall()
+    duck_con.execute("SET threads = 1").fetchall()
     canonical = duck_con.sql("""
         SELECT address_id::VARCHAR AS ukam_address_id,
             address_id::VARCHAR AS unique_id,
@@ -92,7 +97,7 @@ def test_local_key_lookup_avoids_expanding_unrelated_postcodes(duck_con):
     assert featured.select("ukam_address_id, lk_level_by_alias, lk_anchor_uprns").order(
         "ukam_address_id"
     ).fetchall() == [("literal", {"0": 6}, ["0"]), ("spacing", {"0": 2}, [])]
-    assert returned_canonical.count("*").fetchone()[0] == 200_000
+    assert returned_canonical.count("*").fetchall()[0][0] == 200_000
 
 
 def test_canonical_local_key_statistics_are_materialised_once(duck_con):
@@ -102,12 +107,14 @@ def test_canonical_local_key_statistics_are_materialised_once(duck_con):
             ('001', 'a1', 'MEADOW COTTAGE'),
             ('002', 'b1', 'ORCHARD HOUSE')
         ) addresses(unique_id, ukam_address_id, clean_full_address)
-    """)
+    """).fetchall()
     canonical = duck_con.table("canonical_key_input")
     prepared = prepare_canonical_local_keys(duck_con, canonical)
     columns = "ukam_address_id, local_key_index"
     expected = prepared.select(columns).order("ukam_address_id").fetchall()
-    duck_con.execute("UPDATE canonical_key_input SET clean_full_address = 'CHANGED NAME'")
+    duck_con.execute(
+        "UPDATE canonical_key_input SET clean_full_address = 'CHANGED NAME'"
+    ).fetchall()
     assert prepared.select(columns).order("ukam_address_id").fetchall() == expected
     rebuilt = prepare_canonical_local_keys(duck_con, canonical)
     assert rebuilt.select(columns).order("ukam_address_id").fetchall() != expected
@@ -158,13 +165,13 @@ def test_source_key_eligibility_uses_numeric_tokens(duck_con, numeric_tokens, ha
         params={"tokens": numeric_tokens},
     )
     prepared = prepare_source_local_keys(duck_con, source)
-    keys = prepared.select("local_key_tokens").fetchone()[0]
+    keys = prepared.select("local_key_tokens").fetchall()[0][0]
     assert bool(keys) is has_keys
     assert all(key["kind"] == "word" for key in keys)
     assert (
         prepare_source_local_keys(duck_con, prepared)
         .select("local_key_tokens")
-        .fetchone()[0]
+        .fetchall()[0][0]
         == keys
     )
 
@@ -188,18 +195,24 @@ def _features(duck_con, text, canonical_rows):
     """,
         params={"rows": canonical_rows},
     )
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     return add_local_key_features(duck_con, source, canonical)
 
 
 def test_canonical_local_keys_do_not_materialise_unrelated_columns(duck_con):
-    memory_limit, threads, spill_limit = duck_con.execute("""
+    memory_limit, threads, spill_limit = next(
+        iter(
+            duck_con.execute("""
         SELECT current_setting('memory_limit'), current_setting('threads'),
             current_setting('max_temp_directory_size')
-    """).fetchone()
+    """).fetchall()
+        ),
+        None,
+    )
     try:
-        duck_con.execute("SET memory_limit = '96MB'")
-        duck_con.execute("SET threads = 1")
-        duck_con.execute("SET max_temp_directory_size = '0B'")
+        duck_con.execute("SET memory_limit = '96MB'").fetchall()
+        duck_con.execute("SET threads = 1").fetchall()
+        duck_con.execute("SET max_temp_directory_size = '0B'").fetchall()
         canonical = duck_con.sql("""
             SELECT address_id::VARCHAR AS unique_id,
                 address_id::VARCHAR AS ukam_address_id,
@@ -210,17 +223,22 @@ def test_canonical_local_keys_do_not_materialise_unrelated_columns(duck_con):
             FROM range(12000) addresses(address_id)
         """)
         prepared = prepare_canonical_local_keys(duck_con, canonical)
-        assert prepared.aggregate("count(*), sum(len(local_key_index))").fetchone() == (
+        assert (
+            prepared.aggregate("count(*), sum(len(local_key_index))").limit(1).fetchall()
+        )[0] == (
             12000,
             36000,
         )
-        assert prepared.filter("ukam_address_id = '0'").select(
-            "length(unrelated_payload)"
-        ).fetchone() == (16384,)
+        assert (
+            prepared.filter("ukam_address_id = '0'")
+            .select("length(unrelated_payload)")
+            .limit(1)
+            .fetchall()
+        )[0] == (16384,)
     finally:
-        duck_con.execute("SET memory_limit = ?", [memory_limit])
-        duck_con.execute("SET threads = ?", [threads])
-        duck_con.execute("SET max_temp_directory_size = ?", [spill_limit])
+        duck_con.execute("SET memory_limit = ?", [memory_limit]).fetchall()
+        duck_con.execute("SET threads = ?", [threads]).fetchall()
+        duck_con.execute("SET max_temp_directory_size = ?", [spill_limit]).fetchall()
 
 
 def test_sql_feature_views_keep_parameter_bound_calls_independent(duck_con):
@@ -230,11 +248,15 @@ def test_sql_feature_views_keep_parameter_bound_calls_independent(duck_con):
     ]
     first, _ = _features(duck_con, "MEADOW COTTAGE", canonical_rows)
     second, _ = _features(duck_con, "LAUREL GROVE", canonical_rows)
-    assert first.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+    assert (first.select("lk_level_by_alias, lk_anchor_uprns").limit(1).fetchall())[
+        0
+    ] == (
         {"a1": 6},
         ["001"],
     )
-    assert second.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+    assert (second.select("lk_level_by_alias, lk_anchor_uprns").limit(1).fetchall())[
+        0
+    ] == (
         {"b1": 6},
         ["002"],
     )
@@ -264,8 +286,8 @@ def test_numbered_sources_skip_canonical_key_preparation(duck_con, monkeypatch, 
                 "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
             ).fetchall()
         )
-    assert source.count("*").fetchone()[0] == 1
-    assert canonical.count("*").fetchone()[0] == 2
+    assert source.count("*").fetchall()[0][0] == 1
+    assert canonical.count("*").fetchall()[0][0] == 2
 
 
 def test_canonical_statistics_recompute_filtered_population(duck_con):
@@ -279,9 +301,11 @@ def test_canonical_statistics_recompute_filtered_population(duck_con):
         ) addresses(unique_id, ukam_address_id, clean_full_address)
     """).select("*, 'ZZ1 1ZZ' AS postcode")
     prepared = prepare_canonical_local_keys(duck_con, canonical)
-    assert prepared.count("*").fetchone()[0] == 5
+    assert prepared.count("*").fetchall()[0][0] == 5
     index = (
-        prepared.filter("ukam_address_id = 'a1'").select("local_key_index").fetchone()[0]
+        prepared.filter("ukam_address_id = 'a1'")
+        .select("local_key_index")
+        .fetchall()[0][0]
     )
     meadow = next(
         key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
@@ -290,7 +314,9 @@ def test_canonical_statistics_recompute_filtered_population(duck_con):
     filtered = prepared.filter("unique_id <> '002'")
     rebuilt = prepare_canonical_local_keys(duck_con, filtered)
     index = (
-        rebuilt.filter("ukam_address_id = 'a1'").select("local_key_index").fetchone()[0]
+        rebuilt.filter("ukam_address_id = 'a1'")
+        .select("local_key_index")
+        .fetchall()[0][0]
     )
     meadow = next(
         key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
@@ -309,13 +335,16 @@ def test_source_cleaning_defers_keys_and_uses_current_text(duck_con):
     assert "local_key_tokens" not in cleaned.columns
     changed = cleaned.select("* REPLACE ('ORCHARD HOUSE' AS clean_full_address)")
     prepared = prepare_source_local_keys(duck_con, changed)
-    keys = prepared.select("local_key_tokens").fetchone()[0]
+    keys = prepared.select("local_key_tokens").fetchall()[0][0]
     assert any(key["key"] == "ORCHARD HOUSE" for key in keys)
     assert all("MEADOW" not in key["key"] for key in keys)
     changed_numbers = cleaned.select("* REPLACE (['54'] AS numeric_tokens)")
-    assert prepare_source_local_keys(duck_con, changed_numbers).select(
-        "local_key_tokens"
-    ).fetchone() == ([],)
+    assert (
+        prepare_source_local_keys(duck_con, changed_numbers)
+        .select("local_key_tokens")
+        .limit(1)
+        .fetchall()
+    )[0] == ([],)
 
 
 def test_literal_rarity_counts_numbered_properties(duck_con):
@@ -330,14 +359,18 @@ def test_literal_rarity_counts_numbered_properties(duck_con):
     """).select("*, 'ZZ1 1ZZ' AS postcode")
     prepared = prepare_canonical_local_keys(duck_con, canonical)
     index = (
-        prepared.filter("ukam_address_id = 'a1'").select("local_key_index").fetchone()[0]
+        prepared.filter("ukam_address_id = 'a1'")
+        .select("local_key_index")
+        .fetchall()[0][0]
     )
     rosebank = next(key for key in index if key["key"] == "ROSEBANK")
     assert (rosebank["df_uprns"], rosebank["n_uprns"]) == (2, 4)
     filtered = prepared.filter("unique_id NOT IN ('002', '003')")
     rebuilt = prepare_canonical_local_keys(duck_con, filtered)
     index = (
-        rebuilt.filter("ukam_address_id = 'a1'").select("local_key_index").fetchone()[0]
+        rebuilt.filter("ukam_address_id = 'a1'")
+        .select("local_key_index")
+        .fetchall()[0][0]
     )
     rosebank = next(key for key in index if key["key"] == "ROSEBANK")
     assert (rosebank["df_uprns"], rosebank["n_uprns"]) == (1, 2)
@@ -374,9 +407,11 @@ def test_aliases_count_once_and_numbered_targets_remain(duck_con):
             ["002", "b1", "ORCHARD HOUSE"],
         ],
     )
-    assert source.select(
-        "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
-    ).fetchone() == (
+    assert (
+        source.select("lk_level_by_alias, lk_anchor_uprns, lk_eligible")
+        .limit(1)
+        .fetchall()
+    )[0] == (
         {"a1": 6, "a2": 6},
         ["001"],
         True,
@@ -395,7 +430,9 @@ def test_identical_text_uprns_are_not_unique(duck_con):
             ["004", "b2", "PINE LODGE"],
         ],
     )
-    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+    assert (source.select("lk_level_by_alias, lk_anchor_uprns").limit(1).fetchall())[
+        0
+    ] == (
         {"a1": 4, "a2": 4},
         [],
     )
@@ -410,7 +447,7 @@ def test_phrase_does_not_bridge_numeric_gap(duck_con):
             ["002", "b1", "ORCHARD HOUSE"],
         ],
     )
-    assert source.select("lk_level_by_alias").fetchone() == ({"a1": 5},)
+    assert (source.select("lk_level_by_alias").limit(1).fetchall())[0] == ({"a1": 5},)
 
 
 @pytest.mark.parametrize("text", ["54 MEADOW COTTAGE", "THE OF", ""])
@@ -423,7 +460,10 @@ def test_no_evidence_is_neutral(duck_con, text):
             ["002", "b1", "ORCHARD HOUSE"],
         ],
     )
-    assert source.select("lk_level_by_alias, lk_eligible").fetchone() == ({}, False)
+    assert (source.select("lk_level_by_alias, lk_eligible").limit(1).fetchall())[0] == (
+        {},
+        False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -468,7 +508,7 @@ def test_guard_excludes_units_and_resolved_rows(duck_con, column):
         + ")"
     )
     source, _ = add_local_key_features(duck_con, source, canonical)
-    assert source.select("lk_eligible").fetchone() == (False,)
+    assert (source.select("lk_eligible").limit(1).fetchall())[0] == (False,)
 
 
 def test_canonical_position_gate_preserves_full_background(duck_con):
@@ -480,7 +520,7 @@ def test_canonical_position_gate_preserves_full_background(duck_con):
             ["002", "b1", "PINE LODGE"],
         ],
     )
-    assert source.select("lk_eligible").fetchone() == (False,)
+    assert (source.select("lk_eligible").limit(1).fetchall())[0] == (False,)
 
 
 def test_late_canonical_hits_still_count_towards_frequency(duck_con):
@@ -492,11 +532,15 @@ def test_late_canonical_hits_still_count_towards_frequency(duck_con):
             ["002", "b1", "ORCHARD HOUSE OFF MEADOW"],
         ],
     )
-    assert source.select("lk_eligible").fetchone() == (False,)
+    assert (source.select("lk_eligible").limit(1).fetchall())[0] == (False,)
 
 
 def test_model_includes_local_key_comparison_and_block():
     model = _get_model_settings_dict()
+    comparisons = {
+        comparison["output_column_name"]: comparison
+        for comparison in model["comparisons"]
+    }
     comparison = model["comparisons"][-1]
     assert comparison["output_column_name"] == "postcode_distinguishing_name"
     assert "additional_columns_to_retain" not in model
@@ -511,15 +555,30 @@ def test_model_includes_local_key_comparison_and_block():
     assert [
         level["m_probability"] / level["u_probability"]
         for level in comparison["comparison_levels"][1:]
-    ] == ([0.25, 16, 8, 4, 2, 2, 1])
+    ] == ([0.25, 16, 8, 4, 2, 2, 1, 1])
+    joint = comparisons["joint_local_evidence"]
+    assert any(
+        "lk_word_support_by_uprn_r" in level["sql_condition"]
+        for level in joint["comparison_levels"]
+    )
+    assert "local_name_already_in_joint" in comparisons
+    numeric_levels = comparisons["numeric_token_1"]["comparison_levels"]
+    assert any(
+        level.get("disable_tf_exact_match_detection") is True for level in numeric_levels
+    )
+    assert {
+        "Strong postcode name with different lexical fallback words",
+        "Unique leading spacing name with different lexical fallback words",
+    } <= {level.get("label_for_charts") for level in numeric_levels}
 
 
 @pytest.mark.parametrize(
     "source_name,target_name,expected_bf",
     [("MEADOW COTTAGE", "MEADOW COTTAGE", 16.0), ("ROSE BANK", "ROSEBANK", 2.0)],
 )
+@pytest.mark.parametrize("prepared_index", [False, True])
 def test_stage_executes_local_key_comparison(
-    duck_con, source_name, target_name, expected_bf
+    duck_con, tmp_path, source_name, target_name, expected_bf, prepared_index
 ):
     source = duck_con.sql(
         """
@@ -538,6 +597,12 @@ def test_stage_executes_local_key_comparison(
     """,
         params={"name": target_name, "source_name": source_name},
     )
+    if prepared_index:
+        folder = tmp_path / "canonical"
+        prepare_canonical_folder(
+            canonical, con=duck_con, output_folder=folder, show_progress="off"
+        )
+        canonical = folder
     stage = SplinkStage(
         include_full_postcode_block=True,
         predict_threshold_match_weight=-100,
@@ -553,7 +618,10 @@ def test_stage_executes_local_key_comparison(
     target = raw.filter(
         "unique_id_l = '001' AND clean_full_address_l LIKE '% 54 TEST ROAD'"
     )
-    assert target.select("bf_postcode_distinguishing_name").fetchone() == (expected_bf,)
+    assert (
+        target.select("pow(2, mw_postcode_distinguishing_name)").limit(1).fetchall()[0]
+        == (expected_bf if prepared_index else 1.0,)
+    )
     assert not any(column.startswith("lk_") for column in raw.columns)
     improved = duck_con.table(stage.improved_predictions_table)
     assert not any(column.startswith("lk_") for column in improved.columns)
@@ -578,7 +646,7 @@ def test_stage_executes_local_key_comparison(
     "text,expected_level",
     [
         ("MEADOW COTTAGE", 6),
-        ("THE TEST PLACE MEADOW COTTAGE", 4),
+        ("THE TEST PLACE MEADOW COTTAGE", 1),
     ],
 )
 def test_leading_names_receive_stronger_evidence(duck_con, text, expected_level):
@@ -590,7 +658,9 @@ def test_leading_names_receive_stronger_evidence(duck_con, text, expected_level)
             ["002", "b1", "ORCHARD HOUSE"],
         ],
     )
-    assert source.select("lk_level_by_alias").fetchone() == ({"a1": expected_level},)
+    assert (source.select("lk_level_by_alias").limit(1).fetchall())[0] == (
+        {"a1": expected_level},
+    )
 
 
 @pytest.mark.parametrize("populated_side", ["source", "canonical"])
@@ -606,8 +676,16 @@ def test_missing_postcode_name_columns_are_typed_and_neutral(duck_con, populated
     neutral = aligned[1] if populated_side == "source" else aligned[0]
     preserved = aligned[0] if populated_side == "source" else aligned[1]
     projection = "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
-    assert neutral.select(projection).fetchone() == ({}, [], False)
-    assert preserved.select(projection).fetchone() == ({"a1": 6}, ["001"], True)
+    assert (neutral.select(projection).limit(1).fetchall())[0] == (
+        {},
+        [],
+        False,
+    )
+    assert (preserved.select(projection).limit(1).fetchall())[0] == (
+        {"a1": 6},
+        ["001"],
+        True,
+    )
     assert [str(column_type) for column_type in neutral.select(projection).types] == [
         "MAP(VARCHAR, INTEGER)",
         "VARCHAR[]",
@@ -629,7 +707,9 @@ def test_missing_unit_metadata_has_no_postcode_name_evidence(duck_con, column):
         "* EXCLUDE (lk_level_by_alias, lk_anchor_uprns, lk_eligible)"
     )
     prepared, _ = add_local_key_features(duck_con, source, canonical)
-    assert prepared.select(f"{column}, lk_level_by_alias, lk_eligible").fetchone() == (
+    assert (
+        prepared.select(f"{column}, lk_level_by_alias, lk_eligible").limit(1).fetchall()
+    )[0] == (
         None,
         {},
         False,
@@ -647,7 +727,7 @@ def test_shared_word_does_not_override_unique_phrase_anchor(duck_con):
             ["004", "d1", "PINE LODGE"],
         ],
     )
-    assert source.select("lk_anchor_uprns").fetchone() == (["002"],)
+    assert (source.select("lk_anchor_uprns").limit(1).fetchall())[0] == (["002"],)
 
 
 @pytest.mark.parametrize(
@@ -664,6 +744,7 @@ def test_shared_word_does_not_override_unique_phrase_anchor(duck_con):
         (True, "ZZ1 1ZZ", "001", 3, 2.0),
         (True, "ZZ1 1ZZ", "001", 2, 2.0),
         (True, "ZZ1 1ZZ", "001", 0, 1.0),
+        (True, "ZZ1 1ZZ", "001", 1, 1.0),
         (True, "ZZ1 1ZZ", "002", 6, 0.25),
         (True, "ZZ1 1ZZ", "002", 2, 0.25),
     ],
@@ -698,7 +779,7 @@ def test_postcode_name_comparison_weights(
     )
     for level in comparison["comparison_levels"]:
         condition = level["sql_condition"]
-        if condition == "ELSE" or pair.filter(condition).count("*").fetchone()[0]:
+        if condition == "ELSE" or pair.filter(condition).count("*").fetchall()[0][0]:
             bits = (
                 None
                 if level.get("is_null_level")
@@ -724,9 +805,9 @@ def test_spacing_support_is_weak_and_near_start(duck_con, text, target, expected
     source, _ = _features(
         duck_con, text, [["001", "a1", target], ["002", "b1", "LAUREL GROVE"]]
     )
-    assert source.select("lk_level_by_alias").fetchone()[0] == expected
-    assert source.select("lk_anchor_uprns").fetchone()[0] == []
-    assert source.select("lk_eligible").fetchone()[0] == bool(expected)
+    assert source.select("lk_level_by_alias").fetchall()[0][0] == expected
+    assert source.select("lk_anchor_uprns").fetchall()[0][0] == []
+    assert source.select("lk_eligible").fetchall()[0][0] == bool(expected)
 
 
 @pytest.mark.parametrize("collision", ["THE OTHER PLACE ROSE BANK", "54 ROSE BANK"])
@@ -734,7 +815,7 @@ def test_spacing_collisions_block_support_across_positions_and_kinds(duck_con, c
     source, _ = _features(
         duck_con, "ROSE BANK", [["001", "a1", "ROSEBANK"], ["002", "b1", collision]]
     )
-    assert "a1" not in source.select("lk_level_by_alias").fetchone()[0]
+    assert "a1" not in source.select("lk_level_by_alias").fetchall()[0][0]
 
 
 def test_spacing_aliases_count_once_and_preserve_literal_anchors(duck_con):
@@ -747,13 +828,15 @@ def test_spacing_aliases_count_once_and_preserve_literal_anchors(duck_con):
             ["002", "b1", "LAUREL GROVE"],
         ],
     )
-    assert source.select("lk_level_by_alias").fetchone()[0] == {"a1": 2, "a2": 2}
+    assert source.select("lk_level_by_alias").fetchall()[0][0] == {"a1": 2, "a2": 2}
     source, _ = _features(
         duck_con,
         "HEATH ROSE BANK",
         [["001", "a1", "MEADOW ROSEBANK"], ["002", "b1", "HEATH GROVE"]],
     )
-    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+    assert (source.select("lk_level_by_alias, lk_anchor_uprns").limit(1).fetchall())[
+        0
+    ] == (
         {"b1": 5},
         ["002"],
     )
@@ -762,7 +845,9 @@ def test_spacing_aliases_count_once_and_preserve_literal_anchors(duck_con):
         "HEATH ROSE BANK",
         [["001", "a1", "HEATH ROSEBANK"], ["002", "b1", "LAUREL GROVE"]],
     )
-    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchone() == (
+    assert (source.select("lk_level_by_alias, lk_anchor_uprns").limit(1).fetchall())[
+        0
+    ] == (
         {"a1": 5},
         ["001"],
     )
@@ -789,7 +874,7 @@ def test_spacing_alias_cannot_displace_better_exact_anchored_alias(
             '001' AS unique_id_l, 'query' AS unique_id_r,
             MAP(['1', '2'], [5, 2]) AS lk_level_by_alias_r,
             $anchors::VARCHAR[] AS lk_anchor_uprns_r,
-            2.0 AS bf_postcode_distinguishing_name
+            1.0 AS mw_postcode_distinguishing_name
         FROM (VALUES (1, $other_weight::DOUBLE), (2, 0.0))
             aliases(ukam_address_id_l, match_weight)
     """,
@@ -806,7 +891,12 @@ def test_spacing_alias_cannot_displace_better_exact_anchored_alias(
         preserved.order("ukam_address_id_l").select("ukam_address_id_l").fetchall()
     ) == [(alias,) for alias in expected]
     assert (
-        preserved.filter("ukam_address_id_l = 1").select("match_weight").fetchone()
+        (
+            preserved.filter("ukam_address_id_l = 1")
+            .select("match_weight")
+            .limit(1)
+            .fetchall()
+        )[0]
     ) == (other_weight,)
 
 
@@ -815,7 +905,7 @@ def test_spacing_only_alias_and_unfeatured_predictions_are_preserved(duck_con):
         SELECT 2 AS ukam_address_id_l, 1 AS ukam_address_id_r,
             '001' AS unique_id_l, 'query' AS unique_id_r,
             0.0 AS match_weight, MAP(['2'], [2]) AS lk_level_by_alias_r,
-            ['001'] AS lk_anchor_uprns_r, 2.0 AS bf_postcode_distinguishing_name
+            ['001'] AS lk_anchor_uprns_r, 1.0 AS mw_postcode_distinguishing_name
     """)
     source = predictions.select(
         "ukam_address_id_r AS ukam_address_id, lk_level_by_alias_r AS lk_level_by_alias, "
@@ -825,7 +915,7 @@ def test_spacing_only_alias_and_unfeatured_predictions_are_preserved(duck_con):
     assert preserve_anchored_name_aliases(duck_con, predictions, source).fetchall() == (
         predictions.fetchall()
     )
-    plain = predictions.select("* EXCLUDE (bf_postcode_distinguishing_name)")
+    plain = predictions.select("* EXCLUDE (mw_postcode_distinguishing_name)")
     assert preserve_anchored_name_aliases(duck_con, plain, source) is plain
 
 
@@ -849,7 +939,7 @@ def test_alias_preservation_uses_actual_spacing_contribution(
             '001' AS unique_id_l, 'query' AS unique_id_r,
             MAP(['1', '2'], [5, 2]) AS lk_level_by_alias_r,
             ['001'] AS lk_anchor_uprns_r,
-            $factor::DOUBLE AS bf_postcode_distinguishing_name
+            log2($factor::DOUBLE) AS mw_postcode_distinguishing_name
         FROM (VALUES (1, -0.75::DOUBLE), (2, $spacing_weight::DOUBLE))
             aliases(ukam_address_id_l, match_weight)
     """,
@@ -865,7 +955,7 @@ def test_alias_preservation_uses_actual_spacing_contribution(
         "ukam_address_id_l"
     ).fetchall() == [(alias,) for alias in expected]
     without_contribution = predictions.select(
-        "* EXCLUDE (bf_postcode_distinguishing_name)"
+        "* EXCLUDE (mw_postcode_distinguishing_name)"
     )
     assert preserve_anchored_name_aliases(duck_con, without_contribution, source) is (
         without_contribution
@@ -889,8 +979,8 @@ def test_alias_preservation_includes_custom_tf_contribution(
             '001' AS unique_id_l, 'query' AS unique_id_r,
             MAP(['1', '2'], [5, 2]) AS lk_level_by_alias_r,
             ['001'] AS lk_anchor_uprns_r,
-            $factor::DOUBLE AS bf_postcode_distinguishing_name,
-            $tf_factor::DOUBLE AS bf_tf_postcode_distinguishing_name
+            log2($factor::DOUBLE) AS mw_postcode_distinguishing_name,
+            log2($tf_factor::DOUBLE) AS mw_tf_adj_postcode_distinguishing_name
         FROM (VALUES (1, -0.75::DOUBLE), (2, 0.0::DOUBLE))
             aliases(ukam_address_id_l, match_weight)
     """,
@@ -911,11 +1001,11 @@ def test_alias_preservation_includes_custom_tf_contribution(
 def test_alias_preservation_uses_other_source_aliases_without_retaining_maps(duck_con):
     predictions = duck_con.sql("""
         SELECT * FROM (VALUES
-            (1, 10, '001', 'query', -0.3::DOUBLE, 8.0),
-            (2, 11, '001', 'query', 0.0, 2.0),
-            (2, 12, '001', 'other', 0.0, 2.0)
+            (1, 10, '001', 'query', -0.3::DOUBLE, 3.0),
+            (2, 11, '001', 'query', 0.0, 1.0),
+            (2, 12, '001', 'other', 0.0, 1.0)
         ) predictions(ukam_address_id_l, ukam_address_id_r, unique_id_l,
-            unique_id_r, match_weight, bf_postcode_distinguishing_name)
+            unique_id_r, match_weight, mw_postcode_distinguishing_name)
     """)
     source = duck_con.sql("""
         SELECT * FROM (VALUES
@@ -951,6 +1041,7 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
             ('002', 'b1', 'LAUREL GROVE', 'ZZ1 1ZZ')
         ) canonical(unique_id, ukam_address_id, clean_full_address, postcode)
     """)
+    canonical = prepare_canonical_local_keys(duck_con, canonical)
     source = duck_con.sql("""
         SELECT 'query' AS unique_id, 'q1' AS ukam_address_id,
             'MEADOW COTTAGE' AS clean_full_address, 'ZZ1 1ZZ' AS postcode,
@@ -963,11 +1054,15 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
         source.select("* REPLACE ('LAUREL GROVE' AS clean_full_address)"),
         canonical,
     )
-    assert first.select("clean_full_address, lk_level_by_alias").fetchone() == (
+    assert (first.select("clean_full_address, lk_level_by_alias").limit(1).fetchall())[
+        0
+    ] == (
         "MEADOW COTTAGE",
         {"a1": 6},
     )
-    assert second.select("clean_full_address, lk_level_by_alias").fetchone() == (
+    assert (second.select("clean_full_address, lk_level_by_alias").limit(1).fetchall())[
+        0
+    ] == (
         "LAUREL GROVE",
         {"b1": 6},
     )
@@ -981,5 +1076,253 @@ def test_name_lookup_reuse_preserves_each_source_relation(duck_con):
             "alias_id",
             "lk_level_by_alias",
             "lk_anchor_uprns",
+            "lk_word_support_by_uprn",
         ]
-        assert duck_con.table(lookup_name).count("*").fetchone() == (1,)
+        assert (duck_con.table(lookup_name).count("*").limit(1).fetchall())[0] == (1,)
+
+
+@pytest.mark.parametrize("exclusion", ["EXCLUDING", "EXCEPT", "EXCL"])
+def test_excluded_components_do_not_create_name_evidence(duck_con, exclusion):
+    source, _ = _features(
+        duck_con,
+        f"HOUSE {exclusion} SECOND FLOOR ALDER HOUSE",
+        [
+            ["001", "a1", "SECOND FLOOR ALDER HOUSE"],
+            ["002", "b1", "ALDER HOUSE"],
+        ],
+    )
+    assert source.select(
+        "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
+    ).fetchall()[0] == ({}, [], False)
+
+
+def test_late_locality_phrase_does_not_override_shared_leading_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "NEW UPPER MEADOW TESTVILLE",
+        [
+            ["001", "a1", "NEW UPPER MEADOW FARM TESTVILLE"],
+            ["002", "b1", "NEW UPPER MEADOW COTTAGE TESTVILLE"],
+            ["003", "c1", "OLD UPPER MEADOW TESTVILLE"],
+            ["004", "d1", "PINE LODGE TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0]
+    assert levels["a1"] == levels["b1"] == 4
+    assert levels["c1"] == 1
+    assert anchors == []
+
+
+def test_descriptor_locality_phrase_is_context_not_unique_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "BIRCH COTTAGE TESTVILLE",
+        [
+            ["001", "a1", "BIRCH COTTAGES TESTVILLE"],
+            ["001", "a2", "BIRCH COTTAGE LONG ROAD"],
+            ["002", "b1", "LITTLE BIRCH COTTAGE TESTVILLE"],
+            ["003", "c1", "PINE LODGE TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0]
+    assert levels["a2"] == 4
+    assert levels["b1"] == 1
+    assert anchors == []
+
+
+def test_late_context_anchor_cannot_veto_leading_spacing_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "SUNNY SIDE BUNGALOW TEST ROAD TESTVILLE",
+        [
+            ["001", "a1", "SUNNYSIDE TEST ROAD TESTVILLE"],
+            ["002", "b1", "LINDEN TREE BUNGALOW TEST ROAD TESTVILLE"],
+            ["003", "c1", "PINE LODGE TEST ROAD TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TEST ROAD TESTVILLE"],
+        ],
+    )
+    levels, anchors = source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0]
+    assert levels["a1"] == 2
+    assert levels["b1"] == 1
+    assert anchors == []
+
+
+def test_leading_stopword_does_not_hide_the_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "THE ALDER COTTAGE",
+        [["001", "a1", "ALDER COTTAGE"], ["002", "b1", "PINE LODGE"]],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0] == (
+        {"a1": 6},
+        ["001"],
+    )
+
+
+def test_leading_canonical_qualifier_can_anchor_after_shared_building_name(duck_con):
+    source, _ = _features(
+        duck_con,
+        "ALDER HALL EAST WING TESTVILLE",
+        [
+            ["001", "a1", "EAST WING ALDER HALL TESTVILLE"],
+            ["002", "b1", "WEST WING ALDER HALL TESTVILLE"],
+            ["003", "c1", "ALDER HALL TESTVILLE"],
+            ["004", "d1", "PINE LODGE TESTVILLE"],
+        ],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0][1] == ["001"]
+
+
+@pytest.mark.parametrize(
+    "numbers_l,numbers_r,eligible,anchors,postcode,expected",
+    [
+        ([], [], True, ["001"], "ZZ1 1ZZ", True),
+        (["7"], [], True, ["001"], "ZZ1 1ZZ", False),
+        ([], ["7"], True, ["001"], "ZZ1 1ZZ", False),
+        ([], [], False, ["001"], "ZZ1 1ZZ", False),
+        ([], [], True, ["002"], "ZZ1 1ZZ", False),
+        ([], [], True, ["001", "002"], "ZZ1 1ZZ", False),
+        ([], [], True, ["001"], "ZZ1 2ZZ", False),
+    ],
+)
+def test_lexical_fallback_relief_requires_anchored_unnumbered_property(
+    duck_con, numbers_l, numbers_r, eligible, anchors, postcode, expected
+):
+    comparison = next(
+        item
+        for item in _get_model_settings_dict()["comparisons"]
+        if item["output_column_name"] == "numeric_token_1"
+    )
+    level = next(
+        item
+        for item in comparison["comparison_levels"]
+        if item["label_for_charts"]
+        == "Strong postcode name with different lexical fallback words"
+    )
+    pair = duck_con.sql(
+        """
+        SELECT $numbers_l::VARCHAR[] AS numeric_tokens_l,
+            $numbers_r::VARCHAR[] AS numeric_tokens_r,
+            $eligible::BOOLEAN AS lk_eligible_r,
+            $anchors::VARCHAR[] AS lk_anchor_uprns_r,
+            '001' AS unique_id_l, 'ZZ1 1ZZ' AS postcode_l,
+            $postcode::VARCHAR AS postcode_r,
+            'WING' AS numeric_token_1_l, 'ALDER' AS numeric_token_1_r
+        """,
+        params={
+            "numbers_l": numbers_l,
+            "numbers_r": numbers_r,
+            "eligible": eligible,
+            "anchors": anchors,
+            "postcode": postcode,
+        },
+    )
+    assert (
+        bool(pair.filter(level["sql_condition"]).count("*").fetchall()[0][0]) == expected
+    )
+    assert level["m_probability"] / level["u_probability"] == 0.0625
+    assert comparison["comparison_levels"].index(level) < next(
+        index
+        for index, item in enumerate(comparison["comparison_levels"])
+        if item["label_for_charts"] == "Primary numbers both present but differ"
+    )
+
+
+def test_lookup_work_tables_are_released_before_pair_scoring(duck_con):
+    source, canonical = _features(
+        duck_con,
+        "MEADOW COTTAGE",
+        [["001", "a1", "MEADOW COTTAGE"], ["002", "b1", "ORCHARD HOUSE"]],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0] == (
+        {"a1": 6},
+        ["001"],
+    )
+    assert canonical.count("*").fetchall()[0][0] == 2
+    assert (
+        duck_con.sql("""
+        SELECT count(*) FROM duckdb_tables()
+        WHERE table_name LIKE '__ukam__name_source_keys_%'
+            OR table_name LIKE '__ukam__name_spacing_candidates_%'
+            OR table_name LIKE '__ukam__name_canonical_%_keys'
+    """).fetchall()[0][0]
+        == 0
+    )
+
+
+def test_aligned_three_word_name_can_anchor_on_second_phrase(duck_con):
+    source, _ = _features(
+        duck_con,
+        "MILL OF BIRCH TESTVILLE",
+        [
+            ["001", "a1", "MILL OF BIRCH TESTVILLE"],
+            ["002", "b1", "MILL OF ALDER TESTVILLE"],
+            ["003", "c1", "PINE LODGE TESTVILLE"],
+            ["004", "d1", "ALDER HOUSE TESTVILLE"],
+        ],
+    )
+    assert source.select("lk_anchor_uprns").fetchall()[0][0] == ["001"]
+
+
+@pytest.mark.parametrize("prefix", ["THE", "GROUND", "12", "12A"])
+def test_canonical_article_floor_or_number_prefix_keeps_name_support(duck_con, prefix):
+    source, _ = _features(
+        duck_con,
+        "MEADOW COTTAGE",
+        [
+            ["001", "a1", f"{prefix} MEADOW COTTAGE"],
+            ["002", "b1", "ORCHARD HOUSE"],
+        ],
+    )
+    assert source.select("lk_level_by_alias, lk_anchor_uprns").fetchall()[0] == (
+        {"a1": 6},
+        ["001"],
+    )
+
+
+@pytest.mark.parametrize(
+    "tokens_l,tokens_r,level,numbers,expected",
+    [
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 2, [], True),
+        (["SUNNY", "SIDE", "ROAD"], ["SUNNYSIDE", "ROAD"], 2, [], True),
+        (["ALDER", "SUNNYSIDE"], ["ALDER", "SUNNY", "SIDE"], 2, [], False),
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 3, [], False),
+        (["SUNNYSIDE", "ROAD"], ["SUNNY", "SIDE", "ROAD"], 2, ["7"], False),
+    ],
+)
+def test_spacing_fallback_relief_requires_an_exact_leading_name(
+    duck_con, tokens_l, tokens_r, level, numbers, expected
+):
+    comparison = next(
+        item
+        for item in _get_model_settings_dict()["comparisons"]
+        if item["output_column_name"] == "numeric_token_1"
+    )
+    rule = next(
+        item
+        for item in comparison["comparison_levels"]
+        if item["label_for_charts"]
+        == "Unique leading spacing name with different lexical fallback words"
+    )
+    pair = duck_con.sql(
+        """
+        SELECT $tokens_l::VARCHAR[] AS clean_full_address_tokens_l,
+            $tokens_r::VARCHAR[] AS clean_full_address_tokens_r,
+            $numbers::VARCHAR[] AS numeric_tokens_l, []::VARCHAR[] AS numeric_tokens_r,
+            true AS lk_eligible_r, 'ZZ1 1ZZ' AS postcode_l, 'ZZ1 1ZZ' AS postcode_r,
+            MAP(['alias'], [$level::INTEGER]) AS lk_level_by_alias_r,
+            'alias' AS ukam_address_id_l,
+            'SUNNYSIDE' AS numeric_token_1_l, 'SUNNY' AS numeric_token_1_r
+        """,
+        params={
+            "tokens_l": tokens_l,
+            "tokens_r": tokens_r,
+            "numbers": numbers,
+            "level": level,
+        },
+    )
+    assert (
+        bool(pair.filter(rule["sql_condition"]).count("*").fetchall()[0][0]) == expected
+    )
+    assert rule["m_probability"] / rule["u_probability"] == 0.0625

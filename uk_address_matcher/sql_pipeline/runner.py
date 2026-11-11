@@ -518,7 +518,7 @@ class DuckDBPipeline(CTEPipeline):
         sql = self.generate_cte_pipeline_sql(mark_spent=False)
         tmp = f"__seg_{_uid()}"
         self._materialised_sql_blocks.append((sql, tmp))
-        self.con.execute(f"CREATE OR REPLACE TEMP TABLE {tmp} AS {sql}")
+        self.con.execute(f"CREATE OR REPLACE TEMP TABLE {tmp} AS {sql}").fetchall()
         # reset the queue with a fresh seed reading from tmp
         self.queue.clear()
         seed = f"seed_{_uid()}"
@@ -635,7 +635,7 @@ class DuckDBPipeline(CTEPipeline):
             # ways we could try to catch this earlier.
             self.con.execute(
                 f"CREATE OR REPLACE TEMP TABLE {fragment.alias} AS {fragment.sql}"
-            )
+            ).fetchall()
             rel = self.con.table(fragment.alias)
             if max_rows is not None:
                 rel.show(max_rows=max_rows, max_width=50000)

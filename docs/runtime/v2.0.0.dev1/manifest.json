@@ -1,0 +1,577 @@
+{
+  "target_release": "v2.0.0.dev1",
+  "software_version": "2.0.0.dev1",
+  "status": "completed",
+  "raw_conversion": {
+    "e2e_seconds": 39.920844625041354,
+    "sampled_peak_rss_bytes": 9164046336,
+    "os_peak_rss_bytes": 9333424128,
+    "sampled_peak_spill_bytes": 0,
+    "final_spill_bytes": 0
+  },
+  "precleaning": {
+    "software_version": "2.0.0.dev1",
+    "canonical_rows": 71438939,
+    "e2e_seconds": 528.2113078749971,
+    "sampled_peak_rss_bytes": 17614372864,
+    "os_peak_rss_bytes": 17886363648,
+    "sampled_peak_spill_bytes": 42516840448,
+    "final_spill_bytes": 0,
+    "stages": [
+      {"name": "Foundational cleaning and IDs", "runtime_seconds": 122.78977179096546, "sampled_peak_rss_bytes": 11403608064, "sampled_peak_spill_bytes": 0},
+      {"name": "Term-frequency aggregation", "runtime_seconds": 2.0468892920180224, "sampled_peak_rss_bytes": 11101831168, "sampled_peak_spill_bytes": 0},
+      {"name": "Adjacent distinguishing and TF application", "runtime_seconds": 87.64296437503072, "sampled_peak_rss_bytes": 15487647744, "sampled_peak_spill_bytes": 0},
+      {"name": "Inverted-index derivation", "runtime_seconds": 37.80083916703006, "sampled_peak_rss_bytes": 12089819136, "sampled_peak_spill_bytes": 0},
+      {"name": "Road catalogue and keys", "runtime_seconds": 159.40581016702345, "sampled_peak_rss_bytes": 17614389248, "sampled_peak_spill_bytes": 3871473664},
+      {"name": "Inverted-index write", "runtime_seconds": 6.269019625033252, "sampled_peak_rss_bytes": 7634206720, "sampled_peak_spill_bytes": 1558511616},
+      {"name": "Canonical-address write", "runtime_seconds": 108.30843170802109, "sampled_peak_rss_bytes": 13894189056, "sampled_peak_spill_bytes": 42516840448},
+      {"name": "Manifest finalisation", "runtime_seconds": 1.4106427499791607, "sampled_peak_rss_bytes": 9917890560, "sampled_peak_spill_bytes": 38698221568},
+      {"name": "Other preparation work", "runtime_seconds": 0.3609786258894019, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+    ]
+  },
+  "datasets": {
+    "pooled_councils": {
+      "eligible_rows": 348284,
+      "runtime_seconds": 59.24177258304553,
+      "e2e_seconds": 77.10764466697583,
+      "sampled_peak_rss_bytes": 14211121152,
+      "os_peak_rss_bytes": 14333575168,
+      "sampled_peak_spill_bytes": 83197952,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.7821, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.6978, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 48.2464, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 8.114388832977319, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9884489784122764,
+          "recall": 0.9820520035373431,
+          "f1": 0.9852401075017931,
+          "tp": 342033,
+          "fp": 3997,
+          "unmatched": 2254
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.989077209533986,
+          "recall": 0.9806967876790206,
+          "f1": 0.9848691713150053,
+          "tp": 341561,
+          "fp": 3772,
+          "unmatched": 2951
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9898640698853353,
+          "recall": 0.9783165462668397,
+          "f1": 0.9840564328055393,
+          "tp": 340732,
+          "fp": 3489,
+          "unmatched": 4063
+        }
+      ]
+    },
+    "hackney": {
+      "eligible_rows": 113837,
+      "runtime_seconds": 20.650690666981973,
+      "e2e_seconds": 24.254385250038467,
+      "sampled_peak_rss_bytes": 6660620288,
+      "os_peak_rss_bytes": 6749093888,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.3286, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2364, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 13.7468, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 5.587781542005763, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9970101479097416,
+          "recall": 0.9959679190421392,
+          "f1": 0.996488760958889,
+          "tp": 113378,
+          "fp": 340,
+          "unmatched": 119
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9971834457021141,
+          "recall": 0.9952300218733804,
+          "f1": 0.9962057761891572,
+          "tp": 113294,
+          "fp": 320,
+          "unmatched": 223
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9973394414589023,
+          "recall": 0.994474555724413,
+          "f1": 0.9959049382661747,
+          "tp": 113208,
+          "fp": 302,
+          "unmatched": 327
+        }
+      ]
+    },
+    "rhondda": {
+      "eligible_rows": 111247,
+      "runtime_seconds": 20.558320834010374,
+      "e2e_seconds": 24.235584209032822,
+      "sampled_peak_rss_bytes": 6682378240,
+      "os_peak_rss_bytes": 6702120960,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.2983, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.3213, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 13.3742, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 5.859786166980676, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9909084290420633,
+          "recall": 0.978749988763742,
+          "f1": 0.9847916826829588,
+          "tp": 108883,
+          "fp": 999,
+          "unmatched": 1365
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9913015728288124,
+          "recall": 0.9772937697196329,
+          "f1": 0.9842478340771856,
+          "tp": 108721,
+          "fp": 954,
+          "unmatched": 1572
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9923316953541786,
+          "recall": 0.9747948259278902,
+          "f1": 0.9834850903286657,
+          "tp": 108443,
+          "fp": 838,
+          "unmatched": 1966
+        }
+      ]
+    },
+    "aberdeenshire": {
+      "eligible_rows": 122301,
+      "runtime_seconds": 15.23517025000183,
+      "e2e_seconds": 18.179816957970615,
+      "sampled_peak_rss_bytes": 5357715456,
+      "os_peak_rss_bytes": 5395021824,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.2671, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.1955, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 8.753, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 5.347097583984118, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9910197368421053,
+          "recall": 0.985339449391256,
+          "f1": 0.9881714302114383,
+          "tp": 120508,
+          "fp": 1092,
+          "unmatched": 701
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9916882218231543,
+          "recall": 0.9843337339841866,
+          "f1": 0.9879972916965879,
+          "tp": 120385,
+          "fp": 1009,
+          "unmatched": 907
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.992306739857196,
+          "recall": 0.9829273677238943,
+          "f1": 0.9875947848804252,
+          "tp": 120213,
+          "fp": 932,
+          "unmatched": 1156
+        }
+      ]
+    },
+    "mid_sussex": {
+      "eligible_rows": 3717,
+      "runtime_seconds": 7.240139083995018,
+      "e2e_seconds": 10.10049845802132,
+      "sampled_peak_rss_bytes": 4479451136,
+      "os_peak_rss_bytes": 4497899520,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.1413, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.143, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 3.3656, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 3.059473208985198, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9626604434072346,
+          "recall": 0.8878127522195319,
+          "f1": 0.9237228831350595,
+          "tp": 3300,
+          "fp": 128,
+          "unmatched": 289
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9651094027202839,
+          "recall": 0.8781275221953188,
+          "f1": 0.9195661360755036,
+          "tp": 3264,
+          "fp": 118,
+          "unmatched": 335
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9685534591194969,
+          "recall": 0.8700564971751412,
+          "f1": 0.9166666666666666,
+          "tp": 3234,
+          "fp": 105,
+          "unmatched": 378
+        }
+      ]
+    },
+    "gwynedd": {
+      "eligible_rows": 62103,
+      "runtime_seconds": 15.898457165982109,
+      "e2e_seconds": 19.18183937499998,
+      "sampled_peak_rss_bytes": 5187256320,
+      "os_peak_rss_bytes": 5224251392,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.2193, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2429, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 10.0333, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 4.642102999981027, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9784175056161079,
+          "recall": 0.9467819590035909,
+          "f1": 0.9623398091621794,
+          "tp": 58798,
+          "fp": 1297,
+          "unmatched": 2008
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9794773315521416,
+          "recall": 0.9444954350031399,
+          "f1": 0.961668360822376,
+          "tp": 58656,
+          "fp": 1229,
+          "unmatched": 2218
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9805766618024455,
+          "recall": 0.9413554900729434,
+          "f1": 0.9605658796273475,
+          "tp": 58461,
+          "fp": 1158,
+          "unmatched": 2484
+        }
+      ]
+    }
+  },
+  "postcodeless_datasets": {
+    "pooled_councils": {
+      "eligible_rows": 348284,
+      "runtime_seconds": 78.49060650001047,
+      "e2e_seconds": 89.29799175000517,
+      "sampled_peak_rss_bytes": 16975396864,
+      "os_peak_rss_bytes": 17141284864,
+      "sampled_peak_spill_bytes": 14624849920,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.2526, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2551, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 69.3582, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 7.2791266249594315, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9619414994482047,
+          "recall": 0.8083690321691493,
+          "f1": 0.8784941455461687,
+          "tp": 281542,
+          "fp": 11139,
+          "unmatched": 55603
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.969879496963772,
+          "recall": 0.7947278657647208,
+          "f1": 0.8736110694666476,
+          "tp": 276791,
+          "fp": 8596,
+          "unmatched": 62897
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9756676924867771,
+          "recall": 0.7700985402717323,
+          "f1": 0.8607799276620464,
+          "tp": 268213,
+          "fp": 6689,
+          "unmatched": 73382
+        }
+      ]
+    },
+    "hackney": {
+      "eligible_rows": 113837,
+      "runtime_seconds": 27.749057540961076,
+      "e2e_seconds": 31.33009179099463,
+      "sampled_peak_rss_bytes": 5525635072,
+      "os_peak_rss_bytes": 5561335808,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.2088, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2115, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 21.4628, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 5.168679458997769, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9945139671431114,
+          "recall": 0.8838163338808999,
+          "f1": 0.9359032199550704,
+          "tp": 100611,
+          "fp": 555,
+          "unmatched": 12671
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9958490260397683,
+          "recall": 0.8640600156363923,
+          "f1": 0.9252853830270591,
+          "tp": 98362,
+          "fp": 410,
+          "unmatched": 15065
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9967495139948578,
+          "recall": 0.837750467774098,
+          "f1": 0.9103596401212324,
+          "tp": 95367,
+          "fp": 311,
+          "unmatched": 18159
+        }
+      ]
+    },
+    "rhondda": {
+      "eligible_rows": 111247,
+      "runtime_seconds": 20.198937500012107,
+      "e2e_seconds": 24.24246745900018,
+      "sampled_peak_rss_bytes": 6166413312,
+      "os_peak_rss_bytes": 6202556416,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.1985, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2176, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 13.6623, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 5.444200958007388, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9433218105468297,
+          "recall": 0.7309860041169649,
+          "f1": 0.823689688178959,
+          "tp": 81320,
+          "fp": 4886,
+          "unmatched": 25041
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9581873644574724,
+          "recall": 0.7228329752712432,
+          "f1": 0.8240345546680057,
+          "tp": 80413,
+          "fp": 3509,
+          "unmatched": 27325
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9698437345952874,
+          "recall": 0.7074078402114214,
+          "f1": 0.8180944015052679,
+          "tp": 78697,
+          "fp": 2447,
+          "unmatched": 30103
+        }
+      ]
+    },
+    "aberdeenshire": {
+      "eligible_rows": 122301,
+      "runtime_seconds": 18.069503582955804,
+      "e2e_seconds": 21.218902666994836,
+      "sampled_peak_rss_bytes": 7044218880,
+      "os_peak_rss_bytes": 7080017920,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.1843, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.2029, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 12.0618, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 4.970271958002355, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9891266157516134,
+          "recall": 0.8747107546136172,
+          "f1": 0.9284068473237725,
+          "tp": 106978,
+          "fp": 1176,
+          "unmatched": 14147
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9917573174834585,
+          "recall": 0.8677116295042558,
+          "f1": 0.9255969124092366,
+          "tp": 106122,
+          "fp": 882,
+          "unmatched": 15297
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9932715850209729,
+          "recall": 0.8557983990318967,
+          "f1": 0.919424618425387,
+          "tp": 104665,
+          "fp": 709,
+          "unmatched": 16927
+        }
+      ]
+    },
+    "mid_sussex": {
+      "eligible_rows": 3717,
+      "runtime_seconds": 6.669712790986523,
+      "e2e_seconds": 10.097280166985001,
+      "sampled_peak_rss_bytes": 4367941632,
+      "os_peak_rss_bytes": 4389437440,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.1203, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.1197, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 2.9937, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 2.936266541987378, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9737206085753803,
+          "recall": 0.7576002152273339,
+          "f1": 0.8521712815857164,
+          "tp": 2816,
+          "fp": 76,
+          "unmatched": 825
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9769258075967341,
+          "recall": 0.7403820285176217,
+          "f1": 0.842363024181206,
+          "tp": 2752,
+          "fp": 65,
+          "unmatched": 900
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9801616458486407,
+          "recall": 0.7177831584611246,
+          "f1": 0.828700108712533,
+          "tp": 2668,
+          "fp": 54,
+          "unmatched": 995
+        }
+      ]
+    },
+    "gwynedd": {
+      "eligible_rows": 62103,
+      "runtime_seconds": 21.232961166009773,
+      "e2e_seconds": 24.24734541599173,
+      "sampled_peak_rss_bytes": 5092343808,
+      "os_peak_rss_bytes": 5128994816,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {"name": "Exact matching", "runtime_seconds": 0.16, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Peeled matching", "runtime_seconds": 0.1681, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Splink", "runtime_seconds": 16.0309, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null},
+        {"name": "Other match pipeline work", "runtime_seconds": 4.166852959020996, "sampled_peak_rss_bytes": null, "sampled_peak_spill_bytes": null}
+      ],
+      "operating_points": [
+        {
+          "match_weight": 8,
+          "precision": 0.9694335736354274,
+          "recall": 0.7578699901776081,
+          "f1": 0.8506954172051368,
+          "tp": 47066,
+          "fp": 1484,
+          "unmatched": 13553
+        },
+        {
+          "match_weight": 10,
+          "precision": 0.9759910310107035,
+          "recall": 0.7429431750479043,
+          "f1": 0.8436691443356464,
+          "tp": 46139,
+          "fp": 1135,
+          "unmatched": 14829
+        },
+        {
+          "match_weight": 12,
+          "precision": 0.9801341871189108,
+          "recall": 0.7221551293818335,
+          "f1": 0.8315965139996292,
+          "tp": 44848,
+          "fp": 909,
+          "unmatched": 16346
+        }
+      ]
+    }
+  },
+  "notes": [
+    "Fresh local raw conversion used ukam-os-builder 0.4.0 with alternate and Welsh address rules, metadata, deduplication and historicaddress exclusion. National preparation and matching used a locally built 2.0.0.dev1 wheel, DuckDB 2.0.0 and Splink 5.0.0. Nothing was published or deployed.",
+    "Preparation used all ten converted national chunks, 10 preparation chunks, one output chunk, 16GB configured DuckDB memory and 14 threads. Manifest, files, indexes and footer counts passed; the bundle loaded in a fresh connection. Bidirectional EXCEPT ALL found no lost or extra identifiers, preserving duplicate multiplicities.",
+    "Supplied-postcode mode retains genuinely missing postcodes. Postcode-less mode removes postcode text and clears the input field before cleaning; extraction cannot recover it. Canonical postcodes, labels, IDs and filters are unchanged. Identical eligible cohort counts and identifier fingerprints were verified across modes.",
+    "Missing labels and labels absent from the selected canonical are excluded; wrong and unmatched observations remain in the denominator. Pooled councils comprise Hackney, Rhondda and Aberdeenshire against the unfiltered national canonical. Regional subsets use the specified council codes and residential classification, except Mid Sussex commercial; national TF and indexes are retained.",
+    "Each dataset and mode has one scored run retaining Splink candidates down to MW 8. MW 8, 10 and 12 use exact threshold overrides with fixed exact and peeled matches; shared runtime is not three separately timed runs. Precision is 1 when no observations match; recall and F1 are 0 when their denominators are zero.",
+    "Workflow runtime excludes accuracy reporting and persistence. Matching E2E includes setup, filtering, scoring, reporting, persistence, threshold evaluation and teardown. Preparation E2E includes setup, cleaning, writes, manifest checks and teardown, but excludes raw conversion and the separate fresh-connection identifier audit.",
+    "Resources use one-second process-tree RSS samples; OS child high-water RSS is recorded separately in the manifest. Sampled peaks are not continuous maxima. GB is 1,000,000,000 bytes. Spill is allocated disk bytes, not logical size. All monitored jobs and verification ended with zero spill remaining. A DuckDB memory setting is not a process-RSS limit.",
+    "Preparation stage peaks are process totals sampled during each stage, not incremental allocations. Stages without a sample have null peaks; benchmark sub-stage RSS/spill was not separately measured. Other work is a timing residual. The three omitted preparation rows remain included in E2E timing.",
+    "Validation required benchmark-helper corrections to retain naturally missing postcodes and replace a removed DuckDB relation.fetchone call in accuracy reporting. All 21 surrounding benchmark and source-loader tests passed. The failed reporting attempt is retained privately and excluded from successful run timings.",
+    "Against the previous local 1.6.0 matching summaries, pooled MW 10 supplied-postcode outcomes change by -7 TP and +4 FP; postcode-less outcomes change by +4 TP and +1 FP. Aberdeenshire supplied-postcode MW 10 has 7 fewer TP and 6 more FP. No regression budget was supplied. The previous summaries used preparation labelled 1.5.3; canonical preparation and dependencies differ, so these observed deltas do not isolate a model effect or establish deterministic repeatability.",
+    "The freshly prepared national folder is active only in the isolated worktree; the original workspace and its configuration are unchanged. Performance documentation is unchanged pending review: this major-version branch changes the model and dependency stack, so older release timings are not a controlled performance baseline. Execution success does not guarantee accuracy or constitute publication approval."
+  ]
+}

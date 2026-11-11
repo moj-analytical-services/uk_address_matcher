@@ -68,12 +68,12 @@ def test_dataset_attribute_returns_duckdb_relation(tmp_path: Path):
     )
 
     rel = datasets.messy_example
-    row_count = rel.aggregate("COUNT(*) as c").fetchone()[0]
+    row_count = rel.aggregate("COUNT(*) as c").fetchall()[0][0]
     assert row_count == 2
 
     con = duckdb.connect(database=":memory:")
     rel_with_con = datasets.as_relation("messy_example", con=con)
-    first_id = rel_with_con.order("unique_id").limit(1).fetchone()[0]
+    first_id = rel_with_con.order("unique_id").limit(1).fetchall()[0][0]
     assert first_id == "m_1"
 
 
@@ -173,7 +173,7 @@ def test_fictional_london_returns_messy_and_canonical_tuple(tmp_path: Path):
         TO '{canonical.as_posix()}'
         (FORMAT PARQUET)
         """
-    )
+    ).fetchall()
     con.execute(
         f"""
         COPY (
@@ -185,7 +185,7 @@ def test_fictional_london_returns_messy_and_canonical_tuple(tmp_path: Path):
         TO '{messy.as_posix()}'
         (FORMAT PARQUET)
         """
-    )
+    ).fetchall()
 
     datasets = UKAMDatasets(
         specs=[
@@ -204,5 +204,5 @@ def test_fictional_london_returns_messy_and_canonical_tuple(tmp_path: Path):
     )
 
     messy_rel, canonical_rel = datasets.fictional_london
-    assert messy_rel.aggregate("COUNT(*) AS c").fetchone()[0] == 1
-    assert canonical_rel.aggregate("COUNT(*) AS c").fetchone()[0] == 1
+    assert messy_rel.aggregate("COUNT(*) AS c").fetchall()[0][0] == 1
+    assert canonical_rel.aggregate("COUNT(*) AS c").fetchall()[0][0] == 1

@@ -156,6 +156,14 @@ Keep the existing release environment approval and delay. Publishing uses OIDC, 
 no API-token fallback. After verifying a trusted release, revoke and remove the old
 `PYPI_API_TOKEN`. Release builds disable shared caches and require all security checks.
 
+Use the [two-stage release process](../docs/releasing.md): prepare a mutable draft and
+validate its exact source SHA, then manually publish the selected verified artefacts.
+Both stages run from request-file pushes on trusted `main` or `build/*` branches,
+without requiring new workflows on the default branch. Permit both in the protected
+environment without removing approval or delay. GitHub publication happens after
+PyPI and asset verification, with native immutability retained. There is no automatic destructive
+cleanup. The guide documents tag-creation permissions, recovery and sandbox acceptance.
+
 ## Privacy and incidents
 
 Review fixture provenance and generated artefacts manually; scanners do not establish

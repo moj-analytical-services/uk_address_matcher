@@ -27,7 +27,7 @@ class _FakeConnection:
         self.table_calls: list[str] = []
 
     def execute(self, _query: str, _params=None) -> SimpleNamespace:
-        return SimpleNamespace(fetchone=lambda: (0,))
+        return SimpleNamespace(fetchall=lambda: [(0,)])
 
     def register(self, alias: str, relation: _FakeRelation) -> None:
         self.register_calls.append((alias, relation))
@@ -80,7 +80,7 @@ def test_register_input_relation_once_returns_nested_sql_for_cross_connection_re
         target_con.execute(
             "CREATE TABLE registered_copy AS "
             f"SELECT * FROM ({registered.sql_query()}) AS src"
-        )
+        ).fetchall()
         rows = target_con.table("registered_copy").order("a").fetchall()
 
         assert rows == [(1, "alpha"), (2, "beta")]
@@ -93,7 +93,7 @@ def test_duckdb_table_exists_handles_names_requiring_literal_escaping():
     con = duckdb.connect(database=":memory:")
 
     try:
-        con.execute('CREATE TEMP TABLE "quoted\'table" (a INTEGER)')
+        con.execute('CREATE TEMP TABLE "quoted\'table" (a INTEGER)').fetchall()
 
         assert _duckdb_table_exists(con, "quoted'table") is True
         assert _duckdb_table_exists(con, "missing'table") is False
@@ -105,7 +105,7 @@ def test_drop_table_and_registered_aliases_quotes_table_identifiers():
     con = duckdb.connect(database=":memory:")
 
     try:
-        con.execute('CREATE TEMP TABLE "quoted table" (a INTEGER)')
+        con.execute('CREATE TEMP TABLE "quoted table" (a INTEGER)').fetchall()
 
         _drop_table_and_registered_aliases(con, "quoted table")
 
@@ -118,8 +118,8 @@ def test_drop_table_and_registered_aliases_quotes_view_identifiers():
     con = duckdb.connect(database=":memory:")
 
     try:
-        con.execute("CREATE TEMP TABLE source_tbl (a INTEGER)")
-        con.execute('CREATE VIEW "quoted view" AS SELECT * FROM source_tbl')
+        con.execute("CREATE TEMP TABLE source_tbl (a INTEGER)").fetchall()
+        con.execute('CREATE VIEW "quoted view" AS SELECT * FROM source_tbl').fetchall()
 
         _drop_table_and_registered_aliases(con, "quoted view")
 

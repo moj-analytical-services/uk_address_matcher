@@ -100,9 +100,9 @@ def improve_predictions_using_distinguishing_tokens(
                             ELSE string_split(trim(upper({postcode_column})), ' ')
                         END
                     ),
-                    token -> upper(token)
+                    lambda token: upper(token)
                 ),
-                token -> token IS NOT NULL AND token != ''
+                lambda token: token IS NOT NULL AND token != ''
             )
         """
 
@@ -116,19 +116,19 @@ def improve_predictions_using_distinguishing_tokens(
 
     candidate_token_lists_sql = """
         array_agg(candidate_tokens).
-        list_transform(candidate_tokens -> list_distinct(candidate_tokens))
+        list_transform(lambda candidate_tokens: list_distinct(candidate_tokens))
     """
     if use_bigrams:
         canonical_bigrams_sql = """
             list_transform(
                 array_agg(candidate_tokens),
-                candidate_tokens -> list_distinct(
+                lambda candidate_tokens: list_distinct(
                     list_transform(
                         list_zip(
                             list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
                             list_slice(candidate_tokens, 2, length(candidate_tokens))
                         ),
-                        pair -> ARRAY[pair[1], pair[2]]
+                        lambda pair: ARRAY[pair[1], pair[2]]
                     )
                 )
             ).flatten() AS bigrams_in_block_l,
@@ -141,7 +141,7 @@ def improve_predictions_using_distinguishing_tokens(
                     list_slice(tokens_r, 1, length(tokens_r) - 1),
                     list_slice(tokens_r, 2, length(tokens_r))
                 ),
-                pair -> ARRAY[pair[1], pair[2]]
+                lambda pair: ARRAY[pair[1], pair[2]]
             ) AS bigrams_r
         """
     else:
@@ -173,7 +173,7 @@ def improve_predictions_using_distinguishing_tokens(
                     ) AS best
                 FROM df_predict
                 WHERE match_weight > {match_weight_threshold}
-                GROUP BY unique_id_l, unique_id_r
+                GROUP BY unique_id_l, unique_id_r, ukam_address_id_r
             )
             SELECT
                 unique_id_l,
@@ -207,7 +207,7 @@ def improve_predictions_using_distinguishing_tokens(
                         {candidate_search_depth}
                     ) AS candidates
                 FROM {good_match_keys_table}
-                GROUP BY unique_id_r
+                GROUP BY unique_id_r, ukam_address_id_r
             )
             SELECT
                 unique_id_r,
@@ -225,7 +225,7 @@ def improve_predictions_using_distinguishing_tokens(
              AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
             WHERE prediction.match_weight > {match_weight_threshold}
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY prediction.unique_id_r, prediction.unique_id_l
+                PARTITION BY prediction.ukam_address_id_r, prediction.unique_id_l
                 ORDER BY
                     prediction.match_weight DESC,
                     prediction.ukam_address_id_r DESC,
@@ -282,7 +282,7 @@ def improve_predictions_using_distinguishing_tokens(
                 SELECT *
                 FROM {good_matches_table}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY unique_id_r
+                    PARTITION BY ukam_address_id_r
                     ORDER BY match_weight DESC, unique_id_l DESC
                 ) <= {top_n_matches}
             """).create(top_n_matches_table)
@@ -395,7 +395,7 @@ def improve_predictions_using_distinguishing_tokens(
                     *,
                     COALESCE(
                         common_end_tokens_r.list_transform(
-                            value -> COALESCE(
+                            lambda value: COALESCE(
                                 struct_extract(
                                     TRY_CAST(value AS STRUCT(
                                         tok VARCHAR, rel_freq DOUBLE
@@ -413,19 +413,19 @@ def improve_predictions_using_distinguishing_tokens(
                 *,
                 __full_address_tokens_l
                     .list_reverse()
-                    .list_filter((token, position) -> NOT (
+                    .list_filter(lambda token, position: NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
-                    .list_filter((token, position) -> NOT (
+                    .list_filter(lambda token, position: NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
                     .list_reverse() AS __token_address_tokens_l,
                 __full_address_tokens_r
                     .list_reverse()
-                    .list_filter((token, position) -> NOT (
+                    .list_filter(lambda token, position: NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
-                    .list_filter((token, position) -> NOT (
+                    .list_filter(lambda token, position: NOT (
                         position = 1 AND common_end_tokens_tok.list_contains(token)
                     ))
                     .list_reverse() AS __token_address_tokens_r
@@ -466,7 +466,7 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(hist_all_tokens_in_block_l),
-                            entry -> list_contains(tokens_r, entry.key)
+                            lambda entry: list_contains(tokens_r, entry.key)
                         )
                     ) AS hist_overlapping_tokens_r_block_l,
                     {block_bigrams_sql}
@@ -477,7 +477,7 @@ def improve_predictions_using_distinguishing_tokens(
                 map_from_entries(
                     list_filter(
                         map_entries(hist_all_bigrams_in_block_l),
-                        entry -> list_contains(bigrams_r, entry.key)
+                        lambda entry: list_contains(bigrams_r, entry.key)
                     )
                 ) AS hist_overlapping_bigrams_r_block_l
             FROM block_overlap_statistics
@@ -508,13 +508,13 @@ def improve_predictions_using_distinguishing_tokens(
                     list_distinct(
                         list_filter(
                             {candidate_tokens_l_sql},
-                                token -> token IN {_POSITIONAL_TOKENS_SQL}
+                                lambda token: token IN {_POSITIONAL_TOKENS_SQL}
                         )
                     ) AS positional_tokens_l,
                     list_distinct(
                         list_filter(
                             statistics.tokens_r,
-                                token -> token IN {_POSITIONAL_TOKENS_SQL}
+                                lambda token: token IN {_POSITIONAL_TOKENS_SQL}
                         )
                     ) AS positional_tokens_r
                 FROM {token_addresses_table} AS candidate
@@ -526,21 +526,21 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(hist_overlapping_tokens_r_block_l),
-                            entry -> list_contains(tokens_l, entry.key)
+                            lambda entry: list_contains(tokens_l, entry.key)
                         )
                     ) AS overlapping_tokens_this_l_and_r,
                     map_from_entries(list_distinct(list_transform(
-                        list_filter(tokens_r, token -> token NOT IN tokens_l),
-                        token -> {{'key': token, 'value': true}}
+                        list_filter(tokens_r, lambda token: token NOT IN tokens_l),
+                        lambda token: {{'key': token, 'value': true}}
                     ))) AS tokens_r_not_in_l_map,
-                    list_filter(tokens_l, token -> token NOT IN tokens_r)
+                    list_filter(tokens_l, lambda token: token NOT IN tokens_r)
                         AS missing_tokens,
                     list_transform(
                         list_zip(
                             list_slice(tokens_l, 1, length(tokens_l) - 1),
                             list_slice(tokens_l, 2, length(tokens_l))
                         ),
-                        pair -> ARRAY[pair[1], pair[2]]
+                        lambda pair: ARRAY[pair[1], pair[2]]
                     ) AS bigrams_l
                 FROM intermediate
             ),
@@ -550,17 +550,17 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(hist_all_tokens_in_block_l),
-                            entry -> map_contains(tokens_r_not_in_l_map, entry.key)
+                            lambda entry: map_contains(tokens_r_not_in_l_map, entry.key)
                         )
                     ) AS tokens_elsewhere_in_block_but_not_this,
                     map_from_entries(list_distinct(list_transform(
-                        list_filter(bigrams_r, bigram -> bigram NOT IN bigrams_l),
-                        bigram -> {{'key': bigram, 'value': true}}
+                        list_filter(bigrams_r, lambda bigram: bigram NOT IN bigrams_l),
+                        lambda bigram: {{'key': bigram, 'value': true}}
                     ))) AS bigrams_r_not_in_l_map,
                     map_from_entries(
                         list_filter(
                             map_entries(hist_overlapping_tokens_r_block_l),
-                            entry -> list_contains(tokens_l, entry.key)
+                            lambda entry: list_contains(tokens_l, entry.key)
                         )
                     ) AS overlapping_tokens_this_l_and_r_again
                 FROM candidate_features
@@ -571,7 +571,7 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(hist_all_bigrams_in_block_l),
-                            entry -> map_contains(bigrams_r_not_in_l_map, entry.key)
+                            lambda entry: map_contains(bigrams_r_not_in_l_map, entry.key)
                         )
                     ) AS bigrams_elsewhere_in_block_but_not_this
                 FROM evidence
@@ -584,12 +584,12 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(hist_overlapping_bigrams_r_block_l),
-                            entry -> list_contains(bigrams_l, entry.key)
+                            lambda entry: list_contains(bigrams_l, entry.key)
                         )
                     ) AS overlapping_bigrams_this_l_and_r,
                     COALESCE(list_sum(list_transform(
                         map_values(overlapping_tokens_this_l_and_r),
-                        value -> 1.0 / (value * value)
+                        lambda value: 1.0 / (value * value)
                     )), 0.0) * {REWARD_MULTIPLIER} AS token_reward,
                     COALESCE(len(map_entries(
                         tokens_elsewhere_in_block_but_not_this
@@ -617,7 +617,7 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(overlapping_bigrams_this_l_and_r),
-                            entry -> NOT (
+                            lambda entry: NOT (
                                 map_contains(
                                     overlapping_tokens_this_l_and_r, entry.key[1]
                                 )
@@ -634,7 +634,7 @@ def improve_predictions_using_distinguishing_tokens(
                     map_from_entries(
                         list_filter(
                             map_entries(bigrams_elsewhere_in_block_but_not_this),
-                            entry -> NOT (
+                            lambda entry: NOT (
                                 map_contains(
                                     tokens_elsewhere_in_block_but_not_this,
                                     entry.key[1]
@@ -657,7 +657,7 @@ def improve_predictions_using_distinguishing_tokens(
                     *,
                     COALESCE(list_sum(list_transform(
                         map_values(overlapping_bigrams_this_l_and_r_filtered),
-                        value -> 1.0 / (value * value)
+                        lambda value: 1.0 / (value * value)
                     )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
                     COALESCE(len(map_entries(
                         bigrams_elsewhere_in_block_but_not_this_filtered

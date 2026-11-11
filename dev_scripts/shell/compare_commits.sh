@@ -18,15 +18,15 @@
 # working tree (including uncommitted changes) instead of a clean commit.
 #
 # Usage
-#   scripts/compare_commits.sh -b <baseline_ref> -c <candidate_ref|local> \
+#   dev_scripts/shell/compare_commits.sh -b <baseline_ref> -c <candidate_ref|local> \
 #       -d <dataset[,dataset,...]> [-w <splink_weight>] [-r <results_root>] [--fetch]
 #
 # Examples
 #   # Compare main against your local working tree on two datasets
-#   scripts/compare_commits.sh -b main -c local -d hackney,rhondda
+#   dev_scripts/shell/compare_commits.sh -b main -c local -d hackney,rhondda
 #
 #   # Compare two commits across the four core datasets
-#   scripts/compare_commits.sh -b 4b9e3e1 -c 0a2fccf \
+#   dev_scripts/shell/compare_commits.sh -b 4b9e3e1 -c 0a2fccf \
 #       -d rhondda,aberdeenshire,hackney,mid_sussex
 #
 # Benchmark configuration (data paths)

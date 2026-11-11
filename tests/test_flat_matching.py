@@ -1,4 +1,5 @@
 import duckdb
+import pytest
 
 from uk_address_matcher import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
@@ -16,6 +17,8 @@ TEST_CASES = [
     ("m_flat_1", "FLAT 1 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
     ("m_flat_2", "FLAT 2 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
     ("m_flat_3", "FLAT 3 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", True),
+    ("m_fflat_2", "FFLAT 2 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", False),
+    ("m_fflat_3", "FFLAT 3 20 HIGH STREET LONDON", "E1 6AA", "c_flat_3", True),
     # Combined number and letter
     ("m_flat_1a", "FLAT 1A 30 PARK LANE LONDON", "W1K 1BE", "c_flat_2b", False),
     # This one now scores around 16.8 because same-number/different-letter is a
@@ -424,14 +427,14 @@ def test_flat_number_letter_one_sided_penalty_not_fuzzy_equivalence():
     assert not one_sided_row.empty, "Missing one-sided comparison row"
     assert not fuzzy_reference_row.empty, "Missing fuzzy reference comparison row"
 
-    one_sided_bf = float(one_sided_row.iloc[0]["bf_flat_identity"])
-    fuzzy_reference_bf = float(fuzzy_reference_row.iloc[0]["bf_flat_identity"])
+    one_sided_bf = 2 ** float(one_sided_row.iloc[0]["mw_flat_identity"])
+    fuzzy_reference_bf = 2 ** float(fuzzy_reference_row.iloc[0]["mw_flat_identity"])
 
-    assert one_sided_bf == 5.17, (
+    assert one_sided_bf == pytest.approx(5.17), (
         "Expected FLAT 2B vs FLAT 2 to hit 'Same number, letter one-sided' "
         f"(bf=5.17), got bf_flat_identity={one_sided_bf:.6f}."
     )
-    assert fuzzy_reference_bf == 13.0, (
+    assert fuzzy_reference_bf == pytest.approx(13.0), (
         "Expected FLAT B vs FLAT 2 to hit fuzzy letter-number equivalence "
         f"(bf=13), got bf_flat_identity={fuzzy_reference_bf:.6f}."
     )
@@ -551,7 +554,7 @@ def test_sub_premise_location_discrimination_in_reranker():
             ukam_address_id_r INTEGER
         )
         """
-    )
+    ).fetchall()
     con.executemany(
         "INSERT INTO df VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
