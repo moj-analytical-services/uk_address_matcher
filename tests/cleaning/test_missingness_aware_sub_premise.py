@@ -315,9 +315,7 @@ def test_directional_premise_role_model_uses_ordered_set_weights(duck_con):
         assert not predictions.duplicated(["unique_id_l", "unique_id_r"]).any()
         scores.append(
             {
-                (row.unique_id_r, row.unique_id_l): float(
-                    row.mw_sub_premise_identifier
-                )
+                (row.unique_id_r, row.unique_id_l): float(row.mw_sub_premise_identifier)
                 for row in predictions.itertuples()
             }
         )

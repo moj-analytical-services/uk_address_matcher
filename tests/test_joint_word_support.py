@@ -49,7 +49,6 @@ def test_word_support_is_empty_for_phrase_only_spacing_evidence(duck_con):
             false AS has_flat_indicator, false AS has_business_unit
     """)
     featured, _ = add_local_key_features(duck_con, source, canonical)
-    assert (
-        featured.select("lk_level_by_alias, lk_word_support_by_uprn").fetchall()[0]
-        == ({"a1": 2}, {})
-    )
+    assert featured.select("lk_level_by_alias, lk_word_support_by_uprn").fetchall()[
+        0
+    ] == ({"a1": 2}, {})
