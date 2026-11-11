@@ -4,6 +4,7 @@ from typing import Dict, List, Set, Tuple
 
 import pytest
 
+from uk_address_matcher.cleaning.chunking_strategies import derive_inverted_index
 from uk_address_matcher.cleaning.pipelines import QUEUE_CLEAN_FULL_ADDRESS
 from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
@@ -210,6 +211,74 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
     ]
 
 
+def test_first_pass_normalises_unicode_punctuation_and_spacing(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE' || chr(8217) || 'S QUAY', 'FABLES QUAY'),
+            ('MYTHIC' || chr(8217) || 'S ROOM', 'MYTHICS ROOM'),
+            (chr(8211) || ' FABLE PORT', 'FABLE PORT'),
+            ('MYTHIC LTD ' || chr(8211), 'MYTHIC LTD'),
+            (chr(8211) || ' FABLE PORT OF MIST', 'FABLE PORT OF MIST'),
+            ('MYTHIC LTD ' || chr(8211) || ' FABLE PORT',
+             'MYTHIC LTD FABLE PORT'),
+            ('FICTIONAL UK LTD ' || chr(8211), 'FICTIONAL UK LTD'),
+            ('FABLE' || chr(160) || 'PORT OF MIST', 'FABLE PORT OF MIST'),
+            ('FABLE' || chr(160) || 'PORT OF MIST HALL',
+             'FABLE PORT OF MIST HALL'),
+            ('MYTHIC' || chr(160) || 'ROOM 2 WELL', 'MYTHIC ROOM 2 WELL'),
+            ('MYTHIC' || chr(160) || 'ROOM 2', 'MYTHIC ROOM 2'),
+            ('FABLE&FAUX 95% FINE!', 'FABLE&FAUX 95% FINE!')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLES QUAY", "FABLES QUAY"),
+        ("MYTHICS ROOM", "MYTHICS ROOM"),
+        ("FABLE PORT", "FABLE PORT"),
+        ("MYTHIC LTD", "MYTHIC LTD"),
+        ("FABLE PORT OF MIST", "FABLE PORT OF MIST"),
+        ("MYTHIC LTD FABLE PORT", "MYTHIC LTD FABLE PORT"),
+        ("FICTIONAL UK LTD", "FICTIONAL UK LTD"),
+        ("FABLE PORT OF MIST", "FABLE PORT OF MIST"),
+        ("FABLE PORT OF MIST HALL", "FABLE PORT OF MIST HALL"),
+        ("MYTHIC ROOM 2 WELL", "MYTHIC ROOM 2 WELL"),
+        ("MYTHIC ROOM 2", "MYTHIC ROOM 2"),
+        ("FABLE&FAUX 95% FINE!", "FABLE&FAUX 95% FINE!"),
+    ]
+
+
+def test_first_pass_removes_repeated_tokens(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE FABLE HOUSE', 'FABLE HOUSE'),
+            ('FABLE FABLE FABLE HOUSE', 'FABLE HOUSE'),
+            ('MYTHIC MYTHIC QUAY', 'MYTHIC QUAY'),
+            ('NO NO ROOM', 'NO NO ROOM')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLE HOUSE", "FABLE HOUSE"),
+        ("FABLE HOUSE", "FABLE HOUSE"),
+        ("MYTHIC QUAY", "MYTHIC QUAY"),
+        ("NO NO ROOM", "NO NO ROOM"),
+    ]
+
+
 def test_first_pass_handles_fflat_marker(duck_con):
     input_rel = duck_con.sql(
         """
@@ -234,10 +303,15 @@ def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     input_rel = duck_con.sql(
         """
         SELECT * FROM (VALUES
-            ('PEN-Y-GRAIG'),
-            ('WELLS-NEXT-THE-SEA'),
-            ('TIGH102-NA'),
-            ('1-2 GETHIN ROAD'),
+            ('MYTHIC-Y-FABLE'),
+            ('FABLE-NEXT-THE-MOON'),
+            ('FABLE102-NA'),
+            ('1-2 FABLE ROAD'),
+            ('10 - 12'),
+            ('23A - 24'),
+            ('20A - 22B'),
+            ('10 - 12, 14 - 16'),
+            ('FABLE102 - 13'),
             ('UNIT 5/6')
         ) AS t(clean_full_address)
         """
@@ -254,10 +328,15 @@ def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     )
 
     assert [row[0] for row in pipeline.run().fetchall()] == [
-        "PEN Y GRAIG",
-        "WELLS NEXT THE SEA",
-        "TIGH102-NA",
-        "1-2 GETHIN ROAD",
+        "MYTHIC Y FABLE",
+        "FABLE NEXT THE MOON",
+        "FABLE102-NA",
+        "1-2 FABLE ROAD",
+        "10-12",
+        "23A-24",
+        "20A-22B",
+        "10-12 14-16",
+        "FABLE102 - 13",
         "UNIT 5-6",
     ]
 
@@ -369,6 +448,38 @@ def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_co
     assert pipeline.run().project("clean_full_address_tokens").fetchall() == [
         (["EXCLUDING", "BASEMENT", "41", "TEST", "ROAD", "LONDON"],)
     ]
+
+
+def test_parenthetical_name_is_cleaned_before_inverted_indexing(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('inn-round', 1, '(FABLE INN EAST)', NULL),
+            ('inn-square', 2, '[FABLE INN EAST]', NULL)
+        ) AS t(unique_id, ukam_address_id, address_concat, postcode)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=QUEUE_CLEAN_FULL_ADDRESS,
+    )
+    cleaned = pipeline.run()
+
+    assert sorted(
+        cleaned.project(
+            "unique_id, clean_full_address, clean_full_address_tokens"
+        ).fetchall()
+    ) == [
+        ("inn-round", "FABLE INN EAST", ["FABLE", "INN", "EAST"]),
+        ("inn-square", "FABLE INN EAST", ["FABLE", "INN", "EAST"]),
+    ]
+
+    inverted_index = derive_inverted_index(cleaned, duck_con)
+    trigram_keys = (
+        inverted_index.filter("index_strategy = 'trigram'").project("key").fetchall()
+    )
+    assert trigram_keys == [("FABLE INN EAST",)]
 
 
 ## Checks to confirm our abbreviations file doesn't break the following properties:
