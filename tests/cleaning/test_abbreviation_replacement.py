@@ -254,6 +254,43 @@ def test_first_pass_normalises_unicode_punctuation_and_spacing(duck_con):
     ]
 
 
+def test_first_pass_strips_latin_accents(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE D' || chr(374) || ' QUAY', 'FABLE DY QUAY'),
+            ('52 FABLE D' || chr(212) || 'L', '52 FABLE DOL'),
+            ('44Y FABLE COEDEL' || chr(193) || 'I', '44Y FABLE COEDELAI'),
+            ('TY FABLE DD' || chr(212) || 'L', 'TY FABLE DDOL'),
+            ('1 FABLE TAI D' || chr(194) || 'R', '1 FABLE TAI DAR'),
+            ('3 FABLE GWYTH' || chr(207) || 'EN HALL', '3 FABLE GWYTHIEN HALL'),
+            ('FABLE L' || chr(212) || 'N QUAY', 'FABLE LON QUAY'),
+            ('101 35Y FABLE PAR' || chr(202) || 'D', '101 35Y FABLE PARED'),
+            ('B 4 FABLE T' || chr(374), 'B 4 FABLE TY'),
+            ('38 FABLE PARC T' || chr(374), '38 FABLE PARC TY')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLE DY QUAY", "FABLE DY QUAY"),
+        ("52 FABLE DOL", "52 FABLE DOL"),
+        ("44Y FABLE COEDELAI", "44Y FABLE COEDELAI"),
+        ("TY FABLE DDOL", "TY FABLE DDOL"),
+        ("1 FABLE TAI DAR", "1 FABLE TAI DAR"),
+        ("3 FABLE GWYTHIEN HALL", "3 FABLE GWYTHIEN HALL"),
+        ("FABLE LON QUAY", "FABLE LON QUAY"),
+        ("101 35Y FABLE PARED", "101 35Y FABLE PARED"),
+        ("B 4 FABLE TY", "B 4 FABLE TY"),
+        ("38 FABLE PARC TY", "38 FABLE PARC TY"),
+    ]
+
+
 def test_first_pass_removes_repeated_tokens(duck_con):
     input_rel = duck_con.sql(
         """

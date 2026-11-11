@@ -20,6 +20,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     split_letter_dash_letter,
     standarise_num_dash_num,
     standarise_num_letter,
+    strip_latin_accents,
     trim,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
@@ -203,6 +204,7 @@ def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "clean_full_address",
         [
+            strip_latin_accents,
             remove_commas_periods,
             remove_brackets,
             remove_apostrophes,

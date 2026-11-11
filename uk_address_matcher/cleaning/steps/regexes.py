@@ -33,6 +33,10 @@ def replace_non_breaking_space_with_space(input: str):
     return f"regexp_replace({input}, chr(160), ' ', 'g')"
 
 
+def strip_latin_accents(input: str):
+    return f"strip_accents({input})"
+
+
 def merge_split_flat_number(input: str):
     """Merge zero-padded split flat numbers such as ``FLAT 3 02 AT``."""
     pattern = r"\b(F?FLAT)\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
