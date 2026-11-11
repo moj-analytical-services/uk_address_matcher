@@ -91,8 +91,7 @@ def remove_repeated_tokens(input: str):
     )
     token_pairs = f"list_zip({tokens}, {previous_tokens})"
     unique_token_pairs = (
-        f"list_filter({token_pairs}, "
-        "lambda pair: len(pair[1]) < 4 OR pair[1] <> pair[2])"
+        f"list_filter({token_pairs}, lambda pair: len(pair[1]) < 4 OR pair[1] <> pair[2])"
     )
     return f"""
     CASE

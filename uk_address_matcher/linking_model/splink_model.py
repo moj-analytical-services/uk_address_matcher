@@ -633,9 +633,7 @@ def _get_linker(
 
     if canonical_cache_path is not None:
         model_settings = settings.get_settings("duckdb")
-        queries = [
-            "SELECT " + ", ".join(model_settings._columns_to_select_for_blocking)
-        ]
+        queries = ["SELECT " + ", ".join(model_settings._columns_to_select_for_blocking)]
         for rule in model_settings._blocking_rules_to_generate_predictions:
             definition = rule.as_dict()
             queries.append("SELECT 1 WHERE " + definition["blocking_rule"])

@@ -25,7 +25,11 @@ def test_fetch_overall_summary_selects_overall_and_rejects_missing_row() -> None
             "precision, recall)"
         )
         assert fetch_overall_summary(connection, accuracy, total_input_rows=10) == (
-            10, 5, 4, 0.8, 0.4
+            10,
+            5,
+            4,
+            0.8,
+            0.4,
         )
         with pytest.raises(ValueError, match="Expected an overall row"):
             fetch_overall_summary(
