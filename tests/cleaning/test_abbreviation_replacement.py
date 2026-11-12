@@ -9,8 +9,7 @@ from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _split_letter_dash_letter,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
@@ -313,8 +312,7 @@ def test_exclusion_phrases_do_not_create_unit_or_premise_features(duck_con):
         con=duck_con,
         input_rel=input_rel,
         stage_specs=[
-            _parse_out_flat_position_and_letter,
-            _parse_out_business_unit,
+            _parse_out_sub_premise,
             _parse_out_address_structure_premise,
         ],
     )

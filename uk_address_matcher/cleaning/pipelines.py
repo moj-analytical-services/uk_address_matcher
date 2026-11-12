@@ -18,9 +18,8 @@ from uk_address_matcher.cleaning.steps import (
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
     _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
     _prepare_roadlike_place_input,
     _preserve_original_address_concat,
@@ -113,9 +112,8 @@ def _materialize_numeric_features():
 
 
 QUEUE_DERIVE_NON_TF_FEATURES = [
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
-    _parse_out_business_unit,
     _parse_out_address_structure_premise,
     _parse_out_numbers,
     _derive_numeric_range,
@@ -127,9 +125,8 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
 ]
 
 QUEUE_DERIVE_NON_TF_FEATURES_MATERIALIZED = [
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
-    _parse_out_business_unit,
     _parse_out_address_structure_premise,
     _parse_out_numbers,
     _materialize_numeric_features,
@@ -379,7 +376,7 @@ def get_numeric_term_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
     ]
 
@@ -425,7 +422,7 @@ def get_address_token_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
         _clean_address_string_second_pass_and_tokenise,
         _split_numeric_tokens_to_cols,
