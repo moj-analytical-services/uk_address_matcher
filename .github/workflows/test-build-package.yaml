@@ -71,7 +71,7 @@ jobs:
 
       - name: Smoke test wheel assets and CLI
         run: |
-          uv venv .venv-wheeltest -p 3.10 --clear
+          uv venv .venv-wheeltest -p 3.11 --clear
           uv pip install --python .venv-wheeltest/bin/python dist/*.whl
           .venv-wheeltest/bin/python -I -c "from uk_address_matcher.labelling.server import _static_root; assert (_static_root() / 'index.html').is_file()"
 

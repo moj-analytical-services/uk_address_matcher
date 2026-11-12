@@ -5,7 +5,7 @@ description = "A package for matching UK addresses using a pretrained Splink mod
 authors = [{name = "Robin Linacre", email = "robinlinacre@hotmail.com"}, {name = "Thomas Hepworth"}]
 readme = "readme.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.5.0",
     "splink>=5,<6",
