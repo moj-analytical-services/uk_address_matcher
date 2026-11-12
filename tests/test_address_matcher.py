@@ -97,6 +97,33 @@ def test_match_with_default_stages(con, canonical_data, messy_data):
     assert result.matches().count("*").fetchall()[0][0] > 0
 
 
+def test_dotted_floor_unit_codes_expand_to_existing_floor_words(con):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            ('C1', 'GROUND FLOOR 8 EXAMPLE BUILDING HIGH ROAD', 'E1 6AA'),
+            ('C2', 'FIRST FLOOR 8 EXAMPLE BUILDING HIGH ROAD', 'E1 6AA'),
+            ('C3', 'SECOND FLOOR 8 EXAMPLE BUILDING HIGH ROAD', 'E1 6AA')
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+    messy = con.sql("""
+        SELECT * FROM (VALUES
+            ('M1', 'G.08 Example Building High Road', 'E1 6AA'),
+            ('M2', '1.08 Example Building High Road', 'E1 6AA'),
+            ('M3', '2.08 Example Building High Road', 'E1 6AA')
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+
+    result = AddressMatcher(canonical, messy, con=con).match().matches(all_columns=True)
+
+    assert result.order("unique_id").project(
+        "unique_id, resolved_canonical_id"
+    ).fetchall() == [
+        ("M1", "C1"),
+        ("M2", "C2"),
+        ("M3", "C3"),
+    ]
+
+
 def test_match_with_explicit_stages(con, canonical_data, messy_data):
     """Passing explicit stages should work identically."""
     matcher = AddressMatcher(

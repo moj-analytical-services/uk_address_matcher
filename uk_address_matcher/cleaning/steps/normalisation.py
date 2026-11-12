@@ -201,8 +201,39 @@ def _upper_case_address_and_postcode() -> str:
     tags=["cleaning", "normalisation"],
 )
 def _clean_address_string_first_pass() -> str:
+    dotted_floor_pattern = r"^\s*(G|[1-9]|10)\.([0-9]{1,3})(?:[\s,]|$)"
+    floor_word = f"""
+        CASE regexp_extract(clean_full_address, '{dotted_floor_pattern}', 1)
+            WHEN 'G' THEN 'GROUND'
+            WHEN '1' THEN 'FIRST'
+            WHEN '2' THEN 'SECOND'
+            WHEN '3' THEN 'THIRD'
+            WHEN '4' THEN 'FOURTH'
+            WHEN '5' THEN 'FIFTH'
+            WHEN '6' THEN 'SIXTH'
+            WHEN '7' THEN 'SEVENTH'
+            WHEN '8' THEN 'EIGHTH'
+            WHEN '9' THEN 'NINTH'
+            WHEN '10' THEN 'TENTH'
+        END
+    """
+    address_with_expanded_floor = f"""
+        CASE
+            WHEN regexp_matches(clean_full_address, '{dotted_floor_pattern}')
+            THEN {floor_word}
+                || ' FLOOR '
+                || CAST(CAST(regexp_extract(
+                    clean_full_address, '{dotted_floor_pattern}', 2
+                ) AS INTEGER) AS VARCHAR)
+                || ' '
+                || regexp_replace(
+                    clean_full_address, '{dotted_floor_pattern}', ''
+                )
+            ELSE clean_full_address
+        END
+    """
     fn_call = construct_nested_call(
-        "clean_full_address",
+        address_with_expanded_floor,
         [
             strip_latin_accents,
             remove_commas_periods,
