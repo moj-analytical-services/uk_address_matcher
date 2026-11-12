@@ -36,6 +36,8 @@ class PeeledAddressStage(MatchingStage):
 
     Set ``inward_postcode_levenshtein`` to a positive integer to enable the
     optional inward postcode phase; the default ``0`` skips it.
+    Cross-postcode matches require a unique entity within the postcode district.
+    Exact-postcode matches also require one distinct canonical entity.
 
     Example:
         ``"100 Test Street Hackney London"`` can match
@@ -141,39 +143,7 @@ def _peeled_address_matches(
     )
 
     if inward_postcode_levenshtein > 0:
-        single_pass_messy_sql = f"""
-            SELECT
-                messy.*,
-                messy.peeled_address AS match_key,
-                1 AS key_priority
-            FROM {{messy_peeled}} AS messy
-            UNION ALL
-            SELECT
-                messy.*,
-                {_compacted_address_sql("messy.peeled_address")} AS match_key,
-                2 AS key_priority
-            FROM {{messy_peeled}} AS messy
-            WHERE {_compacted_address_sql("messy.peeled_address")} <> ''
-            AND {_compacted_address_sql("messy.peeled_address")}
-                <> messy.peeled_address
-        """
-        single_pass_canonical_sql = f"""
-            SELECT
-                canon.*,
-                canon.peeled_address AS match_key,
-                1 AS key_priority
-            FROM {{canonical_peeled}} AS canon
-            UNION ALL
-            SELECT
-                canon.*,
-                {_compacted_address_sql("canon.peeled_address")} AS match_key,
-                2 AS key_priority
-            FROM {{canonical_peeled}} AS canon
-            WHERE {_compacted_address_sql("canon.peeled_address")} <> ''
-            AND {_compacted_address_sql("canon.peeled_address")}
-                <> canon.peeled_address
-        """
-        single_pass_candidates_sql = f"""
+        rescue_candidates_sql = f"""
             SELECT
                 messy.ukam_address_id,
                 canon.canonical_ukam_address_id,
@@ -181,65 +151,60 @@ def _peeled_address_matches(
                 CASE
                     WHEN messy.postcode <> canon.postcode
                     THEN '{partial_postcode_match_reason_value}'::ENUM {enum_values}
-                    WHEN messy.key_priority = 1 AND canon.key_priority = 1
+                    WHEN messy.peeled_address = canon.peeled_address
                     THEN '{match_reason_value}'::ENUM {enum_values}
                     ELSE '{stripped_match_reason_value}'::ENUM {enum_values}
                 END AS match_reason,
                 CASE WHEN messy.postcode = canon.postcode THEN 0 ELSE 1 END
                     AS postcode_priority,
-                messy.key_priority + canon.key_priority AS key_priority
-            FROM {{single_pass_messy}} AS messy
-            INNER JOIN {{single_pass_canonical}} AS canon
+                CASE
+                    WHEN messy.peeled_address = canon.peeled_address THEN 0
+                    WHEN messy.peeled_address = messy.compact_address
+                        OR canon.peeled_address = canon.compact_address THEN 1
+                    ELSE 2
+                END AS key_priority
+            FROM {{messy_peeled}} AS messy
+            JOIN {{canonical_peeled}} AS canon
                 ON split_part(messy.postcode, ' ', 1)
                     = split_part(canon.postcode, ' ', 1)
-                AND messy.match_key = canon.match_key
+                AND messy.compact_address = canon.compact_address
                 AND regexp_extract_all(messy.peeled_address, '[0-9]+')
                     = regexp_extract_all(canon.peeled_address, '[0-9]+')
-            WHERE messy.postcode IS NOT NULL
-            AND canon.postcode IS NOT NULL
-            AND split_part(messy.postcode, ' ', 2) <> ''
+            WHERE split_part(messy.postcode, ' ', 2) <> ''
             AND split_part(canon.postcode, ' ', 2) <> ''
             AND (messy.did_peel OR canon.did_peel)
             AND (
-                messy.postcode = canon.postcode
-                OR levenshtein(
-                    split_part(messy.postcode, ' ', 2),
-                    split_part(canon.postcode, ' ', 2)
-                ) <= {inward_postcode_levenshtein}
+                messy.peeled_address = canon.peeled_address
+                OR messy.compact_address <> ''
             )
+            AND levenshtein(
+                split_part(messy.postcode, ' ', 2),
+                split_part(canon.postcode, ' ', 2)
+            ) <= {inward_postcode_levenshtein}
         """
-        single_pass_ranked_sql = """
-            SELECT
-                candidates.ukam_address_id,
-                candidates.canonical_ukam_address_id,
-                candidates.resolved_canonical_id,
-                candidates.match_reason,
-                ROW_NUMBER() OVER (
-                    PARTITION BY candidates.ukam_address_id
-                    ORDER BY
-                        candidates.postcode_priority,
-                        candidates.key_priority,
-                        candidates.canonical_ukam_address_id
-                ) AS rn
-            FROM {single_pass_candidates} AS candidates
-        """
-        single_pass_matches_sql = """
-            SELECT
-                ukam_address_id,
-                canonical_ukam_address_id,
-                resolved_canonical_id,
-                match_reason
-            FROM {single_pass_ranked}
-            WHERE rn = 1
+        ranked_rescues_sql = """
+            SELECT * FROM {rescue_candidates}
+            QUALIFY row_number() OVER (
+                PARTITION BY ukam_address_id
+                ORDER BY postcode_priority, key_priority, canonical_ukam_address_id
+            ) = 1
+            AND count(DISTINCT resolved_canonical_id) OVER (
+                PARTITION BY ukam_address_id, postcode_priority, key_priority
+            ) = 1
         """
         return [
             CTEStep("messy_peeled", messy_peeled_sql),
             CTEStep("canonical_peeled", canonical_peeled_sql),
-            CTEStep("single_pass_messy", single_pass_messy_sql),
-            CTEStep("single_pass_canonical", single_pass_canonical_sql),
-            CTEStep("single_pass_candidates", single_pass_candidates_sql),
-            CTEStep("single_pass_ranked", single_pass_ranked_sql),
-            CTEStep("peeled_address_matches", single_pass_matches_sql),
+            CTEStep("rescue_candidates", rescue_candidates_sql),
+            CTEStep("ranked_rescues", ranked_rescues_sql),
+            CTEStep(
+                "peeled_address_matches",
+                """
+                    SELECT ukam_address_id, canonical_ukam_address_id,
+                        resolved_canonical_id, match_reason
+                    FROM {ranked_rescues}
+                """,
+            ),
         ]
 
     peeled_candidates_sql = f"""
@@ -256,6 +221,11 @@ def _peeled_address_matches(
         WHERE messy.did_peel OR canon.did_peel
     """
 
+    unique_peeled_candidates_sql = """
+        SELECT * FROM {peeled_address_candidates}
+        QUALIFY count(DISTINCT resolved_canonical_id)
+            OVER (PARTITION BY ukam_address_id) = 1
+        """
     ranked_peeled_candidates_sql = """
         SELECT
             candidates.ukam_address_id,
@@ -268,7 +238,7 @@ def _peeled_address_matches(
                     candidates.match_priority,
                     candidates.canonical_ukam_address_id
             ) AS rn
-        FROM {peeled_address_candidates} AS candidates
+        FROM {unique_peeled_candidates} AS candidates
     """
 
     pre_stripped_matches_sql = """
@@ -285,6 +255,7 @@ def _peeled_address_matches(
         CTEStep("messy_peeled", messy_peeled_sql),
         CTEStep("canonical_peeled", canonical_peeled_sql),
         CTEStep("peeled_address_candidates", peeled_candidates_sql),
+        CTEStep("unique_peeled_candidates", unique_peeled_candidates_sql),
         CTEStep("ranked_peeled_candidates", ranked_peeled_candidates_sql),
         CTEStep("pre_stripped_matches", pre_stripped_matches_sql),
     ]
@@ -351,6 +322,15 @@ def _peeled_address_matches(
                 messy.compact_peeled_address <> messy.peeled_address
                 OR canon.compact_peeled_address <> canon.peeled_address
             )
+        """
+
+        stripped_candidates_sql += """
+            QUALIFY count(DISTINCT canon.canonical_unique_id)
+                OVER (PARTITION BY messy.ukam_address_id) = 1
+                AND row_number() OVER (
+                    PARTITION BY messy.ukam_address_id
+                    ORDER BY canon.canonical_ukam_address_id
+                ) = 1
         """
 
         steps.extend(
@@ -569,6 +549,7 @@ def _build_regex_peel_sql(
                 postcode,
                 canonical_clean_full_address,
                 peeled_address,
+                {_compacted_address_sql("peeled_address")} AS compact_address,
                 peeled_address <> canonical_clean_full_address AS did_peel
             FROM peeled
         """
@@ -605,6 +586,7 @@ def _build_regex_peel_sql(
             postcode,
             clean_full_address,
             peeled_address,
+            {_compacted_address_sql("peeled_address")} AS compact_address,
             peeled_address <> clean_full_address AS did_peel
         FROM peeled
     """
