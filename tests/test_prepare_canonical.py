@@ -100,6 +100,9 @@ def canonical_data(con):
         "FLAT 4 DEMO LODGE 12A DEMO ROAD",
         "FLAT 2 18-20 DEMO ROAD",
         "FLAT 4 12 DEMO ROAD",
+        "UNIT G 3 AT 55-57 DEMO ROAD",
+        "GROUND FLOOR REAR UNIT 4 19A DEMO ROAD",
+        "STUDIO 8 42A DEMO ROAD",
     ],
 )
 def test_reloaded_numeric_slots_match_live_cleaning(con, address):
@@ -109,9 +112,16 @@ def test_reloaded_numeric_slots_match_live_cleaning(con, address):
     )
     cleaned = _clean_data_pre_term_frequencies(source, con)
     restored = _rehydrate_canonical_addresses(
-        cleaned.select("* EXCLUDE(numeric_token_2,numeric_token_3)")
+        cleaned.select("""* EXCLUDE (
+            numeric_token_2, numeric_token_3, business_unit_type, business_unit_id,
+            has_business_unit, has_flat_indicator, flat_number, flat_identity
+        )""")
     )
-    slots = "numeric_token_1,numeric_token_2,numeric_token_3"
+    slots = """
+        numeric_token_1, numeric_token_2, numeric_token_3,
+        business_unit_type, business_unit_id, has_business_unit,
+        has_flat_indicator, flat_number, flat_letter, flat_identity
+    """
     assert restored.select(slots).fetchall() == cleaned.select(slots).fetchall()
 
 
@@ -128,12 +138,22 @@ def prepared_folder(con, canonical_data, tmp_path):
     return tmp_path
 
 
-def test_prepare_creates_expected_files(prepared_folder):
+def test_prepare_creates_expected_files(prepared_folder, con):
     assert (prepared_folder / "ukam_canonical_addresses.parquet").exists()
     assert (prepared_folder / "ukam_term_frequencies.parquet").exists()
     assert (prepared_folder / "ukam_inverted_index.parquet").exists()
     assert (prepared_folder / "roadlike_places.parquet").exists()
     assert (prepared_folder / "ukam_manifest.json").exists()
+    stored_columns = con.read_parquet(
+        str(prepared_folder / "ukam_canonical_addresses.parquet")
+    ).columns
+    assert not {
+        "sub_premise_details", "business_unit_type", "business_unit_id",
+        "has_business_unit", "has_flat_indicator", "flat_number",
+        "flat_identity",
+    }.intersection(stored_columns)
+    assert "sub_premise_building_number" in stored_columns
+    assert "flat_letter" in stored_columns
 
 
 @pytest.mark.parametrize(

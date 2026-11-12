@@ -10,9 +10,8 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 from uk_address_matcher.cleaning.steps import (
     _derive_numeric_range,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
     _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
@@ -721,7 +720,7 @@ def test_parse_out_flat_positional():
     )
 
     result = _run_single_stage(
-        _parse_out_flat_position_and_letter, input_relation, connection
+        _parse_out_sub_premise, input_relation, connection
     )
     rows = result.fetchall()
     columns = result.columns
@@ -770,7 +769,7 @@ def test_parse_out_flat_positional():
         + " AS original_address_concat"
     )
     comma_separated_flat_row = _run_single_stage(
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         comma_separated_flat_relation,
         connection,
     ).fetchone()
@@ -793,6 +792,8 @@ def test_parse_out_sub_premise_location():
         ),
         ("COMMERCIAL CENTRE 40 MARTELL ROAD", None),
         ("GROUND FLOOR FLAT 4 UFTON ROAD LONDON", None),
+        ("UNIT 4 REAR 42 TEST ROAD", "REAR"),
+        ("UNIT 4 LEFT 42 TEST ROAD", "LEFT"),
     ]
 
     input_relation = connection.sql(
@@ -803,7 +804,7 @@ def test_parse_out_sub_premise_location():
     )
 
     pipeline = DuckDBPipeline(connection, input_relation)
-    pipeline.add_step(_parse_out_flat_position_and_letter())
+    pipeline.add_step(_parse_out_sub_premise())
     pipeline.add_step(_parse_out_sub_premise_location())
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
 
@@ -1093,7 +1094,7 @@ def test_parse_out_business_unit():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(_parse_out_business_unit, input_relation, connection)
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     type_idx = columns.index("business_unit_type")
