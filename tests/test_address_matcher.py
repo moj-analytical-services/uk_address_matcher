@@ -97,6 +97,35 @@ def test_match_with_default_stages(con, canonical_data, messy_data):
     assert result.matches().count("*").fetchall()[0][0] > 0
 
 
+def test_dotted_unit_codes_preserve_exact_matches_and_abstain_at_long_street(con):
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            ('C1', 'STUDIO 409 FLORA BUILDING 11-13 LONG STREET', 'E2 8HJ'),
+            ('C2', '04.09 EXAMPLE BUILDING HIGH ROAD', 'E1 6AA'),
+            ('C3', 'FLAT 4.12 11-13 LONG STREET', 'E2 8HJ')
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+    messy = con.sql("""
+        SELECT * FROM (VALUES
+            ('M1', 'flat 4.09 at 11-13 Long Street', 'e28hj'),
+            ('M2', '04.09 Example Building High Road', 'E1 6AA'),
+            ('M3', 'flat 4.12 11-13 Long Street', 'E2 8HJ'),
+            ('M4', 'flat g . 09 at 11-13 Long Street E2 8HJ', NULL)
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+
+    result = AddressMatcher(canonical, messy, con=con).match().matches(all_columns=True)
+
+    assert result.order("unique_id").project(
+        "unique_id, dotted_unit_code, resolved_canonical_id"
+    ).fetchall() == [
+        ("M1", "4.09", None),
+        ("M2", "04.09", "C2"),
+        ("M3", "4.12", "C3"),
+        ("M4", "G.09", None),
+    ]
+
+
 def test_match_with_explicit_stages(con, canonical_data, messy_data):
     """Passing explicit stages should work identically."""
     matcher = AddressMatcher(

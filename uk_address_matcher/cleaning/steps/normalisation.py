@@ -194,6 +194,10 @@ def _upper_case_address_and_postcode() -> str:
     tags=["cleaning", "normalisation"],
 )
 def _clean_address_string_first_pass() -> str:
+    dotted_unit_pattern = (
+        r"^\s*(?:(?:F?FLAT|APT|APARTMENT|UNIT)\s+)?"
+        r"((?:[0-9]{1,2}|G)\s*\.\s*[0-9]{1,3})(?:[\s,]|$)"
+    )
     fn_call = construct_nested_call(
         "clean_full_address",
         [
@@ -215,6 +219,10 @@ def _clean_address_string_first_pass() -> str:
     WITH cleaned AS (
         SELECT
             *,
+            NULLIF(regexp_replace(
+                regexp_extract(clean_full_address, '{dotted_unit_pattern}', 1),
+                '\\s+', '', 'g'
+            ), '') AS dotted_unit_code,
             {fn_call} AS __clean_address
         FROM {{input}}
     )

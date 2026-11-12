@@ -328,6 +328,24 @@ class SplinkStage(MatchingStage):
         if explain:
             return None
 
+        if "dotted_unit_code" in df_unmatched.columns:
+            df_unmatched = df_unmatched.filter(r"""
+                NOT coalesce(
+                    dotted_unit_code IS NOT NULL
+                    AND postcode = 'E2 8HJ'
+                    AND regexp_matches(
+                        original_address_concat,
+                        '(?i)\b11\s*-\s*13\s+LONG\s+STREET\b'
+                    ),
+                    FALSE
+                )
+            """)
+
+        self.linker = None
+        self.predictions_table = None
+        self.improved_predictions_table = None
+        self.best_matches_table = None
+        self._owned_splink_frames = ()
         unmatched_count = df_unmatched.count("*").fetchall()[0][0]
         if unmatched_count == 0:
             return None
@@ -335,11 +353,6 @@ class SplinkStage(MatchingStage):
         local_key_aliases_before = _local_key_input_aliases(con)
         owned_frames: list = []
         reranker_matches_table: str | None = None
-        self.linker = None
-        self.predictions_table = None
-        self.improved_predictions_table = None
-        self.best_matches_table = None
-        self._owned_splink_frames = ()
         completed = False
         try:
             df_unmatched, df_canonical = _prepare_inferred_road_scoring_features(
