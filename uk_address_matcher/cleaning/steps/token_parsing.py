@@ -622,7 +622,7 @@ def _parse_out_flat_position_and_letter():
 @pipeline_stage(
     name="parse_out_sub_premise_location",
     description=(
-        "Extract sub-premise side/location descriptors from the first half of the address"
+        "Extract sub-premise side/location descriptors before the street address"
     ),
     tags=["token_extraction", "flat_parsing"],
 )
@@ -633,8 +633,8 @@ def _parse_out_sub_premise_location():
     `flat_identity` so it can be compared independently downstream. The signal
     is intentionally broader than flats alone: maisonettes and other
     sub-premise occupancies can carry the same FRONT/REAR/LEFT/RIGHT cues.
-    Only the first half of the cleaned address is scanned to reduce false
-    positives from place names such as commercial centres later in the string.
+    A premise number usually marks the end of the sub-premise description.
+    For unnumbered addresses, use a short prefix to limit place-name matches.
     """
 
     tokens_for_parsing = _address_for_parsing(
@@ -644,16 +644,22 @@ def _parse_out_sub_premise_location():
     SELECT
         i.* EXCLUDE (__tokens_for_parsing),
         list_slice(
-                __tokens_for_parsing,
-                1,
-                LEAST(
-                    len(__tokens_for_parsing),
-                    GREATEST(
-                        6,
-                        CAST(CEIL(len(__tokens_for_parsing) / 2.0) AS BIGINT)
+            __tokens_for_parsing,
+            1,
+            COALESCE(
+                list_first(list_filter(
+                    range(1, len(__tokens_for_parsing) + 1),
+                    lambda idx: regexp_full_match(
+                        __tokens_for_parsing[idx], '[0-9]+[A-Z]?(-[0-9]+[A-Z]?)?'
+                    ) AND NOT (
+                        idx = 2 AND __tokens_for_parsing[1] IN (
+                            'FLAT', 'FFLAT', 'MAISONETTE'
+                        )
                     )
-                )
-            ) AS sub_premise_location_prefix_tokens
+                )) - 1,
+                GREATEST(6, CAST(CEIL(len(__tokens_for_parsing) / 2.0) AS BIGINT))
+            )
+        ) AS sub_premise_location_prefix_tokens
     FROM (
         SELECT
             i.*,
@@ -683,6 +689,10 @@ def _parse_out_sub_premise_location():
                 THEN 'LEFT'
             WHEN list_contains(sub_premise_location_prefix_tokens, 'CENTRE')
                 OR list_contains(sub_premise_location_prefix_tokens, 'CENTER')
+                OR regexp_matches(
+                    array_to_string(sub_premise_location_prefix_tokens, ' '),
+                    '\b((FLOORS?|F?FLAT|MAISONETTE) MIDDLE|MIDDLE (F?FLAT|MAISONETTE))\b'
+                )
                 THEN 'CENTRE'
             WHEN list_contains(sub_premise_location_prefix_tokens, 'FRONT')
                 THEN 'FRONT'
