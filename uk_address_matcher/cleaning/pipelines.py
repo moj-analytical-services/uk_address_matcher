@@ -249,6 +249,7 @@ def _run_narrow_precomputed_tf_pipeline(
         required_columns.append("numeric_range")
     if additional_stages:
         required_columns.append("unique_id")
+        required_columns.append("postcode")
         required_columns.append(
             "clean_full_address_tokens"
             if "clean_full_address_tokens" in address_table.columns

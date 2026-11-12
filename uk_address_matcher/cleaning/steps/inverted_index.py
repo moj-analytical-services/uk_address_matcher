@@ -180,6 +180,27 @@ BIGRAM_INDEX = PhysicalIndexStrategy(
     key_generator=ADJACENT_BIGRAM_KEYS,
     maximum_posting_size=BASE_POSTING_CAP,
 )
+DISTRICT_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="district_trigram_keys",
+    keys_sql_expr=f"""\
+CASE WHEN regexp_full_match(postcode,
+    '[A-Z]{{1,2}}[0-9]{{1,2}}[A-Z]? [0-9][A-Z]{{2}}') THEN
+    list_transform({ADJACENT_TRIGRAM_KEYS.keys_sql_expr},
+        lambda phrase: 'LOCAL_POSTCODE_DISTRICT|' || split_part(postcode, ' ', 1)
+            || '|' || phrase)
+ELSE []::VARCHAR[] END""",
+)
+DISTRICT_TRIGRAM_INDEX = PhysicalIndexStrategy(
+    name="trigram_singleton_district",
+    key_generator=DISTRICT_TRIGRAM_KEYS,
+    maximum_posting_size=1,
+)
+DISTRICT_TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
+    name="trigram_singleton_district",
+    source_key_generator=DISTRICT_TRIGRAM_KEYS,
+    target_index=DISTRICT_TRIGRAM_INDEX,
+    contributes_signature_evidence=False,
+)
 TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="trigram",
     source_key_generator=ADJACENT_TRIGRAM_KEYS,
@@ -235,11 +256,64 @@ DEFAULT_INDEXING_STRATEGIES = list(BASE_INDEX_PORTFOLIO.physical_indexes)
 DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = list(BASE_INDEX_PORTFOLIO.lookup_strategies)
 MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
     *DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
+    DISTRICT_TRIGRAM_LOOKUP,
     SKIP1_BIGRAM_LOOKUP,
     SKIP2_BIGRAM_LOOKUP,
     SKIP1_TRIGRAM_LOOKUP,
     SKIP2_TRIGRAM_LOOKUP,
 ]
+
+
+def _derive_district_singleton_trigrams(global_index_table: str):
+    @pipeline_stage(
+        name="derive_district_singleton_trigrams",
+        description="Build district-singleton trigrams absent from the global index",
+        tags="inverted_index",
+    )
+    def _stage():
+        return [
+            CTEStep(
+                "tokenised",
+                """
+                SELECT unique_id, split_part(postcode, ' ', 1) AS district,
+                    string_split(trim(clean_full_address), ' ') AS __tokens
+                FROM {input}
+                WHERE unique_id IS NOT NULL AND trim(unique_id::VARCHAR) <> ''
+                    AND regexp_full_match(postcode,
+                        '[A-Z]{1,2}[0-9]{1,2}[A-Z]? [0-9][A-Z]{2}')
+                """,
+            ),
+            CTEStep(
+                "phrases",
+                f"""
+                SELECT unique_id, district,
+                    unnest(list_distinct({ADJACENT_TRIGRAM_KEYS.keys_sql_expr})) AS phrase
+                FROM {{tokenised}}
+                """,
+            ),
+            CTEStep(
+                "singletons",
+                f"""
+                SELECT district, phrase, list(DISTINCT unique_id) AS unique_ids
+                FROM {{phrases}} phrases
+                ANTI JOIN {global_index_table} global_index
+                    ON phrases.phrase = global_index.key
+                        AND global_index.index_strategy = 'trigram'
+                GROUP BY district, phrase
+                HAVING count(DISTINCT unique_id) = 1
+                """,
+            ),
+            CTEStep(
+                "final",
+                """
+                SELECT 'LOCAL_POSTCODE_DISTRICT|' || district || '|' || phrase AS key,
+                    unique_ids, 'trigram_singleton_district' AS index_strategy
+                FROM {singletons}
+                """,
+            ),
+        ]
+
+    return _stage
 
 
 def _token_array_expression(token_column: str) -> str:
@@ -389,6 +463,7 @@ def _lookup_keys_in_inverted_index(
         tokenised_sql = f"""
         SELECT
             ukam_address_id AS unique_id,
+            postcode,
             {token_array_expression} AS __tokens
         FROM {{base}}
         """
