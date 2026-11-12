@@ -618,10 +618,9 @@ def test_stage_executes_local_key_comparison(
     target = raw.filter(
         "unique_id_l = '001' AND clean_full_address_l LIKE '% 54 TEST ROAD'"
     )
-    assert (
-        target.select("pow(2, mw_postcode_distinguishing_name)").limit(1).fetchall()[0]
-        == (expected_bf if prepared_index else 1.0,)
-    )
+    assert target.select("pow(2, mw_postcode_distinguishing_name)").limit(1).fetchall()[
+        0
+    ] == (expected_bf if prepared_index else 1.0,)
     assert not any(column.startswith("lk_") for column in raw.columns)
     improved = duck_con.table(stage.improved_predictions_table)
     assert not any(column.startswith("lk_") for column in improved.columns)
@@ -1091,9 +1090,9 @@ def test_excluded_components_do_not_create_name_evidence(duck_con, exclusion):
             ["002", "b1", "ALDER HOUSE"],
         ],
     )
-    assert source.select(
-        "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
-    ).fetchall()[0] == ({}, [], False)
+    assert source.select("lk_level_by_alias, lk_anchor_uprns, lk_eligible").fetchall()[
+        0
+    ] == ({}, [], False)
 
 
 def test_late_locality_phrase_does_not_override_shared_leading_name(duck_con):

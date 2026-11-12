@@ -21,10 +21,15 @@ def test_fetch_overall_summary_selects_overall_and_rejects_missing_row() -> None
         accuracy = connection.sql(
             "SELECT * FROM (VALUES "
             "('exact', 4, 4, 1.0, 0.4), ('overall', 5, 4, 0.8, 0.4)"
-            ") AS accuracy(stage, rows_matched_in_stage, correct_matches, precision, recall)"
+            ") AS accuracy(stage, rows_matched_in_stage, correct_matches, "
+            "precision, recall)"
         )
         assert fetch_overall_summary(connection, accuracy, total_input_rows=10) == (
-            10, 5, 4, 0.8, 0.4
+            10,
+            5,
+            4,
+            0.8,
+            0.4,
         )
         with pytest.raises(ValueError, match="Expected an overall row"):
             fetch_overall_summary(
