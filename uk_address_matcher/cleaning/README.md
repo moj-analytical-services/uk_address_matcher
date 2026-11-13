@@ -47,3 +47,17 @@ The package supports four distinct but complementary stages. Each stage has a cl
 Orchestration and composition
 - Thin pipelines (e.g., clean → tokenise) live in [`pipelines.py`](./pipelines.py); they compose the stages above with minimal logic and return relations/tables suitable for further SQL.
 - The stable public API (re‑exported in [`__init__.py`](./__init__.py)) exposes high‑level entry points such as `clean_and_tokenise_inputs(...)`. Step‑level utilities remain private to allow internal iteration without breaking callers.
+
+## Sub-premise evidence
+
+`_parse_out_sub_premise` extracts explicit flat and business-unit identifiers once;
+floor and side/location evidence remain separate. Matching compares these prepared
+fields rather than reparsing full addresses. Match structs and address tails are
+temporary. `sub_premise_explicit_identifier` preserves the explicit identifier
+independently of legacy flat evidence: `FLAT A 1` has explicit identifier `A1`
+and legacy flat letter `A`. Canonical storage retains `flat_number` and
+`flat_letter`, because they cannot be losslessly recovered from the explicit
+identifier. Identities, business-unit fields, flags and floor-prefix lists are
+recomputed on load. `sub_premise_building_number` records a unique building
+number in the remaining address, rejecting nested descriptors and multiple
+numbers; older bundles use null for new explicit fields until rebuilt.
