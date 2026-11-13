@@ -9,8 +9,7 @@ from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _split_letter_dash_letter,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
@@ -27,6 +26,8 @@ def test_abbr_data(duck_con):
             ('FLAT 10 OFFICE SUITE 200 BLVD DRIVE BIRMINGHAM'),
             ('123 TOWNHALL STREET CENTRE MANCHESTER'),
             ('THE COTTAGE WOOD LANE BRISTOL'),
+            ('2 SAMPLE COTTAGES'),
+            ('2 SAMPLE COTTS'),
             ('FACTORY WORKS WKS INDUSTRIAL ESTATE RD'),
             ('MUSEUM GALLERY THEATRE THEA CIVIC CENTRE'),
             ('FLAT 3D 12B BAKER AVE LONDON'),
@@ -59,6 +60,8 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
         "FLAT 10 OFFICE SUITE 200 BOULEVARD DRIVE BIRMINGHAM",
         "123 TOWN HALL STREET CENTRE MANCHESTER",
         "THE COTTAGE WOOD LANE BRISTOL",
+        "2 SAMPLE COTTAGE",
+        "2 SAMPLE COTTAGE",
         "FACTORY WORKS WORKS INDUSTRIAL ESTATE ROAD",
         "MUSEUM GALLERY THEATRE THEATRE CIVIC CENTRE",
         "FLAT 3D 12B BAKER AVENUE LONDON",
@@ -72,6 +75,13 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
     ]
     for row, expected in zip(rows, expected_addresses):
         assert row[clean_idx] == expected
+
+    repeated = create_sql_pipeline(
+        con=duck_con,
+        input_rel=result_rel,
+        stage_specs=[_normalise_abbreviations_and_units],
+    ).run()
+    assert repeated.fetchall() == rows
 
 
 def test_abbreviations_expand_to_multi_word_business_shells(duck_con):
@@ -313,8 +323,7 @@ def test_exclusion_phrases_do_not_create_unit_or_premise_features(duck_con):
         con=duck_con,
         input_rel=input_rel,
         stage_specs=[
-            _parse_out_flat_position_and_letter,
-            _parse_out_business_unit,
+            _parse_out_sub_premise,
             _parse_out_address_structure_premise,
         ],
     )

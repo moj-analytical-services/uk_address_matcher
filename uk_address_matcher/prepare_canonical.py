@@ -20,6 +20,7 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
     _ensure_clean_full_address_views,
+    _ensure_sub_premise_views,
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     BASE_INDEX_PORTFOLIO,
@@ -105,6 +106,12 @@ _INVERTED_INDEX_PARQUET_SETTINGS = _ParquetArtefactSettings(
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
 RECOMPUTABLE_DROP_COLUMNS = (
     "address_tokens",
+    "business_unit_type",
+    "business_unit_id",
+    "has_business_unit",
+    "has_flat_indicator",
+    "flat_identity",
+    "flat_floor_prefixes",
     "exploding_unique_ids",
     "numeric_token_2",
     "numeric_token_3",
@@ -296,7 +303,7 @@ def _rehydrate_canonical_addresses(
     inverted-index stages derive address tokens inline and the linker adds a
     neutral common-token array for legacy schema alignment when required.
     """
-    addresses = _ensure_clean_full_address_views(addresses)
+    addresses = _ensure_sub_premise_views(_ensure_clean_full_address_views(addresses))
     columns = addresses.columns
     if "address_tokens" in columns:
         addresses = addresses.select("* EXCLUDE (address_tokens)")

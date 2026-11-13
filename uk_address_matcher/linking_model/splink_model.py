@@ -12,6 +12,7 @@ from uk_address_matcher.cleaning.materialisation import _parquet_preserves_type
 from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
+    _ensure_sub_premise_views,
 )
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     ensure_numeric_range_struct,
@@ -139,11 +140,13 @@ def _align_sub_premise_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
 ) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
-    """Add nullable sub-premise fields for older prepared canonical data."""
+    """Restore sub-premise fields for older prepared address data."""
     columns = (
         "sub_premise_marker_token",
         "sub_premise_role",
         "sub_premise_identifier",
+        "sub_premise_building_number",
+        "sub_premise_explicit_identifier",
     )
     for column in columns:
         expression = f"CAST(NULL AS VARCHAR) AS {column}"
@@ -153,7 +156,10 @@ def _align_sub_premise_columns(
             df_addresses_to_search_within = df_addresses_to_search_within.select(
                 f"*, {expression}"
             )
-    return df_addresses_to_match, df_addresses_to_search_within
+    return (
+        _ensure_sub_premise_views(df_addresses_to_match),
+        _ensure_sub_premise_views(df_addresses_to_search_within),
+    )
 
 
 def _align_address_structure_feature_columns(

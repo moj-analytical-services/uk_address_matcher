@@ -10,7 +10,11 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 def _address_for_parsing(address_expression: str) -> str:
     exclusion_pattern = r"'(^|[ (])EXCLUDING +([^ )]+)', '\1EXCLUDING_\2', 'g'"
-    return f"regexp_replace({address_expression}, {exclusion_pattern})"
+    return (
+        f"CASE WHEN strpos({address_expression}, 'EXCLUDING ') > 0 "
+        f"THEN regexp_replace({address_expression}, {exclusion_pattern}) "
+        f"ELSE {address_expression} END"
+    )
 
 
 @pipeline_stage(name="derive_local_key_tokens")
@@ -335,22 +339,12 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
 
 
 @pipeline_stage(
-    name="parse_out_flat_position_and_letter",
-    description=(
-        "Extract flat positions and letters from address strings into separate columns"
-    ),
-    tags=["token_extraction", "flat_parsing"],
+    name="parse_out_sub_premise",
+    description="Extract explicit sub-premise identity separately from floor evidence",
+    tags=["token_extraction", "sub_premise_parsing"],
 )
-def _parse_out_flat_position_and_letter():
-    """
-    Robustly extracts flat positions, letters, and numbers from address strings.
-
-    Strategy:
-            - Detect a 'flat signal' (FLAT/FFLAT, floor position, digit+letter like 15B)
-      - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
-      - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
-    - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
-    """
+def _parse_out_sub_premise():
+    """Derive flat and business-unit fields from one explicit descriptor match."""
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
     # others are paired with FLOOR/GROUND.
@@ -401,7 +395,7 @@ def _parse_out_flat_position_and_letter():
         + floor_positions
         + "|"
         + "|".join(floor_with_suffix)
-        + rf")\s+{explicit_flat_pattern}"
+        + rf")\s+(?:{flat_marker}|APARTMENT|MAISONETTE|PENTHOUSE)\b"
     )
     leading_bare_floor_position = (
         r"^\s*(GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
@@ -415,38 +409,124 @@ def _parse_out_flat_position_and_letter():
     # Match all numbers (standalone digits, not part of ranges like 120-122)
     count_numbers = r"\b(\d{1,5})\b"
 
-    flat_num_after_flat = rf"{explicit_flat_pattern}\s+(\d{{1,4}})(?:\s|[A-Za-z/]|$)"
-    flat_letter_after_num_after_flat = (
-        rf"{explicit_flat_pattern}\s+\d{{1,4}}\s*([A-Za-z])\b"
-    )
-    flat_letter_after_flat = rf"{explicit_flat_pattern}\s+([A-Za-z])\b"
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
-
-    # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
     scottish_flat = rf"{explicit_flat_pattern}\s+(\d+)\s*/\s*(\d+)\b"
     address_for_parsing = _address_for_parsing("input.clean_full_address")
     flat_number_delimiter_pattern = rf"{explicit_flat_pattern}\s*[,;]\s*\d"
-
+    business_descriptors = "'UNIT', 'SUITE', 'OFFICE', 'WORKSHOP', 'WAREHOUSE', 'STUDIO'"
+    descriptors = (
+        "F?FLAT|APARTMENT|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
+        "WORKSHOP|WAREHOUSE|STUDIO"
+    )
+    identifier = r"[A-Z]?\d{1,5}[A-Z]?(?:\s*/\s*\d{1,5})?|[A-Z]"
+    prefix_words = "|".join(
+        floor_with_suffix
+        + standalone_floors
+        + ["ATTIC", "MEZZANINE", "FLOORS?", "FRONT", "REAR", "LEFT", "RIGHT",
+           "CENTRE", "CENTER", "AND"]
+    )
+    prefix = rf"^\s*(?:(?:{prefix_words})[, ]+)*"
+    building_number = r"[0-9]{1,5}[A-Z]?(?:-[0-9]{1,5}[A-Z]?)?"
+    unit_identifier = (
+        rf"(?:NORTH|SOUTH|EAST|WEST|[NSEW])\s+[0-9]{{1,4}}[A-Z]?"
+        rf"|[0-9]{{1,4}}\s+[A-Z]|{identifier}"
+    )
+    qualified_unit = (
+        rf"^(UNITS?)\s+(?:(?:{prefix_words}|OF)\s+)*"
+        rf"({unit_identifier})\b(\s+(?:AT\s+)?{building_number}(?:\s.*|$))"
+    )
+    first_descriptor = (
+        rf"regexp_extract({address_for_parsing}, '\b(?:{descriptors})S?\s+.*', 0)"
+    )
+    split_identifier = (
+        rf"^\s*([0-9]{{1,4}}[A-Z]?)\s+AT\s+{building_number}(?:\s|$)"
+    )
+    explicit_sql = rf"""
+    SELECT input.*,
+        {address_for_parsing} AS __sub_premise_address,
+        CASE WHEN regexp_matches({first_descriptor}, '{qualified_unit}')
+            THEN regexp_extract({first_descriptor}, '{qualified_unit}',
+                ['descriptor', 'identifier', 'tail'])
+            ELSE regexp_extract(
+            CASE WHEN regexp_matches(upper(input.original_address_concat),
+                    '{scottish_flat}')
+                THEN regexp_extract(
+                    {_address_for_parsing('upper(input.original_address_concat)')},
+                    '\bF?FLAT\s+.*', 0)
+                WHEN regexp_matches({address_for_parsing},
+                    '{prefix}(?:{descriptors})S?\s+(?:{identifier})\b')
+                    THEN {address_for_parsing}
+                ELSE regexp_extract({address_for_parsing},
+                    '\b(?:F?FLAT|UNIT|SUITE|OFFICE|WORKSHOP|WAREHOUSE)S?\s+.*', 0)
+            END,
+            '{prefix}({descriptors})S?\s+({identifier})\b(.*)',
+            ['descriptor', 'identifier', 'tail']
+        ) END AS __sub_premise_match
+    FROM {{input}} input
+    """
+    identifier_sql = rf"""
+    SELECT * EXCLUDE (__sub_premise_match),
+        nullif(replace(regexp_replace(__sub_premise_match.descriptor, 'S$', ''),
+            'FFLAT', 'FLAT'), '') AS __descriptor,
+        CASE
+            WHEN __sub_premise_match.descriptor IN ('UNIT', 'UNITS')
+                AND regexp_matches(__sub_premise_match.identifier,
+                    '^(NORTH|SOUTH|EAST|WEST)\s')
+                THEN substr(__sub_premise_match.identifier, 1, 1)
+                    || regexp_extract(__sub_premise_match.identifier,
+                        '([0-9]{{1,4}}[A-Z]?)$', 1)
+            WHEN __sub_premise_match.descriptor IN ('UNIT', 'UNITS')
+                AND regexp_matches(__sub_premise_match.identifier, '\s')
+                THEN replace(__sub_premise_match.identifier, ' ', '')
+            WHEN regexp_full_match(__sub_premise_match.identifier, '[A-Z]')
+                AND regexp_matches(__sub_premise_match.tail, '{split_identifier}')
+                THEN __sub_premise_match.identifier
+                    || regexp_extract(__sub_premise_match.tail, '{split_identifier}', 1)
+            WHEN __sub_premise_match.descriptor IN ('FLAT', 'FFLAT')
+                AND regexp_full_match(__sub_premise_match.identifier, '[0-9]+')
+                AND regexp_matches(__sub_premise_match.tail, '^\s+[A-Z](\s|$)')
+                THEN __sub_premise_match.identifier
+                    || regexp_extract(__sub_premise_match.tail, '^\s+([A-Z])\b', 1)
+            ELSE nullif(regexp_replace(__sub_premise_match.identifier,
+                '^.*\/\s*', ''), '')
+        END AS __identifier,
+        CASE
+            WHEN regexp_full_match(__sub_premise_match.identifier, '[A-Z]')
+                AND regexp_matches(__sub_premise_match.tail, '{split_identifier}')
+                THEN regexp_replace(__sub_premise_match.tail,
+                    '^\s*[0-9]{{1,4}}[A-Z]?\s+', '')
+            WHEN __sub_premise_match.descriptor IN ('FLAT', 'FFLAT')
+                AND regexp_full_match(__sub_premise_match.identifier, '[0-9]+')
+                AND regexp_matches(__sub_premise_match.tail, '^\s+[A-Z](\s|$)')
+                THEN regexp_replace(__sub_premise_match.tail, '^\s+[A-Z]\s*', '')
+            ELSE __sub_premise_match.tail
+        END AS __sub_premise_tail,
+        nullif(regexp_extract(__sub_premise_address,
+            '{explicit_flat_pattern}\s+(\d{{1,4}})(?:\s|[A-Za-z/]|$)', 1), '')
+            AS __flat_number_candidate,
+        CASE WHEN __descriptor = 'FLAT' THEN coalesce(
+            nullif(regexp_extract(__sub_premise_match.identifier, '([A-Z])$', 1), ''),
+            nullif(regexp_extract(__identifier, '([A-Z])$', 1), '')
+        ) END AS __flat_letter_candidate
+    FROM {{explicit}}
+    """
     final_base_sql = f"""
     SELECT
-        i.* EXCLUDE (clean_full_address, __original_clean_full_address),
-        i.__original_clean_full_address AS clean_full_address,
-
-        -- 1) Positional/floor signal from the address string itself.
+        i.*,
         CASE
             WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+                regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
             ) = 'LOWER GROUND'
                 THEN 'GROUND FLOOR'
             WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+                regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
             ) = 'LOWER FLOOR'
                 THEN 'LOWER FLOOR'
             WHEN NULLIF(
                 regexp_extract(
-                    i.clean_full_address,
+                    i.__sub_premise_address,
                     '{leading_bare_floor_position}',
                     1
                 ),
@@ -455,7 +535,7 @@ def _parse_out_flat_position_and_letter():
                 THEN CONCAT(
                     NULLIF(
                         regexp_extract(
-                            i.clean_full_address,
+                            i.__sub_premise_address,
                             '{leading_bare_floor_position}',
                             1
                         ),
@@ -464,149 +544,100 @@ def _parse_out_flat_position_and_letter():
                     ' FLOOR'
                 )
             ELSE NULLIF(
-                regexp_extract(i.clean_full_address, '{floor_positions}', 1),
+                regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
             )
         END AS flat_positional,
 
-        -- 2) flat_letter (priority:
-        -- FLAT 12A → A, FLAT A → A, BLOCK A → A,
-        -- 11A start → A, 15B anywhere → B)
-        COALESCE(
-            NULLIF(
-                regexp_extract(
-                    i.clean_full_address,
-                    '{flat_letter_after_num_after_flat}',
-                    1
-                ),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{flat_letter_after_flat}', 1),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{block_letter}', 1),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{leading_num_letter}', 2),
-                ''
-            ),
-            NULLIF(
-                regexp_extract(i.clean_full_address, '{num_letter_anywhere}', 2),
-                ''
-            )
+        coalesce(
+                __flat_letter_candidate,
+                nullif(regexp_extract(__sub_premise_address, '{block_letter}', 1), ''),
+                nullif(regexp_extract(__sub_premise_address,
+                    '{leading_num_letter}', 2), ''),
+                nullif(regexp_extract(__sub_premise_address,
+                    '{num_letter_anywhere}', 2), '')
         ) AS flat_letter,
-
-        -- 3) flat_number (priority explained inline)
-        -- Only extract flat_number when there's an EXPLICIT FLAT indicator.
-        -- Ambiguous cases like "7 42 FICTIONAL ROAD" should NOT populate flat_number
-        -- since "2" might be a building number, not a flat.
-        -- Note: DuckDB regexp_extract returns '' not NULL for no match, so
-        -- we use NULLIF(..., '') to normalise non-matches.
         CASE
-            -- Explicit "FLAT X" - extract if (multiple numbers) OR (BLOCK pattern)
-            -- OR (letter follows the number, e.g., "FLAT 12A")
-            -- OR (Scottish style FLAT X/Y pattern)
-            WHEN NULLIF(
-                regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
-                ''
-            ) IS NOT NULL
-                 AND (
-                     COALESCE(
-                        length(
-                            regexp_extract_all(i.clean_full_address, '{count_numbers}')
-                        ),
-                        0
-                    ) >= 2
-                     OR NULLIF(
-                        regexp_extract(i.clean_full_address, '{block_letter}', 1),
-                        ''
-                    ) IS NOT NULL
-                     OR NULLIF(
-                        regexp_extract(
-                           i.clean_full_address,
-                           '{flat_letter_after_num_after_flat}',
-                           1
-                       ),
-                       ''
-                   ) IS NOT NULL
-                     OR NULLIF(
-                        regexp_extract(i.original_address_concat, '{scottish_flat}', 1),
-                        ''
-                    ) IS NOT NULL
-                     OR (
-                         COALESCE(
-                             length(
-                                 regexp_extract_all(
-                                     i.clean_full_address,
-                                     '{count_numbers}'
-                                 )
-                             ),
-                             0
-                         ) = 1
-                         AND NOT regexp_matches(
-                             i.clean_full_address,
-                             '{floor_first_address_pattern}'
-                         )
-                         AND NOT regexp_matches(
-                             upper(coalesce(i.original_address_concat, '')),
-                             '{flat_number_delimiter_pattern}'
-                         )
-                     )
-                 )
-            THEN COALESCE(
-                -- FLAT 3/2 → 2 (Scottish style)
-                NULLIF(
-                    regexp_extract(i.original_address_concat, '{scottish_flat}', 2),
-                    ''
-                ),
-                -- FLAT 12 → 12
-                NULLIF(
-                    regexp_extract(i.clean_full_address, '{flat_num_after_flat}', 1),
-                    ''
+            WHEN __flat_number_candidate IS NOT NULL
+                AND (
+                    len(regexp_extract_all(__sub_premise_address, '{count_numbers}')) >= 2
+                    OR regexp_matches(__sub_premise_address, '{block_letter}')
+                    OR regexp_matches(__sub_premise_address,
+                        '{explicit_flat_pattern}\\s+\\d{{1,4}}\\s*[A-Za-z]\\b')
+                    OR regexp_matches(upper(original_address_concat), '{scottish_flat}')
+                    OR (
+                        NOT regexp_matches(__sub_premise_address,
+                            '{floor_first_address_pattern}')
+                        AND NOT regexp_matches(upper(original_address_concat),
+                            '{flat_number_delimiter_pattern}')
+                    )
                 )
-            )
-            ELSE NULL
+                THEN coalesce(
+                    nullif(regexp_extract(upper(original_address_concat),
+                        '{scottish_flat}', 2), ''), __flat_number_candidate)
         END AS flat_number,
-        regexp_matches(
-            i.clean_full_address, '{explicit_flat_pattern}'
-        ) AS __has_explicit_flat
-    FROM (
-        SELECT
-            input.* EXCLUDE (clean_full_address),
-            input.clean_full_address AS __original_clean_full_address,
-            {address_for_parsing} AS clean_full_address
-        FROM {{input}} input
-    ) i
+        CASE WHEN __descriptor IN ({business_descriptors})
+            THEN __descriptor END AS business_unit_type,
+        CASE WHEN __descriptor IN ({business_descriptors})
+            THEN __identifier END AS business_unit_id,
+        coalesce(__descriptor IN ({business_descriptors}), false) AS has_business_unit,
+        coalesce(__descriptor,
+            nullif(regexp_extract(__sub_premise_address,
+                '^\\s*([A-Z]+)\\s+(?:[A-Z]?[0-9]{{1,5}}[A-Z]?|[A-Z])\\b', 1), '')
+        ) AS sub_premise_marker_token,
+        CASE WHEN NOT regexp_matches(__sub_premise_tail,
+                '\\b(?:{descriptors})\\s+(?:{identifier})(?:\\s|$)')
+            AND len(regexp_extract_all(__sub_premise_tail,
+                '\\b{building_number}\\b')) = 1
+            THEN regexp_extract(__sub_premise_tail, '\\b({building_number})\\b', 1)
+        END AS sub_premise_building_number,
+        __identifier AS sub_premise_explicit_identifier,
+        list_distinct(regexp_extract_all(
+            regexp_extract(clean_full_address, '^[^0-9]*', 0),
+            'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0
+        )) AS flat_floor_prefixes
+    FROM {{identifier}} i
     """
 
     # Final step: boolean indicator and composite flat identity
     # (split out so we can refer to computed aliases)
     # Also check for the word FLAT itself as a flat signal
-    final_sql = r"""
+    final_sql = f"""
     SELECT
-        * EXCLUDE (__has_explicit_flat),
-        (
-            flat_letter IS NOT NULL
-            OR flat_number IS NOT NULL
-            OR flat_positional IS NOT NULL
-            OR __has_explicit_flat
-        ) AS has_flat_indicator,
+        * EXCLUDE (__descriptor, __identifier, __sub_premise_tail,
+            __sub_premise_address, __flat_number_candidate, __flat_letter_candidate),
+        (flat_letter IS NOT NULL OR flat_number IS NOT NULL
+                OR flat_positional IS NOT NULL
+                OR regexp_matches(__sub_premise_address, '{explicit_flat_pattern}'))
+            AS has_flat_indicator,
         CASE
             WHEN flat_number IS NOT NULL OR flat_letter IS NOT NULL
-                 OR flat_positional IS NOT NULL
+                OR flat_positional IS NOT NULL
             THEN CONCAT_WS('_',
                      COALESCE(flat_number, ''),
                      COALESCE(flat_letter, ''),
                      COALESCE(flat_positional, ''))
             ELSE NULL
-        END AS flat_identity
-    FROM {final_base}
+        END AS flat_identity,
+        CASE
+            WHEN __descriptor IN ('UNIT', 'STUDIO') THEN 'BUSINESS_UNIT'
+            WHEN __descriptor IN ('APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN 'FLAT'
+            WHEN has_flat_indicator THEN 'FLAT'
+            WHEN has_business_unit THEN 'BUSINESS_UNIT'
+        END AS sub_premise_role,
+        CASE
+            WHEN __descriptor IN ('UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE',
+                'PENTHOUSE') THEN __identifier
+            WHEN has_flat_indicator THEN
+                nullif(concat(coalesce(flat_number, ''), coalesce(flat_letter, '')), '')
+            WHEN has_business_unit THEN business_unit_id
+        END AS sub_premise_identifier
+    FROM {{final_base}}
     """
 
     steps = [
+        CTEStep("explicit", explicit_sql),
+        CTEStep("identifier", identifier_sql),
         CTEStep("final_base", final_base_sql),
         CTEStep("final", final_sql),
     ]
@@ -664,7 +695,8 @@ def _parse_out_sub_premise_location():
         ),
         CASE
             WHEN NOT (
-                flat_positional IS NOT NULL
+                has_business_unit
+                OR flat_positional IS NOT NULL
                 OR flat_letter IS NOT NULL
                 OR flat_number IS NOT NULL
                 OR list_contains(clean_full_address_tokens, 'FLAT')
@@ -688,77 +720,6 @@ def _parse_out_sub_premise_location():
     """
 
     return [CTEStep("with_prefix", prefix_sql), CTEStep("final", final_sql)]
-
-
-@pipeline_stage(
-    name="parse_out_business_unit",
-    description=(
-        "Extract business unit identifiers (UNIT, SUITE, OFFICE, etc.) from addresses"
-    ),
-    tags=["token_extraction", "business_parsing"],
-)
-def _parse_out_business_unit():
-    """
-    Extracts business unit identifiers from address strings.
-
-    Business addresses often have unit identifiers that distinguish different
-    tenants within the same building, e.g.:
-      - "UNIT C 32 PARKHALL BUSINESS CENTRE"
-      - "UNIT F 32 PARKHALL BUSINESS CENTRE"
-
-    These are distinct from residential flat indicators as they typically appear
-    in commercial/industrial contexts. Common patterns:
-      - UNIT A, UNIT 5, UNIT 5A, UNITS 1-3
-      - SUITE 100, SUITE A
-      - OFFICE 5, OFFICE A
-      - WORKSHOP 3, WORKSHOP A
-      - WAREHOUSE A, WAREHOUSE 5
-
-    We capture:
-      - business_unit_type: The type keyword (UNIT, SUITE, OFFICE, etc.)
-      - business_unit_id: The identifier (letter, number, or alphanumeric)
-      - has_business_unit: Boolean indicator
-    """
-    # Business unit keywords - these indicate commercial/industrial premises
-    # Note: UNIT is normalised FROM residential APARTMENT in earlier cleaning,
-    # but raw UNIT in business contexts (UNIT C, UNIT 5) remains
-    business_keywords = ["UNIT", "SUITE", "OFFICE", "WORKSHOP", "WAREHOUSE", "STUDIO"]
-
-    # Build pattern: (UNIT|SUITE|...) followed by identifier
-    # Identifier can be: letter (A-Z), number (1-999), or alphanumeric (5A, A5)
-    # Also handle plural forms like "UNITS 1-3" or "UNITS A AND B"
-    keywords_pattern = "|".join(business_keywords)
-
-    # Pattern for singular: UNIT A, UNIT 5, UNIT 5A, UNIT A5
-    singular_pattern = (
-        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
-    )
-    address_for_parsing = _address_for_parsing("source.clean_full_address")
-
-    sql = f"""
-    SELECT
-        i.* EXCLUDE (__business_unit_match),
-        NULLIF(
-            UPPER(i.__business_unit_match.business_unit_type),
-            ''
-        ) AS business_unit_type,
-        NULLIF(
-            UPPER(i.__business_unit_match.business_unit_id),
-            ''
-        ) AS business_unit_id,
-        i.__business_unit_match.business_unit_type != '' AS has_business_unit
-    FROM (
-        SELECT
-            source.*,
-            regexp_extract(
-                {address_for_parsing},
-                '{singular_pattern}',
-                ['business_unit_type', 'business_unit_id']
-            ) AS __business_unit_match
-        FROM {{input}} AS source
-    ) AS i
-    """
-    return sql
 
 
 @pipeline_stage(
@@ -834,42 +795,13 @@ def _parse_out_numbers():
     tags=["token_extraction", "sub_premise_parsing"],
 )
 def _derive_missingness_aware_sub_premise_features():
-    marker_pattern = r"^\s*([A-Z]+)\s+(?:[A-Z]?\d{1,5}[A-Z]?|[A-Z])\b"
-    return f"""
+    return """
     SELECT
-        i.*,
-        NULLIF(
-            regexp_extract(i.clean_full_address, '{marker_pattern}', 1),
-            ''
-        ) AS sub_premise_marker_token,
-        CASE
-            WHEN i.has_flat_indicator
-                OR i.flat_number IS NOT NULL
-                OR i.flat_letter IS NOT NULL
-                OR i.flat_positional IS NOT NULL
-                THEN 'FLAT'
-            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
-                THEN 'BUSINESS_UNIT'
-            ELSE NULL
-        END AS sub_premise_role,
-        CASE
-            WHEN i.has_flat_indicator
-                AND i.flat_number IS NOT NULL
-                AND i.flat_letter IS NOT NULL
-                THEN CONCAT(i.flat_number, i.flat_letter)
-            WHEN i.has_flat_indicator
-                THEN COALESCE(
-                    NULLIF(i.flat_number, ''),
-                    NULLIF(i.flat_letter, '')
-                )
-            WHEN i.has_business_unit OR i.business_unit_id IS NOT NULL
-                THEN NULLIF(i.business_unit_id, '')
-            WHEN i.numeric_tokens IS NOT NULL
-                AND len(i.numeric_tokens) >= 1
-                THEN list_extract(i.numeric_tokens, 1)
-            ELSE NULL
-        END AS sub_premise_identifier
-    FROM {{input}} AS i
+        * EXCLUDE (sub_premise_identifier),
+        coalesce(sub_premise_identifier,
+            CASE WHEN sub_premise_role IS NULL THEN numeric_tokens[1] END
+        ) AS sub_premise_identifier
+    FROM {input}
     """
 
 

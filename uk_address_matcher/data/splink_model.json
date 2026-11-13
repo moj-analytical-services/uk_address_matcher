@@ -246,13 +246,21 @@
       "output_column_name": "flat_identity",
       "comparison_levels": [
         {
-          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND ((NOT coalesce((flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r),false) OR (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))))) AND ((flat_number_l IS NOT NULL AND flat_number_l = flat_number_r)\n    OR (flat_letter_l IS NOT NULL AND flat_letter_l = flat_letter_r)) AND flat_identity_l != flat_identity_r AND NOT coalesce(flat_number_l IS NOT NULL AND flat_number_l = flat_number_r AND ((flat_letter_l IS NULL AND flat_letter_r IS NOT NULL) OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)), false) AND (NOT coalesce(road_1_norm_l IS NOT NULL AND road_1_norm_r IS NOT NULL AND road_1_norm_l != road_1_norm_r, false))",
+          "sql_condition": "postcode_l = postcode_r AND road_1_norm_l = road_1_norm_r AND sub_premise_building_number_l = sub_premise_building_number_r\nAND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END <> CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END AND sub_premise_explicit_identifier_l = sub_premise_explicit_identifier_r\nAND (flat_positional_l IS NULL OR flat_positional_r IS NULL OR flat_positional_l = flat_positional_r)",
+          "label_for_charts": "Matching sub-premise details scored separately",
+          "m_probability": 1,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND ((NOT coalesce((flat_positional_l IS NOT NULL AND flat_positional_r IS NOT NULL AND flat_positional_l != flat_positional_r),false) OR (len(list_distinct(flat_floor_prefixes_r)) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(flat_floor_prefixes_r, regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))))) AND ((flat_number_l IS NOT NULL AND flat_number_l = flat_number_r)\n    OR (flat_letter_l IS NOT NULL AND flat_letter_l = flat_letter_r)) AND flat_identity_l != flat_identity_r AND NOT coalesce(flat_number_l IS NOT NULL AND flat_number_l = flat_number_r AND ((flat_letter_l IS NULL AND flat_letter_r IS NOT NULL) OR (flat_letter_l IS NOT NULL AND flat_letter_r IS NULL)), false) AND (NOT coalesce(road_1_norm_l IS NOT NULL AND road_1_norm_r IS NOT NULL AND road_1_norm_l != road_1_norm_r, false))",
           "label_for_charts": "Explicit unit identifier agrees; additional floor detail",
           "m_probability": 0.5,
           "u_probability": 0.005262631159631602
         },
         {
-          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND (len(list_distinct(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(regexp_extract_all(regexp_extract(clean_full_address_r, '^[^0-9]*', 0), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0), regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) AND flat_identity_l != flat_identity_r",
+          "sql_condition": "(postcode_l = postcode_r AND (nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_1_l, '[0-9]+', 0), '')\n      = nullif(regexp_extract(numeric_token_1_r, '[0-9]+', 0), ''))\n    AND NOT (coalesce(flat_number_l IS NOT NULL AND flat_number_r IS NOT NULL AND flat_number_l != flat_number_r, false)\n    OR coalesce(flat_letter_l IS NOT NULL AND flat_letter_r IS NOT NULL AND flat_letter_l != flat_letter_r, false)\n    OR coalesce(business_unit_id_l IS NOT NULL AND business_unit_id_r IS NOT NULL AND business_unit_id_l != business_unit_id_r, false)) AND NOT coalesce((numeric_token_2_l IS NOT NULL AND numeric_token_2_r IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '') IS NOT NULL\n    AND nullif(regexp_extract(numeric_token_2_l, '[0-9]+', 0), '') != nullif(regexp_extract(numeric_token_2_r, '[0-9]+', 0), '')),false)) AND (len(list_distinct(flat_floor_prefixes_r)) >= 2 AND len(regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0)) > 0\n    AND list_has_any(flat_floor_prefixes_r, regexp_extract_all(coalesce(flat_positional_l,''), 'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))) AND flat_identity_l != flat_identity_r",
           "label_for_charts": "Multi-floor description includes canonical floor; numbers agree",
           "m_probability": 0.5,
           "u_probability": 0.5
@@ -351,12 +359,68 @@
       "output_column_name": "sub_premise_identifier",
       "comparison_levels": [
         {
-          "sql_condition": "sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NULL",
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NULL",
           "label_for_charts": "Both sub-premise identifiers absent",
           "is_null_level": true
         },
         {
-          "sql_condition": "sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NOT NULL AND sub_premise_role_l != sub_premise_role_r",
+          "sql_condition": "postcode_l = postcode_r AND road_1_norm_l = road_1_norm_r AND sub_premise_building_number_l = sub_premise_building_number_r\nAND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END <> CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END AND sub_premise_explicit_identifier_l = sub_premise_explicit_identifier_r\nAND (flat_positional_l IS NULL OR flat_positional_r IS NULL OR flat_positional_l = flat_positional_r)",
+          "label_for_charts": "Different descriptors, same building and sub-unit identifier",
+          "m_probability": 1,
+          "u_probability": 0.5,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "postcode_l = postcode_r AND road_1_norm_l = road_1_norm_r AND sub_premise_building_number_l = sub_premise_building_number_r AND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END <> CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END AND sub_premise_explicit_identifier_l <> sub_premise_explicit_identifier_r",
+          "label_for_charts": "Explicit descriptors and identifiers differ at the same building",
+          "m_probability": 0.0009765625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "postcode_l = postcode_r AND road_1_norm_l = road_1_norm_r AND sub_premise_building_number_l = sub_premise_building_number_r AND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END = CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END AND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END IN ('UNIT', 'STUDIO') AND sub_premise_explicit_identifier_l <> sub_premise_explicit_identifier_r",
+          "label_for_charts": "Explicit unit or studio identifiers differ at the same building",
+          "m_probability": 0.00390625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) = 'UNIT' AND list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) AND sub_premise_explicit_identifier_r <> (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END)) OR ((CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) = 'UNIT' AND list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) AND sub_premise_explicit_identifier_l <> (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END))",
+          "label_for_charts": "Explicit UNIT and FLAT identifiers differ",
+          "m_probability": 0.0009765625,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) = 'UNIT' AND list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT'])) OR ((CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) = 'UNIT' AND list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']))",
+          "label_for_charts": "Explicit UNIT and FLAT descriptors differ",
+          "m_probability": 0.25,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END <> CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END",
+          "label_for_charts": "Explicit sub-premise descriptors differ",
+          "m_probability": 0.25,
+          "u_probability": 1,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) = 'UNIT' AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) = 'UNIT' AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) = (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END)",
+          "label_for_charts": "Explicit UNIT identifiers agree",
+          "m_probability": 1,
+          "u_probability": 0.25,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NOT NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) IS NOT NULL AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) != (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) != 'UNIT' AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) != 'UNIT' AND NOT (CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END IS NOT NULL AND CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END IS NULL AND sub_premise_role_r = 'FLAT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT'])) AND NOT (CASE WHEN sub_premise_explicit_identifier_r IS NOT NULL AND sub_premise_marker_token_r IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_r END IS NOT NULL AND CASE WHEN sub_premise_explicit_identifier_l IS NOT NULL AND sub_premise_marker_token_l IN ('FLAT', 'UNIT', 'STUDIO', 'APARTMENT', 'MAISONETTE', 'PENTHOUSE') THEN sub_premise_marker_token_l END IS NULL AND sub_premise_role_l = 'FLAT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']))",
           "label_for_charts": "Confident sub-premise roles conflict",
           "m_probability": 0.015625,
           "u_probability": 1.0,
@@ -364,7 +428,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "sub_premise_identifier_l IS NOT NULL AND sub_premise_identifier_r IS NOT NULL AND sub_premise_identifier_l != sub_premise_identifier_r AND sub_premise_role_l = sub_premise_role_r AND sub_premise_role_l IS NOT NULL",
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NOT NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NOT NULL AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) != (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) = (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NOT NULL",
           "label_for_charts": "Confident sub-premise identifiers differ",
           "m_probability": 0.00390625,
           "u_probability": 1.0,
@@ -372,7 +436,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND ((sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL) OR (sub_premise_role_r IS NOT NULL AND sub_premise_role_l IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL)) AND COALESCE(jaccard(sub_premise_marker_token_l, sub_premise_marker_token_r), 0) >= 0.5",
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) = (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) AND (((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NOT NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL) OR ((CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) IS NOT NULL AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NULL AND sub_premise_marker_token_l IS NOT NULL AND sub_premise_marker_token_r IS NOT NULL)) AND COALESCE(jaccard(sub_premise_marker_token_l, sub_premise_marker_token_r), 0) >= 0.5",
           "label_for_charts": "Identifier agrees with a fuzzy marker",
           "m_probability": 8.0,
           "u_probability": 1.0,
@@ -380,7 +444,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "sub_premise_identifier_l = sub_premise_identifier_r AND ((sub_premise_role_l IS NOT NULL AND sub_premise_role_r IS NULL) OR (sub_premise_role_r IS NOT NULL AND sub_premise_role_l IS NULL))",
+          "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) = (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) AND (((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NOT NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) IS NULL) OR ((CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_r END) IS NOT NULL AND (CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN 'UNIT' ELSE sub_premise_role_l END) IS NULL))",
           "label_for_charts": "Identifier agrees with a missing marker",
           "m_probability": 4.0,
           "u_probability": 1.0,
@@ -388,7 +452,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(sub_premise_identifier_l IS NULL AND sub_premise_identifier_r IS NOT NULL) OR (sub_premise_identifier_l IS NOT NULL AND sub_premise_identifier_r IS NULL)",
+          "sql_condition": "((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NOT NULL) OR ((CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NOT NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NULL)",
           "label_for_charts": "One sub-premise identifier absent",
           "m_probability": 0.5,
           "u_probability": 1.0,
