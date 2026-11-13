@@ -550,6 +550,7 @@ def prepare_canonical_folder(
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
+    derive_district_singleton_trigrams: bool = False,
     _derive_road_catalogue: bool = True,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
@@ -596,6 +597,8 @@ def prepare_canonical_folder(
             progress output.
         _derive_road_catalogue: Whether to derive the road catalogue and canonical
             road keys. Defaults to ``True``; pass ``False`` to skip road artefacts.
+        derive_district_singleton_trigrams: Add district-singleton trigrams absent
+            from the global index using the ordinary raw trigram key. Defaults to `False`.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files
@@ -614,6 +617,7 @@ def prepare_canonical_folder(
             overwrite=overwrite,
             add_debug_features=add_debug_features,
             show_progress=show_progress,
+            derive_district_singleton_trigrams=derive_district_singleton_trigrams,
             _derive_road_catalogue=_derive_road_catalogue,
             _storage=storage,
         )
@@ -630,6 +634,7 @@ def _prepare_canonical_folder(
     overwrite: bool,
     add_debug_features: bool,
     show_progress: ShowProgress,
+    derive_district_singleton_trigrams: bool,
     _derive_road_catalogue: bool,
     _storage: _CanonicalIntermediates | None,
 ) -> None:
@@ -740,12 +745,20 @@ def _prepare_canonical_folder(
         show_progress=progress_mode,
         _storage=_storage,
     )
+    base_inverted_index_rows = (
+        inverted_index.count("*").fetchall()[0][0]
+        if derive_district_singleton_trigrams
+        else 0
+    )
 
     roadlike_places, local_features = _derive_postcode_features(
         df_clean,
         con,
         include_local_keys=True,
         include_road_catalogue=_derive_road_catalogue,
+        singleton_trigram_index=(
+            inverted_index if derive_district_singleton_trigrams else None
+        ),
         show_progress=progress_mode,
         _storage=_storage,
     )
@@ -910,6 +923,13 @@ def _prepare_canonical_folder(
         "inverted_index": idx_count,
         "canonical_output_chunks": output_chunk_count,
     }
+    if derive_district_singleton_trigrams:
+        manifest_row_counts["trigram_singleton_district"] = (
+            idx_count - base_inverted_index_rows
+        )
+    preparation_options = {"add_debug_features": add_debug_features}
+    if derive_district_singleton_trigrams:
+        preparation_options["derive_district_singleton_trigrams"] = True
     artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
     if roadlike_places is not None:
         roadlike_count = roadlike_places.count("*").fetchone()[0]
@@ -923,9 +943,7 @@ def _prepare_canonical_folder(
             artefact_paths=[str(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={
-                "add_debug_features": add_debug_features,
-            },
+            preparation_options=preparation_options,
         )
     else:
         _write_manifest_local(
@@ -934,9 +952,7 @@ def _prepare_canonical_folder(
             artefact_paths=[Path(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={
-                "add_debug_features": add_debug_features,
-            },
+            preparation_options=preparation_options,
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)

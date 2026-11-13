@@ -1,5 +1,4 @@
 import pytest
-
 from uk_address_matcher import (
     ExactMatchStage,
     PeeledAddressStage,
@@ -409,7 +408,9 @@ def test_exact_matching_flat_retraction_rejects_conflicting_sub_premise_location
     df_messy = _address_relation_from_values(duck_con, FLAT_MESSY_ROW_SQL).select(
         "* EXCLUDE (sub_premise_location), 'RIGHT'::VARCHAR AS sub_premise_location"
     )
-    df_canonical = _address_relation_from_values(duck_con, FLAT_CANONICAL_ROW_SQL).select(
+    df_canonical = _address_relation_from_values(
+        duck_con, FLAT_CANONICAL_ROW_SQL
+    ).select(
         "* EXCLUDE (sub_premise_location), 'LEFT'::VARCHAR AS sub_premise_location"
     )
 
@@ -728,7 +729,9 @@ def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
 
     # Check specific matches
     matched = results_df[results_df["resolved_canonical_id"].notna()]
-    matched_dict = dict(zip(matched["ukam_address_id"], matched["resolved_canonical_id"]))
+    matched_dict = dict(
+        zip(matched["ukam_address_id"], matched["resolved_canonical_id"])
+    )
 
     # Case 1: '100 HIGH STREET LONDON' -> '100 HIGH STREET' (canonical 1001)
     assert matched_dict.get(1) == 1001, "Case 1 should match canonical 1001"
@@ -751,7 +754,9 @@ def test_peeled_address_matching_finds_matches(duck_con, peeled_test_data):
     assert matched_dict.get(6) == 1006, "Case 6 should match canonical 1006"
 
 
-def test_run_matching_handles_non_identifier_uid(duck_con, peeled_test_data, monkeypatch):
+def test_run_matching_handles_non_identifier_uid(
+    duck_con, peeled_test_data, monkeypatch
+):
     """Ensure temporary table names remain SQL-safe even for unusual run IDs."""
     df_fuzzy, df_canonical = peeled_test_data
 
@@ -1086,7 +1091,9 @@ def test_inward_postcode_levenshtein_cap_applies_to_exact_matches(duck_con):
     )
     one_edit_df = one_edit.fetchdf()
     assert one_edit_df.loc[0, "resolved_canonical_id"] == 1001
-    assert one_edit_df.loc[0, "match_reason"] == MatchReason.EXACT_PARTIAL_POSTCODE.value
+    assert (
+        one_edit_df.loc[0, "match_reason"] == MatchReason.EXACT_PARTIAL_POSTCODE.value
+    )
 
     two_edits, _ = _run_matching(
         con=duck_con,
@@ -1408,7 +1415,9 @@ def test_deterministic_stripping_preserves_numeric_boundaries(
             rows=f"VALUES (1, '{source_address}', 90::BIGINT)", postcode="E8 1AA"
         )
     )
-    canonical_rows = f"VALUES (1000, '{conflicting_number} TESTLANE{suffix}', 10::BIGINT)"
+    canonical_rows = (
+        f"VALUES (1000, '{conflicting_number} TESTLANE{suffix}', 10::BIGINT)"
+    )
     if include_exact_candidate:
         canonical_rows += f", (1001, '{source_number} TESTLANE{suffix}', 20::BIGINT)"
     canonical = duck_con.sql(

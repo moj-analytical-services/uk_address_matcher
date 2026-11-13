@@ -237,6 +237,57 @@ MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
 ]
 
 
+def _derive_district_singleton_trigrams(global_index_table: str):
+    @pipeline_stage(
+        name="derive_district_singleton_trigrams",
+        description="Build district-singleton trigrams absent from the global index",
+        tags="inverted_index",
+    )
+    def _stage():
+        return [
+            CTEStep(
+                "tokenised",
+                """
+                SELECT unique_id, split_part(postcode, ' ', 1) AS district,
+                    string_split(trim(clean_full_address), ' ') AS __tokens
+                FROM {input}
+                WHERE unique_id IS NOT NULL AND trim(unique_id::VARCHAR) <> ''
+                    AND regexp_full_match(postcode,
+                        '[A-Z]{1,2}[0-9]{1,2}[A-Z]? [0-9][A-Z]{2}')
+                """,
+            ),
+            CTEStep(
+                "phrases",
+                f"""
+                SELECT unique_id, district,
+                    unnest(list_distinct({ADJACENT_TRIGRAM_KEYS.keys_sql_expr})) AS phrase
+                FROM {{tokenised}}
+                """,
+            ),
+            CTEStep(
+                "singletons",
+                f"""
+                SELECT district, phrase, min(unique_id) AS unique_id
+                FROM {{phrases}} phrases
+                ANTI JOIN {global_index_table} global_index
+                    ON phrases.phrase = global_index.key
+                        AND global_index.index_strategy = 'trigram'
+                GROUP BY district, phrase
+                HAVING count(DISTINCT unique_id) = 1
+                """,
+            ),
+            CTEStep(
+                "final",
+                """
+                SELECT district, phrase, unique_id
+                FROM {singletons}
+                """,
+            ),
+        ]
+
+    return _stage
+
+
 def _token_array_expression(token_column: str) -> str:
     if token_column == "clean_full_address":
         return "string_split(trim(clean_full_address), ' ')"

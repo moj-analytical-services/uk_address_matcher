@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from uk_address_matcher.linking_model.matching.input_filters import (
     _restrict_canonical_to_messy_postcodes,
@@ -57,9 +57,9 @@ class PeeledAddressStage(MatchingStage):
         stage_name: str,
         df_unmatched: duckdb.DuckDBPyRelation,
         df_canonical: duckdb.DuckDBPyRelation,
-        debug_options: Optional[DebugOptions] = None,
+        debug_options: DebugOptions | None = None,
         explain: bool = False,
-    ) -> Optional[duckdb.DuckDBPyRelation]:
+    ) -> duckdb.DuckDBPyRelation | None:
         from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
             run_sql_pipeline,
         )

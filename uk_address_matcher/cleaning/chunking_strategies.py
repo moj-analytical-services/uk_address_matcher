@@ -31,8 +31,10 @@ from uk_address_matcher.cleaning.steps.inverted_index import (
     MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES,
     InvertedIndexLookupStrategy,
     PhysicalIndexStrategy,
+    TRIGRAM_INDEX,
     _build_inverted_index_from_keys,
     _build_inverted_index_from_scalar_keys,
+    _derive_district_singleton_trigrams,
     _derive_keys_for_strategy,
     _lookup_keys_in_inverted_index,
 )
@@ -511,6 +513,7 @@ def _derive_postcode_features(
     *,
     include_local_keys: bool,
     include_road_catalogue: bool = True,
+    singleton_trigram_index: DuckDBPyRelation | None = None,
     postcode_districts: Collection[str] | None = None,
     postcode_districts_per_batch: int | None = _CANONICAL_POSTCODE_DISTRICTS_PER_BATCH,
     debug_options: Optional[DebugOptions] = None,
@@ -570,6 +573,7 @@ def _derive_postcode_features(
     candidate_sources_table = f"__ukam_roadlike_candidate_sources_{uid}"
     catalogue_table = f"__ukam_roadlike_places_{uid}"
     local_key_table = f"__ukam_local_key_features_{uid}"
+    singleton_table = f"__ukam_district_singleton_trigrams_{uid}"
     property_scope_column = f"__ukam_road_scope_{uid}" if include_road_catalogue else None
 
     if output_path is not None:
@@ -612,6 +616,24 @@ def _derive_postcode_features(
                         enabled=progress_mode == "auto",
                     )
                 batch_rows = batch_input.count("*").fetchone()[0]
+                if singleton_trigram_index is not None:
+                    singletons = create_sql_pipeline(
+                        con,
+                        input_rel=batch_input,
+                        stage_specs=[
+                            _derive_district_singleton_trigrams(
+                                singleton_trigram_index.alias
+                            )
+                        ],
+                        pipeline_name="Build district-singleton trigrams",
+                    ).run()
+                    _materialise_relation(
+                        con,
+                        singletons,
+                        singleton_table,
+                        _storage=_storage,
+                        append=batch_index > 0,
+                    )
                 if include_local_keys:
                     features = _canonical_local_key_features(con, batch_input)
                     _materialise_relation(
@@ -679,6 +701,22 @@ def _derive_postcode_features(
                     chunk_index=batch_index,
                     total_chunks=total_batches,
                 )
+        if singleton_trigram_index is not None:
+            _materialise_relation(
+                con,
+                con.sql(f"""
+                    SELECT phrase AS key,
+                        list(DISTINCT unique_id ORDER BY unique_id) AS unique_ids,
+                        'trigram' AS index_strategy
+                    FROM {singleton_table}
+                    GROUP BY phrase
+                    HAVING COUNT(DISTINCT unique_id)
+                        <= {TRIGRAM_INDEX.maximum_posting_size}
+                """),
+                singleton_trigram_index.alias,
+                _storage=_storage,
+                append=True,
+            )
         if output_path is not None and include_road_catalogue:
             escaped_output_path = str(output_path).replace("'", "''")
             con.execute(
@@ -692,6 +730,7 @@ def _derive_postcode_features(
     finally:
         if progress is not None:
             progress.close()
+        _drop_materialised_relation(con, singleton_table, _storage)
         _drop_materialised_relation(con, candidate_sources_table, _storage)
 
     log_stage_complete(

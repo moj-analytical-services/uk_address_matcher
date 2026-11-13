@@ -10,7 +10,7 @@ import pyarrow
 import pyarrow.parquet as pyarrow_parquet
 import pytest
 
-from uk_address_matcher import prepare_canonical_folder
+from uk_address_matcher import prepare_canonical_folder, prepare_data_for_matching
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.local_keys import prepare_canonical_local_keys
 from uk_address_matcher.cleaning.materialisation import (
@@ -291,6 +291,101 @@ def test_shared_road_batches_preserve_local_keys(con):
             enriched.order("ukam_address_id").fetchall()
             == expected_keys.order("ukam_address_id").fetchall()
         )
+
+
+def test_district_singletons_share_complete_postcode_batches(con):
+    source = con.sql("""
+        SELECT row_number() OVER () AS ukam_address_id, *,
+            []::VARCHAR[] AS numeric_tokens
+        FROM (VALUES
+            ('1', 'UNIQUE LOCAL PHRASE', 'ZZ1 1ZZ'),
+            ('1', 'UNIQUE LOCAL PHRASE', 'ZZ1 2ZZ'),
+            ('2', 'COMMON LOCAL PHRASE', 'ZZ1 1ZZ'),
+            ('3', 'COMMON LOCAL PHRASE', 'ZZ1 2ZZ'),
+            ('4', 'COMMON LOCAL PHRASE', 'ZZ2 1ZZ'),
+            ('5', 'ALREADY GLOBAL PHRASE', 'ZZ1 1ZZ'),
+            ('6', 'ECHO ECHO ECHO ECHO', 'ZZ1 1ZZ'),
+            ('009', 'CROSS DISTRICT PHRASE', 'ZZ3 1ZZ'),
+            ('010', 'CROSS DISTRICT PHRASE', 'ZZ4 1ZZ'),
+            ('7', 'MISSING POSTCODE PHRASE', NULL),
+            ('8', 'INVALID POSTCODE PHRASE', 'ZZ1 1ZZ EXTRA'),
+            ('', 'MISSING LABEL PHRASE', 'ZZ1 1ZZ'),
+            (NULL, 'NULL LABEL PHRASE', 'ZZ1 1ZZ')
+        ) addresses(unique_id, clean_full_address, postcode)
+    """)
+    con.execute("""
+        CREATE TABLE singleton_global_index AS
+        SELECT 'ALREADY GLOBAL PHRASE' AS key,
+            ['5']::VARCHAR[] AS unique_ids, 'trigram' AS index_strategy
+    """)
+    roads, keys = chunking_strategies._derive_postcode_features(
+        source,
+        con,
+        include_local_keys=True,
+        singleton_trigram_index=con.table("singleton_global_index"),
+        postcode_districts_per_batch=1,
+        show_progress="off",
+    )
+    assert roads is not None and keys.count("*").fetchall()[0][0] == 13
+    assert con.table("singleton_global_index").order("key").fetchall() == [
+        ("ALREADY GLOBAL PHRASE", ["5"], "trigram"),
+        ("COMMON LOCAL PHRASE", ["4"], "trigram"),
+        ("CROSS DISTRICT PHRASE", ["009", "010"], "trigram"),
+        ("ECHO ECHO ECHO", ["6"], "trigram"),
+        ("UNIQUE LOCAL PHRASE", ["1"], "trigram"),
+    ]
+
+
+def test_prepared_district_singletons_use_raw_trigram_lookup(con, tmp_path):
+    source = con.sql("""
+        SELECT lpad(property_id::VARCHAR, 3, '0') AS unique_id,
+            'AMBER MEADOW COTTAGE' AS address_concat,
+            CASE WHEN property_id <= 2 THEN 'ZZ1 1ZZ'
+                ELSE 'ZZ' || property_id::VARCHAR || ' 1ZZ' END AS postcode
+        FROM range(1, 22) properties(property_id)
+        UNION ALL
+        SELECT lpad((property_id + 100)::VARCHAR, 3, '0') AS unique_id,
+            'TOO MANY LOCAL COTTAGE' AS address_concat,
+            'YY' || property_id::VARCHAR || ' 1YY' AS postcode
+        FROM range(1, 22) properties(property_id)
+    """)
+    prepare_canonical_folder(
+        source,
+        tmp_path,
+        con=con,
+        num_of_chunks=2,
+        derive_district_singleton_trigrams=True,
+        show_progress="off",
+    )
+    loaded = load_prepared_canonical_data(tmp_path, con=con)
+    index = loaded.inverted_index
+    assert index.fetchall() == [
+        ("AMBER MEADOW COTTAGE", [f"{index:03d}" for index in range(3, 22)], "trigram")
+    ]
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    assert manifest["preparation_options"]["derive_district_singleton_trigrams"]
+    assert manifest["row_counts"]["trigram_singleton_district"] == 1
+    assert manifest["inverted_index_portfolio"]["physical_indexes"] == [
+        {"name": "bigram", "maximum_posting_size": 20},
+        {"name": "trigram", "maximum_posting_size": 20},
+    ]
+    messy = con.sql("""
+        SELECT 'query' AS unique_id, 'AMBER MEADOW COTTAGE' AS address_concat,
+            'ZZ1 9ZZ' AS postcode
+    """)
+    prepared = prepare_data_for_matching(
+        messy,
+        con,
+        inverted_index=index,
+        num_of_chunks=1,
+        dataset_role="messy",
+        show_progress="off",
+    )
+    candidates, signature_scores, signature_hits = prepared.select(
+        "exploding_unique_ids, signature_score_map, signature_unique_hits_map"
+    ).fetchall()[0]
+    assert candidates == [f"{index:03d}" for index in range(3, 22)]
+    assert signature_scores and signature_hits
 
 
 def test_preparation_releases_consumed_source_chunks(con, tmp_path, monkeypatch):

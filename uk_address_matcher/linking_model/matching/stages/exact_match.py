@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from uk_address_matcher.linking_model.matching.input_filters import (
     _restrict_canonical_to_messy_postcodes,
@@ -105,9 +105,9 @@ class ExactMatchStage(MatchingStage):
         stage_name: str,
         df_unmatched: duckdb.DuckDBPyRelation,
         df_canonical: duckdb.DuckDBPyRelation,
-        debug_options: Optional[DebugOptions] = None,
+        debug_options: DebugOptions | None = None,
         explain: bool = False,
-    ) -> Optional[duckdb.DuckDBPyRelation]:
+    ) -> duckdb.DuckDBPyRelation | None:
         from uk_address_matcher.linking_model.matching.stages._sql_helpers import (
             run_sql_pipeline,
         )
