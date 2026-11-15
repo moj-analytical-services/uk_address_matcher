@@ -3,9 +3,7 @@ from __future__ import annotations
 import logging
 
 from benchmarking.constants import (
-    APPLY_CANONICAL_FILTER,
     BENCHMARK_RESULTS_ROOT,
-    CANONICAL_FILTER_SQL,
     CLEANING_NUM_CHUNKS,
     FILTER_OUT_MISSING_UPRNS,
     MATCHING_NUM_CHUNKS,
@@ -24,13 +22,15 @@ from benchmarking.settings import (
 )
 from uk_address_matcher import ExactMatchStage, PeeledAddressStage, SplinkStage
 
+CANONICAL_FILTER_SQL: str | None = None
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # SELECTED_DATASETS: str | list[str] = "all"
-SELECTED_DATASETS: str | list[str] = ["conwy"]
+SELECTED_DATASETS: str | list[str] = ["hackney", "mid_sussex", "pooled_councils"]
 # SELECTED_DATASETS: str | list[str] = "aberdeenshire"
 # SELECTED_DATASETS: str | list[str] = "lambeth_llpg"
 STAGES = [
@@ -55,7 +55,7 @@ OUTPUT_OPTIONS = BenchmarkOutputOptions(
     show_splink_comparisons=False,
 )
 
-print(f"Applying canonical filter: {APPLY_CANONICAL_FILTER}")
+print(f"Applying canonical filter: {CANONICAL_FILTER_SQL is not None}")
 
 
 print_available_datasets()
@@ -66,7 +66,7 @@ results = run_selected_datasets(
     stages=STAGES,
     sample_mode=SAMPLE_MODE,
     filter_out_missing_uprns=FILTER_OUT_MISSING_UPRNS,
-    canonical_address_filter=(CANONICAL_FILTER_SQL if APPLY_CANONICAL_FILTER else None),
+    canonical_address_filter=CANONICAL_FILTER_SQL,
     diagnostic_output_options=OUTPUT_OPTIONS,
     cleaning_num_chunks=CLEANING_NUM_CHUNKS,
     matching_num_chunks=MATCHING_NUM_CHUNKS,

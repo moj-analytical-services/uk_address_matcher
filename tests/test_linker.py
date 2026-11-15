@@ -15,6 +15,7 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_address_structure_feature_columns,
     _align_clean_address_token_columns,
     _align_distinguishing_token_columns,
+    _align_name_words_columns,
     _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
@@ -383,6 +384,63 @@ def test_packaged_inferred_road_comparison_is_positive_only():
     ]
     assert math.log2(levels[1]["m_probability"] / levels[1]["u_probability"]) == 2
     assert levels[2]["m_probability"] == levels[2]["u_probability"] == 1
+
+
+@pytest.mark.parametrize(
+    ("tokens_l", "tokens_r", "postcode_l", "postcode_r", "expected"),
+    [
+        (
+            "['WEST', 'ALPHA', 'HOUSE', '1', 'HIGH', 'STREET']",
+            "['ALPHA', 'HOUSE', '1', 'HIGH', 'STREET']",
+            "'AB1 1AA'",
+            "'AB1 1AA'",
+            8,
+        ),
+        ("[]", "['ALPHA', 'HOUSE']", "'AB1 1AA'", "'AB1 1AA'", -1),
+        ("NULL", "['ALPHA', 'HOUSE']", "'AB1 1AA'", "'AB1 1AA'", -1),
+        ("['ALPHA', 'HOUSE']", "['ALPHA', 'HOUSE']", "NULL", "NULL", 9),
+        (
+            "['ALPHA', 'HOUSE', '1', 'HIGH', 'ST', 'E', 'ZZZZZZ']",
+            "['ALPHA', 'HOUSE', '2', 'HIGH', 'ST', 'E', 'QQQQQQ']",
+            "'AB1 1AA'",
+            "'CD2 2BB'",
+            9,
+        ),
+    ],
+)
+def test_name_agreement_comparison_levels(
+    duck_con, tokens_l, tokens_r, postcode_l, postcode_r, expected
+):
+    messy, canonical = _align_name_words_columns(
+        duck_con.sql(f"SELECT {tokens_l}::VARCHAR[] AS clean_full_address_tokens"),
+        duck_con.sql(f"SELECT {tokens_r}::VARCHAR[] AS clean_full_address_tokens"),
+    )
+    comparison = next(
+        comparison
+        for comparison in _get_model_settings_dict()["comparisons"]
+        if comparison["output_column_name"] == "name_agreement"
+    )
+    settings = SettingsCreator(link_type="link_only", comparisons=[comparison])
+    case_statement = settings.get_settings("duckdb").comparisons[0]._case_statement
+    result = duck_con.sql(
+        f"""
+        SELECT {case_statement}
+        FROM (
+            SELECT
+                messy.name_words AS name_words_l,
+                canonical.name_words AS name_words_r,
+                {postcode_l}::VARCHAR AS postcode_l,
+                {postcode_r}::VARCHAR AS postcode_r,
+                true AS lk_eligible_r,
+                MAP(['canonical-id'], [3]) AS lk_level_by_alias_r,
+                'canonical-id'::VARCHAR AS ukam_address_id_l
+            FROM ({messy.sql_query()}) AS messy
+            CROSS JOIN ({canonical.sql_query()}) AS canonical
+        )
+        """
+    ).fetchall()
+
+    assert result == [(expected,)]
 
 
 def test_legacy_canonical_gets_neutral_inferred_road_columns(duck_con):
