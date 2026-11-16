@@ -23,6 +23,7 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     BASE_INDEX_PORTFOLIO,
+    TRIGRAM_SINGLETON_DISTRICT_INDEX,
 )
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
@@ -519,6 +520,22 @@ def _build_manifest(
     """Build the manifest payload shared by local and remote writers."""
     from uk_address_matcher import __version__
 
+    physical_indexes = [
+        {
+            "name": strategy.name,
+            "maximum_posting_size": strategy.maximum_posting_size,
+        }
+        for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
+    ]
+    if preparation_options.get("derive_district_singleton_trigrams"):
+        physical_indexes.append(
+            {
+                "name": TRIGRAM_SINGLETON_DISTRICT_INDEX.name,
+                "maximum_posting_size": (
+                    TRIGRAM_SINGLETON_DISTRICT_INDEX.maximum_posting_size
+                ),
+            }
+        )
     return {
         "ukam_version": __version__,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -527,13 +544,7 @@ def _build_manifest(
         "preparation_options": preparation_options,
         "inverted_index_portfolio": {
             "name": BASE_INDEX_PORTFOLIO.name,
-            "physical_indexes": [
-                {
-                    "name": strategy.name,
-                    "maximum_posting_size": strategy.maximum_posting_size,
-                }
-                for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
-            ],
+            "physical_indexes": physical_indexes,
         },
         "files": files_meta,
     }
@@ -597,8 +608,11 @@ def prepare_canonical_folder(
             progress output.
         _derive_road_catalogue: Whether to derive the road catalogue and canonical
             road keys. Defaults to ``True``; pass ``False`` to skip road artefacts.
-        derive_district_singleton_trigrams: Add district-singleton trigrams absent
-            from the global index using the ordinary raw trigram key. Defaults to `False`.
+        derive_district_singleton_trigrams: Add candidate-only district-singleton
+            postings with `district|phrase` keys and one ID per key under the
+            `unique_postcode_district_trigram` strategy. Global index rows stay
+            unchanged; phrases already in the global trigram index are excluded
+            before appending local postings. Defaults to `False`.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files
@@ -751,7 +765,7 @@ def _prepare_canonical_folder(
         else 0
     )
 
-    roadlike_places, local_features = _derive_postcode_features(
+    roadlike_places, local_features, updated_inverted_index = _derive_postcode_features(
         df_clean,
         con,
         include_local_keys=True,
@@ -762,6 +776,8 @@ def _prepare_canonical_folder(
         show_progress=progress_mode,
         _storage=_storage,
     )
+    if updated_inverted_index is not None:
+        inverted_index = updated_inverted_index
     road_features = None
     if _derive_road_catalogue:
         logger.debug("Deriving canonical road blocking keys")
@@ -924,7 +940,7 @@ def _prepare_canonical_folder(
         "canonical_output_chunks": output_chunk_count,
     }
     if derive_district_singleton_trigrams:
-        manifest_row_counts["trigram_singleton_district"] = (
+        manifest_row_counts[TRIGRAM_SINGLETON_DISTRICT_INDEX.name] = (
             idx_count - base_inverted_index_rows
         )
     preparation_options = {"add_debug_features": add_debug_features}

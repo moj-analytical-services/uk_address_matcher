@@ -90,6 +90,19 @@ CASE
 END""",
 )
 
+POSTCODE_DISTRICT_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="postcode_district_trigram_keys",
+    keys_sql_expr=f"""\
+CASE
+    WHEN regexp_full_match(postcode, '[A-Z]{{1,2}}[0-9]{{1,2}}[A-Z]? [0-9][A-Z]{{2}}')
+    THEN list_transform(
+        ({ADJACENT_TRIGRAM_KEYS.keys_sql_expr}),
+        __phrase -> split_part(postcode, ' ', 1) || '|' || __phrase
+    )
+    ELSE []::VARCHAR[]
+END""",
+)
+
 ADJACENT_BIGRAM_KEYS = SignatureKeyGenerator(
     name="adjacent_bigram_keys",
     keys_sql_expr="""\
@@ -170,6 +183,11 @@ TRIGRAM_INDEX = PhysicalIndexStrategy(
     key_generator=ADJACENT_TRIGRAM_KEYS,
     maximum_posting_size=BASE_POSTING_CAP,
 )
+TRIGRAM_SINGLETON_DISTRICT_INDEX = PhysicalIndexStrategy(
+    name="unique_postcode_district_trigram",
+    key_generator=POSTCODE_DISTRICT_TRIGRAM_KEYS,
+    maximum_posting_size=1,
+)
 BIGRAM_INDEX = PhysicalIndexStrategy(
     name="bigram",
     key_generator=ADJACENT_BIGRAM_KEYS,
@@ -179,6 +197,12 @@ TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="trigram",
     source_key_generator=ADJACENT_TRIGRAM_KEYS,
     target_index=TRIGRAM_INDEX,
+)
+TRIGRAM_SINGLETON_DISTRICT_LOOKUP = InvertedIndexLookupStrategy(
+    name="unique_postcode_district_trigram",
+    source_key_generator=POSTCODE_DISTRICT_TRIGRAM_KEYS,
+    target_index=TRIGRAM_SINGLETON_DISTRICT_INDEX,
+    contributes_signature_evidence=False,
 )
 BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="bigram",
@@ -227,7 +251,10 @@ BASE_INDEX_PORTFOLIO = InvertedIndexPortfolio(
     lookup_strategies=(BIGRAM_LOOKUP, TRIGRAM_LOOKUP),
 )
 DEFAULT_INDEXING_STRATEGIES = list(BASE_INDEX_PORTFOLIO.physical_indexes)
-DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = list(BASE_INDEX_PORTFOLIO.lookup_strategies)
+DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = [
+    *BASE_INDEX_PORTFOLIO.lookup_strategies,
+    TRIGRAM_SINGLETON_DISTRICT_LOOKUP,
+]
 MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
     *DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
     SKIP1_BIGRAM_LOOKUP,
@@ -237,10 +264,10 @@ MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
 ]
 
 
-def _derive_district_singleton_trigrams(global_index_table: str):
+def _derive_district_singleton_trigrams():
     @pipeline_stage(
         name="derive_district_singleton_trigrams",
-        description="Build district-singleton trigrams absent from the global index",
+        description="Collect district-singleton trigrams",
         tags="inverted_index",
     )
     def _stage():
@@ -266,12 +293,9 @@ def _derive_district_singleton_trigrams(global_index_table: str):
             ),
             CTEStep(
                 "singletons",
-                f"""
+                """
                 SELECT district, phrase, min(unique_id) AS unique_id
-                FROM {{phrases}} phrases
-                ANTI JOIN {global_index_table} global_index
-                    ON phrases.phrase = global_index.key
-                        AND global_index.index_strategy = 'trigram'
+                FROM {phrases}
                 GROUP BY district, phrase
                 HAVING count(DISTINCT unique_id) = 1
                 """,
@@ -432,10 +456,18 @@ def _lookup_keys_in_inverted_index(
         SELECT *
         FROM {input}
         """
+        postcode_projection = (
+            ", postcode"
+            if any(
+                strategy.source_key_generator == POSTCODE_DISTRICT_TRIGRAM_KEYS
+                for strategy in lookup_strategies
+            )
+            else ""
+        )
         tokenised_sql = f"""
         SELECT
             ukam_address_id AS unique_id,
-            {token_array_expression} AS __tokens
+            {token_array_expression} AS __tokens{postcode_projection}
         FROM {{base}}
         """
         union_parts = []
@@ -483,7 +515,7 @@ def _lookup_keys_in_inverted_index(
         INNER JOIN __ukam_inverted_index AS index
             ON requested.__key = index.key
            AND requested.__lookup_strategy = index.index_strategy
-           AND len(index.unique_ids) <= requested.__maximum_posting_size
+              AND len(index.unique_ids) <= requested.__maximum_posting_size
         """
         provenance_sql = """
         SELECT
