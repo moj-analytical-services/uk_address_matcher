@@ -210,6 +210,26 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
     ]
 
 
+def test_first_pass_handles_fflat_marker(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FFLAT 3 02 AT TOWN')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "FFLAT 302 AT TOWN",
+    ]
+
+
 def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     input_rel = duck_con.sql(
         """
