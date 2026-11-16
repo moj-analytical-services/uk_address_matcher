@@ -77,7 +77,7 @@ def _print_by_match_reason(
             WHERE match_reason = '{escaped_reason}'
             """
         )
-        row_count = int(reason_table.aggregate("COUNT(*) AS row_count").fetchone()[0])
+        row_count = int(reason_table.aggregate("COUNT(*) AS row_count").fetchall()[0][0])
         print(f"\nmatch_reason: {reason_name}. Showing {row_count} records")
         _show_via_sql(result, reason_table)
 
@@ -195,6 +195,11 @@ def print_run_persistence_summary(results: list[BenchmarkRunResult]) -> None:
             f"manifest={_display_path(persisted.manifest_path)}"
         )
         print(f"internal_dedupe_hash={persisted.run_hash}")
+        if persisted.precision_recall_chart_path is not None:
+            print(
+                "Precision-recall chart: "
+                f"{_display_path(persisted.precision_recall_chart_path)}"
+            )
         if persisted.comparison_warning is not None:
             print(f"Warning: {persisted.comparison_warning}")
         if persisted.comparison is None:

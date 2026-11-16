@@ -520,7 +520,7 @@ def _register_inverted_index_table(
         con.sql("DROP VIEW IF EXISTS __ukam_inverted_index")
         con.execute(
             f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
-        )
+        ).fetchall()
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
@@ -546,7 +546,9 @@ def _register_inverted_index_meta(
         inverted_index_n = con.sql(
             "SELECT COUNT(DISTINCT u) "
             "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     n_value = max(int(inverted_index_n or 0), 1)
-    con.execute("DROP TABLE IF EXISTS __ukam_index_meta")
-    con.execute(f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n")
+    con.execute("DROP TABLE IF EXISTS __ukam_index_meta").fetchall()
+    con.execute(
+        f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n"
+    ).fetchall()

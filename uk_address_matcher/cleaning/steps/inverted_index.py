@@ -82,7 +82,7 @@ CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
             generate_series(1, len(__tokens) - 2),
-            __i -> __tokens[__i]
+            lambda __i: __tokens[__i]
                    || ' ' || __tokens[__i + 1]
                    || ' ' || __tokens[__i + 2]
         )
@@ -97,7 +97,7 @@ CASE
     WHEN len(__tokens) >= 2 THEN
         list_transform(
             generate_series(1, len(__tokens) - 1),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 1]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -109,11 +109,13 @@ CASE
     WHEN len(__tokens) >= 4 THEN list_concat(
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 1] || ' ' || __tokens[__i + 3]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 2] || ' ' || __tokens[__i + 3]
         )
     )
     ELSE []::VARCHAR[]
@@ -126,7 +128,7 @@ CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
             generate_series(1, len(__tokens) - 2),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 2]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -138,7 +140,7 @@ CASE
     WHEN len(__tokens) >= 4 THEN
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 3]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -150,15 +152,18 @@ CASE
     WHEN len(__tokens) >= 5 THEN list_concat(
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 1] || ' ' || __tokens[__i + 4]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 2] || ' ' || __tokens[__i + 4]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 3] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 3] || ' ' || __tokens[__i + 4]
         )
     )
     ELSE []::VARCHAR[]
@@ -266,7 +271,7 @@ def _derive_keys_for_strategy(
             filtered_expr = (
                 "list_filter("
                 f"{keys_expr}, "
-                f"__k -> (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
+                f"lambda __k: (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
                 ")"
             )
         token_array_expression = _token_array_expression(token_column)
@@ -383,7 +388,7 @@ def _lookup_keys_in_inverted_index(
         """
         tokenised_sql = f"""
         SELECT
-            unique_id,
+            ukam_address_id AS unique_id,
             {token_array_expression} AS __tokens
         FROM {{base}}
         """
@@ -502,9 +507,9 @@ def _lookup_keys_in_inverted_index(
             ) AS signature_unique_hits_map
         FROM {base} AS base
         LEFT JOIN {deduplicated} AS candidates
-          ON base.unique_id = candidates.__messy_uid
+                    ON base.ukam_address_id = candidates.__messy_uid
         LEFT JOIN {score_map} AS scores
-          ON base.unique_id = scores.__messy_uid
+                    ON base.ukam_address_id = scores.__messy_uid
         """
         steps = [
             CTEStep("base", base_sql),

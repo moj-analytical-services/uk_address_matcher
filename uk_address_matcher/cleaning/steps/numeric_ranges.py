@@ -20,7 +20,7 @@ def _derive_numeric_range(
                 input.*,
                 list_filter(
                     numeric_tokens,
-                    token -> regexp_matches(
+                    lambda token: regexp_matches(
                         token,
                         '^\\d{1,5}[A-Z]?-\\d{1,5}[A-Z]?$'
                     )
@@ -39,7 +39,7 @@ def _derive_numeric_range(
                 classified_tokens.*,
                 list_transform(
                     range_tokens,
-                    token -> regexp_extract(
+                    lambda token: regexp_extract(
                         token,
                         '^(\\d{1,5})([A-Z]?)-(\\d{1,5})([A-Z]?)$',
                         ['lower', 'lower_suffix', 'upper', 'upper_suffix']
@@ -55,7 +55,7 @@ def _derive_numeric_range(
                 range_endpoints.*,
                 list_transform(
                     parsed_range_endpoints,
-                    endpoint -> struct_pack(
+                    lambda endpoint: struct_pack(
                         raw := endpoint.lower || endpoint.lower_suffix || '-'
                             || endpoint.upper || endpoint.upper_suffix,
                         lower := TRY_CAST(endpoint.lower AS UINTEGER),

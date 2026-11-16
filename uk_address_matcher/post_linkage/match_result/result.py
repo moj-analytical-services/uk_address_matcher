@@ -35,6 +35,8 @@ from uk_address_matcher.sql_pipeline.helpers import (
 )
 
 if TYPE_CHECKING:
+    from tempfile import TemporaryDirectory
+
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
 
 
@@ -101,6 +103,7 @@ class MatchResult:
     # SplinkDataFrame handles for Splink-side tables, dropped via Splink's
     # public API on close().
     _owned_splink_frames: tuple = ()
+    _temporary_directory: TemporaryDirectory | None = None
 
     def __repr__(self) -> str:
         class_name = self.__class__.__name__
@@ -232,7 +235,7 @@ class MatchResult:
         )
 
     def close(self) -> None:
-        """Release every table/view retained for this result.
+        """Release retained tables, views and temporary Parquet parts.
 
         Idempotent. Drops only objects owned by this result, so closing an
         earlier result never invalidates a later live result on the same
@@ -256,6 +259,9 @@ class MatchResult:
         for table_name in self._owned_table_names:
             _drop_table_and_registered_aliases(self.con, table_name)
         self._owned_table_names = ()
+        if self._temporary_directory is not None:
+            self._temporary_directory.cleanup()
+            self._temporary_directory = None
 
     def __enter__(self) -> MatchResult:
         return self

@@ -8,9 +8,30 @@ from uk_address_matcher.cleaning.steps.regexes import (
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
+def _premise_identifier_pattern(max_digits: int = 4) -> str:
+    return rf"[A-Za-z]?\d{{1,{max_digits}}}[A-Za-z]?|[A-Za-z]"
+
+
+def _premise_role_segment_pattern(role: str, range_separator: str) -> str:
+    endpoint = rf"\b(?:{_premise_identifier_pattern(5)})\b"
+    identifier = rf"{endpoint}(?:\s*{range_separator}\s*{endpoint})?"
+    marker = f"{role}S?"
+    return (
+        rf"\b{marker}\s+(?:PART\s+)?{identifier}"
+        rf"(?:\s*(?:AND|,|&)\s*(?:PART\s+)?(?:{marker}\s+)?{identifier})*"
+    )
+
+
 def _address_for_parsing(address_expression: str) -> str:
     exclusion_pattern = r"'(^|[ (])EXCLUDING +([^ )]+)', '\1EXCLUDING_\2', 'g'"
     return f"regexp_replace({address_expression}, {exclusion_pattern})"
+
+
+def _scope_uncertainty_pattern(*patterns: str) -> str:
+    exclusions = (
+        r"\b(?:EXCLUDE|EXCLUDING|EXCLUDED|EXCEPT|EXCEPTING|EXCEPTED|NOT\s+INCLUDING)\b"
+    )
+    return "|".join((*patterns, exclusions))
 
 
 @pipeline_stage(name="derive_local_key_tokens")
@@ -32,7 +53,7 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
         CTEStep(
             "lexical_flags",
             """
-            SELECT input.*, list_transform(__local_tokens, token ->
+            SELECT input.*, list_transform(__local_tokens, lambda token:
                 length(token) >= 2 AND NOT regexp_matches(token, '[0-9]'))
                 AS __local_lexical
             FROM {local_tokens} input
@@ -44,19 +65,19 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
             SELECT * EXCLUDE (__local_tokens, __local_lexical),
                 CASE WHEN {eligible} THEN list_concat(
                     list_transform(
-                        list_filter(range(1, len(__local_tokens) + 1), position ->
+                        list_filter(range(1, len(__local_tokens) + 1), lambda position:
                             __local_lexical[position]
                             AND __local_tokens[position] NOT IN (
                                 'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
                             )
                         ),
-                        position -> struct_pack(
+                        lambda position: struct_pack(
                             pos := position::INTEGER, kind := 'word',
                             key := __local_tokens[position]
                         )
                     ),
                     list_transform(
-                        list_filter(range(1, len(__local_tokens)), position ->
+                        list_filter(range(1, len(__local_tokens)), lambda position:
                             __local_lexical[position] AND __local_lexical[position + 1]
                             AND (__local_tokens[position] NOT IN (
                                     'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
@@ -66,7 +87,7 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
                                         'THE','OF','TO','AT','NEAR','VIA','FROM','AND','WITH'
                                     ))
                         ),
-                        position -> struct_pack(
+                        lambda position: struct_pack(
                             pos := position::INTEGER, kind := 'phrase',
                             key := __local_tokens[position] || ' '
                                 || __local_tokens[position + 1]
@@ -113,6 +134,7 @@ _DISTINGUISHING_MARKER_VALUES = (
     "LOCK",
     "LOCKUP",
     "CONTAINER",
+    "FFLAT",
     "FLAT",
 )
 
@@ -228,7 +250,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
                             list_reverse({left_neighbour_tokens}),
                             true
                         ),
-                        token_pair -> token_pair[1] != token_pair[2]
+                        lambda token_pair: token_pair[1] != token_pair[2]
                     ),
                     true
                 ) - 1,
@@ -245,7 +267,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
                             list_reverse({right_neighbour_tokens}),
                             true
                         ),
-                        token_pair -> token_pair[1] != token_pair[2]
+                        lambda token_pair: token_pair[1] != token_pair[2]
                     ),
                     true
                 ) - 1,
@@ -345,7 +367,7 @@ def _parse_out_flat_position_and_letter():
     Robustly extracts flat positions, letters, and numbers from address strings.
 
     Strategy:
-      - Detect a 'flat signal' (FLAT, floor position, digit+letter like 15B)
+            - Detect a 'flat signal' (FLAT/FFLAT, floor position, digit+letter like 15B)
       - When number+letter pattern exists (11A, 15B), the LETTER is the flat determinant
       - Only extract flat_number from explicit FLAT markers (e.g., FLAT 12)
     - Ambiguous patterns like '7 42 FICTIONAL ROAD' do NOT populate flat_number
@@ -355,32 +377,19 @@ def _parse_out_flat_position_and_letter():
     # others are paired with FLOOR/GROUND.
     # BLOCK indicates a flat block (e.g., "BLOCK B STANNARD HALL")
     standalone_floors = ["BASEMENT", "GARDEN", "BLOCK"]
-    floor_with_suffix = [
-        "LOWER",
-        "UPPER",
-        "GROUND",
-        "FIRST",
-        "SECOND",
-        "THIRD",
-        "FOURTH",
-        "FIFTH",
-        "SIXTH",
-        "SEVENTH",
-        "EIGHTH",
-        "NINTH",
-        "TENTH",
-        "TOP",
-    ]
+    floor_with_suffix = (
+        "LOWER UPPER GROUND FIRST SECOND THIRD FOURTH FIFTH SIXTH "
+        "SEVENTH EIGHTH NINTH TENTH TOP"
+    ).split()
     # Build regex: standalone floors OR (prefix + FLOOR) OR
     # (prefix + GROUND for LOWER/UPPER)
     # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
     # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
     # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
+    numbered_floor_pattern = "|".join(floor_with_suffix[2:])
     multi_floor_pattern = (
-        r"(?:(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
-        r"SEVENTH|EIGHTH|NINTH|TENTH|TOP),? ?|AND )*"
-        r"(?:GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
-        r"SEVENTH|EIGHTH|NINTH|TENTH|TOP) FLOORS"
+        rf"(?:(?:{numbered_floor_pattern}),? ?|AND )*"
+        rf"(?:{numbered_floor_pattern}) FLOORS"
     )
     floor_positions = (
         r"\b("
@@ -393,13 +402,16 @@ def _parse_out_flat_position_and_letter():
         + multi_floor_pattern
         + r")\b"
     )
+    flat_marker = r"F?FLAT"
+    explicit_flat_pattern = rf"\b{flat_marker}\b"
     floor_first_address_pattern = (
-        r"^\s*(?:" + floor_positions + "|" + "|".join(floor_with_suffix) + r")\s+FLAT\b"
+        r"^\s*(?:"
+        + floor_positions
+        + "|"
+        + "|".join(floor_with_suffix)
+        + rf")\s+{explicit_flat_pattern}"
     )
-    leading_bare_floor_position = (
-        r"^\s*(GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|"
-        r"SEVENTH|EIGHTH|NINTH|TENTH|TOP)\s+\d"
-    )
+    leading_bare_floor_position = rf"^\s*({numbered_floor_pattern})\s+\d"
     # Core token patterns (RE2-compatible; avoid lookbehind)
     num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
     leading_num_letter = (
@@ -408,19 +420,17 @@ def _parse_out_flat_position_and_letter():
     # Match all numbers (standalone digits, not part of ranges like 120-122)
     count_numbers = r"\b(\d{1,5})\b"
 
-    flat_num_after_flat = (
-        r"\bFLAT\s+(\d{1,4})(?:\s|[A-Za-z/]|$)"  # FLAT 12 / FLAT 12A / FLAT 12/2
-    )
+    flat_num_after_flat = rf"{explicit_flat_pattern}\s+(\d{{1,4}})(?:\s|[A-Za-z/]|$)"
     flat_letter_after_num_after_flat = (
-        r"\bFLAT\s+\d{1,4}\s*([A-Za-z])\b"  # FLAT 12A / FLAT 12 A
+        rf"{explicit_flat_pattern}\s+\d{{1,4}}\s*([A-Za-z])\b"
     )
-    flat_letter_after_flat = r"\bFLAT\s+([A-Za-z])\b"  # FLAT A
+    flat_letter_after_flat = rf"{explicit_flat_pattern}\s+([A-Za-z])\b"
     block_letter = r"\bBLOCK\s+([A-Za-z])\b"  # BLOCK A / BLOCK B
 
     # Scottish style "FLAT 3/2" → use the right-hand number as the unit/flat number
-    scottish_flat = r"\bFLAT\s+(\d+)\s*/\s*(\d+)\b"
+    scottish_flat = rf"{explicit_flat_pattern}\s+(\d+)\s*/\s*(\d+)\b"
     address_for_parsing = _address_for_parsing("input.clean_full_address")
-    flat_number_delimiter_pattern = r"\bFLAT\s*[,;]\s*\d"
+    flat_number_delimiter_pattern = rf"{explicit_flat_pattern}\s*[,;]\s*\d"
 
     final_base_sql = f"""
     SELECT
@@ -565,7 +575,9 @@ def _parse_out_flat_position_and_letter():
             )
             ELSE NULL
         END AS flat_number,
-        regexp_matches(i.clean_full_address, '\\bFLAT\\b') AS __has_explicit_flat
+        regexp_matches(
+            i.clean_full_address, '{explicit_flat_pattern}'
+        ) AS __has_explicit_flat
     FROM (
         SELECT
             input.* EXCLUDE (clean_full_address),
@@ -601,7 +613,8 @@ def _parse_out_flat_position_and_letter():
 
     steps = [
         CTEStep("final_base", final_base_sql),
-        CTEStep("final", final_sql),
+        CTEStep("flat_identity", final_sql),
+        CTEStep("final", _floor_key_set_sql(floor_with_suffix)),
     ]
     return steps
 
@@ -609,7 +622,7 @@ def _parse_out_flat_position_and_letter():
 @pipeline_stage(
     name="parse_out_sub_premise_location",
     description=(
-        "Extract sub-premise side/location descriptors from the first half of the address"
+        "Extract sub-premise side/location descriptors before the street address"
     ),
     tags=["token_extraction", "flat_parsing"],
 )
@@ -620,8 +633,8 @@ def _parse_out_sub_premise_location():
     `flat_identity` so it can be compared independently downstream. The signal
     is intentionally broader than flats alone: maisonettes and other
     sub-premise occupancies can carry the same FRONT/REAR/LEFT/RIGHT cues.
-    Only the first half of the cleaned address is scanned to reduce false
-    positives from place names such as commercial centres later in the string.
+    A premise number usually marks the end of the sub-premise description.
+    For unnumbered addresses, use a short prefix to limit place-name matches.
     """
 
     tokens_for_parsing = _address_for_parsing(
@@ -631,16 +644,22 @@ def _parse_out_sub_premise_location():
     SELECT
         i.* EXCLUDE (__tokens_for_parsing),
         list_slice(
-                __tokens_for_parsing,
-                1,
-                LEAST(
-                    len(__tokens_for_parsing),
-                    GREATEST(
-                        6,
-                        CAST(CEIL(len(__tokens_for_parsing) / 2.0) AS BIGINT)
+            __tokens_for_parsing,
+            1,
+            COALESCE(
+                list_first(list_filter(
+                    range(1, len(__tokens_for_parsing) + 1),
+                    lambda idx: regexp_full_match(
+                        __tokens_for_parsing[idx], '[0-9]+[A-Z]?(-[0-9]+[A-Z]?)?'
+                    ) AND NOT (
+                        idx = 2 AND __tokens_for_parsing[1] IN (
+                            'FLAT', 'FFLAT', 'MAISONETTE'
+                        )
                     )
-                )
-            ) AS sub_premise_location_prefix_tokens
+                )) - 1,
+                GREATEST(6, CAST(CEIL(len(__tokens_for_parsing) / 2.0) AS BIGINT))
+            )
+        ) AS sub_premise_location_prefix_tokens
     FROM (
         SELECT
             i.*,
@@ -661,6 +680,7 @@ def _parse_out_sub_premise_location():
                 OR flat_letter IS NOT NULL
                 OR flat_number IS NOT NULL
                 OR list_contains(clean_full_address_tokens, 'FLAT')
+                OR list_contains(clean_full_address_tokens, 'FFLAT')
                 OR list_contains(clean_full_address_tokens, 'MAISONETTE')
             ) THEN NULL
             WHEN list_contains(sub_premise_location_prefix_tokens, 'RIGHT')
@@ -669,6 +689,10 @@ def _parse_out_sub_premise_location():
                 THEN 'LEFT'
             WHEN list_contains(sub_premise_location_prefix_tokens, 'CENTRE')
                 OR list_contains(sub_premise_location_prefix_tokens, 'CENTER')
+                OR regexp_matches(
+                    array_to_string(sub_premise_location_prefix_tokens, ' '),
+                    '\b((FLOORS?|F?FLAT|MAISONETTE) MIDDLE|MIDDLE (F?FLAT|MAISONETTE))\b'
+                )
                 THEN 'CENTRE'
             WHEN list_contains(sub_premise_location_prefix_tokens, 'FRONT')
                 THEN 'FRONT'
@@ -714,7 +738,11 @@ def _parse_out_business_unit():
     # Business unit keywords - these indicate commercial/industrial premises
     # Note: UNIT is normalised FROM residential APARTMENT in earlier cleaning,
     # but raw UNIT in business contexts (UNIT C, UNIT 5) remains
-    business_keywords = ["UNIT", "SUITE", "OFFICE", "WORKSHOP", "WAREHOUSE", "STUDIO"]
+    roles = "UNIT SUITE ROOM OFFICE BLOCK BUILDING WORKSHOP WAREHOUSE STUDIO".split()
+    range_separator = r"(?:-|TO|THROUGH|UP\s+TO)"
+    business_keywords = [
+        role for role in roles if role not in ("ROOM", "BLOCK", "BUILDING")
+    ]
 
     # Build pattern: (UNIT|SUITE|...) followed by identifier
     # Identifier can be: letter (A-Z), number (1-999), or alphanumeric (5A, A5)
@@ -722,10 +750,10 @@ def _parse_out_business_unit():
     keywords_pattern = "|".join(business_keywords)
 
     # Pattern for singular: UNIT A, UNIT 5, UNIT 5A, UNIT A5
-    singular_pattern = (
-        rf"\b({keywords_pattern})S?\s+([A-Za-z]?\d{{1,4}}[A-Za-z]?|[A-Za-z])\b"
+    singular_pattern = rf"\b({keywords_pattern})S?\s+({_premise_identifier_pattern()})\b"
+    address_for_parsing = _address_for_parsing(
+        "array_to_string(source.__premise_segments, ' ')"
     )
-    address_for_parsing = _address_for_parsing("source.clean_full_address")
 
     sql = f"""
     SELECT
@@ -747,10 +775,28 @@ def _parse_out_business_unit():
                 '{singular_pattern}',
                 ['business_unit_type', 'business_unit_id']
             ) AS __business_unit_match
-        FROM {{input}} AS source
+        FROM {{role_segments}} AS source
     ) AS i
     """
-    return sql
+    segment_pattern = (
+        r"(?:\bEXCLUDING\s+)?(?:"
+        + "|".join(_premise_role_segment_pattern(role, range_separator) for role in roles)
+        + ")"
+    )
+    return [
+        CTEStep(
+            "role_segments",
+            f"""
+            SELECT input.*, regexp_extract_all(
+                upper(coalesce(input.clean_full_address, '')),
+                '{segment_pattern}', 0
+            ) AS __premise_segments
+            FROM {{input}} AS input
+            """,
+        ),
+        CTEStep("business_unit", sql),
+        CTEStep("final", _premise_key_set_sql(roles, range_separator)),
+    ]
 
 
 @pipeline_stage(
@@ -788,7 +834,7 @@ def _parse_out_numbers():
         r"\b"  # Word boundary
     )
     road_code_pattern = (
-        r"\b((?:FLAT|APARTMENT|UNIT|SUITE|OFFICE|ROOM|BUILDING|BLOCK|PLOT|GARAGE|BAY|"
+        r"\b((?:F?FLAT|APARTMENT|UNIT|SUITE|OFFICE|ROOM|BUILDING|BLOCK|PLOT|GARAGE|BAY|"
         r"SHOP|FLOOR|LEVEL|WORKSHOP|WAREHOUSE|STUDIO|CONTAINER|PLATFORM|MAST|YARD|"
         r"PARKING SPACE)\s+[ABCU]\s*\d+[A-Z]?)\b"
         r"|\b[ABCU]\s*\d+[A-Z]?\b"
@@ -826,7 +872,7 @@ def _parse_out_numbers():
     tags=["token_extraction", "sub_premise_parsing"],
 )
 def _derive_missingness_aware_sub_premise_features():
-    marker_pattern = r"^\s*([A-Z]+)\s+(?:[A-Z]?\d{1,5}[A-Z]?|[A-Z])\b"
+    marker_pattern = rf"^\s*([A-Z]+)\s+(?:{_premise_identifier_pattern(5)})\b"
     return f"""
     SELECT
         i.*,
@@ -919,6 +965,106 @@ def _clean_address_string_second_pass_and_tokenise():
     ]
 
 
+def _premise_key_set_sql(roles: list[str], range_separator: str) -> str:
+    identifier_pattern = rf"\b(?:{_premise_identifier_pattern(5)})\b"
+    numeric_range_pattern = rf"\b\d{{1,5}}\s*{range_separator}\s*\d{{1,5}}\b"
+    role_pattern = "|".join(f"{role}S?" for role in roles)
+    map_entries = []
+    for role in roles:
+        marker = f"{role}S?"
+        marker_removal_pattern = rf"\b(?:{marker}|PART)\b"
+        map_entries.append(
+            f"""struct_pack(key := '{role}', value :=
+            list_sort(list_distinct(flatten(list_transform(
+                list_filter(__premise_segments, lambda segment: regexp_matches(
+                    segment, '^(?:EXCLUDING\\s+)?{marker}\\b'
+                )),
+                lambda segment: list_concat(
+                    regexp_extract_all(
+                        regexp_replace(segment, '{marker_removal_pattern}', ' ', 'g'),
+                        '{identifier_pattern}', 0
+                    ),
+                    flatten(list_transform(
+                        regexp_extract_all(segment, '{numeric_range_pattern}', 0),
+                        lambda numeric_range: list_transform(
+                            range(
+                                regexp_extract(numeric_range, '^\\d+', 0)::BIGINT + 1,
+                                regexp_extract(numeric_range, '\\d+$', 0)::BIGINT
+                            ),
+                            lambda identifier: identifier::VARCHAR
+                        )
+                    ))
+                )
+            )))))"""
+        )
+
+    map_entry_sql = ",\n".join(map_entries)
+    role_range_pattern = (
+        rf"{identifier_pattern}\s*{range_separator}\s*{identifier_pattern}"
+    )
+    partial_role_pattern = rf"\bPART\s+(?:{role_pattern})\b"
+    uncertain_pattern = _scope_uncertainty_pattern(partial_role_pattern)
+    return f"""
+    SELECT
+        * EXCLUDE (__premise_segments, __premise_parse_address),
+        map_from_entries(list_filter(
+            [{map_entry_sql}], lambda entry: len(struct_extract(entry, 'value')) > 0
+        )) AS premise_keys,
+        len(map_keys(premise_keys)) > 0 AND (
+            regexp_matches(__premise_parse_address, '{uncertain_pattern}')
+            OR len(list_filter(__premise_segments, lambda segment:
+                regexp_matches(segment, '{role_range_pattern}')
+            )) > 0
+        ) AS premise_scope_uncertain
+    FROM (
+        SELECT *, upper(coalesce(clean_full_address, '')) AS __premise_parse_address
+        FROM {{business_unit}}
+    ) AS input
+    """
+
+
+def _floor_key_set_sql(floor_names: list[str]) -> str:
+    floor_token_pattern = (
+        "(?:" + "|".join((*floor_names, r"\d{1,2}(?:ST|ND|RD|TH)")) + ")"
+    )
+    floor_list_pattern = (
+        rf"\b{floor_token_pattern}(?:\s*(?:AND|,|&)\s*"
+        rf"{floor_token_pattern})*\s+FLOORS?\b"
+    )
+    floor_range_pattern = (
+        rf"\b{floor_token_pattern}\s*(?:-|TO|THROUGH)\s*"
+        rf"{floor_token_pattern}\s+FLOORS?\b"
+    )
+    ordinal_cases = []
+    for number, name in enumerate(floor_names[3:-1], start=1):
+        suffix = {1: "ST", 2: "ND", 3: "RD"}.get(number, "TH")
+        ordinal_cases.append(f"WHEN '{number}{suffix}' THEN '{name}'")
+    floor_normalisation = (
+        "CASE floor_name " + " ".join(ordinal_cases) + " ELSE floor_name END"
+    )
+    uncertain_pattern = _scope_uncertainty_pattern(
+        floor_range_pattern, r"\bTOP\s+FLOORS?\b"
+    )
+    return f"""
+    SELECT
+        * EXCLUDE (__floor_parse_address),
+        list_sort(list_distinct(list_transform(
+            flatten(list_transform(
+                regexp_extract_all(__floor_parse_address, '{floor_list_pattern}', 0),
+                lambda segment: regexp_extract_all(segment, '{floor_token_pattern}', 0)
+            )),
+            lambda floor_name: {floor_normalisation}
+        ))) AS floor_keys,
+        len(floor_keys) > 0
+            AND regexp_matches(__floor_parse_address, '{uncertain_pattern}')
+            AS floor_scope_uncertain
+    FROM (
+        SELECT *, upper(coalesce(clean_full_address, '')) AS __floor_parse_address
+        FROM {{flat_identity}}
+    ) AS input
+    """
+
+
 GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
     CASE
         WHEN token in ('FIRST', 'SECOND', 'THIRD', 'TOP') THEN ['UPPERFLOOR', 'LEVEL']
@@ -965,7 +1111,7 @@ def _generalised_token_aliases():
     SELECT
         *,
         flatten(
-            list_transform(distinguishing_adj_start_tokens, token ->
+            list_transform(distinguishing_adj_start_tokens, lambda token:
                {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
             )
         ) AS distinguishing_adj_token_aliases
@@ -990,7 +1136,7 @@ def _address_structure_premise_sql() -> str:
         "BAY",
     ]
     premise_pattern = "|".join(address_structure_premise_patterns)
-    identifier_pattern = r"[A-Za-z]?\d{1,4}[A-Za-z]?|[A-Za-z]"
+    identifier_pattern = _premise_identifier_pattern()
     address_for_parsing = _address_for_parsing("input.clean_full_address")
     return f"""
     SELECT
@@ -1073,7 +1219,7 @@ def _derive_distinguishing_token_components():
             input.*,
             list_filter(
                 range(1, len(input.distinguishing_adj_start_tokens) + 1),
-                position -> list_extract(
+                lambda position: list_extract(
                     input.distinguishing_adj_start_tokens, position
                 ) IN ({marker_values})
                 OR (
@@ -1095,18 +1241,18 @@ def _derive_distinguishing_token_components():
         marked.* EXCLUDE (__structural_positions),
         list_transform(
             __structural_positions,
-            position -> list_extract(distinguishing_adj_start_tokens, position)
+            lambda position: list_extract(distinguishing_adj_start_tokens, position)
         ) AS distinguishing_structural_tokens,
         list_transform(
             distinguishing_adj_start_tokens,
-            (token, position) -> struct_pack(
+            lambda token, position: struct_pack(
                 token := token,
                 is_lexical := NOT list_contains(__structural_positions, position)
             )
         ) AS distinguishing_token_parts,
         list_filter(
             distinguishing_adj_start_tokens,
-            (token, position) -> NOT list_contains(__structural_positions, position)
+            lambda token, position: NOT list_contains(__structural_positions, position)
         ) AS distinguishing_lexical_tokens
     FROM marked
     """

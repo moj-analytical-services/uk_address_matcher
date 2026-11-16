@@ -1,4 +1,5 @@
 {
+	"UKAM_GWYNEDD_DATA_PATH": "/path/to/gwynedd/",
 	"UKAM_ABERDEENSHIRE_DATA_PATH": "/path/to/local/aberdeenshire/",
 	"UKAM_LAMBETH_DATA_PATH": "/path/to/local/lambeth/",
 	"UKAM_HACKNEY_DATA_PATH": "/path/to/local/hackney/",

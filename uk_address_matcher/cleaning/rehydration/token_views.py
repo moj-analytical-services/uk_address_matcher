@@ -50,7 +50,7 @@ def _distinguishing_lexical_tokens_expression(
     return f"""
         list_filter(
             {token_column},
-            (token, position) -> NOT (
+            lambda token, position: NOT (
                 token IN ({marker_values})
                 OR (
                     position > 1
@@ -71,11 +71,11 @@ def _distinguishing_token_parts_view_expressions(
 ) -> dict[str, str]:
     return {
         "distinguishing_adj_start_tokens": (
-            f"list_transform({parts_column}, part -> part.token) "
+            f"list_transform({parts_column}, lambda part: part.token) "
             "AS distinguishing_adj_start_tokens"
         ),
         "distinguishing_lexical_tokens": (
-            f"list_transform(list_filter({parts_column}, part -> part.is_lexical), "
-            "part -> part.token) AS distinguishing_lexical_tokens"
+            f"list_transform(list_filter({parts_column}, lambda part: part.is_lexical), "
+            "lambda part: part.token) AS distinguishing_lexical_tokens"
         ),
     }

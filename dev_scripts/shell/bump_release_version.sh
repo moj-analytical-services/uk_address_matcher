@@ -3,11 +3,11 @@
 # Bump package version and push a release branch.
 #
 # Usage:
-#   chmod +x ./shell/bump_release_version.sh
-#   ./shell/bump_release_version.sh <new_version>
+#   chmod +x ./dev_scripts/shell/bump_release_version.sh
+#   ./dev_scripts/shell/bump_release_version.sh <new_version>
 #
 # Example:
-#   ./shell/bump_release_version.sh 1.0.0
+#   ./dev_scripts/shell/bump_release_version.sh 1.0.0
 #
 # The script updates the package version and uv.lock, commits the changes to
 # release/<version>, and pushes that branch for review. It does not publish.
@@ -63,7 +63,7 @@ fi
 
 # Find repository root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 INIT_FILE="$REPO_ROOT/uk_address_matcher/__init__.py"
 PYPROJECT_FILE="$REPO_ROOT/pyproject.toml"

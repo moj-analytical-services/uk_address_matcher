@@ -109,8 +109,10 @@ def _find_operating_point(
     *,
     precision_target: float,
 ) -> tuple[float | None, float | None]:
-    row = con.sql(
-        f"""
+    row = next(
+        iter(
+            con.sql(
+                f"""
         SELECT
             truth_threshold,
             recall
@@ -120,7 +122,12 @@ def _find_operating_point(
         ORDER BY recall DESC, truth_threshold ASC
         LIMIT 1
         """
-    ).fetchone()
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
     if row is None:
         return None, None
     threshold_value, recall_value = row
@@ -190,8 +197,10 @@ def _build_threshold_summary(
             )
             return summary
 
-        threshold_row = con.sql(
-            f"""
+        threshold_row = next(
+            iter(
+                con.sql(
+                    f"""
             WITH canonical_ids AS (
                 SELECT DISTINCT CAST(unique_id AS VARCHAR) AS unique_id
                 FROM __ukam_threshold_canonical__
@@ -271,7 +280,12 @@ def _build_threshold_summary(
                 true_no_match_forced_to_canonical_id_count
             FROM counts
             """
-        ).fetchone()
+                )
+                .limit(1)
+                .fetchall()
+            ),
+            None,
+        )
 
         summary.update(
             {
