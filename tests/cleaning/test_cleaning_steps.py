@@ -743,9 +743,7 @@ def test_parse_out_flat_positional():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(
-        _parse_out_sub_premise, input_relation, connection
-    )
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     positional_idx = columns.index("flat_positional")

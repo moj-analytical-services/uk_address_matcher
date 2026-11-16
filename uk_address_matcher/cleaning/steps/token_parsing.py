@@ -422,8 +422,18 @@ def _parse_out_sub_premise():
     prefix_words = "|".join(
         floor_with_suffix
         + standalone_floors
-        + ["ATTIC", "MEZZANINE", "FLOORS?", "FRONT", "REAR", "LEFT", "RIGHT",
-           "CENTRE", "CENTER", "AND"]
+        + [
+            "ATTIC",
+            "MEZZANINE",
+            "FLOORS?",
+            "FRONT",
+            "REAR",
+            "LEFT",
+            "RIGHT",
+            "CENTRE",
+            "CENTER",
+            "AND",
+        ]
     )
     prefix = rf"^\s*(?:(?:{prefix_words})[, ]+)*"
     building_number = r"[0-9]{1,5}[A-Z]?(?:-[0-9]{1,5}[A-Z]?)?"
@@ -438,9 +448,7 @@ def _parse_out_sub_premise():
     first_descriptor = (
         rf"regexp_extract({address_for_parsing}, '\b(?:{descriptors})S?\s+.*', 0)"
     )
-    split_identifier = (
-        rf"^\s*([0-9]{{1,4}}[A-Z]?)\s+AT\s+{building_number}(?:\s|$)"
-    )
+    split_identifier = rf"^\s*([0-9]{{1,4}}[A-Z]?)\s+AT\s+{building_number}(?:\s|$)"
     explicit_sql = rf"""
     SELECT input.*,
         {address_for_parsing} AS __sub_premise_address,
@@ -451,7 +459,7 @@ def _parse_out_sub_premise():
             CASE WHEN regexp_matches(upper(input.original_address_concat),
                     '{scottish_flat}')
                 THEN regexp_extract(
-                    {_address_for_parsing('upper(input.original_address_concat)')},
+                    {_address_for_parsing("upper(input.original_address_concat)")},
                     '\bF?FLAT\s+.*', 0)
                 WHEN regexp_matches({address_for_parsing},
                     '{prefix}(?:{descriptors})S?\s+(?:{identifier})\b')

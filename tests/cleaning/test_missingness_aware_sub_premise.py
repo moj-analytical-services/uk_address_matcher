@@ -263,32 +263,33 @@ def test_explicit_unit_evidence_outweighs_misleading_flat_and_floor_matches(duck
         scores[pair] = row
 
     for messy_id, correct_id, incorrect_id in (
-        ('m_unit_4', 'c_unit_4', 'c_flat_4'),
-        ('m_unit_2b', 'c_unit_2b', 'c_flat_2'),
-        ('m_unit_4_floor', 'c_unit_4_floor', 'c_flat_2_floor'),
-        ('m_unit_4_floor', 'c_unit_4_floor', 'c_unit_2_floor'),
-        ('m_unit_n4', 'c_unit_n4', 'c_unit_n5'),
+        ("m_unit_4", "c_unit_4", "c_flat_4"),
+        ("m_unit_2b", "c_unit_2b", "c_flat_2"),
+        ("m_unit_4_floor", "c_unit_4_floor", "c_flat_2_floor"),
+        ("m_unit_4_floor", "c_unit_4_floor", "c_unit_2_floor"),
+        ("m_unit_n4", "c_unit_n4", "c_unit_n5"),
     ):
         correct = scores[(correct_id, messy_id)]
         incorrect = scores[(incorrect_id, messy_id)]
         assert correct.match_weight > incorrect.match_weight
         assert correct.bf_sub_premise_identifier == pytest.approx(4)
 
-    same_identifier = scores[('c_flat_8', 'm_studio_8')]
+    same_identifier = scores[("c_flat_8", "m_studio_8")]
     assert math.log2(same_identifier.bf_sub_premise_identifier) == pytest.approx(1)
     assert same_identifier.bf_flat_identity == pytest.approx(1)
 
-    conflicting_identifier = scores[('c_studio_11', 'm_flat_g07')]
-    assert math.log2(
-        conflicting_identifier.bf_sub_premise_identifier
-    ) == pytest.approx(-10)
+    conflicting_identifier = scores[("c_studio_11", "m_flat_g07")]
+    assert math.log2(conflicting_identifier.bf_sub_premise_identifier) == pytest.approx(
+        -10
+    )
 
 
 def test_recovery_ablation_removes_redundant_exact_identifier_level():
     settings = _get_missing_marker_recovery_settings().create_settings_dict("duckdb")
     for comparison in settings["comparisons"]:
         if comparison["output_column_name"] in (
-            "flat_identity", "sub_premise_identifier"
+            "flat_identity",
+            "sub_premise_identifier",
         ):
             assert all(
                 re.search(r"\bclean_full_address_[lr]\b", level["sql_condition"]) is None

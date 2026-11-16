@@ -150,8 +150,13 @@ def test_prepare_creates_expected_files(prepared_folder, con):
         str(prepared_folder / "ukam_canonical_addresses.parquet")
     ).columns
     assert not {
-        "sub_premise_details", "business_unit_type", "business_unit_id",
-        "has_business_unit", "has_flat_indicator", "flat_identity", "flat_floor_prefixes",
+        "sub_premise_details",
+        "business_unit_type",
+        "business_unit_id",
+        "has_business_unit",
+        "has_flat_indicator",
+        "flat_identity",
+        "flat_floor_prefixes",
     }.intersection(stored_columns)
     assert "sub_premise_building_number" in stored_columns
     assert "flat_letter" in stored_columns
