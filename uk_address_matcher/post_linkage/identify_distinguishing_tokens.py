@@ -12,6 +12,45 @@ from uk_address_matcher.sql_pipeline.helpers import (
 )
 
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
+_DEPTH_POSITIONS_SQL = "('FRONT', 'REAR', 'CENTRE')"
+
+
+def _sibling_location_join_sql(
+    shortlist: str,
+    messy: DuckDBPyRelation,
+    canonical: DuckDBPyRelation,
+) -> str:
+    return f"""
+        LEFT JOIN (
+            WITH positioned_pairs AS (
+                SELECT candidate.ukam_address_id_r, candidate.unique_id_l,
+                    messy.sub_premise_location AS messy_location
+                FROM {shortlist} AS candidate
+                JOIN ({messy.sql_query()}) AS messy
+                    ON messy.ukam_address_id = candidate.ukam_address_id_r
+                WHERE messy.sub_premise_location IN {_DEPTH_POSITIONS_SQL}
+            ),
+            canonical_locations AS (
+                SELECT candidate.unique_id_l,
+                    min(canonical.parentuprn) AS parentuprn,
+                    min(canonical.sub_premise_location) AS canonical_location
+                FROM (SELECT DISTINCT unique_id_l FROM positioned_pairs) AS candidate
+                JOIN ({canonical.sql_query()}) AS canonical
+                    ON canonical.unique_id::VARCHAR = candidate.unique_id_l::VARCHAR
+                GROUP BY candidate.unique_id_l
+                HAVING count(DISTINCT canonical.parentuprn) = 1
+                    AND count(DISTINCT canonical.sub_premise_location) = 1
+                    AND min(canonical.sub_premise_location) IN {_DEPTH_POSITIONS_SQL}
+            )
+            SELECT ukam_address_id_r, unique_id_l,
+                canonical_location <> messy_location
+                    AND bool_or(canonical_location = messy_location) OVER (
+                        PARTITION BY ukam_address_id_r, parentuprn
+                    ) AS sibling_location_conflict
+            FROM positioned_pairs
+            JOIN canonical_locations USING (unique_id_l)
+        ) AS positions USING (ukam_address_id_r, unique_id_l)
+    """
 
 
 def improve_predictions_using_distinguishing_tokens(
@@ -380,15 +419,35 @@ def improve_predictions_using_distinguishing_tokens(
             if "common_end_tokens_hist_r" in df_predict.columns
             else "CAST([] AS VARCHAR[])"
         )
+        sibling_location_join = ""
+        sibling_location_conflict = "FALSE"
+        if (
+            df_addresses_to_match is not None
+            and df_addresses_to_search_within is not None
+            and {"ukam_address_id", "sub_premise_location"}.issubset(
+                df_addresses_to_match.columns
+            )
+            and {"unique_id", "parentuprn", "sub_premise_location"}.issubset(
+                df_addresses_to_search_within.columns
+            )
+        ):
+            # The highest-scoring alias may omit the position. Only apply extra
+            # evidence when another shortlisted UPRN at that parent agrees.
+            sibling_location_join = _sibling_location_join_sql(
+                reranker_source, df_addresses_to_match, df_addresses_to_search_within
+            )
+            sibling_location_conflict = "positions.sibling_location_conflict"
         con.sql(f"""
             WITH intermediate AS (
                 SELECT
                     {source_projection},
+                    {sibling_location_conflict} AS sibling_location_conflict,
                     {common_end_tokens_expression} AS common_end_tokens_r,
                     {full_address_tokens_l_sql} AS __full_address_tokens_l,
                     {full_address_tokens_r_sql} AS __full_address_tokens_r
                 FROM {reranker_source} AS source
                 {token_lookup_joins}
+                {sibling_location_join}
             ),
             enriched AS (
                 SELECT
@@ -505,6 +564,7 @@ def improve_predictions_using_distinguishing_tokens(
                     statistics.bigrams_r,
                     {range_intermediate_columns}
                     {retained_columns}
+                    candidate.sibling_location_conflict,
                     list_distinct(
                         list_filter(
                             {candidate_tokens_l_sql},
@@ -598,14 +658,13 @@ def improve_predictions_using_distinguishing_tokens(
                     COALESCE(len(missing_tokens), 0)::DOUBLE * {MISSING_TOKEN_PENALTY}
                         AS missing_token_penalty,
                     CASE
-                        WHEN COALESCE(len(positional_tokens_l), 0) > 0
+                        WHEN sibling_location_conflict OR (
+                            COALESCE(len(positional_tokens_l), 0) > 0
                             AND COALESCE(len(positional_tokens_r), 0) > 0
-                            AND COALESCE(
-                                len(list_intersect(
-                                    positional_tokens_l, positional_tokens_r
-                                )),
-                                0
-                            ) = 0
+                            AND COALESCE(len(list_intersect(
+                                positional_tokens_l, positional_tokens_r
+                            )), 0) = 0
+                        )
                         THEN {POSITIONAL_CONFLICT_PENALTY}
                         ELSE 0.0
                     END AS positional_conflict_penalty

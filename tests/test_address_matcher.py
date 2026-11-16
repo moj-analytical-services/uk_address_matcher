@@ -238,11 +238,10 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
             for frame in linker._input_tables_dict.values()
             if frame.dataset_display_name == "c_"
         )
-        assert (
-            canonical_frame.as_duckdbpyrelation()
-            .select("cached_number, cached_enum")
-            .fetchall()
-            == [(123456789012345678901234567890, "canonical")] * len(CANONICAL_RECORDS)
+        assert canonical_frame.as_duckdbpyrelation().select(
+            "cached_number, cached_enum"
+        ).fetchall() == [(123456789012345678901234567890, "canonical")] * len(
+            CANONICAL_RECORDS
         )
         if fail_on_second_chunk and len(cached_files) == 2:
             raise RuntimeError("stop on second chunk")
@@ -872,7 +871,6 @@ def test_inferred_road_scoring_without_road_catalogue_still_matches(
         canonical_data,
         output_folder=prepared_folder,
         con=con,
-        _derive_road_catalogue=True,
         overwrite=True,
     )
 

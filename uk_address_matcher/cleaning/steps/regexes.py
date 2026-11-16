@@ -5,8 +5,16 @@ def remove_commas_periods(input: str):
     return f"regexp_replace({input}, '[,.]', ' ', 'g')"
 
 
+def remove_brackets(input: str):
+    return f"regexp_replace({input}, '[][()]', ' ', 'g')"
+
+
 def remove_apostrophes(input: str):
     return f"regexp_replace({input}, e'\\'', '', 'g')"
+
+
+def remove_curly_apostrophes(input: str):
+    return f"regexp_replace({input}, chr(8217), '', 'g')"
 
 
 def replace_non_numeric_adjacent_underscores(input: str):
@@ -15,6 +23,18 @@ def replace_non_numeric_adjacent_underscores(input: str):
 
 def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
+
+
+def replace_en_dash_with_space(input: str):
+    return f"regexp_replace({input}, chr(8211), ' ', 'g')"
+
+
+def replace_non_breaking_space_with_space(input: str):
+    return f"regexp_replace({input}, chr(160), ' ', 'g')"
+
+
+def strip_latin_accents(input: str):
+    return f"strip_accents({input})"
 
 
 def merge_split_flat_number(input: str):
@@ -40,11 +60,9 @@ def standarise_num_dash_num(input: str):
         str: The standardized string with numeric ranges formatted correctly.
     """
     regex_pattern = (
-        r"(?<![A-Za-z])"  # Ensure preceding character is not a letter.
-        r"(\d+[A-Za-z]?)"  # Matches a number with an optional single letter
+        r"\b(\d+[A-Za-z]?)"  # Match a number with an optional single letter
         r"\s*-\s*"  # Matches spaces around a dash
-        r"(\d+[A-Za-z]?)"  # Another number with an optional single letter.
-        r"(?![A-Za-z])"  # Ensure following character is not a letter.
+        r"(\d+[A-Za-z]?)\b"  # Require a word boundary after the range.
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
@@ -63,32 +81,27 @@ def split_letter_dash_letter(input: str):
     return f"regexp_replace({first_pass}, '{pattern}', '{replacement}', 'g')"
 
 
-# TODO:  PROBABLY NO LONGER NEEDED
 def remove_repeated_tokens(input: str):
-    """
-    If a token that's at least four characters long is repeated,
-    remove the second instance.
-
-    Examples:
-        'word word' -> 'word'
-        'test test' -> 'test'
-        'hello hello world' -> 'hello world'
-        'this this is is a a test test' -> 'this is a test'
-
-    Args:
-        input (str): The input string to process.
-
-    Returns:
-        str: The string with repeated tokens removed.
-    """
-    regex_pattern = (
-        r"\b"  # Word boundary
-        r"(\w{4,})"  # Matches a word that is at least four characters long
-        r"\s+"  # Matches one or more whitespace characters
-        r"\1"  # Matches the same word captured in the first group
-        r"\b"  # Word boundary
+    """Collapse adjacent duplicate tokens of at least four characters."""
+    tokens = f"string_split({input}, ' ')"
+    previous_tokens = (
+        "list_concat("
+        f"list_value(chr(32))::VARCHAR[], list_slice({tokens}, 1, len({tokens}) - 1)"
+        ")"
     )
-    return f"regexp_replace({input}, '{regex_pattern}', '\\1', 'g')"
+    token_pairs = f"list_zip({tokens}, {previous_tokens})"
+    unique_token_pairs = (
+        f"list_filter({token_pairs}, lambda pair: len(pair[1]) < 4 OR pair[1] <> pair[2])"
+    )
+    return f"""
+    CASE
+        WHEN {input} IS NULL THEN NULL
+        ELSE array_to_string(
+            list_transform({unique_token_pairs}, lambda pair: pair[1]),
+            ' '
+        )
+    END
+    """
 
 
 def trim(input: str):

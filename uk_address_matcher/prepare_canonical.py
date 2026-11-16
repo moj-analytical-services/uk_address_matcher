@@ -551,7 +551,7 @@ def prepare_canonical_folder(
     output_folder: str | Path,
     *,
     con: duckdb.DuckDBPyConnection,
-    num_of_chunks: int = 10,
+    cleaning_num_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
@@ -581,8 +581,10 @@ def prepare_canonical_folder(
             path, or a non-empty list of CSV/Parquet paths.
         output_folder: Folder to write prepared artefacts to.
         con: DuckDB connection.
-        num_of_chunks: Number of chunks to split the data into for cleaning
-            and term frequency derivation. Set to 1 for no chunking.
+        cleaning_num_chunks: Number of processing chunks for cleaning and term
+            frequency derivation, also used to batch postcode-local keys and road
+            parsing. Postcode batches retain whole districts and road fallback
+            groups, so small inputs can use fewer batches. Set to 1 for no chunking.
         output_chunk_count: Number of output chunks to write for canonical
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write contiguous globally ordered chunks under
@@ -611,12 +613,13 @@ def prepare_canonical_folder(
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
     """
+    _validate_chunk_count(cleaning_num_chunks, name="cleaning_num_chunks")
     with _CanonicalIntermediates(con) as storage:
         _prepare_canonical_folder(
             data,
             output_folder,
             con=con,
-            num_of_chunks=num_of_chunks,
+            num_of_chunks=cleaning_num_chunks,
             output_chunk_count=output_chunk_count,
             derive_distinguishing_wrt_adjacent_records=(
                 derive_distinguishing_wrt_adjacent_records
@@ -761,6 +764,7 @@ def _prepare_canonical_folder(
         singleton_trigram_index=(
             inverted_index if derive_district_singleton_trigrams else None
         ),
+        num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
         _storage=_storage,
     )

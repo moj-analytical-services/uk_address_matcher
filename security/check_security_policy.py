@@ -29,7 +29,7 @@ PROTECTED_PATHS = (
     "dev_scripts/*security*.py",
     "tests/test_security_checks.py",
     "scripts/release.py",
-    "scripts/prepare-release.sh",
+    "dev_scripts/shell/prepare-release.sh",
     "tests/test_release_process.py",
     ".github/release-*.json",
     "SECURITY.md",

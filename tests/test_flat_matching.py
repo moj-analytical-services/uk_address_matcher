@@ -612,3 +612,39 @@ def test_sub_premise_location_discrimination_in_reranker():
         "Expected the positional conflict to demote the LEFT sibling by ~one penalty; "
         f"got gap={mw_missing - mw_left:.3f}."
     )
+
+
+def test_reranker_uses_sibling_locations_from_other_aliases():
+    con = duckdb.connect()
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'front', 10, NULL), (2, 'front', 10, 'FRONT'),
+            (3, 'rear', 10, NULL), (4, 'rear', 10, 'REAR'),
+            (5, 'other_parent', 20, 'REAR'),
+            (6, 'ambiguous', 10, 'FRONT'), (7, 'ambiguous', 10, 'REAR')
+        ) AS t(ukam_address_id, unique_id, parentuprn, sub_premise_location)
+    """)
+    messy = con.sql("SELECT 100 AS ukam_address_id, 'FRONT' AS sub_premise_location")
+    predictions = con.sql("""
+        SELECT *, 100 AS ukam_address_id_r, 'input' AS unique_id_r,
+            0.5 AS match_probability, 'FLAT 20 HIGH STREET' AS clean_full_address_l,
+            'FLAT FRONT 20 HIGH STREET' AS clean_full_address_r,
+            'E1 6AA' AS postcode_l, 'E1 6AA' AS postcode_r
+        FROM (VALUES (1, 'front', 10.0), (3, 'rear', 13.0),
+            (5, 'other_parent', 8.0), (6, 'ambiguous', 7.5))
+        AS t(ukam_address_id_l, unique_id_l, match_weight)
+    """)
+    result = improve_predictions_using_distinguishing_tokens(
+        con=con,
+        df_predict=predictions,
+        df_addresses_to_match=messy,
+        df_addresses_to_search_within=canonical,
+    )
+    assert result.order("match_weight DESC").project(
+        "unique_id_l, positional_conflict_penalty"
+    ).fetchall() == [
+        ("front", 0),
+        ("other_parent", 0),
+        ("ambiguous", 0),
+        ("rear", 6),
+    ]

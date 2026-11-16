@@ -85,13 +85,15 @@ class ExactMatchStage(MatchingStage):
 
     Set ``enable_flat_retraction=False`` to skip phase 3.
 
+    By default, candidates must resolve to one distinct canonical entity.
+
     Set ``inward_postcode_levenshtein`` to a positive integer to allow the
     exact-address phase to tolerate that many inward postcode edits; the
     default ``0`` skips the fuzzy postcode phase.
     """
 
     enable_flat_retraction: bool = True
-    require_unique_match: bool = False
+    require_unique_match: bool = True
     inward_postcode_levenshtein: int = 0
 
     def __post_init__(self) -> None:
@@ -141,7 +143,7 @@ def _exact_matches(
     messy_input_name: MessyInputName = "__ukam__tmp_messy_addresses",
     *,
     enable_flat_retraction: bool = True,
-    require_unique_match: bool = False,
+    require_unique_match: bool = True,
     inward_postcode_levenshtein: int = 0,
 ) -> list[CTEStep]:
     """Find deterministic matches using exact, no-whitespace and FLAT phases.
@@ -300,45 +302,27 @@ def _exact_matches(
         SELECT * FROM {no_ws_candidates}
     """
 
-    if require_unique_match:
-        unique_candidates_sql = """
-            SELECT candidates.*
-            FROM {all_ranked_candidates} AS candidates
-            SEMI JOIN (
-                SELECT ukam_address_id
-                FROM {all_ranked_candidates}
-                GROUP BY ukam_address_id
-                HAVING COUNT(DISTINCT resolved_canonical_id) = 1
-            ) AS unique_messy
-                ON unique_messy.ukam_address_id = candidates.ukam_address_id
-        """
-        candidate_source = "unique_exact_candidates"
-    else:
-        candidate_source = "all_ranked_candidates"
-
-    ranked_pre_flat_candidates_sql = f"""
-        SELECT
-            candidates.ukam_address_id,
-            candidates.canonical_ukam_address_id,
-            candidates.resolved_canonical_id,
-            candidates.match_reason,
-            ROW_NUMBER() OVER (
-                PARTITION BY candidates.ukam_address_id
-                ORDER BY
-                    candidates.match_priority,
-                    candidates.canonical_ukam_address_id
-            ) AS rn
-        FROM {{{candidate_source}}} AS candidates
+    best_candidate_sql = """
+        row_number() OVER (
+            PARTITION BY ukam_address_id
+            ORDER BY match_priority, canonical_ukam_address_id
+        ) = 1
     """
+    if require_unique_match:
+        best_candidate_sql += """
+            AND count(DISTINCT resolved_canonical_id) OVER (
+                PARTITION BY ukam_address_id, match_priority
+            ) = 1
+        """
 
-    pre_flat_matches_sql = """
+    pre_flat_matches_sql = f"""
         SELECT
             ukam_address_id,
             canonical_ukam_address_id,
             resolved_canonical_id,
             match_reason
-        FROM {ranked_pre_flat_candidates}
-        WHERE rn = 1
+        FROM {{all_ranked_candidates}}
+        QUALIFY {best_candidate_sql}
     """
 
     steps = [
@@ -347,14 +331,8 @@ def _exact_matches(
         CTEStep("exact_candidates", exact_candidates_sql),
         CTEStep("no_ws_candidates", no_ws_candidates_sql),
         CTEStep("all_ranked_candidates", all_ranked_candidates_sql),
-        CTEStep("ranked_pre_flat_candidates", ranked_pre_flat_candidates_sql),
         CTEStep("pre_flat_matches", pre_flat_matches_sql),
     ]
-    if require_unique_match:
-        steps.insert(
-            5,
-            CTEStep("unique_exact_candidates", unique_candidates_sql),
-        )
 
     if enable_flat_retraction:
         flat_compatibility_condition = _flat_field_compatibility_sql()
@@ -476,7 +454,9 @@ def _exact_matches(
                 canon.canonical_ukam_address_id,
                 canon.canonical_unique_id AS resolved_canonical_id,
                 '{MatchReason.EXACT_PARTIAL_POSTCODE.value}'::ENUM {enum_values}
-                    AS match_reason
+                    AS match_reason,
+                CASE WHEN messy.clean_full_address = canon.clean_full_address
+                    THEN 1 ELSE 2 END AS match_priority
             FROM {{fuzzy_messy_residual}} AS messy
             INNER JOIN {{canon_keys}} AS canon
                 ON split_part(messy.postcode, ' ', 1)
@@ -486,35 +466,18 @@ def _exact_matches(
                     split_part(canon.postcode, ' ', 2)
                 ) <= {inward_postcode_levenshtein}
                 AND messy.postcode <> canon.postcode
+                AND messy.clean_full_address_no_ws = canon.clean_full_address_no_ws
                 AND (
                     messy.clean_full_address = canon.clean_full_address
                     OR (
-                        messy.clean_full_address <> canon.clean_full_address
-                        AND messy.clean_full_address_no_ws
-                            = canon.clean_full_address_no_ws
+                        messy.clean_full_address_no_ws <> ''
                         AND regexp_extract_all(messy.clean_full_address, '[0-9]+')
                             = regexp_extract_all(canon.clean_full_address, '[0-9]+')
-                        AND messy.clean_full_address_no_ws <> ''
                     )
                 )
             WHERE split_part(messy.postcode, ' ', 2) <> ''
             AND split_part(canon.postcode, ' ', 2) <> ''
         """
-
-        fuzzy_candidate_source = "fuzzy_candidates"
-        if require_unique_match:
-            fuzzy_unique_candidates_sql = """
-                SELECT candidates.*
-                FROM {fuzzy_candidates} AS candidates
-                SEMI JOIN (
-                    SELECT ukam_address_id
-                    FROM {fuzzy_candidates}
-                    GROUP BY ukam_address_id
-                    HAVING COUNT(DISTINCT resolved_canonical_id) = 1
-                ) AS unique_messy
-                    ON unique_messy.ukam_address_id = candidates.ukam_address_id
-            """
-            fuzzy_candidate_source = "fuzzy_unique_candidates"
 
         fuzzy_matches_sql = f"""
             SELECT
@@ -522,11 +485,8 @@ def _exact_matches(
                 canonical_ukam_address_id,
                 resolved_canonical_id,
                 match_reason
-            FROM {{{fuzzy_candidate_source}}}
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY ukam_address_id
-                ORDER BY canonical_ukam_address_id
-            ) = 1
+            FROM {{fuzzy_candidates}}
+            QUALIFY {best_candidate_sql}
         """
 
         steps.extend(
@@ -535,8 +495,6 @@ def _exact_matches(
                 CTEStep("fuzzy_candidates", fuzzy_candidates_sql),
             ]
         )
-        if require_unique_match:
-            steps.append(CTEStep("fuzzy_unique_candidates", fuzzy_unique_candidates_sql))
         steps.extend(
             [
                 CTEStep("fuzzy_matches", fuzzy_matches_sql),
