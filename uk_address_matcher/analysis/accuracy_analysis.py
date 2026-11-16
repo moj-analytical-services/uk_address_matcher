@@ -67,6 +67,19 @@ def build_threshold_selection_chart_definition(
     return chart
 
 
+def build_distinguishability_match_weight_chart_definition(
+    records: list[dict[str, Any]],
+    add_metrics: list[str] | None = None,
+) -> dict[str, Any]:
+    del add_metrics
+    plot_records = _visual_chart_records(records)
+    chart = _load_chart_definition("distinguishability_match_weight.json")
+    chart["data"]["values"] = plot_records
+    if chart.get("params"):
+        chart["params"][0]["name"] = f"grid_{uuid4().hex}"
+    return chart
+
+
 def build_match_weight_rounding_expression(
     match_weight_round_to_nearest: float | None,
 ) -> str:
