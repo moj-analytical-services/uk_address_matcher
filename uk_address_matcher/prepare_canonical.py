@@ -23,6 +23,7 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
 )
 from uk_address_matcher.cleaning.steps.inverted_index import (
     BASE_INDEX_PORTFOLIO,
+    TRIGRAM_SINGLETON_DISTRICT_INDEX,
 )
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
@@ -521,6 +522,16 @@ def _build_manifest(
     """Build the manifest payload shared by local and remote writers."""
     from uk_address_matcher import __version__
 
+    physical_indexes = [
+        {
+            "name": strategy.name,
+            "maximum_posting_size": strategy.maximum_posting_size,
+        }
+        for strategy in (
+            *BASE_INDEX_PORTFOLIO.physical_indexes,
+            TRIGRAM_SINGLETON_DISTRICT_INDEX,
+        )
+    ]
     return {
         "ukam_version": __version__,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -529,13 +540,7 @@ def _build_manifest(
         "preparation_options": preparation_options,
         "inverted_index_portfolio": {
             "name": BASE_INDEX_PORTFOLIO.name,
-            "physical_indexes": [
-                {
-                    "name": strategy.name,
-                    "maximum_posting_size": strategy.maximum_posting_size,
-                }
-                for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
-            ],
+            "physical_indexes": physical_indexes,
         },
         "files": files_meta,
     }
@@ -597,6 +602,7 @@ def prepare_canonical_folder(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
+
     Raises:
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
@@ -615,7 +621,6 @@ def prepare_canonical_folder(
             overwrite=overwrite,
             add_debug_features=add_debug_features,
             show_progress=show_progress,
-            _derive_road_catalogue=True,
             _storage=storage,
         )
 
@@ -631,7 +636,6 @@ def _prepare_canonical_folder(
     overwrite: bool,
     add_debug_features: bool,
     show_progress: ShowProgress,
-    _derive_road_catalogue: bool,
     _storage: _CanonicalIntermediates | None,
 ) -> None:
     from uk_address_matcher.cleaning.chunking_strategies import (
@@ -741,29 +745,29 @@ def _prepare_canonical_folder(
         show_progress=progress_mode,
         _storage=_storage,
     )
-
-    roadlike_places, local_features = _derive_postcode_features(
+    base_inverted_index_rows = inverted_index.count("*").fetchall()[0][0]
+    roadlike_places, local_features, updated_inverted_index = _derive_postcode_features(
         df_clean,
         con,
         include_local_keys=True,
-        include_road_catalogue=_derive_road_catalogue,
+        singleton_trigram_index=inverted_index,
         num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
         _storage=_storage,
     )
-    road_features = None
-    if _derive_road_catalogue:
-        logger.debug("Deriving canonical road blocking keys")
-        road_features = _add_canonical_road_blocking_keys(
-            df_clean,
-            con,
-            num_of_chunks=num_of_chunks,
-            roadlike_places=roadlike_places,
-            # Precleaning assigned and stored one unique ID per canonical row.
-            _stored_unique_address_ids=True,
-            _storage=_storage,
-        )
-        logger.debug("Canonical road blocking keys derived")
+    if updated_inverted_index is not None:
+        inverted_index = updated_inverted_index
+    logger.debug("Deriving canonical road blocking keys")
+    road_features = _add_canonical_road_blocking_keys(
+        df_clean,
+        con,
+        num_of_chunks=num_of_chunks,
+        roadlike_places=roadlike_places,
+        # Precleaning assigned and stored one unique ID per canonical row.
+        _stored_unique_address_ids=True,
+        _storage=_storage,
+    )
+    logger.debug("Canonical road blocking keys derived")
     df_clean = _attach_canonical_features(
         df_clean,
         con,
@@ -912,6 +916,10 @@ def _prepare_canonical_folder(
         "inverted_index": idx_count,
         "canonical_output_chunks": output_chunk_count,
     }
+    manifest_row_counts[TRIGRAM_SINGLETON_DISTRICT_INDEX.name] = (
+        idx_count - base_inverted_index_rows
+    )
+    preparation_options = {"add_debug_features": add_debug_features}
     artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
     if roadlike_places is not None:
         roadlike_count = roadlike_places.count("*").fetchall()[0][0]
@@ -925,9 +933,7 @@ def _prepare_canonical_folder(
             artefact_paths=[str(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={
-                "add_debug_features": add_debug_features,
-            },
+            preparation_options=preparation_options,
         )
     else:
         _write_manifest_local(
@@ -936,9 +942,7 @@ def _prepare_canonical_folder(
             artefact_paths=[Path(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={
-                "add_debug_features": add_debug_features,
-            },
+            preparation_options=preparation_options,
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)
