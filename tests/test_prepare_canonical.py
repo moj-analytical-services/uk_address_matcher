@@ -29,7 +29,6 @@ from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
     _coerce_prepare_input_to_relation,
-    _prepare_canonical_folder,
     _PreparedCanonical,
     _rehydrate_canonical_addresses,
     load_prepared_canonical_data,
@@ -272,7 +271,7 @@ def test_larger_road_batches_preserve_fallback_scope(con, num_of_chunks):
         == source.order("ukam_address_id").select("ukam_address_id").fetchall()
     )
 
-    roads, keys = chunking_strategies._derive_postcode_features(
+    roads, keys, _ = chunking_strategies._derive_postcode_features(
         source,
         con,
         include_local_keys=True,
@@ -471,7 +470,6 @@ def test_prepared_district_singletons_use_district_scoped_lookup(con, tmp_path):
         tmp_path,
         con=con,
         cleaning_num_chunks=2,
-        derive_district_singleton_trigrams=True,
         show_progress="off",
     )
     loaded = load_prepared_canonical_data(tmp_path, con=con)
@@ -496,7 +494,7 @@ def test_prepared_district_singletons_use_district_scoped_lookup(con, tmp_path):
         ]
     )
     manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
-    assert manifest["preparation_options"]["derive_district_singleton_trigrams"]
+    assert "derive_district_singleton_trigrams" not in manifest["preparation_options"]
     assert manifest["row_counts"]["unique_postcode_district_trigram"] == 61
     assert manifest["inverted_index_portfolio"]["physical_indexes"] == [
         {"name": "bigram", "maximum_posting_size": 20},
@@ -521,9 +519,11 @@ def test_prepared_district_singletons_use_district_scoped_lookup(con, tmp_path):
         dataset_role="messy",
         show_progress="off",
     )
-    lookup_results = prepared.order("unique_id").select(
-        "exploding_unique_ids, signature_score_map, signature_unique_hits_map"
-    ).fetchall()
+    lookup_results = (
+        prepared.order("unique_id")
+        .select("exploding_unique_ids, signature_score_map, signature_unique_hits_map")
+        .fetchall()
+    )
     assert [row[0] for row in lookup_results] == [[], ["003"], ["101"], []]
     assert all(row[1] == {} and row[2] == {} for row in lookup_results)
 
@@ -590,35 +590,6 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
     }.issubset(prepared.addresses.columns)
     assert prepared.roadlike_places is not None
     assert prepared.roadlike_places.count("*").fetchall()[0][0] > 0
-
-
-def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
-    output_folder = tmp_path / "without_road_keys"
-
-    with _CanonicalIntermediates(con) as storage:
-        _prepare_canonical_folder(
-            canonical_data,
-            output_folder=output_folder,
-            con=con,
-            num_of_chunks=10,
-            output_chunk_count=1,
-            derive_distinguishing_wrt_adjacent_records=True,
-            overwrite=False,
-            add_debug_features=False,
-            show_progress="off",
-            _derive_road_catalogue=False,
-            _storage=storage,
-        )
-    prepared = load_prepared_canonical_data(output_folder, con)
-
-    assert (prepared.addresses.count("*").limit(1).fetchall())[0] == (
-        len(CANONICAL_RECORDS),
-    )
-    assert not (output_folder / "roadlike_places.parquet").exists()
-    assert prepared.roadlike_places is None
-    assert {
-        "road_1_norm",
-    }.isdisjoint(prepared.addresses.columns)
 
 
 @pytest.mark.parametrize(

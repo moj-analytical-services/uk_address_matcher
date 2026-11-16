@@ -527,17 +527,11 @@ def _build_manifest(
             "name": strategy.name,
             "maximum_posting_size": strategy.maximum_posting_size,
         }
-        for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
-    ]
-    if preparation_options.get("derive_district_singleton_trigrams"):
-        physical_indexes.append(
-            {
-                "name": TRIGRAM_SINGLETON_DISTRICT_INDEX.name,
-                "maximum_posting_size": (
-                    TRIGRAM_SINGLETON_DISTRICT_INDEX.maximum_posting_size
-                ),
-            }
+        for strategy in (
+            *BASE_INDEX_PORTFOLIO.physical_indexes,
+            TRIGRAM_SINGLETON_DISTRICT_INDEX,
         )
+    ]
     return {
         "ukam_version": __version__,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -563,8 +557,6 @@ def prepare_canonical_folder(
     overwrite: bool = False,
     add_debug_features: bool = False,
     show_progress: ShowProgress = "auto",
-    derive_district_singleton_trigrams: bool = False,
-    _derive_road_catalogue: bool = True,
 ) -> None:
     """Prepare canonical data and persist to a folder for later use.
 
@@ -610,13 +602,6 @@ def prepare_canonical_folder(
             interactive terminal and otherwise logs stage boundaries.
             ``"stages"`` logs only stage boundaries; ``"off"`` suppresses
             progress output.
-        _derive_road_catalogue: Whether to derive the road catalogue and canonical
-            road keys. Defaults to ``True``; pass ``False`` to skip road artefacts.
-        derive_district_singleton_trigrams: Add candidate-only district-singleton
-            postings with `district|phrase` keys and one ID per key under the
-            `unique_postcode_district_trigram` strategy. Global index rows stay
-            unchanged; phrases already in the global trigram index are excluded
-            before appending local postings. Defaults to `False`.
 
     Raises:
         FileExistsError: If the output folder already contains prepared files
@@ -636,8 +621,6 @@ def prepare_canonical_folder(
             overwrite=overwrite,
             add_debug_features=add_debug_features,
             show_progress=show_progress,
-            derive_district_singleton_trigrams=derive_district_singleton_trigrams,
-            _derive_road_catalogue=_derive_road_catalogue,
             _storage=storage,
         )
 
@@ -653,8 +636,6 @@ def _prepare_canonical_folder(
     overwrite: bool,
     add_debug_features: bool,
     show_progress: ShowProgress,
-    derive_district_singleton_trigrams: bool,
-    _derive_road_catalogue: bool,
     _storage: _CanonicalIntermediates | None,
 ) -> None:
     from uk_address_matcher.cleaning.chunking_strategies import (
@@ -764,35 +745,29 @@ def _prepare_canonical_folder(
         show_progress=progress_mode,
         _storage=_storage,
     )
-
     base_inverted_index_rows = inverted_index.count("*").fetchall()[0][0]
     roadlike_places, local_features, updated_inverted_index = _derive_postcode_features(
         df_clean,
         con,
         include_local_keys=True,
-        include_road_catalogue=_derive_road_catalogue,
-        singleton_trigram_index=(
-            inverted_index if derive_district_singleton_trigrams else None
-        ),
+        singleton_trigram_index=inverted_index,
         num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
         _storage=_storage,
     )
     if updated_inverted_index is not None:
         inverted_index = updated_inverted_index
-    road_features = None
-    if _derive_road_catalogue:
-        logger.debug("Deriving canonical road blocking keys")
-        road_features = _add_canonical_road_blocking_keys(
-            df_clean,
-            con,
-            num_of_chunks=num_of_chunks,
-            roadlike_places=roadlike_places,
-            # Precleaning assigned and stored one unique ID per canonical row.
-            _stored_unique_address_ids=True,
-            _storage=_storage,
-        )
-        logger.debug("Canonical road blocking keys derived")
+    logger.debug("Deriving canonical road blocking keys")
+    road_features = _add_canonical_road_blocking_keys(
+        df_clean,
+        con,
+        num_of_chunks=num_of_chunks,
+        roadlike_places=roadlike_places,
+        # Precleaning assigned and stored one unique ID per canonical row.
+        _stored_unique_address_ids=True,
+        _storage=_storage,
+    )
+    logger.debug("Canonical road blocking keys derived")
     df_clean = _attach_canonical_features(
         df_clean,
         con,
@@ -941,13 +916,10 @@ def _prepare_canonical_folder(
         "inverted_index": idx_count,
         "canonical_output_chunks": output_chunk_count,
     }
-    if derive_district_singleton_trigrams:
-        manifest_row_counts[TRIGRAM_SINGLETON_DISTRICT_INDEX.name] = (
-            idx_count - base_inverted_index_rows
-        )
+    manifest_row_counts[TRIGRAM_SINGLETON_DISTRICT_INDEX.name] = (
+        idx_count - base_inverted_index_rows
+    )
     preparation_options = {"add_debug_features": add_debug_features}
-    if derive_district_singleton_trigrams:
-        preparation_options["derive_district_singleton_trigrams"] = True
     artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
     if roadlike_places is not None:
         roadlike_count = roadlike_places.count("*").fetchall()[0][0]
