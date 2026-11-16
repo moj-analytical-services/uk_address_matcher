@@ -1340,6 +1340,71 @@
         }
       ],
       "comparison_description": "Literal and exact spacing-equivalent postcode-distinguishing property names"
+    },
+    {
+      "output_column_name": "name_agreement",
+      "comparison_description": "Supervised name agreement with merged branches",
+      "comparison_levels": [
+        {
+          "sql_condition": "coalesce(len((name_words_l)),0)=0 OR coalesce(len((name_words_r)),0)=0",
+          "label_for_charts": "No usable name words",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "CASE WHEN (lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3) THEN (CASE WHEN array_to_string(name_words_l[1:4],'')=array_to_string(name_words_r[1:4],'') THEN TRUE WHEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.95 THEN 1-levenshtein(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))::DOUBLE/greatest(length(left(array_to_string(name_words_l,''),24)),length(left(array_to_string(name_words_r,''),24)),1)>=0.75 ELSE FALSE END) ELSE FALSE END",
+          "label_for_charts": "Strong agreement; local name support",
+          "m_probability": 0.7637681638577343,
+          "u_probability": 0.23623183614226578
+        },
+        {
+          "sql_condition": "CASE WHEN (postcode_l=postcode_r AND NOT coalesce((lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3),false)) THEN (CASE WHEN array_to_string(name_words_l[1:4],'')=array_to_string(name_words_r[1:4],'') THEN TRUE WHEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.95 THEN 1-levenshtein(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))::DOUBLE/greatest(length(left(array_to_string(name_words_l,''),24)),length(left(array_to_string(name_words_r,''),24)),1)>=0.75 ELSE FALSE END) ELSE FALSE END",
+          "label_for_charts": "Strong agreement; same postcode without local name support",
+          "m_probability": 0.8285113897628194,
+          "u_probability": 0.1714886102371806
+        },
+        {
+          "sql_condition": "CASE WHEN (NOT coalesce(postcode_l=postcode_r,false)) THEN (CASE WHEN array_to_string(name_words_l[1:4],'')=array_to_string(name_words_r[1:4],'') THEN TRUE WHEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.95 THEN 1-levenshtein(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))::DOUBLE/greatest(length(left(array_to_string(name_words_l,''),24)),length(left(array_to_string(name_words_r,''),24)),1)>=0.75 ELSE FALSE END) ELSE FALSE END",
+          "label_for_charts": "Strong agreement; different or missing postcode",
+          "m_probability": 0.8151274880319869,
+          "u_probability": 0.1848725119680131
+        },
+        {
+          "sql_condition": "CASE WHEN (lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3) THEN (CASE WHEN (CASE WHEN name_words_l[1]=name_words_r[1] THEN TRUE WHEN jaro_winkler_similarity(name_words_l[1],name_words_r[1])>=0.85 THEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.85 ELSE FALSE END) THEN TRUE ELSE coalesce((list_bool_or(list_transform(range(1,5), lambda i: jaro_winkler_similarity(array_to_string(name_words_r[1:3],''),array_to_string(name_words_l[i:i+2],''))>=0.9))),false) END) ELSE FALSE END",
+          "label_for_charts": "Shifted prefix or partial agreement; local name support",
+          "m_probability": 0.5905900541503281,
+          "u_probability": 0.40940994584967194
+        },
+        {
+          "sql_condition": "CASE WHEN (postcode_l=postcode_r AND NOT coalesce((lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3),false)) THEN (CASE WHEN (CASE WHEN name_words_l[1]=name_words_r[1] THEN TRUE WHEN jaro_winkler_similarity(name_words_l[1],name_words_r[1])>=0.85 THEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.85 ELSE FALSE END) THEN TRUE ELSE coalesce((list_bool_or(list_transform(range(1,5), lambda i: jaro_winkler_similarity(array_to_string(name_words_r[1:3],''),array_to_string(name_words_l[i:i+2],''))>=0.9))),false) END) ELSE FALSE END",
+          "label_for_charts": "Shifted prefix or partial agreement; same postcode without local name support",
+          "m_probability": 0.7060654024851564,
+          "u_probability": 0.29393459751484363
+        },
+        {
+          "sql_condition": "CASE WHEN (NOT coalesce(postcode_l=postcode_r,false)) THEN (CASE WHEN (CASE WHEN name_words_l[1]=name_words_r[1] THEN TRUE WHEN jaro_winkler_similarity(name_words_l[1],name_words_r[1])>=0.85 THEN jaro_winkler_similarity(left(array_to_string(name_words_l,''),24),left(array_to_string(name_words_r,''),24))>=0.85 ELSE FALSE END) THEN TRUE ELSE coalesce((list_bool_or(list_transform(range(1,5), lambda i: jaro_winkler_similarity(array_to_string(name_words_r[1:3],''),array_to_string(name_words_l[i:i+2],''))>=0.9))),false) END) ELSE FALSE END",
+          "label_for_charts": "Shifted prefix or partial agreement; different or missing postcode",
+          "m_probability": 0.4749657233865552,
+          "u_probability": 0.5250342766134448
+        },
+        {
+          "sql_condition": "lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3",
+          "label_for_charts": "Weak name agreement; local name support",
+          "m_probability": 0.24020921896692035,
+          "u_probability": 0.7597907810330796
+        },
+        {
+          "sql_condition": "postcode_l=postcode_r AND NOT coalesce((lk_eligible_r IS TRUE AND postcode_l=postcode_r\nAND coalesce(map_extract_value(lk_level_by_alias_r,ukam_address_id_l::VARCHAR),0)>=3),false)",
+          "label_for_charts": "Weak name agreement; same postcode without local name support",
+          "m_probability": 0.4155829738694707,
+          "u_probability": 0.5844170261305293
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "Weak name agreement; different or missing postcode",
+          "m_probability": 0.005676741249582561,
+          "u_probability": 0.9943232587504175
+        }
+      ]
     }
   ]
 }

@@ -15,6 +15,7 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_address_structure_feature_columns,
     _align_clean_address_token_columns,
     _align_distinguishing_token_columns,
+    _align_name_words_columns,
     _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
@@ -246,6 +247,26 @@ def test_align_clean_address_tokens_rejects_token_only_inputs(duck_con):
         _align_clean_address_token_columns(messy, canonical)
 
 
+def test_align_name_words_uses_first_six_cleaned_tokens_and_preserves_values(
+    duck_con,
+):
+    messy = duck_con.sql(
+        "SELECT ['WEST', 'ALPHA', 'HOUSE', '1', 'HIGH', 'STREET', 'CAMDEN']::VARCHAR[] "
+        "AS clean_full_address_tokens"
+    )
+    canonical = duck_con.sql(
+        "SELECT ['ALPHA', 'HOUSE', '2', 'HIGH', 'STREET', 'LONDON', 'EXTRA']::VARCHAR[] "
+        "AS clean_full_address_tokens, ['PRECOMPUTED']::VARCHAR[] AS name_words"
+    )
+
+    aligned_messy, aligned_canonical = _align_name_words_columns(messy, canonical)
+
+    assert aligned_messy.project("name_words").fetchall() == [
+        (["WEST", "ALPHA", "HOUSE", "1", "HIGH", "STREET"],)
+    ]
+    assert aligned_canonical.project("name_words").fetchall() == [(["PRECOMPUTED"],)]
+
+
 def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
     parts = "[struct_pack(token := 'FLAT', is_lexical := false)]"
     messy = duck_con.sql(f"SELECT 1 AS unique_id, {parts} AS distinguishing_token_parts")
@@ -365,6 +386,28 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     assert all(
         level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
     )
+
+
+def test_packaged_name_agreement_comparison_has_merged_levels():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "name_agreement"
+    )
+
+    assert [level["label_for_charts"] for level in comparison["comparison_levels"]] == [
+        "No usable name words",
+        "Strong agreement; local name support",
+        "Strong agreement; same postcode without local name support",
+        "Strong agreement; different or missing postcode",
+        "Shifted prefix or partial agreement; local name support",
+        "Shifted prefix or partial agreement; same postcode without local name support",
+        "Shifted prefix or partial agreement; different or missing postcode",
+        "Weak name agreement; local name support",
+        "Weak name agreement; same postcode without local name support",
+        "Weak name agreement; different or missing postcode",
+    ]
 
 
 def test_packaged_inferred_road_comparison_is_positive_only():

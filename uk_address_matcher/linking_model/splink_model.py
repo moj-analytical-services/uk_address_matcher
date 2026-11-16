@@ -168,6 +168,24 @@ def _align_clean_address_token_columns(
     return df_addresses_to_match, df_addresses_to_search_within
 
 
+def _align_name_words_columns(
+    df_addresses_to_match: DuckDBPyRelation,
+    df_addresses_to_search_within: DuckDBPyRelation,
+) -> tuple[DuckDBPyRelation, DuckDBPyRelation]:
+    """Project the first six cleaned tokens for name comparisons."""
+
+    def add_name_words(relation: DuckDBPyRelation) -> DuckDBPyRelation:
+        if "name_words" in relation.columns:
+            return relation
+        return relation.select(
+            "*, list_slice(clean_full_address_tokens, 1, 6) AS name_words"
+        )
+
+    return add_name_words(df_addresses_to_match), add_name_words(
+        df_addresses_to_search_within
+    )
+
+
 def _align_sub_premise_columns(
     df_addresses_to_match: DuckDBPyRelation,
     df_addresses_to_search_within: DuckDBPyRelation,
@@ -474,6 +492,13 @@ def _get_linker(
         df_addresses_to_match,
         df_addresses_to_search_within,
     ) = _align_clean_address_token_columns(
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    )
+    (
+        df_addresses_to_match,
+        df_addresses_to_search_within,
+    ) = _align_name_words_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
     )
