@@ -81,8 +81,7 @@ def _write_raw_canonical_csv(path: Path, records: list[dict[str, str]]) -> None:
 def _fake_relation(*, columns: list[str], row_count: int) -> MagicMock:
     relation = MagicMock(spec=duckdb.DuckDBPyRelation)
     relation.columns = columns
-    relation.count.return_value.fetchone.return_value = (row_count,)
-    relation.aggregate.return_value.fetchone.return_value = (0, 0)
+    relation.count.return_value.fetchall.return_value = [(row_count,)]
     return relation
 
 
@@ -310,7 +309,7 @@ def test_postcode_features_use_cleaning_chunk_count(con, tmp_path, caplog, prepa
                 show_progress="stages",
             )
             with matcher.match() as result:
-                assert result.matches().count("*").fetchone() == (1,)
+                assert result.matches().count("*").fetchall()[0][0] == 1
     assert (
         "Deriving canonical postcode features: 160 records across 3 chunks"
         in caplog.messages
