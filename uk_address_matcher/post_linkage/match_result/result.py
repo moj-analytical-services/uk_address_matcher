@@ -480,7 +480,8 @@ class MatchResult:
         ]
         | None = None,
     ) -> Any:
-        """Generate an accuracy chart or table from labelled match results.
+        """Generate accuracy or match diagnostics charts or a table from
+        match results.
 
         Mirrors Splink's ``linker.evaluation.accuracy_analysis_from_labels_table``
         API. Requires a ``ukam_label`` column in the input addresses.
