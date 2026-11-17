@@ -80,6 +80,40 @@ def test_addresses_to_match_without_postcode_column(duck_con, canonical_relation
     _run_matcher(duck_con, canonical_relation, messy_relation)
 
 
+@pytest.mark.parametrize("dataset", ["canonical", "messy"])
+def test_dual_id_columns_are_rejected(duck_con, canonical_relation, dataset):
+    both_ids = canonical_relation.project("*, unique_id AS address_id")
+    matcher = AddressMatcher(
+        both_ids if dataset == "canonical" else canonical_relation,
+        both_ids if dataset == "messy" else canonical_relation,
+        con=duck_con,
+        stages=[ExactMatchStage()],
+    )
+    with pytest.raises(ValueError) as error:
+        matcher.match()
+    assert str(error.value) == (
+        f"Input {dataset} contained both `address_id` and `unique_id`. "
+        "Ensure only one is present, not both."
+    )
+
+
+def test_record_alias_validation_and_legacy_constructor():
+    record = AddressRecord("10 DOWNING STREET", None, "M1")
+    assert record.address_id == "M1"
+    record = AddressRecord.from_dict(
+        {"address_id": "M2", "address_concat": "12 HIGH STREET"}
+    )
+    assert record.postcode is None
+    for data in (
+        {"address_id": "M1", "unique_id": "M1"},
+        {"address_id": "M1", "unique_id": None},
+    ):
+        with pytest.raises(ValueError, match="Input messy contained both"):
+            AddressRecord(address_concat="10 DOWNING STREET", **data)
+    with pytest.raises(ValueError, match="address_concat"):
+        AddressRecord.from_dict({"address_id": "M1"})
+
+
 @pytest.mark.parametrize(
     "source_postcode",
     [None, "NOT A POSTCODE"],
