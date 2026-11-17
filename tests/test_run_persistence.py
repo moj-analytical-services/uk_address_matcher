@@ -638,7 +638,7 @@ def test_run_single_dataset_filters_missing_uprns(
 
     class FakeAddressMatcher:
         def __init__(self, *, addresses_to_match, con, **kwargs):
-            assert addresses_to_match.count("*").fetchone()[0] == expected_count
+            assert addresses_to_match.count("*").fetchall()[0][0] == expected_count
             self.con = con
 
         def match(self):

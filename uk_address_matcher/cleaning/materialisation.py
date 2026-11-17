@@ -47,7 +47,7 @@ def _parquet_preserves_type(kind) -> bool:
 def _varchar_leaves(expression, kind):
     if kind.id == "varchar":
         yield expression
-    elif kind.id == "struct":
+    elif kind.id in {"struct", "tuple"}:
         for index, (field, child) in enumerate(kind.children, 1):
             extract = (
                 f"({expression}).{_quote_identifier(field)}"
@@ -66,7 +66,9 @@ def _varchar_leaves(expression, kind):
 def _input_has_collation(con: DuckDBPyConnection, source: DuckDBPyRelation) -> bool:
     # Logical type equality omits collation, even inside LIST/STRUCT/MAP. An
     # empty bound projection exposes each VARCHAR leaf's collation in native DDL.
-    collation = con.execute("SELECT current_setting('default_collation')").fetchone()[0]
+    collation = con.execute("SELECT current_setting('default_collation')").fetchall()[0][
+        0
+    ]
     if collation not in ("", "binary"):
         return True
     leaves = [
@@ -82,10 +84,10 @@ def _input_has_collation(con: DuckDBPyConnection, source: DuckDBPyRelation) -> b
         con.execute(
             f"CREATE TEMPORARY TABLE {name} AS "
             f"SELECT {projection} FROM ({source.sql_query()}) LIMIT 0"
-        )
+        ).fetchall()
         ddl = con.execute(
             "SELECT sql FROM duckdb_tables() WHERE table_name = ?", [name]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         return " COLLATE " in ddl.upper()
     finally:
         _drop_table_and_registered_aliases(con, name)
@@ -173,7 +175,7 @@ class _CanonicalIntermediates:
             self.con.execute(
                 f"COPY ({sql}) TO '{escaped}' "
                 f"(FORMAT PARQUET, COMPRESSION SNAPPY, ROW_GROUP_SIZE 122880{partition})"
-            )
+            ).fetchall()
             paths = (
                 sorted(directory.rglob("*.parquet")) if partition_by else [destination]
             )
@@ -196,7 +198,7 @@ class _CanonicalIntermediates:
             self.con.execute(
                 f"CREATE {'OR REPLACE ' if append else ''}TEMPORARY VIEW "
                 f"{_quote_identifier(name)} AS {stored.sql_query()}"
-            )
+            ).fetchall()
             self._files[name] = files
             return _relation_from_registered_alias(self.con, name)
         except BaseException:

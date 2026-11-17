@@ -771,7 +771,7 @@ def build_splink_model_comparison(
     )
 
     total_input_rows = int(
-        con.sql(f"SELECT COUNT(*) FROM ({relation.sql_query()}) AS m").fetchone()[0]
+        con.sql(f"SELECT COUNT(*) FROM ({relation.sql_query()}) AS m").fetchall()[0][0]
     )
     rows_entering_splink = int(
         con.sql(
@@ -781,7 +781,7 @@ def build_splink_model_comparison(
             WHERE m.match_reason IS NULL
                 OR split_part(m.match_reason::VARCHAR, ':', 1) = 'splink'
             """
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     )
 
     base_compared = _build_base_compared_relation(

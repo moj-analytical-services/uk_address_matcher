@@ -246,7 +246,7 @@ class MatchingStage(ABC):
         # The stage returns a lazy DuckDBPyRelation.  Shouldn't be too big because
         # it's one row per messy ID, not many columns
         # Materialising it just runs the pipeline (the stage's actual calculation).
-        con.execute(f'DROP TABLE IF EXISTS "{tmp_table}"')
+        con.execute(f'DROP TABLE IF EXISTS "{tmp_table}"').fetchall()
         con.execute(
             f"""
             CREATE TABLE \"{tmp_table}\" AS
@@ -264,7 +264,7 @@ class MatchingStage(ABC):
             FROM ({stage_matches.sql_query()})
             WHERE resolved_canonical_id IS NOT NULL
             """
-        )
+        ).fetchall()
 
         tmp_relation = con.table(f'"{tmp_table}"')
         tmp_types = tmp_relation.dtypes
@@ -293,7 +293,7 @@ class MatchingStage(ABC):
                 con.execute(
                     f'ALTER TABLE "{results_table}" '
                     f"ADD COLUMN {column_name} {column_type}"
-                )
+                ).fetchall()
 
         set_clauses = [
             "canonical_ukam_address_id = src.canonical_ukam_address_id",
@@ -314,9 +314,9 @@ class MatchingStage(ABC):
             WHERE dst.ukam_address_id = src.ukam_address_id
               AND dst.resolved_canonical_id IS NULL
             """
-        )
+        ).fetchall()
 
-        con.execute(f'DROP TABLE IF EXISTS "{tmp_table}"')
+        con.execute(f'DROP TABLE IF EXISTS "{tmp_table}"').fetchall()
 
 
 def _cleanup_matching_input_aliases(con: duckdb.DuckDBPyConnection) -> None:

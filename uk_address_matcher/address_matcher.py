@@ -251,7 +251,7 @@ class AddressMatcher:
             + " AS SELECT * FROM ("
             + source_relation.sql_query()
             + ")"
-        )
+        ).fetchall()
         # The derived source table has been copied; it has no further use.
         if isinstance(source_name, str) and source_name.startswith(
             "__ukam_derived_inverted_index_"
@@ -326,6 +326,7 @@ class AddressMatcher:
                 self._roadlike_places = derive_roadlike_places(
                     self._canonical_clean,
                     self.con,
+                    num_of_chunks=self.cleaning_num_chunks,
                     debug_options=self.debug_options,
                     show_progress=self.show_progress,
                 )
@@ -353,7 +354,7 @@ class AddressMatcher:
 
         logger.debug("Cleaning messy data")
         if self._canonical_clean is not None and self._canonical_count is None:
-            self._canonical_count = self._canonical_clean.count("*").fetchone()[0]
+            self._canonical_count = self._canonical_clean.count("*").fetchall()[0][0]
         self._messy_clean = prepare_data_for_matching(
             self._raw_messy,
             con=self.con,
@@ -514,12 +515,14 @@ class AddressMatcher:
                 hive_partitioning=False,
             )
             if encoded_types:
-                restored = ", ".join(
-                    f"CAST({_quote_identifier(column)}::JSON AS {kind}) "
-                    f"AS {_quote_identifier(column)}"
-                    for column, kind in encoded_types.items()
-                )
-                result = result.project(f"* REPLACE ({restored})")
+                restored = []
+                for column, kind in encoded_types.items():
+                    quoted = _quote_identifier(column)
+                    expression = f"{quoted}::JSON"
+                    if kind.id == "enum":
+                        expression = f"json_extract_string({expression}, '$')"
+                    restored.append(f"CAST({expression} AS {kind}) AS {quoted}")
+                result = result.project(f"* REPLACE ({', '.join(restored)})")
         except BaseException:
             output_directory.cleanup()
             raise
@@ -584,7 +587,7 @@ class AddressMatcher:
                 )
             total_rows = sum(rows for _, rows in chunks)
         elif self.show_progress != "off":
-            total_rows = self._raw_messy.count("*").fetchone()[0]
+            total_rows = self._raw_messy.count("*").fetchall()[0][0]
         if self.show_progress != "off":
             log_matching_start(
                 total_rows,

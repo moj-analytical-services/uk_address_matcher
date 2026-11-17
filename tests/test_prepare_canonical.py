@@ -10,7 +10,12 @@ import pyarrow
 import pyarrow.parquet as pyarrow_parquet
 import pytest
 
-from uk_address_matcher import prepare_canonical_folder
+from uk_address_matcher import (
+    AddressMatcher,
+    SplinkStage,
+    prepare_canonical_folder,
+    prepare_data_for_matching,
+)
 from uk_address_matcher.cleaning import chunking_strategies
 from uk_address_matcher.cleaning.local_keys import prepare_canonical_local_keys
 from uk_address_matcher.cleaning.materialisation import (
@@ -78,9 +83,9 @@ def _write_raw_canonical_csv(path: Path, records: list[dict[str, str]]) -> None:
 
 
 def _fake_relation(*, columns: list[str], row_count: int) -> MagicMock:
-    relation = MagicMock()
+    relation = MagicMock(spec=duckdb.DuckDBPyRelation)
     relation.columns = columns
-    relation.count.return_value.fetchone.return_value = (row_count,)
+    relation.count.return_value.fetchall.return_value = [(row_count,)]
     return relation
 
 
@@ -134,7 +139,6 @@ def prepared_folder(con, canonical_data, tmp_path):
         canonical_data,
         output_folder=tmp_path,
         con=con,
-        _derive_road_catalogue=True,
         overwrite=True,
     )
     return tmp_path
@@ -161,6 +165,13 @@ def test_prepare_creates_expected_files(prepared_folder, con):
     assert "sub_premise_building_number" in stored_columns
     assert "flat_letter" in stored_columns
     assert "flat_number" in stored_columns
+    prepared = load_prepared_canonical_data(prepared_folder, con)
+    assert {
+        "premise_keys",
+        "premise_scope_uncertain",
+        "floor_keys",
+        "floor_scope_uncertain",
+    }.issubset(prepared.addresses.columns)
 
 
 @pytest.mark.parametrize(
@@ -205,11 +216,14 @@ def test_prepare_accepts_minimal_columns_and_optional_metadata(
     assert prepared.addresses.project("unique_id").order("unique_id").fetchall() == [
         (record["unique_id"],) for record in CANONICAL_RECORDS
     ]
-    assert prepared.addresses.filter(
-        "clean_full_address IS NULL OR clean_full_address = ''"
-    ).count("*").fetchone() == (0,)
+    assert (
+        prepared.addresses.filter("clean_full_address IS NULL OR clean_full_address = ''")
+        .count("*")
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
     assert prepared.roadlike_places is not None
-    assert prepared.roadlike_places.count("*").fetchone()[0] > 0
+    assert prepared.roadlike_places.count("*").fetchall()[0][0] > 0
     for column, value in optional_columns.items():
         assert prepared.addresses.project(column).fetchall() == [(value,)] * len(
             CANONICAL_RECORDS
@@ -229,16 +243,15 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
         canonical,
         output_folder=tmp_path,
         con=con,
-        num_of_chunks=3,
+        cleaning_num_chunks=3,
         output_chunk_count=2,
-        _derive_road_catalogue=False,
     )
     loaded = load_prepared_canonical_data(tmp_path, con)
     assert "local_key_tokens" not in loaded.addresses.columns
     index = (
         loaded.addresses.filter("unique_id = '001'")
         .select("local_key_index")
-        .fetchone()[0]
+        .fetchall()[0][0]
     )
     meadow = next(
         key for key in index if key["kind"] == "word" and key["key"] == "MEADOW"
@@ -248,7 +261,8 @@ def test_prepared_local_keys_span_cleaning_and_output_chunks(con, tmp_path):
     assert "derive_local_keys" not in manifest["preparation_options"]
 
 
-def test_larger_road_batches_preserve_fallback_scope(con):
+@pytest.mark.parametrize("num_of_chunks", [1, 2, 10])
+def test_larger_road_batches_preserve_fallback_scope(con, num_of_chunks):
     source = con.sql("""
         SELECT *, regexp_extract_all(clean_full_address, '[0-9]+') AS numeric_tokens
         FROM (
@@ -257,10 +271,11 @@ def test_larger_road_batches_preserve_fallback_scope(con):
                     WHEN alias_id IN (2, 8) THEN NULL
                     WHEN alias_id IN (3, 24) THEN 'second-property'
                     ELSE alias_id::VARCHAR END AS unique_id,
-                'AB' || alias_id::VARCHAR || ' 1AA' AS postcode,
+                'A' || chr(65 + (alias_id // 10)::INTEGER)
+                    || (alias_id % 10)::VARCHAR || ' 1AA' AS postcode,
                 CASE WHEN alias_id IN (3, 8, 9) THEN '14 MYSTERY HAMLET'
                     ELSE '12 HIGH STREET' END AS clean_full_address
-            FROM range(1, 25) rows(alias_id)
+            FROM range(1, 161) rows(alias_id)
         ) addresses
     """)
     expected = chunking_strategies.derive_roadlike_places(
@@ -271,6 +286,65 @@ def test_larger_road_batches_preserve_fallback_scope(con):
     assert any(row[1] == "MYSTERY HAMLET" for row in expected_rows)
     actual = chunking_strategies.derive_roadlike_places(source, con, show_progress="off")
     assert actual.order(columns).fetchall() == expected_rows
+
+    seen_rows = []
+    for batch, total_batches in chunking_strategies._postcode_batches(
+        source, con, num_of_chunks=num_of_chunks, property_scope_column="road_scope"
+    ):
+        assert total_batches == num_of_chunks
+        seen_rows.extend(batch.select("ukam_address_id").fetchall())
+    assert (
+        sorted(seen_rows)
+        == source.order("ukam_address_id").select("ukam_address_id").fetchall()
+    )
+
+    roads, keys, _ = chunking_strategies._derive_postcode_features(
+        source,
+        con,
+        include_local_keys=True,
+        num_of_chunks=num_of_chunks,
+        show_progress="off",
+    )
+    assert roads.order(columns).fetchall() == expected_rows
+    key_columns = ", ".join(keys.columns)
+    assert (
+        keys.order("ukam_address_id").fetchall()
+        == prepare_canonical_local_keys(con, source)
+        .select(key_columns)
+        .order("ukam_address_id")
+        .fetchall()
+    )
+
+
+@pytest.mark.parametrize("prepared", [True, False])
+def test_postcode_features_use_cleaning_chunk_count(con, tmp_path, caplog, prepared):
+    source = con.sql("""
+        SELECT alias_id::VARCHAR AS unique_id,
+            '12 HIGH STREET' AS address_concat,
+            'A' || chr(65 + (alias_id // 10)::INTEGER)
+                || (alias_id % 10)::VARCHAR || ' 1AA' AS postcode
+        FROM range(160) addresses(alias_id)
+    """)
+    with caplog.at_level(logging.INFO, logger="uk_address_matcher"):
+        if prepared:
+            prepare_canonical_folder(
+                source, tmp_path, con=con, cleaning_num_chunks=3, show_progress="stages"
+            )
+        else:
+            matcher = AddressMatcher(
+                canonical_addresses=source,
+                addresses_to_match=source.limit(1),
+                con=con,
+                cleaning_num_chunks=3,
+                stages=[SplinkStage()],
+                show_progress="stages",
+            )
+            with matcher.match() as result:
+                assert result.matches().count("*").fetchall()[0][0] == 1
+    assert (
+        "Deriving canonical postcode features: 160 records across 3 chunks"
+        in caplog.messages
+    )
 
 
 def test_shared_road_batches_preserve_local_keys(con):
@@ -296,7 +370,7 @@ def test_shared_road_batches_preserve_local_keys(con):
     road_columns = ", ".join(expected_roads.columns)
     expected_road_rows = expected_roads.order(road_columns).fetchall()
     with _CanonicalIntermediates(con) as storage:
-        roads, keys = chunking_strategies._derive_postcode_features(
+        roads, keys, _ = chunking_strategies._derive_postcode_features(
             source,
             con,
             include_local_keys=True,
@@ -318,6 +392,167 @@ def test_shared_road_batches_preserve_local_keys(con):
             enriched.order("ukam_address_id").fetchall()
             == expected_keys.order("ukam_address_id").fetchall()
         )
+
+
+def test_district_singletons_share_complete_postcode_batches(con):
+    source = con.sql("""
+        SELECT row_number() OVER () AS ukam_address_id, *,
+            []::VARCHAR[] AS numeric_tokens
+        FROM (VALUES
+            ('1', 'UNIQUE LOCAL PHRASE', 'ZZ1 1ZZ'),
+            ('1', 'UNIQUE LOCAL PHRASE', 'ZZ1 2ZZ'),
+            ('2', 'COMMON LOCAL PHRASE', 'ZZ1 1ZZ'),
+            ('3', 'COMMON LOCAL PHRASE', 'ZZ1 2ZZ'),
+            ('4', 'COMMON LOCAL PHRASE', 'ZZ2 1ZZ'),
+            ('005', 'ALREADY GLOBAL PHRASE', 'ZZ1 1ZZ'),
+            ('999', 'ALREADY GLOBAL PHRASE', 'ZZ5 1ZZ'),
+            ('6', 'ECHO ECHO ECHO ECHO', 'ZZ1 1ZZ'),
+            ('009', 'CROSS DISTRICT PHRASE', 'ZZ3 1ZZ'),
+            ('010', 'CROSS DISTRICT PHRASE', 'ZZ4 1ZZ'),
+            ('7', 'MISSING POSTCODE PHRASE', NULL),
+            ('8', 'INVALID POSTCODE PHRASE', 'ZZ1 1ZZ EXTRA'),
+            ('', 'MISSING LABEL PHRASE', 'ZZ1 1ZZ'),
+            (NULL, 'NULL LABEL PHRASE', 'ZZ1 1ZZ')
+        ) addresses(unique_id, clean_full_address, postcode)
+    """)
+    con.execute("""
+        CREATE TABLE singleton_global_index AS
+        SELECT 'ALREADY GLOBAL PHRASE' AS key,
+            list(lpad(index_value::VARCHAR, 3, '0')) AS unique_ids,
+            'trigram' AS index_strategy
+        FROM range(1, 21) ids(index_value)
+        UNION ALL
+        SELECT 'ECHO ECHO ECHO', ['base-bigram'], 'bigram'
+        UNION ALL
+        SELECT 'UNTOUCHED GLOBAL PHRASE', ['base-trigram'], 'trigram'
+    """)
+    baseline_rows = con.table("singleton_global_index").fetchall()
+    roads, keys, updated_index = chunking_strategies._derive_postcode_features(
+        source,
+        con,
+        include_local_keys=True,
+        singleton_trigram_index=con.table("singleton_global_index"),
+        postcode_districts_per_batch=1,
+        show_progress="off",
+    )
+    assert roads is not None and keys.count("*").fetchall()[0][0] == 14
+    assert updated_index is not None
+    local_rows = [
+        ("ZZ1|ECHO ECHO ECHO", ["6"]),
+        ("ZZ1|UNIQUE LOCAL PHRASE", ["1"]),
+        ("ZZ2|COMMON LOCAL PHRASE", ["4"]),
+        ("ZZ3|CROSS DISTRICT PHRASE", ["009"]),
+        ("ZZ4|CROSS DISTRICT PHRASE", ["010"]),
+    ]
+    assert updated_index.order("key, index_strategy").fetchall() == sorted(
+        baseline_rows
+        + [
+            (key, unique_ids, "unique_postcode_district_trigram")
+            for key, unique_ids in local_rows
+        ]
+    )
+    messy = con.sql("""
+        SELECT * FROM (VALUES
+            ('same', 'ALREADY GLOBAL PHRASE', 'ZZ5 1ZZ'),
+            ('other', 'ALREADY GLOBAL PHRASE', 'ZZ9 1ZZ'),
+            ('eligible', 'COMMON LOCAL PHRASE', 'ZZ2 1ZZ'),
+            ('ambiguous', 'COMMON LOCAL PHRASE', 'ZZ1 1ZZ'),
+            ('cross', 'CROSS DISTRICT PHRASE', 'ZZ4 1ZZ'),
+            ('missing', 'COMMON LOCAL PHRASE', NULL)
+        ) addresses(unique_id, address_concat, postcode)
+    """)
+    prepared = prepare_data_for_matching(
+        messy,
+        con,
+        inverted_index=updated_index,
+        num_of_chunks=1,
+        dataset_role="messy",
+        show_progress="off",
+    )
+    assert dict(prepared.select("unique_id, exploding_unique_ids").fetchall()) == {
+        "same": [f"{index:03d}" for index in range(1, 21)],
+        "other": [f"{index:03d}" for index in range(1, 21)],
+        "eligible": ["4"],
+        "ambiguous": [],
+        "cross": ["010"],
+        "missing": [],
+    }
+    assert con.table("singleton_global_index").fetchall() == baseline_rows
+
+
+def test_prepared_district_singletons_use_district_scoped_lookup(con, tmp_path):
+    source = con.sql("""
+        SELECT lpad(property_id::VARCHAR, 3, '0') AS unique_id,
+            'AMBER MEADOW COTTAGE' AS address_concat,
+            CASE WHEN property_id <= 2 THEN 'ZZ1 1ZZ'
+                ELSE 'ZZ' || property_id::VARCHAR || ' 1ZZ' END AS postcode
+        FROM range(1, 22) properties(property_id)
+        UNION ALL
+        SELECT lpad((property_id + 100)::VARCHAR, 3, '0'),
+            'TOO MANY LOCAL COTTAGE', 'YY' || property_id::VARCHAR || ' 1YY'
+        FROM range(1, 22) properties(property_id)
+    """)
+    prepare_canonical_folder(
+        source,
+        tmp_path,
+        con=con,
+        cleaning_num_chunks=2,
+        show_progress="off",
+    )
+    loaded = load_prepared_canonical_data(tmp_path, con=con)
+    index = loaded.inverted_index
+    assert index.order("index_strategy, key").fetchall() == sorted(
+        [
+            (
+                f"ZZ{property_id}|AMBER MEADOW COTTAGE",
+                [f"{property_id:03d}"],
+                "unique_postcode_district_trigram",
+            )
+            for property_id in range(3, 22)
+        ]
+        + [
+            (
+                f"YY{property_id}|{phrase}",
+                [f"{property_id + 100:03d}"],
+                "unique_postcode_district_trigram",
+            )
+            for property_id in range(1, 22)
+            for phrase in ("MANY LOCAL COTTAGE", "TOO MANY LOCAL")
+        ]
+    )
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    assert "derive_district_singleton_trigrams" not in manifest["preparation_options"]
+    assert manifest["row_counts"]["unique_postcode_district_trigram"] == 61
+    assert manifest["inverted_index_portfolio"]["physical_indexes"] == [
+        {"name": "bigram", "maximum_posting_size": 20},
+        {"name": "trigram", "maximum_posting_size": 20},
+        {"name": "unique_postcode_district_trigram", "maximum_posting_size": 1},
+    ]
+    messy = con.sql("""
+        SELECT 'amber' AS unique_id, 'AMBER MEADOW COTTAGE' AS address_concat,
+            'ZZ1 9ZZ' AS postcode
+        UNION ALL
+        SELECT 'amber_valid', 'AMBER MEADOW COTTAGE', 'ZZ3 9ZZ'
+        UNION ALL
+        SELECT 'too_many', 'TOO MANY LOCAL COTTAGE', 'YY1 9YY'
+        UNION ALL
+        SELECT 'too_many_other', 'TOO MANY LOCAL COTTAGE', 'YY22 9YY'
+    """)
+    prepared = prepare_data_for_matching(
+        messy,
+        con,
+        inverted_index=index,
+        num_of_chunks=1,
+        dataset_role="messy",
+        show_progress="off",
+    )
+    lookup_results = (
+        prepared.order("unique_id")
+        .select("exploding_unique_ids, signature_score_map, signature_unique_hits_map")
+        .fetchall()
+    )
+    assert [row[0] for row in lookup_results] == [[], ["003"], ["101"], []]
+    assert all(row[1] == {} and row[2] == {} for row in lookup_results)
 
 
 def test_preparation_releases_consumed_source_chunks(con, tmp_path, monkeypatch):
@@ -363,13 +598,12 @@ def test_prepared_canonical_persists_split_letter_dashes(con, tmp_path):
         canonical_data,
         output_folder=tmp_path,
         con=con,
-        _derive_road_catalogue=False,
     )
     prepared = load_prepared_canonical_data(tmp_path, con)
     tokens = (
         prepared.addresses.filter("unique_id = 'C-DASH'")
         .project("clean_full_address_tokens")
-        .fetchone()[0]
+        .fetchall()[0][0]
     )
 
     assert tokens == ["PEN", "Y", "GRAIG", "TONYPANDY"]
@@ -382,26 +616,7 @@ def test_prepare_persists_compact_road_blocking_eligibility(prepared_folder, con
         "road_1_norm",
     }.issubset(prepared.addresses.columns)
     assert prepared.roadlike_places is not None
-    assert prepared.roadlike_places.count("*").fetchone()[0] > 0
-
-
-def test_prepare_can_skip_road_blocking_keys(canonical_data, con, tmp_path):
-    output_folder = tmp_path / "without_road_keys"
-
-    prepare_canonical_folder(
-        canonical_data,
-        output_folder=output_folder,
-        con=con,
-        _derive_road_catalogue=False,
-    )
-    prepared = load_prepared_canonical_data(output_folder, con)
-
-    assert prepared.addresses.count("*").fetchone() == (len(CANONICAL_RECORDS),)
-    assert not (output_folder / "roadlike_places.parquet").exists()
-    assert prepared.roadlike_places is None
-    assert {
-        "road_1_norm",
-    }.isdisjoint(prepared.addresses.columns)
+    assert prepared.roadlike_places.count("*").fetchall()[0][0] > 0
 
 
 @pytest.mark.parametrize(
@@ -430,10 +645,16 @@ def test_prepare_uses_roads_without_valid_postcode(con, tmp_path, source_postcod
 
     assert prepared.roadlike_places is not None
     assert (output_folder / "roadlike_places.parquet").exists()
-    assert prepared.roadlike_places.project("postcode_district").fetchone() == ("",)
+    assert (prepared.roadlike_places.project("postcode_district").limit(1).fetchall())[
+        0
+    ] == ("",)
     assert "postcode_district" not in prepared.addresses.columns
-    assert prepared.addresses.project("road_1_norm").fetchone() == ("HIGH STREET",)
-    assert prepared.addresses.project("postcode").fetchone() == (source_postcode,)
+    assert (prepared.addresses.project("road_1_norm").limit(1).fetchall())[0] == (
+        "HIGH STREET",
+    )
+    assert (prepared.addresses.project("postcode").limit(1).fetchall())[0] == (
+        source_postcode,
+    )
 
 
 def test_prepare_derives_road_catalogue_by_default(canonical_data, con, tmp_path):
@@ -501,7 +722,6 @@ def test_prepare_road_catalogue_includes_all_classified_rows(
         source,
         output_folder=output_folder,
         con=con,
-        _derive_road_catalogue=True,
     )
 
     prepared = load_prepared_canonical_data(output_folder, con)
@@ -687,7 +907,7 @@ def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_pa
 
 
 def test_prepare_sorts_canonical_parquet_for_compression(con, canonical_data, tmp_path):
-    con.execute("SET threads = 8")
+    con.execute("SET threads = 8").fetchall()
     prepare_canonical_folder(
         canonical_data,
         output_folder=tmp_path,
@@ -702,7 +922,7 @@ def test_prepare_sorts_canonical_parquet_for_compression(con, canonical_data, tm
         ("M1 1AA", "C2"),
         ("SW1A 1AA", "C1"),
     ]
-    assert con.execute("SELECT current_setting('threads')").fetchone()[0] == 8
+    assert con.execute("SELECT current_setting('threads')").fetchall()[0][0] == 8
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 3])
@@ -741,11 +961,11 @@ def test_prepared_canonical_schema_matches_debug_option(
         unique_id,
         list_transform(
             distinguishing_token_parts,
-            part -> part.token
+            lambda part: part.token
         ) AS distinguishing_adj_start_tokens,
         list_transform(
-            list_filter(distinguishing_token_parts, part -> part.is_lexical),
-            part -> part.token
+            list_filter(distinguishing_token_parts, lambda part: part.is_lexical),
+            lambda part: part.token
         ) AS distinguishing_lexical_tokens
         """
         )
@@ -834,7 +1054,7 @@ def test_prepared_canonical_schema_matches_debug_option(
         .fetchall()
     )
     assert actual_clean_address_views == expected_clean_address_views
-    assert canonical_relation.count("*").fetchone()[0] == 3
+    assert canonical_relation.count("*").fetchall()[0][0] == 3
     assert manifest["preparation_options"] == {"add_debug_features": add_debug_features}
 
     for canonical_path in canonical_paths:
@@ -851,7 +1071,7 @@ def test_old_manifest_without_preparation_options_still_loads(con, prepared_fold
 
     loaded = load_prepared_canonical_data(prepared_folder, con=con)
 
-    assert loaded.addresses.count("*").fetchone()[0] == 3
+    assert loaded.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
@@ -866,7 +1086,7 @@ def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
             FROM read_parquet('{canonical_path}')
         ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
     canonical_path.unlink()
     legacy_path.rename(canonical_path)
 
@@ -874,9 +1094,12 @@ def test_legacy_string_only_canonical_rehydrates_tokens(con, prepared_folder):
 
     assert "clean_full_address" in loaded.addresses.columns
     assert "clean_full_address_tokens" in loaded.addresses.columns
-    assert loaded.addresses.order("unique_id").select(
-        "clean_full_address_tokens"
-    ).fetchone() == (["1", "HIGH", "STREET", "LONDON"],)
+    assert (
+        loaded.addresses.order("unique_id")
+        .select("clean_full_address_tokens")
+        .limit(1)
+        .fetchall()
+    )[0] == (["1", "HIGH", "STREET", "LONDON"],)
 
 
 def test_v1_2_0_prepared_canonical_rehydrates_sub_premise_location(con):
@@ -888,9 +1111,12 @@ def test_v1_2_0_prepared_canonical_rehydrates_sub_premise_location(con):
         )
 
     assert "sub_premise_location" in loaded.addresses.columns
-    assert loaded.addresses.filter("sub_premise_location IS NOT NULL").count(
-        "*"
-    ).fetchone() == (0,)
+    assert (
+        loaded.addresses.filter("sub_premise_location IS NOT NULL")
+        .count("*")
+        .limit(1)
+        .fetchall()
+    )[0] == (0,)
 
 
 def test_prepare_show_progress_false_suppresses_live_output(
@@ -1173,28 +1399,28 @@ def test_prepare_rejects_output_chunk_count_above_supported_digits(
 
 
 @pytest.mark.parametrize("invalid_chunk_count", [0, -1, -10])
-def test_prepare_rejects_non_positive_num_of_chunks(
+def test_prepare_rejects_non_positive_cleaning_num_chunks(
     con, canonical_data, tmp_path, invalid_chunk_count
 ):
-    with pytest.raises(ValueError, match="num_of_chunks must be at least 1"):
+    with pytest.raises(ValueError, match="cleaning_num_chunks must be at least 1"):
         prepare_canonical_folder(
             canonical_data,
             output_folder=tmp_path,
             con=con,
-            num_of_chunks=invalid_chunk_count,
+            cleaning_num_chunks=invalid_chunk_count,
             overwrite=True,
         )
 
 
-def test_prepare_rejects_num_of_chunks_above_supported_digits(
+def test_prepare_rejects_cleaning_num_chunks_above_supported_digits(
     con, canonical_data, tmp_path
 ):
-    with pytest.raises(ValueError, match="num_of_chunks must be at most"):
+    with pytest.raises(ValueError, match="cleaning_num_chunks must be at most"):
         prepare_canonical_folder(
             canonical_data,
             output_folder=tmp_path,
             con=con,
-            num_of_chunks=MAX_CHUNK_COUNT + 1,
+            cleaning_num_chunks=MAX_CHUNK_COUNT + 1,
             overwrite=True,
         )
 
@@ -1273,7 +1499,7 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
     monkeypatch.setattr(
         chunking_strategies,
         "_derive_postcode_features",
-        lambda data, con, **kwargs: (roadlike_places, clean_relation),
+        lambda data, con, **kwargs: (roadlike_places, clean_relation, None),
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -1292,7 +1518,6 @@ def test_prepare_remote_csv_input_writes_remote_output(monkeypatch, add_debug_fe
         "s3://bucket/input/canonical.csv",
         "s3://bucket/output/prepared",
         con=con,
-        _derive_road_catalogue=True,
         add_debug_features=add_debug_features,
     )
 
@@ -1407,7 +1632,7 @@ def test_prepare_remote_output_writes_chunked_paths(monkeypatch, add_debug_featu
     monkeypatch.setattr(
         chunking_strategies,
         "_derive_postcode_features",
-        lambda data, con, **kwargs: (roadlike_places, clean_relation),
+        lambda data, con, **kwargs: (roadlike_places, clean_relation, None),
     )
     monkeypatch.setattr(
         chunking_strategies,
@@ -1482,7 +1707,7 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
     addresses = con.read_parquet([str(path) for path in chunk_paths])
     physical_ids = addresses.select("ukam_address_id").fetchall()
 
-    assert addresses.count("*").fetchone()[0] == 4
+    assert addresses.count("*").fetchall()[0][0] == 4
     assert sorted(physical_ids) == [(1,), (2,), (3,), (4,)]
     assert addresses.columns == con.read_parquet(str(chunk_paths[0])).columns
 
@@ -1506,7 +1731,7 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
     id_type = con.execute(
         "DESCRIBE SELECT ukam_address_id FROM read_parquet(?)",
         [str(chunk_paths[0])],
-    ).fetchone()[1]
+    ).fetchall()[0][1]
     assert id_type == "INTEGER"
 
     inverted_index_path = tmp_path / "ukam_inverted_index.parquet"
@@ -1517,10 +1742,13 @@ def test_prepared_canonical_chunks_are_compression_sorted_and_use_parquet_v2(
         "BIGINT[]",
         "VARCHAR",
     ]
-    inverted_index_row_count = inverted_index.count("*").fetchone()[0]
+    inverted_index_row_count = inverted_index.count("*").fetchall()[0][0]
     assert inverted_index_row_count > 0
     assert (
-        inverted_index.select("key, index_strategy").distinct().count("*").fetchone()[0]
+        inverted_index.select("key, index_strategy")
+        .distinct()
+        .count("*")
+        .fetchall()[0][0]
         == inverted_index_row_count
     )
     assert (
@@ -1640,9 +1868,9 @@ def test_load_returns_prepared_canonical(con, prepared_folder):
 def test_load_prepared_data_has_expected_row_counts(con, prepared_folder):
     result = load_prepared_canonical_data(prepared_folder, con=con)
 
-    assert result.addresses.count("*").fetchone()[0] == 3
-    assert result.term_frequencies.count("*").fetchone()[0] > 0
-    assert result.inverted_index.count("*").fetchone()[0] > 0
+    assert result.addresses.count("*").fetchall()[0][0] == 3
+    assert result.term_frequencies.count("*").fetchall()[0][0] > 0
+    assert result.inverted_index.count("*").fetchall()[0][0] > 0
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 2])
@@ -1725,7 +1953,7 @@ def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):
     chunk_files = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
 
     total_rows_across_chunks = sum(
-        con.read_parquet(str(chunk_path)).count("*").fetchone()[0]
+        con.read_parquet(str(chunk_path)).count("*").fetchall()[0][0]
         for chunk_path in chunk_files
     )
 
@@ -1746,12 +1974,12 @@ def test_load_reads_chunked_canonical_layout(con, canonical_data, tmp_path):
     result = load_prepared_canonical_data(tmp_path, con=con)
 
     assert isinstance(result, _PreparedCanonical)
-    assert result.addresses.count("*").fetchone()[0] == 3
+    assert result.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_load_accepts_string_path(con, prepared_folder):
     result = load_prepared_canonical_data(str(prepared_folder), con=con)
-    assert result.addresses.count("*").fetchone()[0] == 3
+    assert result.addresses.count("*").fetchall()[0][0] == 3
 
 
 def test_invalid_folder_raises(con):
@@ -1921,7 +2149,7 @@ def test_load_remote_folder_permission_error_raises_permissionerror():
         ("[1, 2]::INTEGER[2]", True),
         ("'left'::ENUM('left', 'right')", True),
         ("TIMESTAMP '2020-01-01'::TIMESTAMP_S", True),
-        ("NULL", False),
+        ("NULL::INTEGER", False),
     ],
 )
 def test_canonical_intermediate_types_and_cleanup(con, expression, native):
@@ -1934,25 +2162,25 @@ def test_canonical_intermediate_types_and_cleanup(con, expression, native):
         assert result.fetchall() == expected.fetchall()
         assert ("intermediate" in storage._native) == native
         storage.write(source, "intermediate", append=True)
-        assert con.table("intermediate").count("*").fetchone()[0] == 2
+        assert con.table("intermediate").count("*").fetchall()[0][0] == 2
         storage.drop("intermediate")
         assert not list(storage.directory.iterdir())
     assert not storage.directory.exists()
-    assert con.table("caller_owned_type_reference").count("*").fetchone()[0] == 1
+    assert con.table("caller_owned_type_reference").count("*").fetchall()[0][0] == 1
 
 
 def test_canonical_intermediate_empty_and_failed_append(con):
     with _CanonicalIntermediates(con) as storage:
         source = con.sql("SELECT 1::INTEGER AS part WHERE false")
         result = storage.write(source, "empty", partition_by="part")
-        assert result.types == source.types and result.count("*").fetchone()[0] == 0
+        assert result.types == source.types and result.count("*").fetchall()[0][0] == 0
         paths = list(storage.directory.rglob("*.parquet"))
         with pytest.raises(duckdb.InvalidInputException):
             storage.write(
                 con.sql("SELECT error('expected')::INTEGER AS part"), "empty", append=True
             )
         assert list(storage.directory.rglob("*.parquet")) == paths
-        assert con.table("empty").count("*").fetchone()[0] == 0
+        assert con.table("empty").count("*").fetchall()[0][0] == 0
     assert not storage.directory.exists()
 
 

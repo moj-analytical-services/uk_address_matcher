@@ -6,7 +6,7 @@
   "sql_dialect": "duckdb",
   "em_convergence": 0.0001,
   "max_iterations": 25,
-  "bayes_factor_column_prefix": "bf_",
+  "match_weight_column_prefix": "mw_",
   "term_frequency_adjustment_column_prefix": "tf_",
   "comparison_vector_value_column_prefix": "gamma_",
   "unique_id_column_name": "ukam_address_id",
@@ -66,7 +66,7 @@
           "is_null_level": true
         },
         {
-          "sql_condition": "postcode_l = postcode_r AND list_slice(clean_full_address_tokens_r, 1, len(distinguishing_adj_start_tokens_l)) = distinguishing_adj_start_tokens_l AND list_contains(flatten(list_transform(range(1, 5), first_offset -> list_transform(range(first_offset + 1, 5), second_offset -> list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + first_offset) = list_extract(clean_full_address_tokens_l, len(distinguishing_adj_start_tokens_l) + 1) AND list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + second_offset) = list_extract(clean_full_address_tokens_l, len(distinguishing_adj_start_tokens_l) + 2) AND NOT list_contains(list_transform(list_filter(range(1, second_offset + 1), gap_offset -> gap_offset != first_offset AND gap_offset != second_offset), gap_offset -> regexp_matches(list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + gap_offset), '[0-9]') OR list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + gap_offset) IN ('APARTMENT', 'BLOCK', 'BUILDING', 'COTTAGE', 'FLAT', 'HOUSE', 'MAISONETTE', 'OFFICE', 'STEADING', 'STUDIO', 'SUITE', 'UNIT', 'WAREHOUSE', 'WORKSHOP')), TRUE)))), TRUE)",
+          "sql_condition": "postcode_l = postcode_r AND list_slice(clean_full_address_tokens_r, 1, len(distinguishing_adj_start_tokens_l)) = distinguishing_adj_start_tokens_l AND list_contains(flatten(list_transform(range(1, 5), lambda first_offset: list_transform(range(first_offset + 1, 5), lambda second_offset: list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + first_offset) = list_extract(clean_full_address_tokens_l, len(distinguishing_adj_start_tokens_l) + 1) AND list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + second_offset) = list_extract(clean_full_address_tokens_l, len(distinguishing_adj_start_tokens_l) + 2) AND NOT list_contains(list_transform(list_filter(range(1, second_offset + 1), lambda gap_offset: gap_offset != first_offset AND gap_offset != second_offset), lambda gap_offset: regexp_matches(list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + gap_offset), '[0-9]') OR list_extract(clean_full_address_tokens_r, len(distinguishing_adj_start_tokens_l) + gap_offset) IN ('APARTMENT', 'BLOCK', 'BUILDING', 'COTTAGE', 'FLAT', 'HOUSE', 'MAISONETTE', 'OFFICE', 'STEADING', 'STUDIO', 'SUITE', 'UNIT', 'WAREHOUSE', 'WORKSHOP')), TRUE)))), TRUE)",
           "label_for_charts": "Existing ordered distinguishing signature",
           "m_probability": 1024.0,
           "u_probability": 1.0,
@@ -358,6 +358,38 @@
     {
       "output_column_name": "sub_premise_identifier",
       "comparison_levels": [
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), lambda role: map_contains(premise_keys_r, role) AND NOT list_has_any(map_extract_value(premise_keys_l, role), map_extract_value(premise_keys_r, role)))) > 0",
+          "label_for_charts": "Explicit premise role identifiers conflict",
+          "m_probability": 0.00390625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), lambda role: map_contains(premise_keys_r, role) AND NOT list_has_all(map_extract_value(premise_keys_r, role), map_extract_value(premise_keys_l, role)))) > 0",
+          "label_for_charts": "Canonical premise identifiers over-cover source",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND list_sort(map_keys(premise_keys_l)) = list_sort(map_keys(premise_keys_r)) AND len(list_filter(map_keys(premise_keys_l), lambda role: list_sort(map_extract_value(premise_keys_l, role)) != list_sort(map_extract_value(premise_keys_r, role)))) = 0",
+          "label_for_charts": "Complete premise role sets agree",
+          "m_probability": 1.0,
+          "u_probability": 0.00390625,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0",
+          "label_for_charts": "Eligible premise role evidence is incomplete or uncertain",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
         {
           "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NULL",
           "label_for_charts": "Both sub-premise identifiers absent",
@@ -662,7 +694,7 @@
       "output_column_name": "token_rel_freq_arr_hist",
       "comparison_levels": [
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).local_evidence",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).local_evidence",
           "label_for_charts": "Postcode-local anchor lane: TF contribution replaced by joint local levels",
           "m_probability": 1.0,
           "u_probability": 1.0,
@@ -670,12 +702,12 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).missing_histogram",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).missing_histogram",
           "label_for_charts": "Term-frequency history unavailable",
           "is_null_level": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-29",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-29",
           "label_for_charts": " < 1e-29",
           "m_probability": 77935.87748881833,
           "u_probability": 1,
@@ -683,7 +715,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-28",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-28",
           "label_for_charts": " < 1e-28",
           "m_probability": 65536.0,
           "u_probability": 1,
@@ -691,7 +723,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-27",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-27",
           "label_for_charts": " < 1e-27",
           "m_probability": 55108.98747006743,
           "u_probability": 1,
@@ -699,7 +731,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-26",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-26",
           "label_for_charts": " < 1e-26",
           "m_probability": 46340.95001184158,
           "u_probability": 1,
@@ -707,7 +739,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-25",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-25",
           "label_for_charts": " < 1e-25",
           "m_probability": 38967.93874440916,
           "u_probability": 1,
@@ -715,7 +747,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-24",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-24",
           "label_for_charts": " < 1e-24",
           "m_probability": 32768.0,
           "u_probability": 1,
@@ -723,7 +755,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-23",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-23",
           "label_for_charts": " < 1e-23",
           "m_probability": 6888.623433758429,
           "u_probability": 1,
@@ -731,7 +763,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-22",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-22",
           "label_for_charts": " < 1e-22",
           "m_probability": 23170.47500592079,
           "u_probability": 1,
@@ -739,7 +771,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-21",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-21",
           "label_for_charts": " < 1e-21",
           "m_probability": 19483.96937220458,
           "u_probability": 1,
@@ -747,7 +779,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-20",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-20",
           "label_for_charts": " < 1e-20",
           "m_probability": 16384.0,
           "u_probability": 1,
@@ -755,7 +787,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-19",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-19",
           "label_for_charts": " < 1e-19",
           "m_probability": 13777.246867516858,
           "u_probability": 1,
@@ -763,7 +795,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-18",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-18",
           "label_for_charts": " < 1e-18",
           "m_probability": 11585.237502960395,
           "u_probability": 1,
@@ -771,7 +803,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-17",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-17",
           "label_for_charts": " < 1e-17",
           "m_probability": 9741.98468610229,
           "u_probability": 1,
@@ -779,7 +811,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-16",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-16",
           "label_for_charts": " < 1e-16",
           "m_probability": 8192.0,
           "u_probability": 1,
@@ -787,7 +819,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-15",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-15",
           "label_for_charts": " < 1e-15",
           "m_probability": 6888.623433758429,
           "u_probability": 1,
@@ -795,7 +827,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-14",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-14",
           "label_for_charts": " < 1e-14",
           "m_probability": 5792.618751480198,
           "u_probability": 1,
@@ -803,7 +835,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-13",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-13",
           "label_for_charts": " < 1e-13",
           "m_probability": 4870.992343051145,
           "u_probability": 1,
@@ -811,7 +843,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-12",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-12",
           "label_for_charts": " < 1e-12",
           "m_probability": 4096,
           "u_probability": 1,
@@ -819,7 +851,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-11",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-11",
           "label_for_charts": " < 1e-11",
           "m_probability": 2048,
           "u_probability": 1,
@@ -827,7 +859,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-10",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-10",
           "label_for_charts": " < 1e-10",
           "m_probability": 1024,
           "u_probability": 1,
@@ -835,7 +867,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-9",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-9",
           "label_for_charts": " < 1e-9",
           "m_probability": 512,
           "u_probability": 1,
@@ -843,7 +875,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-8",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-8",
           "label_for_charts": " < 1e-8",
           "m_probability": 256,
           "u_probability": 1,
@@ -851,7 +883,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-7",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-7",
           "label_for_charts": " < 1e-7",
           "m_probability": 128,
           "u_probability": 1,
@@ -859,7 +891,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-6",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-6",
           "label_for_charts": " < 1e-6",
           "m_probability": 64,
           "u_probability": 1,
@@ -867,7 +899,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-5",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-5",
           "label_for_charts": " < 1e-5",
           "m_probability": 32,
           "u_probability": 1,
@@ -875,7 +907,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-4",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-4",
           "label_for_charts": " < 1e-4",
           "m_probability": 16,
           "u_probability": 1,
@@ -883,7 +915,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-3",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-3",
           "label_for_charts": " < 1e-3",
           "m_probability": 8,
           "u_probability": 1,
@@ -891,7 +923,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-2",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-2",
           "label_for_charts": " < 1e-2",
           "m_probability": 4,
           "u_probability": 1,
@@ -899,7 +931,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-1",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e-1",
           "label_for_charts": " < 1e-1",
           "m_probability": 2,
           "u_probability": 1,
@@ -907,7 +939,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e0",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e0",
           "label_for_charts": " < 1e0",
           "m_probability": 1,
           "u_probability": 1,
@@ -915,7 +947,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e1",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e1",
           "label_for_charts": " < 1e1",
           "m_probability": 0.5,
           "u_probability": 1,
@@ -923,7 +955,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e2",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e2",
           "label_for_charts": " < 1e2",
           "m_probability": 0.25,
           "u_probability": 1,
@@ -931,7 +963,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e3",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e3",
           "label_for_charts": " < 1e3",
           "m_probability": 0.125,
           "u_probability": 1,
@@ -939,7 +971,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), entry -> CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), x -> x), x -> NOT x IS NULL)), (p, q) -> p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e4",
+          "sql_condition": "(list_extract(list_value(struct_pack(product := LIST_REDUCE(LIST_PREPEND(1.0, LIST_FILTER(LIST_TRANSFORM(FLATTEN(LIST_TRANSFORM(MAP_ENTRIES(token_rel_freq_arr_hist_l), lambda entry: CASE WHEN COALESCE(token_rel_freq_arr_hist_r[entry.key], 0) > 0 THEN [POWER(entry.key.rel_freq, LEAST(entry.value, token_rel_freq_arr_hist_r[entry.key]))] ELSE [] END)), lambda x: x), lambda x: NOT x IS NULL)), lambda p, q: p * q), local_evidence := (lk_eligible_r AND postcode_l = postcode_r), missing_histogram := (token_rel_freq_arr_hist_l IS NULL OR token_rel_freq_arr_hist_r IS NULL))), 1)).product < 1e4",
           "label_for_charts": " < 1e4",
           "m_probability": 0.0625,
           "u_probability": 1,

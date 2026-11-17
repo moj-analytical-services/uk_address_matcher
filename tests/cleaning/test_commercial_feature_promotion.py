@@ -94,11 +94,11 @@ def test_numeric_role_gate_covers_every_marker_alternative(marker, alternative):
             "stable_input_row_id BIGINT, "
             "clean_full_address_tokens VARCHAR[], "
             "numeric_tokens VARCHAR[])"
-        )
+        ).fetchall()
         connection.execute(
             "INSERT INTO numeric_marker_input VALUES (1, ?, ['20']::VARCHAR[])",
             [tokens],
-        )
+        ).fetchall()
         input_relation = connection.table("numeric_marker_input")
         result = DuckDBPipeline(connection, input_relation)
         result.add_step(_derive_numeric_context_roles())
@@ -208,12 +208,12 @@ def test_numeric_role_gate_preserves_null_empty_and_nonmatching_outputs():
             f"SELECT count(*) FROM (SELECT {output_columns} "
             "FROM numeric_role_candidate EXCEPT ALL "
             f"SELECT {output_columns} FROM numeric_role_baseline)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         baseline_only = connection.execute(
             f"SELECT count(*) FROM (SELECT {output_columns} "
             "FROM numeric_role_baseline EXCEPT ALL "
             f"SELECT {output_columns} FROM numeric_role_candidate)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     finally:
         connection.close()
 

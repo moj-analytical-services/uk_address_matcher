@@ -43,7 +43,7 @@ def create_test_bundle(root: Path, existing_label: str | None = None) -> Path:
                 "__IMPORTED_LABEL__", imported_label
             ).replace("__HAS_EXISTING_LABEL__", has_existing_label),
             [str(data_file)],
-        )
+        ).fetchall()
     finally:
         connection.close()
     (root / "manifest.json").write_text(
@@ -190,7 +190,7 @@ def test_apply_updates_reads_chunked_review_bundle(tmp_path: Path) -> None:
             connection.execute(
                 query,
                 [str(source)],
-            )
+            ).fetchall()
     finally:
         connection.close()
     manifest_path = bundle / "manifest.json"
