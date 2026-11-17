@@ -82,10 +82,23 @@ CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
             generate_series(1, len(__tokens) - 2),
-            __i -> __tokens[__i]
+            lambda __i: __tokens[__i]
                    || ' ' || __tokens[__i + 1]
                    || ' ' || __tokens[__i + 2]
         )
+    ELSE []::VARCHAR[]
+END""",
+)
+
+POSTCODE_DISTRICT_TRIGRAM_KEYS = SignatureKeyGenerator(
+    name="postcode_district_trigram_keys",
+    keys_sql_expr=f"""\
+CASE
+    WHEN regexp_full_match(postcode, '[A-Z]{{1,2}}[0-9]{{1,2}}[A-Z]? [0-9][A-Z]{{2}}')
+    THEN list_transform(
+        ({ADJACENT_TRIGRAM_KEYS.keys_sql_expr}),
+        lambda __phrase: split_part(postcode, ' ', 1) || '|' || __phrase
+    )
     ELSE []::VARCHAR[]
 END""",
 )
@@ -97,7 +110,7 @@ CASE
     WHEN len(__tokens) >= 2 THEN
         list_transform(
             generate_series(1, len(__tokens) - 1),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 1]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -109,11 +122,13 @@ CASE
     WHEN len(__tokens) >= 4 THEN list_concat(
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 1] || ' ' || __tokens[__i + 3]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 2] || ' ' || __tokens[__i + 3]
         )
     )
     ELSE []::VARCHAR[]
@@ -126,7 +141,7 @@ CASE
     WHEN len(__tokens) >= 3 THEN
         list_transform(
             generate_series(1, len(__tokens) - 2),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 2]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -138,7 +153,7 @@ CASE
     WHEN len(__tokens) >= 4 THEN
         list_transform(
             generate_series(1, len(__tokens) - 3),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 3]
+            lambda __i: __tokens[__i] || ' ' || __tokens[__i + 3]
         )
     ELSE []::VARCHAR[]
 END""",
@@ -150,15 +165,18 @@ CASE
     WHEN len(__tokens) >= 5 THEN list_concat(
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 1] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 1] || ' ' || __tokens[__i + 4]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 2] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 2] || ' ' || __tokens[__i + 4]
         ),
         list_transform(
             generate_series(1, len(__tokens) - 4),
-            __i -> __tokens[__i] || ' ' || __tokens[__i + 3] || ' ' || __tokens[__i + 4]
+            lambda __i: __tokens[__i] || ' ' ||
+                __tokens[__i + 3] || ' ' || __tokens[__i + 4]
         )
     )
     ELSE []::VARCHAR[]
@@ -170,6 +188,11 @@ TRIGRAM_INDEX = PhysicalIndexStrategy(
     key_generator=ADJACENT_TRIGRAM_KEYS,
     maximum_posting_size=BASE_POSTING_CAP,
 )
+TRIGRAM_SINGLETON_DISTRICT_INDEX = PhysicalIndexStrategy(
+    name="unique_postcode_district_trigram",
+    key_generator=POSTCODE_DISTRICT_TRIGRAM_KEYS,
+    maximum_posting_size=1,
+)
 BIGRAM_INDEX = PhysicalIndexStrategy(
     name="bigram",
     key_generator=ADJACENT_BIGRAM_KEYS,
@@ -179,6 +202,12 @@ TRIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="trigram",
     source_key_generator=ADJACENT_TRIGRAM_KEYS,
     target_index=TRIGRAM_INDEX,
+)
+TRIGRAM_SINGLETON_DISTRICT_LOOKUP = InvertedIndexLookupStrategy(
+    name="unique_postcode_district_trigram",
+    source_key_generator=POSTCODE_DISTRICT_TRIGRAM_KEYS,
+    target_index=TRIGRAM_SINGLETON_DISTRICT_INDEX,
+    contributes_signature_evidence=False,
 )
 BIGRAM_LOOKUP = InvertedIndexLookupStrategy(
     name="bigram",
@@ -227,7 +256,10 @@ BASE_INDEX_PORTFOLIO = InvertedIndexPortfolio(
     lookup_strategies=(BIGRAM_LOOKUP, TRIGRAM_LOOKUP),
 )
 DEFAULT_INDEXING_STRATEGIES = list(BASE_INDEX_PORTFOLIO.physical_indexes)
-DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = list(BASE_INDEX_PORTFOLIO.lookup_strategies)
+DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES = [
+    *BASE_INDEX_PORTFOLIO.lookup_strategies,
+    TRIGRAM_SINGLETON_DISTRICT_LOOKUP,
+]
 MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
     *DEFAULT_INVERTED_INDEX_LOOKUP_STRATEGIES,
     SKIP1_BIGRAM_LOOKUP,
@@ -235,6 +267,47 @@ MESSY_INVERTED_INDEX_LOOKUP_STRATEGIES = [
     SKIP1_TRIGRAM_LOOKUP,
     SKIP2_TRIGRAM_LOOKUP,
 ]
+
+
+def _derive_district_singleton_trigrams():
+    @pipeline_stage(
+        name="derive_district_singleton_trigrams",
+        description="Collect district-singleton trigrams",
+        tags="inverted_index",
+    )
+    def _stage():
+        return [
+            CTEStep(
+                "tokenised",
+                """
+                SELECT unique_id, split_part(postcode, ' ', 1) AS district,
+                    string_split(trim(clean_full_address), ' ') AS __tokens
+                FROM {input}
+                WHERE unique_id IS NOT NULL AND trim(unique_id::VARCHAR) <> ''
+                    AND regexp_full_match(postcode,
+                        '[A-Z]{1,2}[0-9]{1,2}[A-Z]? [0-9][A-Z]{2}')
+                """,
+            ),
+            CTEStep(
+                "phrases",
+                f"""
+                SELECT unique_id, district,
+                    unnest(list_distinct({ADJACENT_TRIGRAM_KEYS.keys_sql_expr})) AS phrase
+                FROM {{tokenised}}
+                """,
+            ),
+            CTEStep(
+                "singletons",
+                """
+                SELECT district, phrase, min(unique_id) AS unique_id
+                FROM {phrases}
+                GROUP BY district, phrase
+                HAVING count(DISTINCT unique_id) = 1
+                """,
+            ),
+        ]
+
+    return _stage
 
 
 def _token_array_expression(token_column: str) -> str:
@@ -266,7 +339,7 @@ def _derive_keys_for_strategy(
             filtered_expr = (
                 "list_filter("
                 f"{keys_expr}, "
-                f"__k -> (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
+                f"lambda __k: (abs(hash(__k)) % {num_of_chunks}) = {chunk_index}"
                 ")"
             )
         token_array_expression = _token_array_expression(token_column)
@@ -381,10 +454,18 @@ def _lookup_keys_in_inverted_index(
         SELECT *
         FROM {input}
         """
+        postcode_projection = (
+            ", postcode"
+            if any(
+                strategy.source_key_generator == POSTCODE_DISTRICT_TRIGRAM_KEYS
+                for strategy in lookup_strategies
+            )
+            else ""
+        )
         tokenised_sql = f"""
         SELECT
-            unique_id,
-            {token_array_expression} AS __tokens
+            ukam_address_id AS unique_id,
+            {token_array_expression} AS __tokens{postcode_projection}
         FROM {{base}}
         """
         union_parts = []
@@ -432,7 +513,7 @@ def _lookup_keys_in_inverted_index(
         INNER JOIN __ukam_inverted_index AS index
             ON requested.__key = index.key
            AND requested.__lookup_strategy = index.index_strategy
-           AND len(index.unique_ids) <= requested.__maximum_posting_size
+              AND len(index.unique_ids) <= requested.__maximum_posting_size
         """
         provenance_sql = """
         SELECT
@@ -502,9 +583,9 @@ def _lookup_keys_in_inverted_index(
             ) AS signature_unique_hits_map
         FROM {base} AS base
         LEFT JOIN {deduplicated} AS candidates
-          ON base.unique_id = candidates.__messy_uid
+                    ON base.ukam_address_id = candidates.__messy_uid
         LEFT JOIN {score_map} AS scores
-          ON base.unique_id = scores.__messy_uid
+                    ON base.ukam_address_id = scores.__messy_uid
         """
         steps = [
             CTEStep("base", base_sql),

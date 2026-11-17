@@ -115,7 +115,7 @@ def _derive_numeric_context_roles():
                 )
                 THEN list_transform(
                     range(1, len(clean_full_address_tokens) + 1),
-                    pos -> struct_pack(
+                    lambda pos: struct_pack(
                         token := list_extract(clean_full_address_tokens, pos),
                         previous_one := CASE
                             WHEN pos > 1 THEN
@@ -156,7 +156,7 @@ def _derive_numeric_context_roles():
             *,
             list_transform(
                 __numeric_token_contexts,
-                context -> CASE
+                lambda context: CASE
                     {marker_priority_sql}
                     ELSE NULL::UTINYINT
                 END
@@ -169,9 +169,9 @@ def _derive_numeric_context_roles():
             list_transform(
                 list_filter(
                     range(1, len(__numeric_token_contexts) + 1),
-                    pos -> list_extract(__numeric_marker_priorities, pos) IS NOT NULL
+                    lambda pos: list_extract(__numeric_marker_priorities, pos) IS NOT NULL
                 ),
-                pos -> struct_pack(
+                lambda pos: struct_pack(
                     token := list_extract(__numeric_token_contexts, pos).token,
                     priority := list_extract(__numeric_marker_priorities, pos)
                 )
@@ -183,12 +183,12 @@ def _derive_numeric_context_roles():
             *,
             list_transform(
                 numeric_tokens,
-                token -> CASE list_min(list_transform(
+                lambda token: CASE list_min(list_transform(
                     list_filter(
                         __numeric_marker_entries,
-                        entry -> entry.token = token
+                        lambda entry: entry.token = token
                     ),
-                    entry -> entry.priority
+                    lambda entry: entry.priority
                 ))
                     {marker_name_sql}
                     ELSE 'ADDRESS_NUMBER'
@@ -205,7 +205,7 @@ def _derive_numeric_context_roles():
         ),
         list_transform(
             numeric_tokens,
-            (token, index) -> CASE
+            lambda token, index: CASE
                 WHEN __numeric_specific_markers[index] = 'ADDRESS_NUMBER'
                     THEN 'location|ADDRESS_NUMBER|' || token
                 WHEN __numeric_specific_markers[index] IN (
@@ -220,7 +220,7 @@ def _derive_numeric_context_roles():
         ) AS numeric_role_keys,
         list_transform(
             __numeric_specific_markers,
-            marker -> CASE
+            lambda marker: CASE
                 WHEN marker = 'ADDRESS_NUMBER' THEN 'location'
                 WHEN marker IN (
                     'PARKING_SPACE', 'CONTAINER', 'PLATFORM', 'MAST', 'PLOT',

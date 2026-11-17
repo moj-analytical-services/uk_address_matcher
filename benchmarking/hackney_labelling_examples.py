@@ -54,5 +54,4 @@ con.sql(f"""
 
 _launch_labelling_app_beta(
     labelling_bundle_path=bundle_path,
-    canonical_address_path=CANONICAL_PATH,
 )

@@ -66,7 +66,8 @@
 
   { "token": "COTT", "replacement": "COTTAGE" },
   { "token": "COT", "replacement": "COTTAGE" },
-  { "token": "COTTS", "replacement": "COTTAGES" },
+  { "token": "COTTS", "replacement": "COTTAGE" },
+  { "token": "COTTAGES", "replacement": "COTTAGE" },
 
   { "token": "CR", "replacement": "CRESCENT" },
   { "token": "CRES", "replacement": "CRESCENT" },

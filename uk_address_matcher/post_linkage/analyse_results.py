@@ -151,7 +151,7 @@ def best_matches_with_distinguishability(
                 *
             FROM ({df_predict.sql_query()}) AS predict_for_distinguishability
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY unique_id_r, unique_id_l
+                PARTITION BY ukam_address_id_r, unique_id_l
                 ORDER BY match_weight DESC, ukam_address_id_l
             ) = 1
         ),
@@ -159,14 +159,14 @@ def best_matches_with_distinguishability(
             SELECT
                 *,
                 ROW_NUMBER() OVER (
-                    PARTITION BY unique_id_r
+                    PARTITION BY ukam_address_id_r
                     ORDER BY match_weight DESC, unique_id_l, ukam_address_id_l
                 ) AS candidate_rank,
                 match_weight - LEAD(match_weight) OVER (
-                    PARTITION BY unique_id_r
+                    PARTITION BY ukam_address_id_r
                     ORDER BY match_weight DESC, unique_id_l, ukam_address_id_l
                 ) AS distinguishability,
-                COUNT(*) OVER (PARTITION BY unique_id_r) AS match_count
+                COUNT(*) OVER (PARTITION BY ukam_address_id_r) AS match_count
             FROM distinct_canonical_candidates
         ),
         categorized_matches AS (

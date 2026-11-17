@@ -247,7 +247,7 @@ def _score_road_candidates(
             {score_expression} AS ranker_logit
         FROM scorecard_features
         """
-    )
+    ).fetchall()
 
 
 def derive_rightmost_numeric_position_sql(source_relation: str) -> str:
@@ -269,7 +269,7 @@ def derive_rightmost_numeric_position_sql(source_relation: str) -> str:
             * EXCLUDE (_roadlike_peeled_tokens),
             CAST(list_max(list_transform(
                 range(1, array_length(_roadlike_peeled_tokens) + 1),
-                position -> CASE
+                lambda position: CASE
                     WHEN list_contains(
                         numeric_tokens,
                         list_extract(_roadlike_peeled_tokens, position)
@@ -302,7 +302,7 @@ def roadlike_place_prepared_input_sql(
                 *,
                 list_max(list_transform(
                     range(1, array_length(peeled_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens,
                             list_extract(peeled_tokens, position)
@@ -392,7 +392,7 @@ def roadlike_place_prepared_candidate_sources_sql(
                 *,
                 list_max(list_transform(
                     range(1, array_length(address_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens, list_extract(address_tokens, position)
                         ) THEN position
@@ -590,7 +590,7 @@ def roadlike_place_prepared_candidate_sql(
             FROM terminal_shapes AS candidate_sources
             CROSS JOIN unnest(list_filter(
                 range(numeric_anchor + 2, array_length(address_tokens) + 1),
-                position -> regexp_matches(
+                lambda position: regexp_matches(
                     list_extract(address_tokens, position),
                     {road_terminal_pattern}
                 )
@@ -696,7 +696,7 @@ def _road_tail_signature_sql(source_relation: str) -> str:
                 *,
                 list_max(list_transform(
                     range(1, array_length(address_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens,
                             list_extract(address_tokens, position)
@@ -765,7 +765,7 @@ def roadlike_place_candidate_sql(source_relation: str) -> str:
                 addresses.*,
                 list_max(list_transform(
                     range(1, array_length(address_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens, list_extract(address_tokens, position)
                         ) THEN position
@@ -902,7 +902,9 @@ def _materialized_road_scores(
                 "rightmost_numeric_position" in address_table.columns
             ),
         )
-        con.execute(f"CREATE TEMPORARY TABLE {prepared_table} AS {prepared_input_sql}")
+        con.execute(
+            f"CREATE TEMPORARY TABLE {prepared_table} AS {prepared_input_sql}"
+        ).fetchall()
         with ExitStack() as resources:
             model_path = resources.enter_context(
                 as_file(
@@ -920,7 +922,7 @@ def _materialized_road_scores(
                 con.execute(
                     f"CREATE TEMPORARY TABLE {tails_table} AS "
                     f"{_road_tail_signature_sql(prepared_table)}"
-                )
+                ).fetchall()
                 con.execute(f"""
                     CREATE TEMPORARY TABLE {signatures_table} AS
                     SELECT
@@ -931,7 +933,7 @@ def _materialized_road_scores(
                     WHERE array_length(road_tail_tokens) >= 2
                     GROUP BY road_tail_tokens, allow_truncated_windows
                         {signature_district}
-                """)
+                """).fetchall()
                 candidate_source = f"""(
                     SELECT
                         address_id AS unique_id,
@@ -1051,7 +1053,7 @@ def derive_top_1_road_keys(
             JOIN {signatures_table} AS signatures
                 USING ({signature_keys})
             JOIN winners ON signatures.address_id = winners.address_id
-        """)
+        """).fetchall()
     return con.table(keys_table)
 
 
@@ -1120,7 +1122,7 @@ def add_top_1_road_features(
                 ) AS road_1_margin,
                 list_filter(
                     string_split(ranked.candidate_phrase, ' '),
-                    token -> list_contains({unusual_tokens}, token)
+                    lambda token: list_contains({unusual_tokens}, token)
                         AND NOT list_contains([{road_type_tokens}], token)
                 ) AS road_1_distinctive_tokens
             FROM {input_name} AS input
@@ -1128,7 +1130,7 @@ def add_top_1_road_features(
                 ON CAST(input.unique_id AS VARCHAR) = ranked.address_id
                 AND ranked.candidate_rank = 1
             """
-        )
+        ).fetchall()
     return con.table(features_table)
 
 
@@ -1142,9 +1144,15 @@ def add_road_blocking_features(
     """Attach the scalar road key used by the packaged blocker."""
     if "road_1_norm" in address_table.columns:
         return address_table
+    identity_column = (
+        "ukam_address_id" if "ukam_address_id" in address_table.columns else "unique_id"
+    )
+    road_input = address_table.select(
+        f"* EXCLUDE (unique_id), CAST({identity_column} AS VARCHAR) AS unique_id"
+    )
     road_keys = derive_top_1_road_keys(
         con,
-        address_table,
+        road_input,
         roadlike_places=roadlike_places,
         require_catalogue_support=require_catalogue_support,
     )
@@ -1152,7 +1160,7 @@ def add_road_blocking_features(
         SELECT input.*, road_keys.road_1_norm
         FROM ({address_table.sql_query()}) AS input
         LEFT JOIN ({road_keys.sql_query()}) AS road_keys
-            ON CAST(input.unique_id AS VARCHAR) = road_keys.unique_id
+            ON CAST(input.{identity_column} AS VARCHAR) = road_keys.unique_id
     """)
 
 
