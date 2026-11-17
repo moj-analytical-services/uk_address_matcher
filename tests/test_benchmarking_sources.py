@@ -2,9 +2,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
+from benchmarking.config.datasets import _clean_output
 from benchmarking.config.sources import resolve_data_path
+
+
+def test_dataset_cleaning_retains_missing_postcodes() -> None:
+    with duckdb.connect() as connection:
+        source = connection.sql(
+            "SELECT * FROM (VALUES "
+            "('1', '12 Example Street', '101', NULL), "
+            "('2', '8 Sample Road', '102', 'AB1 2CD'), "
+            "(NULL, '4 Test Lane', '103', NULL), "
+            "('3', ' ', '104', NULL)"
+            ") AS source(unique_id, address_concat, ukam_label, postcode)"
+        )
+        assert _clean_output(connection, source).order("unique_id").fetchall() == [
+            ("1", "12 example street", "101", None),
+            ("2", "8 sample road", "102", "AB1 2CD"),
+        ]
 
 
 def test_resolve_data_path_accepts_s3_uri(monkeypatch: pytest.MonkeyPatch) -> None:

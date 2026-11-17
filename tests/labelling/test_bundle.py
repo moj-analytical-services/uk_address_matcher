@@ -130,7 +130,7 @@ def test_exports_default_bundle_with_deterministic_candidates(
         assert [
             chunked_con.execute(
                 "SELECT COUNT(*) FROM read_parquet(?)", [str(path)]
-            ).fetchone()[0]
+            ).fetchall()[0][0]
             for path in chunked_paths
         ] == [1, 1]
 
@@ -198,13 +198,18 @@ def test_exports_reranked_splink_candidates(tmp_path):
     bundle_path = result._export_labelling_bundle_beta(tmp_path / "splink_bundle")
     manifest = json.loads((bundle_path / "manifest.json").read_text())
     with duckdb.connect() as fresh_con:
-        candidate_count, candidates = fresh_con.execute(
-            """
+        candidate_count, candidates = next(
+            iter(
+                fresh_con.execute(
+                    """
             SELECT candidate_count, top_candidates
             FROM read_parquet(?)
             """,
-            [str(bundle_path / "review_data.parquet")],
-        ).fetchone()
+                    [str(bundle_path / "review_data.parquet")],
+                ).fetchall()
+            ),
+            None,
+        )
 
     assert candidate_count >= len(candidates) > 0
     assert manifest["splink"]["use_relation_marker_reranker"] is True
@@ -261,14 +266,19 @@ def test_preserves_labels_with_fixed_default_schema(tmp_path):
 
     bundle_path = result._export_labelling_bundle_beta(tmp_path / "review_bundle")
     with duckdb.connect() as fresh_con:
-        row = fresh_con.execute(
-            """
+        row = next(
+            iter(
+                fresh_con.execute(
+                    """
             SELECT ukam_label, has_existing_label, resolved_label_id,
                 ukam_label_clean_full_address, ukam_label_postcode, top_candidates
             FROM read_parquet(?)
             """,
-            [str(bundle_path / "review_data.parquet")],
-        ).fetchone()
+                    [str(bundle_path / "review_data.parquet")],
+                ).fetchall()
+            ),
+            None,
+        )
         columns = {
             column[0]
             for column in fresh_con.execute(

@@ -35,6 +35,16 @@ _DATASETS: dict[str, dict[str, str]] = {
         "file_name": "ABERDEENSHIRE_CTBANDS_ONSUD_202512.csv",
         "data_path_env": "UKAM_ABERDEENSHIRE_DATA_PATH",
     },
+    "conwy": {
+        "label": "Conwy",
+        "file_name": "conwy-data.csv",
+        "data_path_env": "UKAM_CONWY_DATA_PATH",
+    },
+    "gwynedd": {
+        "label": "Gwynedd domestic property list",
+        "file_name": "Gwynedd-domestic-property-list-060626.csv",
+        "data_path_env": "UKAM_GWYNEDD_DATA_PATH",
+    },
     "hackney": {
         "label": "Hackney council tax",
         "file_name": "HACKNEY_CTBANDS_ONSUD_202507.csv",
@@ -113,7 +123,25 @@ def _clean_output(
         WHERE unique_id IS NOT NULL
           AND address_concat IS NOT NULL
           AND TRIM(address_concat) != ''
-          AND postcode IS NOT NULL
+        """
+    )
+
+
+def filter_dataset_to_canonical_labels(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+    canonical_relation: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    return con.sql(
+        f"""
+        SELECT source.*
+        FROM ({relation.sql_query()}) AS source
+        WHERE EXISTS (
+            SELECT 1
+            FROM ({canonical_relation.sql_query()}) AS canonical
+            WHERE CAST(canonical.unique_id AS VARCHAR)
+                = CAST(source.ukam_label AS VARCHAR)
+        )
         """
     )
 
@@ -136,6 +164,54 @@ def _load_hackney(
             "POSTCODE" AS postcode
         FROM {reader}('{source_path}')
         WHERE "UPRN" IS NOT NULL
+        """
+    )
+    return _clean_output(con, relation)
+
+
+def _load_conwy(
+    con: duckdb.DuckDBPyConnection,
+    source_path: str,
+) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
+    uprn_expr = _normalise_uprn_expr('"uprn"')
+    address_expr = (
+        'regexp_replace(trim(concat_ws(\' \', "addr1", "addr2", '
+        "\"addr3\", \"addr4\")), '\\s+', ' ')"
+    )
+    relation = con.sql(
+        f"""
+        SELECT
+            {uprn_expr} AS unique_id,
+            {uprn_expr} AS ukam_label,
+            {address_expr} AS address_concat,
+            "postcode" AS postcode
+        FROM {reader}('{source_path}')
+            WHERE "uprn" IS NOT NULL
+        """
+    )
+    return _clean_output(con, relation)
+
+
+def _load_gwynedd(
+    con: duckdb.DuckDBPyConnection,
+    source_path: str,
+) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
+    uprn_expr = _normalise_uprn_expr('"uprn"')
+    address_expr = (
+        'regexp_replace(trim(concat_ws(\' \', "addr1", "addr2", '
+        "\"addr3\", \"addr4\")), '\\s+', ' ')"
+    )
+    relation = con.sql(
+        f"""
+        SELECT
+            {uprn_expr} AS unique_id,
+            {uprn_expr} AS ukam_label,
+            {address_expr} AS address_concat,
+            "postcode" AS postcode
+        FROM {reader}('{source_path}')
+        WHERE "uprn" IS NOT NULL
         """
     )
     return _clean_output(con, relation)
@@ -416,6 +492,8 @@ def load_dataset(
 
         loaders = {
             "aberdeenshire": _load_aberdeenshire,
+            "conwy": _load_conwy,
+            "gwynedd": _load_gwynedd,
             "hackney": _load_hackney,
             "lambeth_council_tax": _load_lambeth_council_tax,
             "lambeth_electoral_register": _load_lambeth_electoral_register,

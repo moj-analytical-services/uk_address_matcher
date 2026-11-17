@@ -388,7 +388,7 @@ class _MatchResultDebugTools:
                 candidate_id=candidate_id,
             )
 
-            if records.limit(1).fetchone() is None:
+            if not records.limit(1).fetchall():
                 continue
 
             try:

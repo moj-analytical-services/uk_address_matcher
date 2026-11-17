@@ -64,16 +64,16 @@ def test_logistic_logit_sql_uses_folded_feature_weights() -> None:
         f"{feature} {'BOOLEAN' if feature in boolean_features else 'DOUBLE'}"
         for feature in FEATURE_COLUMNS
     )
-    con.execute(f"CREATE TABLE features ({columns})")
+    con.execute(f"CREATE TABLE features ({columns})").fetchall()
     values = ", ".join(
         "true" if feature in boolean_features else str(index)
         for index, feature in enumerate(FEATURE_COLUMNS)
     )
-    con.execute(f"INSERT INTO features VALUES ({values})")
+    con.execute(f"INSERT INTO features VALUES ({values})").fetchall()
 
-    actual = con.execute(f"SELECT {logistic_logit_sql(model)} FROM features").fetchone()[
+    actual = con.execute(f"SELECT {logistic_logit_sql(model)} FROM features").fetchall()[
         0
-    ]
+    ][0]
     expected = -1.5 + sum(
         index * (1 if feature in boolean_features else index)
         for index, feature in enumerate(FEATURE_COLUMNS)
@@ -92,7 +92,7 @@ def test_top_one_metrics_uses_one_deterministic_winner_per_address() -> None:
         "('c', 'DELTA ROAD', 1, NULL, false, false, 0.8)) "
         "AS rows(unique_id, candidate_phrase, candidate_start_position, candidate_label, "
         "candidate_exact, target_eligible, ranker_logit)"
-    )
+    ).fetchall()
 
     actual = _top_one_metrics(con, score_table="scores")
 
@@ -122,7 +122,7 @@ def test_additive_pairwise_training_weights_each_address_equally() -> None:
     con.register("feature_rows", frame)
     con.execute(
         "CREATE TABLE all_sector_candidate_features AS SELECT * FROM feature_rows"
-    )
+    ).fetchall()
 
     actual, details = _additive_pairwise_training_frame(con, max_addresses=10)
 
@@ -147,8 +147,8 @@ def test_additive_feature_sql_exposes_tree_thresholds_and_interactions() -> None
         for name, value in feature_values.items()
     )
     values = ", ".join(str(value).lower() for value in feature_values.values())
-    con.execute(f"CREATE TABLE candidates ({columns})")
-    con.execute(f"INSERT INTO candidates VALUES ({values})")
+    con.execute(f"CREATE TABLE candidates ({columns})").fetchall()
+    con.execute(f"INSERT INTO candidates VALUES ({values})").fetchall()
 
     actual = con.execute(
         f"SELECT {additive_feature_sql('candidates')} FROM candidates"
@@ -166,7 +166,7 @@ def test_precision_policy_selects_maximum_recall_at_requested_precision() -> Non
         "CREATE TABLE winners AS SELECT * FROM (VALUES "
         "(3.0, true, 1), (2.0, true, 1), (1.0, true, 0), (0.0, false, NULL)) "
         "AS rows(ranker_logit, target_eligible, winner_label)"
-    )
+    ).fetchall()
 
     curve = _threshold_curve(con, winner_table="winners")
     actual = _select_precision_policy(curve, minimum_precision=1.0)
@@ -187,7 +187,7 @@ def test_tree_rule_feature_definition_evaluates_its_full_conjunction() -> None:
     con.execute(
         "CREATE TABLE candidates AS SELECT * FROM (VALUES (true, 5.0, 0.7), "
         "(true, 5.0, 0.8)) AS rows(road_syntax_terminal, tail_length, end_tail_fraction)"
-    )
+    ).fetchall()
     rules = (
         TreeRule(
             conditions=(
