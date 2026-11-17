@@ -70,7 +70,7 @@ def open_generated_app(
                 ) TO ? (FORMAT PARQUET)
                 """,
                 [str(address_path)],
-            )
+            ).fetchall()
         finally:
             connection.close()
     else:
@@ -160,7 +160,7 @@ def test_local_labelling_app_selects_server_searched_canonical_record(
             ) TO ? (FORMAT PARQUET)
             """,
             [str(canonical)],
-        )
+        ).fetchall()
     finally:
         connection.close()
 
@@ -341,7 +341,7 @@ def test_generated_app_labels_with_canonical_data_and_downloads_labels(
             ) TO ? (FORMAT PARQUET)
             """,
             [str(canonical)],
-        )
+        ).fetchall()
     finally:
         connection.close()
 

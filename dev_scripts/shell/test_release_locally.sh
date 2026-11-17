@@ -1,11 +1,11 @@
 #!/bin/bash
 # Test the PyPI release workflow locally before deploying
-# This mirrors the steps in .github/workflows/pypi-release.yaml
+# This builds and smoke-tests the package without publishing.
 
 set -e  # Exit on any error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TEST_ENV_DIR="$PROJECT_ROOT/.test-release-env"
 
 echo "=============================================="

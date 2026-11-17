@@ -33,7 +33,7 @@ jobs:
             'Before merging this PR, make sure that you run the following check to test for performance regression:' \
             '' \
             '```bash' \
-            'bash ./shell/compare_commits.sh \' \
+            "bash ./dev_scripts/shell/compare_commits.sh \\" \
             "  -b ${PR_BASE_REF} \\" \
             "  -c ${PR_HEAD_SHA} \\" \
             '  -d rhondda,aberdeenshire,hackney,mid_sussex' \

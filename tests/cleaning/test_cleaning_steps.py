@@ -10,15 +10,15 @@ from uk_address_matcher.cleaning.chunking_strategies import (
 from uk_address_matcher.cleaning.steps import (
     _derive_numeric_range,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
     _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
     _split_numeric_tokens_to_cols,
 )
+from uk_address_matcher.cleaning.steps.token_parsing import _address_for_parsing
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
 
@@ -36,6 +36,29 @@ def _run_adjacent_stage(input_relation, connection, *, use_precomputed_tokens=Fa
         )
     )
     return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def test_address_for_parsing_only_rewrites_matching_exclusion_markers():
+    connection = duckdb.connect()
+    input_relation = connection.sql("""
+        SELECT * FROM (VALUES
+            ('EXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD'),
+            ('FLAT 2 (EXCLUDING ROAD) 42 FICTIONAL ROAD'),
+            ('UNEXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD'),
+            ('excluding road flat 2 42 fictional road')
+        ) AS addresses(address)
+    """)
+
+    parsed = input_relation.project(
+        f"{_address_for_parsing('address')} AS parsed_address"
+    ).fetchall()
+
+    assert parsed == [
+        ("EXCLUDING_ROAD FLAT 2 42 FICTIONAL ROAD",),
+        ("FLAT 2 (EXCLUDING_ROAD) 42 FICTIONAL ROAD",),
+        ("UNEXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD",),
+        ("excluding road flat 2 42 fictional road",),
+    ]
 
 
 def _run_legacy_adjacent_query(input_relation, connection):
@@ -56,7 +79,7 @@ def _run_legacy_adjacent_query(input_relation, connection):
                                 list_reverse(__{neighbour_name}_tokens),
                                 true
                             ),
-                            token_pair -> token_pair[1] != token_pair[2]
+                            lambda token_pair: token_pair[1] != token_pair[2]
                         ),
                         true
                     ) - 1,
@@ -170,6 +193,7 @@ def test_parse_out_numbers_excludes_road_references():
                 ('1-3 FICTIONAL TEST ROAD C110S', NULL, ['1-3']),
                 ('UNIT A12 7 FICTIONAL TEST ROAD A96T', NULL, ['A12', '7']),
                 ('FLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
+                ('FFLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
                 ('FLAT A 12 8 FICTIONAL TEST ROAD A 952', NULL, ['12', '8']),
                 ('UNIT C4 FICTIONAL TEST ROAD A90T', NULL, ['C4']),
                 ('PLOT U123A 6 FICTIONAL TEST ROAD C110S', NULL, ['U123A', '6']),
@@ -191,7 +215,7 @@ def test_parse_out_numbers_excludes_road_references():
         """).fetchall()
             == []
         )
-        assert result.count("*").fetchone()[0] == 20
+        assert result.count("*").fetchall()[0][0] == 21
         assert "__numeric_token_address" not in result.columns
 
 
@@ -206,11 +230,18 @@ def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():
         ] AS token_rel_freq_arr
     """)
 
-    result = _run_single_stage(
-        _separate_unusual_tokens,
-        input_relation,
-        connection,
-    ).fetchone()
+    result = next(
+        iter(
+            _run_single_stage(
+                _separate_unusual_tokens,
+                input_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
 
     assert result[-2:] == (
         ["CLEEVE", "ALCESTER"],
@@ -528,25 +559,33 @@ def test_separate_distinguishing_tokens_can_choose_best_left_or_right_neighbour(
         """
     )
 
-    left_target = (
-        _run_single_stage(
-            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-            left_input,
-            connection,
-        )
-        .filter("ukam_address_id = 2")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    left_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                left_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
-    right_target = (
-        _run_single_stage(
-            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
-            right_input,
-            connection,
-        )
-        .filter("ukam_address_id = 2")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    right_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                right_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
 
     assert left_target == (
@@ -577,10 +616,14 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
         input_relation,
         connection,
     )
-    target = (
-        result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    target = next(
+        iter(
+            result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
 
     assert target == (["ALPHC", "RAINBOW"], ["LANE", "TAUNTON"])
@@ -602,6 +645,7 @@ def test_parse_out_flat_positional():
     test_cases = [
         ("11A SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("FLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
+        ("FFLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("BASEMENT FLAT A 11 SPITFIRE COURT BIRMINGHAM", "BASEMENT", "A", None),
         (
             "BASEMENT FLAT 11 243 SPITFIRE COURT BIRMINGHAM",
@@ -616,6 +660,7 @@ def test_parse_out_flat_positional():
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
         ("FLAT 2 733 FICTIONAL ROAD", None, None, "2"),
+        ("FFLAT 2 733 FICTIONAL ROAD", None, None, "2"),
         (
             "2 7 FICTIONAL ROAD",
             None,
@@ -626,7 +671,9 @@ def test_parse_out_flat_positional():
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
         ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
+        ("FFLAT 3/2 41 DUMMY ROAD", None, None, "2"),
         ("FLAT THE CROWN TESTING ROAD", None, None, None),
+        ("FFLAT THE CROWN TESTING ROAD", None, None, None),
         (
             "FLAT 12A HIGH STREET",
             None,
@@ -660,6 +707,7 @@ def test_parse_out_flat_positional():
         ),
         # Floor-first single numbers remain ambiguous.
         ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
+        ("FIRST FLOOR FFLAT 120 TEST", "FIRST FLOOR", None, None),
         ("GROUND FLAT 4 HIGH STREET", None, None, None),
         # LOWER GROUND variants (canonicalised to GROUND FLOOR)
         ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
@@ -714,9 +762,7 @@ def test_parse_out_flat_positional():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(
-        _parse_out_flat_position_and_letter, input_relation, connection
-    )
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     positional_idx = columns.index("flat_positional")
@@ -763,11 +809,18 @@ def test_parse_out_flat_positional():
         + _sql_literal("FLAT, 6 HIGH STREET")
         + " AS original_address_concat"
     )
-    comma_separated_flat_row = _run_single_stage(
-        _parse_out_flat_position_and_letter,
-        comma_separated_flat_relation,
-        connection,
-    ).fetchone()
+    comma_separated_flat_row = next(
+        iter(
+            _run_single_stage(
+                _parse_out_sub_premise,
+                comma_separated_flat_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
     assert comma_separated_flat_row[number_idx] is None
 
 
@@ -780,12 +833,20 @@ def test_parse_out_sub_premise_location():
         ("FLAT SECOND FLOOR CENTRE 5 MORESBY ROAD LONDON", "CENTRE"),
         ("FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON", "FRONT"),
         ("FLAT FIRST FLOOR REAR 176 LOWER CLAPTON ROAD LONDON", "REAR"),
+        ("MAISONETTE GROUND FIRST AND SECOND FLOOR REAR 18 HIGH ROAD", "REAR"),
+        ("FLAT 5 FIRST FLOOR MIDDLE 20 HIGH STREET", "CENTRE"),
+        ("MIDDLE FLAT 20 HIGH STREET", "CENTRE"),
+        ("FIRST FLOOR FLAT 20 MIDDLE STREET", None),
+        ("FLAT 5 FIRST FLOOR 20 FRONT STREET", None),
+        ("FFLAT RIGHT MAIN ROAD", "RIGHT"),
         (
             "MAISONETTE BASEMENT AND GROUND FLOOR RIGHT 46 LANSDOWNE DRIVE LONDON",
             "RIGHT",
         ),
         ("COMMERCIAL CENTRE 40 MARTELL ROAD", None),
         ("GROUND FLOOR FLAT 4 UFTON ROAD LONDON", None),
+        ("UNIT 4 REAR 42 TEST ROAD", "REAR"),
+        ("UNIT 4 LEFT 42 TEST ROAD", "LEFT"),
     ]
 
     input_relation = connection.sql(
@@ -796,7 +857,7 @@ def test_parse_out_sub_premise_location():
     )
 
     pipeline = DuckDBPipeline(connection, input_relation)
-    pipeline.add_step(_parse_out_flat_position_and_letter())
+    pipeline.add_step(_parse_out_sub_premise())
     pipeline.add_step(_parse_out_sub_premise_location())
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
 
@@ -1002,7 +1063,7 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
             show_progress="off",
         )
 
-    assert cleaned.count("*").fetchone()[0] == 1
+    assert cleaned.count("*").fetchall()[0][0] == 1
     stage_prefixes = ("Cleaning and preprocessing", "Applying term frequencies")
     assert not any(
         record.getMessage().startswith(stage_prefix)
@@ -1086,7 +1147,7 @@ def test_parse_out_business_unit():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(_parse_out_business_unit, input_relation, connection)
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     type_idx = columns.index("business_unit_type")

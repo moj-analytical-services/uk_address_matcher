@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import wraps
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
-
-from typing_extensions import ParamSpec
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    ParamSpec,
+    Tuple,
+    Union,
+)
 
 from uk_address_matcher.sql_pipeline.helpers import _uid
 

@@ -131,7 +131,7 @@ def test_distinguishing_reranker_joins_cached_tokens_from_cleaned_inputs():
 
         overlap = con.sql(
             f"SELECT overlapping_tokens_this_l_and_r FROM ({result.sql_query()})"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert dict(overlap)["10"] == 1
     finally:
         con.close()
@@ -172,7 +172,7 @@ def run_assertions(
                 ukam_address_id_r integer
             )
             """
-        )
+        ).fetchall()
         rows = [
             (
                 row["match_weight"],
@@ -245,7 +245,7 @@ def run_assertions(
             from df_improved
             where unique_id_l = '{unique_id_l}'
             """
-            row = con.sql(sql).fetchone()
+            row = next(iter(con.sql(sql).limit(1).fetchall()), None)
 
             # Unpack the row into five variables
             (
