@@ -40,13 +40,6 @@ def _normalise_and_validate_address_input(
     if not isinstance(rel, duckdb.DuckDBPyRelation):
         raise TypeError(f"Input {dataset} must be a DuckDB relation.")
     id_column = _input_id_column(rel.columns, dataset=dataset)
-    null_ids, null_addresses = rel.aggregate(
-        f"count(*) FILTER (WHERE {id_column} IS NULL), "
-        "count(*) FILTER (WHERE address_concat IS NULL)"
-    ).fetchone()
-    for field, null_count in ((id_column, null_ids), ("address_concat", null_addresses)):
-        if null_count:
-            raise ValueError(f"Input {dataset} field '{field}' must not be null.")
     if id_column == "address_id":
         rel = rel.project("*, address_id AS unique_id")
     return rel
