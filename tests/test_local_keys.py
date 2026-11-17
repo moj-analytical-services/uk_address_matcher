@@ -7,7 +7,6 @@ from uk_address_matcher import (
     AddressMatcher,
     SplinkStage,
     prepare_canonical_folder,
-    prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.local_keys import (
