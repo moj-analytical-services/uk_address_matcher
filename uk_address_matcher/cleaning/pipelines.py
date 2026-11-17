@@ -18,9 +18,8 @@ from uk_address_matcher.cleaning.steps import (
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
     _parse_out_address_structure_premise,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
     _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
     _prepare_roadlike_place_input,
     _preserve_original_address_concat,
@@ -113,9 +112,8 @@ def _materialize_numeric_features():
 
 
 QUEUE_DERIVE_NON_TF_FEATURES = [
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
-    _parse_out_business_unit,
     _parse_out_address_structure_premise,
     _parse_out_numbers,
     _derive_numeric_range,
@@ -127,9 +125,8 @@ QUEUE_DERIVE_NON_TF_FEATURES = [
 ]
 
 QUEUE_DERIVE_NON_TF_FEATURES_MATERIALIZED = [
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
-    _parse_out_business_unit,
     _parse_out_address_structure_premise,
     _parse_out_numbers,
     _materialize_numeric_features,
@@ -248,7 +245,7 @@ def _run_narrow_precomputed_tf_pipeline(
     if "numeric_range" in address_table.columns:
         required_columns.append("numeric_range")
     if additional_stages:
-        required_columns.append("unique_id")
+        required_columns.extend(["unique_id", "postcode"])
         required_columns.append(
             "clean_full_address_tokens"
             if "clean_full_address_tokens" in address_table.columns
@@ -379,7 +376,7 @@ def get_numeric_term_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
     ]
 
@@ -425,7 +422,7 @@ def get_address_token_frequencies_from_address_table(
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
         _clean_address_string_second_pass_and_tokenise,
         _split_numeric_tokens_to_cols,
@@ -520,7 +517,7 @@ def _register_inverted_index_table(
         con.sql("DROP VIEW IF EXISTS __ukam_inverted_index")
         con.execute(
             f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
-        )
+        ).fetchall()
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
@@ -546,7 +543,9 @@ def _register_inverted_index_meta(
         inverted_index_n = con.sql(
             "SELECT COUNT(DISTINCT u) "
             "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     n_value = max(int(inverted_index_n or 0), 1)
-    con.execute("DROP TABLE IF EXISTS __ukam_index_meta")
-    con.execute(f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n")
+    con.execute("DROP TABLE IF EXISTS __ukam_index_meta").fetchall()
+    con.execute(
+        f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n"
+    ).fetchall()

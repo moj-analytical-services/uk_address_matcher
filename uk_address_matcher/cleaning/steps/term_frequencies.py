@@ -68,7 +68,7 @@ def _add_term_frequencies_to_address_tokens():
         ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
-            s -> s.freq
+            lambda s: s.freq
         ) AS freq_arr
     FROM {joined_scalars}
     GROUP BY ukam_address_id
@@ -82,7 +82,7 @@ def _add_term_frequencies_to_address_tokens():
         base.* EXCLUDE (address_without_numbers_tokenised),
         list_transform(
             list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
+            lambda x: struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
@@ -147,7 +147,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
-            s -> s.freq
+            lambda s: s.freq
         ) AS freq_arr
     FROM {joined_scalars}
     GROUP BY ukam_address_id
@@ -159,7 +159,7 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         base.* EXCLUDE (address_without_numbers_tokenised),
         list_transform(
             list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
+            lambda x: struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
@@ -252,7 +252,7 @@ def _move_common_end_tokens_to_field():
         * EXCLUDE (end_tokens_to_remove),
         list_filter(
             token_rel_freq_arr[-3:],
-            x -> list_contains(end_tokens_to_remove, x.tok)
+            lambda x: list_contains(end_tokens_to_remove, x.tok)
         ) AS common_end_tokens
     FROM {joined}
     """
@@ -260,9 +260,9 @@ def _move_common_end_tokens_to_field():
     remove_end_tokens_expr = """
     list_filter(
         token_rel_freq_arr,
-        (x, i) -> NOT (
+        lambda x, i: NOT (
             i > len(token_rel_freq_arr) - 2
-            AND list_contains(list_transform(common_end_tokens, x -> x.tok), x.tok)
+            AND list_contains(list_transform(common_end_tokens, lambda x: x.tok), x.tok)
         )
     )
     """
@@ -294,7 +294,7 @@ def _first_unusual_token():
     """Attach the first token below the frequency threshold (0.001) if present."""
 
     first_token_expr = (
-        "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
+        "list_any_value(list_filter(token_rel_freq_arr, lambda x: x.rel_freq < 0.001))"
     )
 
     sql = f"""
@@ -325,7 +325,7 @@ def _use_first_unusual_token_if_no_numeric_token():
             WHEN {input}.numeric_token_1 IS NULL THEN
                 list_filter(
                     token_rel_freq_arr,
-                    x -> coalesce(x.tok != first_unusual_token.tok, TRUE)
+                    lambda x: coalesce(x.tok != first_unusual_token.tok, TRUE)
                 )
             ELSE token_rel_freq_arr
         END AS token_rel_freq_arr
@@ -352,13 +352,15 @@ def _separate_unusual_tokens():
                     list_grade_up(
                         list_transform(
                             token_rel_freq_arr,
-                            (x, i) -> struct_pack(rel_freq := x.rel_freq, token_idx := i)
+                            lambda x, i: struct_pack(
+                                rel_freq := x.rel_freq, token_idx := i
+                            )
                         )
                     )
                 ),
-                x -> x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
+                lambda x: x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
             ),
-            x -> x.tok
+            lambda x: x.tok
         ) AS unusual_tokens_arr,
         list_transform(
             list_filter(
@@ -367,13 +369,15 @@ def _separate_unusual_tokens():
                     list_grade_up(
                         list_transform(
                             token_rel_freq_arr,
-                            (x, i) -> struct_pack(rel_freq := x.rel_freq, token_idx := i)
+                            lambda x, i: struct_pack(
+                                rel_freq := x.rel_freq, token_idx := i
+                            )
                         )
                     )
                 ),
-                x -> x.rel_freq < 1e-7
+                lambda x: x.rel_freq < 1e-7
             ),
-            x -> x.tok
+            lambda x: x.tok
         ) AS extremely_unusual_tokens_arr
     FROM {input}
     """
@@ -401,7 +405,7 @@ def _generalised_token_aliases():
     SELECT
         *,
         flatten(
-            list_transform(distinguishing_adj_start_tokens, token ->
+            list_transform(distinguishing_adj_start_tokens, lambda token:
                {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
             )
         ) AS distinguishing_adj_token_aliases
@@ -438,7 +442,7 @@ def _get_token_frequeny_table():
         list_concat(
             array_filter(
                 [numeric_token_1, numeric_token_2, numeric_token_3],
-                x -> x IS NOT NULL
+                lambda x: x IS NOT NULL
             ),
             address_without_numbers_tokenised
         ) AS all_tokens

@@ -82,8 +82,10 @@ def compute_precision_recall_auc(
     con: duckdb.DuckDBPyConnection,
     threshold_metrics_sql: str,
 ) -> float | None:
-    auc_row = con.sql(
-        f"""
+    auc_row = next(
+        iter(
+            con.sql(
+                f"""
         WITH points AS (
             SELECT
                 CAST(recall AS DOUBLE) AS recall,
@@ -117,7 +119,12 @@ def compute_precision_recall_auc(
             END AS auc
         FROM auc_integral
         """
-    ).fetchone()
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
     if auc_row is None or auc_row[0] is None:
         return None
     return float(auc_row[0])

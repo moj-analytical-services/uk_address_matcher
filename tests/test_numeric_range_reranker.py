@@ -59,7 +59,7 @@ def test_numeric_range_struct_is_preserved_for_reranking():
     """)
 
     normalised = ensure_numeric_range_struct(relation)
-    numeric_range = normalised.select("numeric_range").fetchone()[0]
+    numeric_range = normalised.select("numeric_range").fetchall()[0][0]
 
     assert numeric_range["lower"] == 20
     assert numeric_range["upper"] == 23
@@ -70,7 +70,7 @@ def test_missing_numeric_range_is_normalised_to_typed_null():
     relation = con.sql("SELECT 'C1' AS unique_id")
 
     normalised = ensure_numeric_range_struct(relation)
-    numeric_range = normalised.select("numeric_range").fetchone()[0]
+    numeric_range = normalised.select("numeric_range").fetchall()[0][0]
 
     assert numeric_range is None
     range_type = normalised.types[normalised.columns.index("numeric_range")]
@@ -383,7 +383,7 @@ def test_numeric_range_adjustment_respects_configured_cap():
         relation,
         NumericRangeRerankerConfig(endpoint_match_bits=40.0),
     )
-    assert result.select("numeric_range_adjustment").fetchone()[0] == 20.0
+    assert result.select("numeric_range_adjustment").fetchall()[0][0] == 20.0
     con.close()
 
 
@@ -397,8 +397,8 @@ def test_numeric_range_candidate_pool_can_rescue_raw_rank_six():
             f"('L{rank}', 'M', {rank}, 100, {21.0 - rank}::DOUBLE, "
             f"{numeric_range}, {empty}, ['20']::VARCHAR[], ['20']::VARCHAR[], "
             "NULL::VARCHAR, NULL::VARCHAR, "
-            "2.0::DOUBLE, 1.0::DOUBLE, 1.0::DOUBLE, "
-            "1.0::DOUBLE, 1.0::DOUBLE, 1.0::DOUBLE)"
+            "1.0::DOUBLE, 0.0::DOUBLE, 0.0::DOUBLE, "
+            "0.0::DOUBLE, 0.0::DOUBLE, 0.0::DOUBLE)"
         )
     relation = con.sql(f"""
         WITH candidates AS (
@@ -406,9 +406,9 @@ def test_numeric_range_candidate_pool_can_rescue_raw_rank_six():
                 unique_id_l, unique_id_r, ukam_address_id_l, ukam_address_id_r,
                 match_weight, numeric_range_l, numeric_range_r,
                 numeric_tokens_l, numeric_tokens_r, flat_identity_l, flat_identity_r,
-                bf_numeric_token_1, bf_numeric_token_2, bf_numeric_token_3,
-                bf_tf_adj_numeric_token_1, bf_tf_adj_numeric_token_2,
-                bf_tf_adj_numeric_token_3
+                mw_numeric_token_1, mw_numeric_token_2, mw_numeric_token_3,
+                mw_tf_adj_numeric_token_1, mw_tf_adj_numeric_token_2,
+                mw_tf_adj_numeric_token_3
             )
         )
         SELECT * FROM candidates
@@ -500,7 +500,7 @@ def test_enabled_splink_path_collapses_intermediate_numeric_columns():
     assert "numeric_tokens_r" in prediction_columns
     assert "flat_identity_l" in prediction_columns
     assert "flat_identity_r" in prediction_columns
-    assert not any(column.startswith("bf_") for column in prediction_columns)
+    assert not any(column.startswith(("bf_", "mw_")) for column in prediction_columns)
     assert not any(column.startswith("gamma_") for column in prediction_columns)
     assert not any(column.startswith("tf_") for column in prediction_columns)
     con.close()
@@ -533,8 +533,8 @@ def test_enabled_debug_retention_keeps_factors_without_range_bits():
     matcher.match()
     predictions = con.table(stage.predictions_table)
     assert "legacy_numeric_bits" not in predictions.columns
-    assert "bf_numeric_token_1" in predictions.columns
-    assert "bf_tf_adj_numeric_token_1" in predictions.columns
+    assert "mw_numeric_token_1" in predictions.columns
+    assert "mw_tf_adj_numeric_token_1" in predictions.columns
     con.close()
 
 
@@ -562,5 +562,5 @@ def test_splink_always_collapses_numeric_factors():
     prediction_columns = con.table(stage.predictions_table).columns
 
     assert "legacy_numeric_bits" not in prediction_columns
-    assert not any(column.startswith("bf_") for column in prediction_columns)
+    assert not any(column.startswith(("bf_", "mw_")) for column in prediction_columns)
     con.close()

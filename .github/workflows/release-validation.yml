@@ -1,0 +1,53 @@
+name: Validate release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  run-pytest:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/run_pytest.yml
+    with:
+      target_sha: ${{ github.sha }}
+
+  test-build-package:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test-build-package.yaml
+    with:
+      target_sha: ${{ github.sha }}
+
+  test-labelling:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/labelling.yml
+    with:
+      target_sha: ${{ github.sha }}
+
+  security:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security.yml
+    with:
+      target_sha: ${{ github.sha }}
+
+  verified:
+    name: Release validation complete
+    if: always()
+    needs: [run-pytest, test-build-package, test-labelling, security]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      VALIDATION_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require every check to succeed
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const results = JSON.parse(process.env.VALIDATION_RESULTS);
+            if (Object.values(results).some(job => job.result !== 'success')) {
+              throw new Error('All four validation checks must succeed.');
+            }

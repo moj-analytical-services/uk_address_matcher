@@ -26,7 +26,7 @@ def test_source_dataset_is_ignored():
         '10 DOWNING STREET LONDON' as address_concat,
         'SW1A 2AA' as postcode
     """
-    con.execute(sql)
+    con.execute(sql).fetchall()
 
     sql = """
     CREATE OR REPLACE TABLE test_canonical AS
@@ -36,7 +36,7 @@ def test_source_dataset_is_ignored():
         '10 DOWNING STREET LONDON' as address_concat,
         'SW1A 2AA' as postcode
     """
-    con.execute(sql)
+    con.execute(sql).fetchall()
     test_messy = con.table("test_messy")
     test_canonical = con.table("test_canonical")
 
@@ -103,7 +103,7 @@ def test_get_linker_raises_error_with_source_dataset():
         '10 DOWNING STREET LONDON' as address_concat,
         'SW1A 2AA' as postcode
     """
-    con.execute(sql)
+    con.execute(sql).fetchall()
     test_data = con.table("test_data")
 
     # Create data without source_dataset column
@@ -114,7 +114,7 @@ def test_get_linker_raises_error_with_source_dataset():
         '11 DOWNING STREET LONDON' as address_concat,
         'SW1A 2AA' as postcode
     """
-    con.execute(sql)
+    con.execute(sql).fetchall()
     test_data_no_source = con.table("test_data_no_source")
 
     # Test error when source_dataset is in first dataset

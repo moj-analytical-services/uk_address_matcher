@@ -130,14 +130,19 @@ def _validate_unique_messy_ids(
     messy_relation: DuckDBPyRelation,
 ) -> None:
     relation_sql = messy_relation.sql_query()
-    null_count, duplicate_count = con.execute(
-        f"""
+    null_count, duplicate_count = next(
+        iter(
+            con.execute(
+                f"""
         SELECT
             COUNT(*) FILTER (WHERE unique_id IS NULL),
             COUNT(*) - COUNT(DISTINCT unique_id)
         FROM ({relation_sql}) AS messy
         """
-    ).fetchone()
+            ).fetchall()
+        ),
+        None,
+    )
     if null_count:
         raise ValueError(
             "Messy unique_id contains null values; bundle export requires IDs."
@@ -159,7 +164,7 @@ def _validate_label_compatibility(
         WHERE ukam_label IS NOT NULL
             AND TRY_CAST(ukam_label AS {canonical_label_type}) IS NULL
         """
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     if incompatible_count:
         raise ValueError(
             "Existing ukam_label values cannot be represented using the canonical "
@@ -176,7 +181,7 @@ def _column_type(
         con.execute(
             f"DESCRIBE SELECT {quote_identifier(column_name)} "
             f"FROM ({relation.sql_query()}) AS source_relation"
-        ).fetchone()[1]
+        ).fetchall()[0][1]
     )
 
 
@@ -242,7 +247,9 @@ def validate_splink_relations(match_result: object) -> None:
     con = getattr(match_result, "con")
     for table_name in table_names:
         try:
-            con.execute(f"SELECT 1 FROM {quote_identifier(table_name)} LIMIT 1")
+            con.execute(
+                f"SELECT 1 FROM {quote_identifier(table_name)} LIMIT 1"
+            ).fetchall()
         except duckdb.Error as error:
             raise ValueError(
                 "Splink ran but required retained candidate relations are no longer "
@@ -270,13 +277,18 @@ def validate_written_parquet(
                 "Written Parquet is missing required bundle columns: "
                 + ", ".join(missing)
             )
-        row_count, unique_id_count, null_id_count = con.execute(
-            f"""
+        row_count, unique_id_count, null_id_count = next(
+            iter(
+                con.execute(
+                    f"""
             SELECT COUNT(*), COUNT(DISTINCT unique_id),
                 COUNT(*) FILTER (WHERE unique_id IS NULL)
             FROM read_parquet('{parquet_sql}')
             """
-        ).fetchone()
+                ).fetchall()
+            ),
+            None,
+        )
         if row_count != expected_row_count:
             raise ValueError(
                 "Written Parquet row count differs from the retained messy input: "
@@ -286,8 +298,10 @@ def validate_written_parquet(
             raise ValueError(
                 "Written Parquet must contain one non-null row per messy unique_id."
             )
-        counts = con.execute(
-            f"""
+        counts = next(
+            iter(
+                con.execute(
+                    f"""
             SELECT
                 COUNT(*) FILTER (WHERE is_matched),
                 COUNT(*) FILTER (WHERE NOT is_matched),
@@ -295,7 +309,10 @@ def validate_written_parquet(
                 COUNT(*) FILTER (WHERE has_existing_label)
             FROM read_parquet('{parquet_sql}')
             """
-        ).fetchone()
+                ).fetchall()
+            ),
+            None,
+        )
     return {
         "schema": schema,
         "row_count": int(row_count),
