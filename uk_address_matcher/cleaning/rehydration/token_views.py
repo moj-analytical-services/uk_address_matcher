@@ -9,6 +9,7 @@ from uk_address_matcher.cleaning.steps.token_parsing import (
 )
 
 
+# TODO(ThomasHepworth): remove these views when we release v2.0.0 with a warning to users
 def _clean_full_address_tokens_expression(
     address_column: str = "clean_full_address",
     token_column: str = "clean_full_address_tokens",
@@ -41,6 +42,66 @@ def _ensure_clean_full_address_views(
         relation = relation.select(f"*, {_clean_full_address_tokens_expression()}")
 
     return relation
+
+
+def _ensure_sub_premise_views(relation: DuckDBPyRelation) -> DuckDBPyRelation:
+    required = {
+        "sub_premise_role",
+        "sub_premise_identifier",
+        "sub_premise_marker_token",
+        "flat_positional",
+    }
+    if not required.issubset(relation.columns):
+        return relation
+    flat_parts = [
+        "CASE WHEN sub_premise_role = 'FLAT' THEN "
+        f"nullif(regexp_extract(sub_premise_identifier, '{pattern}', 0), '') "
+        f"END AS {column}"
+        for column, pattern in (("flat_number", "^[0-9]+"), ("flat_letter", "[A-Z]$"))
+        if column not in relation.columns
+    ]
+    if flat_parts:
+        relation = relation.select("*, " + ", ".join(flat_parts))
+    business_marker = (
+        "sub_premise_marker_token IN "
+        "('UNIT', 'SUITE', 'OFFICE', 'WORKSHOP', 'WAREHOUSE', 'STUDIO')"
+    )
+    business_identifier = (
+        "sub_premise_explicit_identifier"
+        if "sub_premise_explicit_identifier" in relation.columns
+        else "sub_premise_identifier"
+    )
+    expressions = {
+        "business_unit_type": (
+            f"CASE WHEN {business_marker} THEN sub_premise_marker_token END"
+        ),
+        "business_unit_id": (
+            f"CASE WHEN {business_marker} THEN {business_identifier} END"
+        ),
+        "has_business_unit": f"coalesce({business_marker}, false)",
+        "has_flat_indicator": (
+            "flat_number IS NOT NULL OR flat_letter IS NOT NULL "
+            "OR flat_positional IS NOT NULL "
+            "OR list_has_any(clean_full_address_tokens, ['FLAT', 'FFLAT'])"
+        ),
+        "flat_identity": (
+            "CASE WHEN flat_number IS NOT NULL "
+            "OR flat_letter IS NOT NULL OR flat_positional IS NOT NULL "
+            "THEN concat_ws('_', coalesce(flat_number, ''), coalesce(flat_letter, ''), "
+            "coalesce(flat_positional, '')) END"
+        ),
+        "flat_floor_prefixes": (
+            "list_distinct(regexp_extract_all(regexp_extract("
+            "array_to_string(clean_full_address_tokens, ' '), '^[^0-9]*', 0), "
+            "'BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH', 0))"
+        ),
+    }
+    missing = [
+        f"{expression} AS {column}"
+        for column, expression in expressions.items()
+        if column not in relation.columns
+    ]
+    return relation.select("*, " + ", ".join(missing)) if missing else relation
 
 
 def _distinguishing_lexical_tokens_expression(
