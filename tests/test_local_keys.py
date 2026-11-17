@@ -541,8 +541,7 @@ def test_model_includes_local_key_comparison_and_block():
         comparison["output_column_name"]: comparison
         for comparison in model["comparisons"]
     }
-    comparison = model["comparisons"][-1]
-    assert comparison["output_column_name"] == "postcode_distinguishing_name"
+    comparison = comparisons["postcode_distinguishing_name"]
     assert "additional_columns_to_retain" not in model
     assert all(
         "coalesce" not in level["sql_condition"].lower()
@@ -756,9 +755,13 @@ def test_postcode_name_comparison_weights(
     evidence_level,
     expected,
 ):
-    comparison = SettingsCreator.from_path_or_dict(
-        _get_model_settings_dict()
-    ).create_settings_dict("duckdb")["comparisons"][-1]
+    comparison = next(
+        comparison
+        for comparison in SettingsCreator.from_path_or_dict(
+            _get_model_settings_dict()
+        ).create_settings_dict("duckdb")["comparisons"]
+        if comparison["output_column_name"] == "postcode_distinguishing_name"
+    )
     pair = duck_con.sql(
         """
         SELECT false AS lk_eligible_l, $eligible::BOOLEAN AS lk_eligible_r,
