@@ -1,7 +1,7 @@
 import duckdb
 import pytest
 
-from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,

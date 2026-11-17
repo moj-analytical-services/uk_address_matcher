@@ -14,9 +14,9 @@ from uk_address_matcher import (
     AddressMatcher,
     SplinkStage,
     prepare_canonical_folder,
-    prepare_data_for_matching,
 )
 from uk_address_matcher.cleaning import chunking_strategies
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.cleaning.local_keys import prepare_canonical_local_keys
 from uk_address_matcher.cleaning.materialisation import (
     _CanonicalIntermediates,
