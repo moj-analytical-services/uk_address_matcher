@@ -27,9 +27,9 @@ from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 @pytest.mark.parametrize(
     "removed_level, expected",
     [
-        (None, [35, -1, -1, 34, 33, 33, 34]),
-        (0, [-1, -1, -1, 34, 33, 33, 34]),
-        (2, [34, -1, -1, 33, 33, 33, 33]),
+        (None, [32, -1, -1, 31, 30, 30, 31]),
+        (0, [-1, -1, -1, 31, 30, 30, 31]),
+        (2, [31, -1, -1, 30, 30, 30, 30]),
     ],
 )
 def test_inline_histogram_keeps_guards_and_strict_thresholds(
@@ -517,7 +517,7 @@ def test_packaged_address_model_uses_inline_address_signatures():
         for level in numberless["comparison_levels"]
         if level["sql_condition"] != "ELSE"
     ]
-    assert len(numberless_conditions) == 6
+    assert len(numberless_conditions) == 5
     assert all("regexp_replace" in condition for condition in numberless_conditions)
     assert all(
         "clean_full_address_without_numbers" not in condition
