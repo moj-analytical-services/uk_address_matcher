@@ -21,6 +21,12 @@ It is powered by [DuckDB-WASM](https://duckdb.org/docs/current/clients/wasm/over
 The local labeller writes directly to a labelling bundle folder. Run a matching
 job end to end and start here with the resulting `MatchResult` object.
 
+Export while the result and its connection are open. Beta bundles require
+non-null, unique messy entity IDs even though matching supports repeated IDs.
+The caller may supply `address_id` or `unique_id`; the bundle format continues
+to call its review identifier `unique_id`. Canonical variants can share an
+entity ID. Closing the result does not remove an exported bundle.
+
 1. Export a self-contained bundle.
 
     ```python

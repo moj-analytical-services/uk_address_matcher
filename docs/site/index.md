@@ -45,16 +45,20 @@ pip install uk_address_matcher
 
 Your data should be in the following format[^3]:
 
+Prefer `address_id`, or keep the supported `unique_id` input alias. Supply only
+one ID name per dataset. Entity IDs may repeat across textual variants;
+`postcode` can be omitted or null.
+
 ### Messy data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | m_1 | Flat A Example Court, 10 Demo Road, Townton | AB1 2BC |
 | ...more rows |
 
 ### Canonical data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | c_1 | Flat A, 10 Demo Road, Townton | AB1 2BC |
 | c_2 | Flat B, 10 Demo Road, Townton | AB1 2BC |
@@ -77,15 +81,21 @@ matcher = AddressMatcher(
     addresses_to_match=messy,
     con=con,
 )
-result = matcher.match()
-result.matches().show(max_width=10000)
+with matcher.match() as result:
+    result.matches().show(max_width=10000)
+con.close()
 ```
 
-Example output:
+Selected output columns:
 
-| unique_id | resolved_canonical_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
+| address_id | canonical_address_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
 |----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
 | m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
+
+Default results also include both per-run UKAM row keys. Use
+`matches(include_unmatched=False)` for successful matches only. See
+[Reading results](get_started.md#reading-results) for enrichment, resource lifetime
+and the [2.0 migration guide](get_started.md#migrating-to-20).
 
 
 The above is recommended if your canonical dataset is relatively small, say, under 1 million rows. If you're matching to larger canonical dataset, a preprocessing step is recommended. See [choose whether to pre-process your canonical dataset](get_started.md#choose-whether-to-pre-process-your-canonical-dataset) for details.
