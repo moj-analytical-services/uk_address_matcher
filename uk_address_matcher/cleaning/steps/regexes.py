@@ -138,6 +138,12 @@ def standarise_num_letter(input: str):
     return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2 ', 'g')"
 
 
+def move_flat_block_letter_before_number(input: str):
+    """Canonicalise a separated block letter before generic number-letter merging."""
+    regex_pattern = r"\b(F?FLAT)\s+(\d{1,4})\s+([A-Za-z])\s+BLOCK\b"
+    return f"regexp_replace({input}, '{regex_pattern}', 'BLOCK \\3 \\1 \\2', 'g')"
+
+
 def separate_letter_num(input: str):
     """
     Matches a single letter followed by a number (with or without spaces in between),
