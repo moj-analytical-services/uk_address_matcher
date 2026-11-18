@@ -230,19 +230,19 @@ EQUIVALENCE_TEST_CASES = [
         "c_flat_number_mismatch",
     ),
     (
-        "m_ground_floor",
-        "GROUND FLOOR FLAT 20 HIGH STREET LONDON",
+        "m_lower_ground",
+        "FLAT LOWER GROUND FLOOR 20 HIGH STREET LONDON",
         "E1 6AA",
-        "c_lower_ground_equiv",
-        "c_first_floor_mismatch",
+        "c_basement_equiv",
+        "c_ground_floor_mismatch",
     ),
 ]
 
 EQUIVALENCE_CANONICAL_ADDRESSES = [
     ("c_flat_number_equiv", "FLAT 2 10 KINGS ROAD LONDON", "SW3 4ND"),
     ("c_flat_number_mismatch", "FLAT D 10 KINGS ROAD LONDON", "SW3 4ND"),
-    ("c_lower_ground_equiv", "LOWER GROUND FLAT 20 HIGH STREET LONDON", "E1 6AA"),
-    ("c_first_floor_mismatch", "FIRST FLOOR FLAT 20 HIGH STREET LONDON", "E1 6AA"),
+    ("c_basement_equiv", "BASEMENT FLAT 20 HIGH STREET LONDON", "E1 6AA"),
+    ("c_ground_floor_mismatch", "GROUND FLOOR FLAT 20 HIGH STREET LONDON", "E1 6AA"),
 ]
 
 ONE_SIDED_NUMBER_LETTER_MESSY = [
