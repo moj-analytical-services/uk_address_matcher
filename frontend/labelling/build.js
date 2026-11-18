@@ -42,7 +42,7 @@ const options = {
             if (!fileName) throw new Error(`Unsupported asset import: ${path}`);
             await cp(new URL(fileName, duckdbRoot), new URL(fileName, assetsRoot));
             return {
-              contents: `export default new URL("./${fileName}", import.meta.url).href;`,
+              contents: `export default new URL(${JSON.stringify(fileName)}, import.meta.url).href;`,
               loader: "js",
             };
           },
