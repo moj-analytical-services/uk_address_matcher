@@ -94,8 +94,7 @@ Selected output columns:
 
 Default results also include both per-run UKAM row keys. Use
 `matches(include_unmatched=False)` for successful matches only. See
-[Reading results](get_started.md#reading-results) for enrichment, resource lifetime
-and the [2.0 migration guide](get_started.md#migrating-to-20).
+[Reading results](get_started.md#reading-results) for enrichment and resource lifetime.
 
 
 The above is recommended if your canonical dataset is relatively small, say, under 1 million rows. If you're matching to larger canonical dataset, a preprocessing step is recommended. See [choose whether to pre-process your canonical dataset](get_started.md#choose-whether-to-pre-process-your-canonical-dataset) for details.
