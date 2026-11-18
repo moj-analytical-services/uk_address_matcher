@@ -103,12 +103,6 @@ Selected output columns:
 |----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
 | m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
 
-Results also include the per-run row keys `ukam_address_id` and
-`canonical_ukam_address_id`. `matches()` includes unmatched rows by default;
-use `matches(include_unmatched=False)` for successful matches only. Consume lazy
-relations before closing their result or connection; materialised Python values
-remain usable afterwards. See the [2.0 migration guide](docs/site/get_started.md#migrating-to-20).
-
 
 
 

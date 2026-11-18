@@ -26,8 +26,7 @@
 Consume lazy result relations before closing the result or its connection.
 Prefer `with matcher.match() as result:`; materialised Python values remain
 usable after the context exits. The caller retains ownership of the connection.
-See [Reading results](get_started.md#reading-results) and the
-[2.0 migration guide](get_started.md#migrating-to-20).
+See [Reading results](get_started.md#reading-results).
 
 The [labelling workflow](labelling.md) is beta and has separate ID restrictions;
 there is no stable `export_labelling_bundle` method.
