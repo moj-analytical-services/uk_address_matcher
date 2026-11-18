@@ -212,8 +212,8 @@ supported for matching, not for labelling-bundle export.
             PeeledAddressStage(),
             UniqueTrigramStage(),
             SplinkStage(
-                final_match_weight_threshold=20.0,
-                final_distinguishability_threshold=5.0,
+                minimum_match_weight=20.0,
+                minimum_distinguishability=5.0,
             ),
         ],
     )

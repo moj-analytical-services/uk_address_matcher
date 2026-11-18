@@ -79,7 +79,8 @@ def test_generate_benchmark_run_id_hashes_timestamp_seed() -> None:
 
 
 def test_splink_stage_definition_resolves_default_and_custom_settings() -> None:
-    default_settings = _serialisable_stage(SplinkStage())["params"]["settings"]
+    default_stage = _serialisable_stage(SplinkStage())
+    default_settings = default_stage["params"]["settings"]
     custom_settings = _serialisable_stage(
         SplinkStage(settings=_get_production_model_settings())
     )["params"]["settings"]
@@ -87,6 +88,11 @@ def test_splink_stage_definition_resolves_default_and_custom_settings() -> None:
     assert isinstance(default_settings, dict)
     assert default_settings == custom_settings
     assert default_settings["comparisons"]
+    assert default_stage["params"]["acceptance_profile"] == "coverage"
+    assert default_stage["params"]["minimum_match_weight"] == -20.0
+    assert default_stage["params"]["minimum_distinguishability"] == 0.0
+    assert "final_match_weight_threshold" not in default_stage["params"]
+    assert "final_distinguishability_threshold" not in default_stage["params"]
 
 
 def test_overlay_html_uses_matching_vega_lite_runtime_and_export_actions(

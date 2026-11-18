@@ -194,8 +194,8 @@ matcher = AddressMatcher(
         PeeledAddressStage(),
         UniqueTrigramStage(),
         SplinkStage(
-            final_match_weight_threshold=2.0,
-            final_distinguishability_threshold=1.0,
+            minimum_match_weight=2.0,
+            minimum_distinguishability=1.0,
         ),
     ],
 )
