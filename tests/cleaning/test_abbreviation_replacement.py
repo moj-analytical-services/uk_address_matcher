@@ -346,6 +346,44 @@ def test_first_pass_handles_fflat_marker(duck_con):
     ]
 
 
+def test_first_pass_normalises_numeric_range_separators(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('HAFOD FLAT 55 TO 58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT'),
+            ('FLAT 12A THRU 14B HIGH STREET'),
+            ('FLAT 20 THROUGH 22 HIGH STREET'),
+            ('FLAT 30 UP TO 32 HIGH STREET'),
+            ('FLAT 40 - 42 HIGH STREET'),
+            ('FLAT 23TO24 HIGH STREET'),
+            ('FLAT 23 TO24 HIGH STREET'),
+            ('FLAT 23TO 24 HIGH STREET'),
+            ('FLAT 23To 24 HIGH STREET'),
+            ('FICTIONAL ROAD A 952 TO B 9001')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "HAFOD FLAT 55-58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT",
+        "FLAT 12A-14B HIGH STREET",
+        "FLAT 20-22 HIGH STREET",
+        "FLAT 30-32 HIGH STREET",
+        "FLAT 40-42 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FICTIONAL ROAD A 952 TO B 9001",
+    ]
+
+
 def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     input_rel = duck_con.sql(
         """
