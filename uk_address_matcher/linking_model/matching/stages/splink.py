@@ -271,9 +271,7 @@ class SplinkStage(MatchingStage):
 
     # Deprecated aliases retained for compatibility during the API transition.
     final_match_weight_threshold: float = field(default=-20.0, repr=False)
-    final_distinguishability_threshold: float | None = field(
-        default=0.0, repr=False
-    )
+    final_distinguishability_threshold: float | None = field(default=0.0, repr=False)
 
     # Blocking configuration
     include_full_postcode_block: bool = False
@@ -319,8 +317,7 @@ class SplinkStage(MatchingStage):
                 and self.minimum_match_weight != self.final_match_weight_threshold
             ):
                 raise ValueError(
-                    "Set minimum_match_weight or final_match_weight_threshold, "
-                    "not both."
+                    "Set minimum_match_weight or final_match_weight_threshold, not both."
                 )
             self.minimum_match_weight = self.final_match_weight_threshold
         self.final_match_weight_threshold = self.minimum_match_weight
@@ -335,9 +332,7 @@ class SplinkStage(MatchingStage):
                     "Set minimum_distinguishability or "
                     "final_distinguishability_threshold, not both."
                 )
-            self.minimum_distinguishability = (
-                self.final_distinguishability_threshold
-            )
+            self.minimum_distinguishability = self.final_distinguishability_threshold
         self.final_distinguishability_threshold = self.minimum_distinguishability
 
     def _final_acceptance_filter_sql(self) -> str:
