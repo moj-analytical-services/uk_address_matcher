@@ -655,6 +655,8 @@ def test_parse_out_flat_positional():
         ),
         ("GARDEN FLAT 11 243 SPITFIRE COURT BIRMINGHAM", "GARDEN", None, "11"),
         ("TOP FLOOR FLAT 12A HIGH STREET", "TOP FLOOR", "A", "12"),
+        ("ATTIC FLAT 12 HIGH STREET", "TOP FLOOR", None, None),
+        ("FLAT ATTIC FLOOR 12 HIGH STREET", "TOP FLOOR", None, None),
         ("SECOND FLOOR FLAT 12 A HIGH STREET", "SECOND FLOOR", "A", "12"),
         ("GROUND FLOOR FLAT B 25 MAIN ROAD", "GROUND FLOOR", "B", None),
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
@@ -709,10 +711,10 @@ def test_parse_out_flat_positional():
         ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
         ("FIRST FLOOR FFLAT 120 TEST", "FIRST FLOOR", None, None),
         ("GROUND FLAT 4 HIGH STREET", None, None, None),
-        # LOWER GROUND variants (canonicalised to GROUND FLOOR)
-        ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
-        ("LOWER GROUND FLAT 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
-        ("LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
+        ("FLAT LOWER GROUND FLOOR 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("LOWER GROUND FLAT 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("LOWER GROUND 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
         ("LOWER FLOOR FLAT 10 TEST ROAD", "LOWER FLOOR", None, None),
         # UPPER GROUND variant
         ("UPPER GROUND FLAT 20 EXAMPLE STREET", "UPPER GROUND", None, None),

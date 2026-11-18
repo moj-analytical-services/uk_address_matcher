@@ -365,7 +365,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     tags=["token_extraction", "sub_premise_parsing"],
 )
 def _parse_out_sub_premise():
-    """Derive flat and business-unit fields from one explicit descriptor match."""
+    """Derive sub-premise fields; map lower ground to basement and attic to top floor."""
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
     # others are paired with FLOOR/GROUND.
@@ -376,7 +376,7 @@ def _parse_out_sub_premise():
         "SEVENTH EIGHTH NINTH TENTH TOP"
     ).split()
     # Build regex: standalone floors OR (prefix + FLOOR) OR
-    # (prefix + GROUND for LOWER/UPPER)
+    # lower/upper ground and attic variants
     # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
     # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
     # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
@@ -390,7 +390,7 @@ def _parse_out_sub_premise():
         + "|".join(
             standalone_floors
             + [f"{f} FLOOR" for f in floor_with_suffix]
-            + [f"{f} GROUND" for f in ["LOWER", "UPPER"]]
+            + [r"LOWER GROUND(?: FLOOR)?", "UPPER GROUND", r"ATTIC(?: FLOOR)?"]
         )
         + r"|"
         + multi_floor_pattern
@@ -537,8 +537,12 @@ def _parse_out_sub_premise():
             WHEN NULLIF(
                 regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
-            ) = 'LOWER GROUND'
-                THEN 'GROUND FLOOR'
+            ) IN ('LOWER GROUND', 'LOWER GROUND FLOOR')
+                THEN 'BASEMENT'
+            WHEN regexp_extract(
+                i.__sub_premise_address, '{floor_positions}', 1
+            ) IN ('ATTIC', 'ATTIC FLOOR')
+                THEN 'TOP FLOOR'
             WHEN NULLIF(
                 regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
