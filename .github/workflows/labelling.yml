@@ -1,0 +1,76 @@
+name: Test labelling app
+
+on:
+  workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - "uk_address_matcher/labelling/**"
+      - "tests/labelling/**"
+      - "frontend/labelling/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/labelling.yml"
+  push:
+    branches: [main]
+    paths:
+      - "uk_address_matcher/labelling/**"
+      - "tests/labelling/**"
+      - "frontend/labelling/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/labelling.yml"
+
+permissions: {}
+
+concurrency:
+  group: test-labelling-${{ inputs.target_sha && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-labelling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Build labelling app assets
+        working-directory: frontend/labelling
+        run: npm ci && npm run build
+
+      - name: Check labelling app assets are current
+        run: git diff --exit-code -- uk_address_matcher/labelling/app/static
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --locked
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run labelling tests
+        run: RUN_LABELLING_BROWSER_TESTS=1 uv run pytest tests/labelling -q

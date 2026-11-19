@@ -3,7 +3,7 @@ applyTo:
   - "uk_address_matcher/sql_pipeline/**/*.py"
   - "uk_address_matcher/linking_model/**/*.py"
   - "tests/**/*sql*.py"
-  - "scripts/**/*.py"
+  - "dev_scripts/**/*.py"
   - "examples/**/*.py"
 ---
 

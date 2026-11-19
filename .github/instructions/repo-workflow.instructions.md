@@ -5,9 +5,9 @@ applyTo:
   - ".github/**/*.md"
   - "docs/developer/**/*.md"
   - "docs/findings/**/*.md"
-  - "CHANGELOG.md"
+  - "docs/CHANGELOG.md"
   - "pyproject.toml"
-  - "shell/**/*.sh"
+  - "dev_scripts/shell/**/*.sh"
   - ".github/workflows/**/*.yml"
   - ".github/workflows/**/*.yaml"
 ---
@@ -17,7 +17,7 @@ applyTo:
 - Purpose: match messy UK addresses to a canonical gazetteer with high precision and speed.
 - Core stack: Python, DuckDB SQL pipelines, and Splink.
 - Key areas: `uk_address_matcher/cleaning/`, `uk_address_matcher/linking_model/`,
-  `uk_address_matcher/sql_pipeline/`, plus `tests/`, `examples/`, and `scripts/`.
+  `uk_address_matcher/sql_pipeline/`, plus `tests/`, `examples/`, and `dev_scripts/`.
 - Use project tooling via `uv`:
   - `uv sync` to create or refresh the environment.
   - `uv run <command>` for test and script execution.

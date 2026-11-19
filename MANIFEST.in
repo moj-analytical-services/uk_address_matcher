@@ -1,0 +1,6 @@
+prune security
+prune .github
+prune frontend
+exclude dev_scripts/check_secrets.py
+exclude dev_scripts/audit_dependencies.py
+exclude tests/test_security_checks.py

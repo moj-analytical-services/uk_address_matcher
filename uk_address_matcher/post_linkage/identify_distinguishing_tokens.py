@@ -6,8 +6,51 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     NumericRangeRerankerConfig,
     build_numeric_range_candidate_pool,
 )
+from uk_address_matcher.sql_pipeline.helpers import (
+    _drop_table_and_registered_aliases,
+    _uid,
+)
 
 _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
+_DEPTH_POSITIONS_SQL = "('FRONT', 'REAR', 'CENTRE')"
+
+
+def _sibling_location_join_sql(
+    shortlist: str,
+    messy: DuckDBPyRelation,
+    canonical: DuckDBPyRelation,
+) -> str:
+    return f"""
+        LEFT JOIN (
+            WITH positioned_pairs AS (
+                SELECT candidate.ukam_address_id_r, candidate.unique_id_l,
+                    messy.sub_premise_location AS messy_location
+                FROM {shortlist} AS candidate
+                JOIN ({messy.sql_query()}) AS messy
+                    ON messy.ukam_address_id = candidate.ukam_address_id_r
+                WHERE messy.sub_premise_location IN {_DEPTH_POSITIONS_SQL}
+            ),
+            canonical_locations AS (
+                SELECT candidate.unique_id_l,
+                    min(canonical.parentuprn) AS parentuprn,
+                    min(canonical.sub_premise_location) AS canonical_location
+                FROM (SELECT DISTINCT unique_id_l FROM positioned_pairs) AS candidate
+                JOIN ({canonical.sql_query()}) AS canonical
+                    ON canonical.unique_id::VARCHAR = candidate.unique_id_l::VARCHAR
+                GROUP BY candidate.unique_id_l
+                HAVING count(DISTINCT canonical.parentuprn) = 1
+                    AND count(DISTINCT canonical.sub_premise_location) = 1
+                    AND min(canonical.sub_premise_location) IN {_DEPTH_POSITIONS_SQL}
+            )
+            SELECT ukam_address_id_r, unique_id_l,
+                canonical_location <> messy_location
+                    AND bool_or(canonical_location = messy_location) OVER (
+                        PARTITION BY ukam_address_id_r, parentuprn
+                    ) AS sibling_location_conflict
+            FROM positioned_pairs
+            JOIN canonical_locations USING (unique_id_l)
+        ) AS positions USING (ukam_address_id_r, unique_id_l)
+    """
 
 
 def improve_predictions_using_distinguishing_tokens(
@@ -26,8 +69,19 @@ def improve_predictions_using_distinguishing_tokens(
     MISSING_TOKEN_PENALTY: float = 0.0,
     POSITIONAL_CONFLICT_PENALTY: float = 6.0,
     numeric_range_reranker: NumericRangeRerankerConfig | None = None,
+    df_addresses_to_match: DuckDBPyRelation | None = None,
+    df_addresses_to_search_within: DuckDBPyRelation | None = None,
 ) -> DuckDBPyRelation:
-    matches_table = "__ukam__distinguishability_matches"
+    run_id = _uid()
+    matches_table = f"__ukam__tmp_distinguishability_matches_{run_id}"
+    good_match_keys_table = f"__ukam__tmp_good_match_keys_{run_id}"
+    candidate_search_keys_table = f"__ukam__tmp_candidate_search_keys_{run_id}"
+    good_matches_table = f"__ukam__tmp_good_matches_{run_id}"
+    top_n_matches_table = f"__ukam__tmp_top_n_matches_{run_id}"
+    token_addresses_table = f"__ukam__tmp_token_addresses_{run_id}"
+    block_statistics_table = f"__ukam__tmp_block_statistics_{run_id}"
+    canonical_token_lookup_table = f"__ukam__tmp_canonical_token_lookup_{run_id}"
+    messy_token_lookup_table = f"__ukam__tmp_messy_token_lookup_{run_id}"
 
     if numeric_range_reranker is not None:
         required_range_columns = {
@@ -41,15 +95,18 @@ def improve_predictions_using_distinguishing_tokens(
         if not required_range_columns.issubset(df_predict.columns):
             numeric_range_reranker = None
 
-    retained_columns = ""
+    retained_column_names: list[str] = []
     if additional_columns_to_retain:
-        retained_columns = "".join(
-            f"{column}_l, {column}_r, "
-            for column in additional_columns_to_retain
-            if f"{column}_l" in df_predict.columns and f"{column}_r" in df_predict.columns
-        )
+        for column in additional_columns_to_retain:
+            if (
+                f"{column}_l" in df_predict.columns
+                and f"{column}_r" in df_predict.columns
+            ):
+                retained_column_names.extend((f"{column}_l", f"{column}_r"))
     if "ukam_label_r" in df_predict.columns:
-        retained_columns += "ukam_label_r, "
+        retained_column_names.append("ukam_label_r")
+    retained_column_names = list(dict.fromkeys(retained_column_names))
+    retained_columns = "".join(f"{column}, " for column in retained_column_names)
 
     eligibility_filter = ""
     if histogram_eligibility_column is not None:
@@ -60,244 +117,62 @@ def improve_predictions_using_distinguishing_tokens(
             )
         eligibility_filter = f"WHERE COALESCE({histogram_eligibility_column}, FALSE)"
 
+    fallback_full_address_tokens_l_sql = (
+        "string_split(trim(upper(source.clean_full_address_l)), ' ')"
+    )
+    fallback_full_address_tokens_r_sql = (
+        "string_split(trim(upper(source.clean_full_address_r)), ' ')"
+    )
+    token_lookup_joins = ""
+    full_address_tokens_l_sql = fallback_full_address_tokens_l_sql
+    full_address_tokens_r_sql = fallback_full_address_tokens_r_sql
+
+    def tokens_with_postcode_sql(token_column: str, postcode_column: str) -> str:
+        return f"""
+            list_filter(
+                list_transform(
+                    list_concat(
+                        {token_column},
+                        CASE
+                            WHEN {postcode_column} IS NULL OR {postcode_column} = ''
+                                THEN CAST([] AS VARCHAR[])
+                            ELSE string_split(trim(upper({postcode_column})), ' ')
+                        END
+                    ),
+                    lambda token: upper(token)
+                ),
+                lambda token: token IS NOT NULL AND token != ''
+            )
+        """
+
+    source_tokens_sql = tokens_with_postcode_sql("__token_address_tokens_r", "postcode_r")
+    candidate_tokens_sql = tokens_with_postcode_sql(
+        "candidate.__token_address_tokens_l", "candidate.postcode_l"
+    )
+    candidate_tokens_l_sql = tokens_with_postcode_sql(
+        "__token_address_tokens_l", "postcode_l"
+    )
+
     candidate_token_lists_sql = """
         array_agg(candidate_tokens).
-        list_transform(candidate_tokens -> list_distinct(candidate_tokens))
+        list_transform(lambda candidate_tokens: list_distinct(candidate_tokens))
     """
-    canonical_bigrams_sql = """
-        list_transform(
-            array_agg(candidate_tokens),
-            candidate_tokens -> list_distinct(
-                list_transform(
-                    list_zip(
-                        list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
-                        list_slice(candidate_tokens, 2, length(candidate_tokens))
-                    ),
-                    pair -> ARRAY[pair[1], pair[2]]
-                )
-            )
-        ).flatten() AS bigrams_in_block_l,
-        """
-
-    con.sql(f"""
-        WITH grouped AS (
-            SELECT
-                unique_id_l,
-                unique_id_r,
-                max_by(
-                    struct_pack(
-                        ukam_address_id_l := ukam_address_id_l,
-                        ukam_address_id_r := ukam_address_id_r,
-                        match_weight := match_weight
-                    ),
-                    struct_pack(
-                        match_weight := match_weight,
-                        ukam_address_id_r := ukam_address_id_r,
-                        ukam_address_id_l := ukam_address_id_l
+    if use_bigrams:
+        canonical_bigrams_sql = """
+            list_transform(
+                array_agg(candidate_tokens),
+                lambda candidate_tokens: list_distinct(
+                    list_transform(
+                        list_zip(
+                            list_slice(candidate_tokens, 1, length(candidate_tokens) - 1),
+                            list_slice(candidate_tokens, 2, length(candidate_tokens))
+                        ),
+                        lambda pair: ARRAY[pair[1], pair[2]]
                     )
-                ) AS best
-            FROM df_predict
-            WHERE match_weight > {match_weight_threshold}
-            GROUP BY unique_id_l, unique_id_r
-        )
-        SELECT
-            unique_id_l,
-            unique_id_r,
-            best.ukam_address_id_l AS ukam_address_id_l,
-            best.ukam_address_id_r AS ukam_address_id_r,
-            best.match_weight AS match_weight
-        FROM grouped
-    """).create("good_match_keys")
-
-    candidate_search_depth = top_n_matches
-    if numeric_range_reranker is not None:
-        candidate_search_depth = max(
-            top_n_matches,
-            numeric_range_reranker.numeric_search_depth,
-        )
-    con.sql(f"""
-        WITH grouped AS (
-            SELECT
-                unique_id_r,
-                max_by(
-                    struct_pack(
-                        unique_id_l := unique_id_l,
-                        ukam_address_id_l := ukam_address_id_l,
-                        ukam_address_id_r := ukam_address_id_r
-                    ),
-                    struct_pack(
-                        match_weight := match_weight,
-                        unique_id_l := unique_id_l
-                    ),
-                    {candidate_search_depth}
-                ) AS candidates
-            FROM good_match_keys
-            GROUP BY unique_id_r
-        )
-        SELECT
-            unique_id_r,
-            unnest(candidates, recursive := true)
-        FROM grouped
-    """).create("candidate_search_keys")
-    con.sql(f"""
-        SELECT prediction.*
-        FROM df_predict AS prediction
-        INNER JOIN candidate_search_keys AS candidate
-          ON candidate.unique_id_l = prediction.unique_id_l
-         AND candidate.unique_id_r = prediction.unique_id_r
-         AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
-         AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
-        WHERE prediction.match_weight > {match_weight_threshold}
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY prediction.unique_id_r, prediction.unique_id_l
-            ORDER BY
-                prediction.match_weight DESC,
-                prediction.ukam_address_id_r DESC,
-                prediction.ukam_address_id_l DESC
-        ) = 1
-    """).create("good_matches")
-
-    reranker_source = ""
-    range_intermediate_columns = ""
-    range_projection = ""
-    range_adjustment_sql = ""
-    token_adjustment_alias = "mw_adjustment"
-    if numeric_range_reranker is not None:
-        reranked = build_numeric_range_candidate_pool(
-            con,
-            con.table("good_matches"),
-            numeric_range_reranker,
-            top_n_matches=top_n_matches,
-            numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
-            numeric_search_depth=numeric_range_reranker.numeric_search_depth,
-        )
-        reranker_source = f"({reranked.sql_query()}) AS reranked_top_n_matches"
-        range_intermediate_columns = """
-                candidate.legacy_numeric_bits,
-                candidate.numeric_range_relationship,
-                candidate.numeric_range_guard_passed,
-                candidate.numeric_range_guard_reason,
-                candidate.numeric_range_base_bits,
-                candidate.numeric_range_tf_bits,
-                candidate.numeric_range_adjustment,
-        """
-        range_projection = """
-            legacy_numeric_bits,
-            numeric_range_relationship,
-            numeric_range_guard_passed,
-            numeric_range_guard_reason,
-            numeric_range_base_bits,
-            numeric_range_tf_bits,
-            numeric_range_adjustment,
-        """
-        range_adjustment_sql = " + numeric_range_adjustment"
-        token_adjustment_alias = "distinguishing_token_adjustment"
-    else:
-        con.sql(f"""
-            SELECT *
-            FROM good_matches
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY unique_id_r
-                ORDER BY match_weight DESC, unique_id_l DESC
-            ) <= {top_n_matches}
-        """).create("top_n_matches")
-        reranker_source = "top_n_matches"
-
-    con.sql(f"""
-        WITH intermediate AS (
-            SELECT *, map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
-            FROM {reranker_source}
-        ),
-        enriched AS (
-            SELECT
-                *,
-                COALESCE(
-                    common_end_tokens_r.list_transform(
-                        value -> COALESCE(
-                            struct_extract(
-                                TRY_CAST(value AS STRUCT(tok VARCHAR, rel_freq DOUBLE)),
-                                'tok'
-                            ),
-                            TRY_CAST(value AS VARCHAR)
-                        )
-                    ),
-                    CAST([] AS VARCHAR[])
-                ) AS common_end_tokens_tok
-            FROM intermediate
-        )
-        SELECT
-            *,
-            clean_full_address_l
-                .trim()
-                .upper()
-                .regexp_split_to_array('\\s+')
-                .list_reverse()
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_reverse()
-                .array_to_string(' ') AS __token_address_l,
-            clean_full_address_r
-                .trim()
-                .upper()
-                .regexp_split_to_array('\\s+')
-                .list_reverse()
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_filter((token, position) -> NOT (
-                    position = 1 AND common_end_tokens_tok.list_contains(token)
-                ))
-                .list_reverse()
-                .array_to_string(' ') AS __token_address_r
-        FROM enriched
-    """).create("token_addresses")
-
-    con.sql(f"""
-        WITH source_tokens AS (
-            SELECT DISTINCT
-                ukam_address_id_r,
-                concat_ws(' ', __token_address_r, postcode_r)
-                    .trim()
-                    .upper()
-                    .regexp_split_to_array('\\s+') AS tokens_r
-            FROM token_addresses
-        ),
-        block_tokens AS (
-            SELECT
-                source.ukam_address_id_r,
-                source.tokens_r,
-                concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
-                    .trim()
-                    .upper()
-                    .regexp_split_to_array('\\s+') AS candidate_tokens
-            FROM token_addresses AS candidate
-            JOIN source_tokens AS source USING (ukam_address_id_r)
-            {eligibility_filter}
-        ),
-        block_histograms AS (
-            SELECT
-                ukam_address_id_r,
-                ANY_VALUE(tokens_r) AS tokens_r,
-                list_aggregate(
-                    {candidate_token_lists_sql}.flatten(),
-                    'histogram'
-                ) AS hist_all_tokens_in_block_l,
-                {canonical_bigrams_sql}
-            FROM block_tokens
-            GROUP BY ukam_address_id_r
-        )
-        SELECT
-            *,
-            map_from_entries(
-                list_filter(
-                    map_entries(hist_all_tokens_in_block_l),
-                    entry -> list_contains(tokens_r, entry.key)
                 )
-            ) AS hist_overlapping_tokens_r_block_l,
+            ).flatten() AS bigrams_in_block_l,
+            """
+        block_bigrams_sql = """
             list_aggregate(bigrams_in_block_l, 'histogram')
                 AS hist_all_bigrams_in_block_l,
             list_transform(
@@ -305,247 +180,612 @@ def improve_predictions_using_distinguishing_tokens(
                     list_slice(tokens_r, 1, length(tokens_r) - 1),
                     list_slice(tokens_r, 2, length(tokens_r))
                 ),
-                pair -> ARRAY[pair[1], pair[2]]
+                lambda pair: ARRAY[pair[1], pair[2]]
             ) AS bigrams_r
-        FROM block_histograms
-    """).create("block_statistics")
+        """
+    else:
+        canonical_bigrams_sql = "CAST([] AS VARCHAR[][]) AS bigrams_in_block_l,"
+        block_bigrams_sql = """
+            MAP([]::VARCHAR[][], []::UBIGINT[])
+                AS hist_all_bigrams_in_block_l,
+            CAST([] AS VARCHAR[][]) AS bigrams_r
+        """
 
-    con.sql(f"""
-        WITH intermediate AS (
-            SELECT
-                candidate.match_weight,
-                candidate.match_probability,
-                candidate.unique_id_l,
-                candidate.unique_id_r,
-                candidate.clean_full_address_l,
-                candidate.clean_full_address_r,
-                candidate.ukam_address_id_l,
-                candidate.ukam_address_id_r,
-                candidate.postcode_l,
-                candidate.postcode_r,
-                concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
-                    .trim()
-                    .upper()
-                    .regexp_split_to_array('\\s+') AS tokens_l,
-                statistics.tokens_r,
-                statistics.hist_all_tokens_in_block_l,
-                statistics.hist_overlapping_tokens_r_block_l,
-                statistics.hist_all_bigrams_in_block_l,
-                statistics.bigrams_r,
-                {range_intermediate_columns}
-                {retained_columns}
-                list_distinct(
-                    list_filter(
-                        concat_ws(' ', candidate.__token_address_l, candidate.postcode_l)
-                            .trim()
-                            .upper()
-                            .regexp_split_to_array('\\s+'),
-                            token -> token IN {_POSITIONAL_TOKENS_SQL}
-                    )
-                ) AS positional_tokens_l,
-                list_distinct(
-                    list_filter(
-                        statistics.tokens_r,
-                            token -> token IN {_POSITIONAL_TOKENS_SQL}
-                    )
-                ) AS positional_tokens_r
-            FROM token_addresses AS candidate
-            LEFT JOIN block_statistics AS statistics USING (ukam_address_id_r)
-        ),
-        candidate_features AS (
-            SELECT
-                *,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_overlapping_tokens_r_block_l),
-                        entry -> list_contains(tokens_l, entry.key)
-                    )
-                ) AS overlapping_tokens_this_l_and_r,
-                map_from_entries(list_distinct(list_transform(
-                    list_filter(tokens_r, token -> token NOT IN tokens_l),
-                    token -> {{'key': token, 'value': true}}
-                ))) AS tokens_r_not_in_l_map,
-                list_filter(tokens_l, token -> token NOT IN tokens_r) AS missing_tokens,
-                list_transform(
-                    list_zip(
-                        list_slice(tokens_l, 1, length(tokens_l) - 1),
-                        list_slice(tokens_l, 2, length(tokens_l))
-                    ),
-                    pair -> ARRAY[pair[1], pair[2]]
-                ) AS bigrams_l
-            FROM intermediate
-        ),
-        evidence AS (
-            SELECT
-                *,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_all_tokens_in_block_l),
-                        entry -> map_contains(tokens_r_not_in_l_map, entry.key)
-                    )
-                ) AS tokens_elsewhere_in_block_but_not_this,
-                map_from_entries(list_distinct(list_transform(
-                    list_filter(bigrams_r, bigram -> bigram NOT IN bigrams_l),
-                    bigram -> {{'key': bigram, 'value': true}}
-                ))) AS bigrams_r_not_in_l_map,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_overlapping_tokens_r_block_l),
-                        entry -> list_contains(tokens_l, entry.key)
-                    )
-                ) AS overlapping_tokens_this_l_and_r_again
-            FROM candidate_features
-        ),
-        adjusted_evidence AS (
-            SELECT
-                *,
-                overlapping_tokens_this_l_and_r_again
-                    AS overlapping_tokens_this_l_and_r,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_all_bigrams_in_block_l),
-                        entry -> list_contains(bigrams_r, entry.key)
-                    )
-                ) AS hist_overlapping_bigrams_r_block_l,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_all_bigrams_in_block_l),
-                        entry -> map_contains(bigrams_r_not_in_l_map, entry.key)
-                    )
-                ) AS bigrams_elsewhere_in_block_but_not_this
-            FROM evidence
-        ),
-        components AS (
-            SELECT
-                *,
-                map_from_entries(
-                    list_filter(
-                        map_entries(hist_overlapping_bigrams_r_block_l),
-                        entry -> list_contains(bigrams_l, entry.key)
-                    )
-                ) AS overlapping_bigrams_this_l_and_r,
-                COALESCE(list_sum(list_transform(
-                    map_values(overlapping_tokens_this_l_and_r),
-                    value -> 1.0 / (value * value)
-                )), 0.0) * {REWARD_MULTIPLIER} AS token_reward,
-                COALESCE(len(map_entries(
-                    tokens_elsewhere_in_block_but_not_this
-                )), 0)::DOUBLE
-                    * {PUNISHMENT_MULTIPLIER} AS token_absence_penalty,
-                COALESCE(len(missing_tokens), 0)::DOUBLE * {MISSING_TOKEN_PENALTY}
-                    AS missing_token_penalty,
-                CASE
-                    WHEN COALESCE(len(positional_tokens_l), 0) > 0
-                        AND COALESCE(len(positional_tokens_r), 0) > 0
-                        AND COALESCE(
-                            len(list_intersect(positional_tokens_l, positional_tokens_r)),
-                            0
-                        ) = 0
-                    THEN {POSITIONAL_CONFLICT_PENALTY}
-                    ELSE 0.0
-                END AS positional_conflict_penalty
-            FROM adjusted_evidence
-        ),
-        scored_components AS (
-            SELECT
-                *,
-                map_from_entries(
-                    list_filter(
-                        map_entries(overlapping_bigrams_this_l_and_r),
-                        entry -> NOT (
-                            map_contains(
-                                overlapping_tokens_this_l_and_r, entry.key[1]
-                            )
-                            AND overlapping_tokens_this_l_and_r[entry.key[1]]
-                                <= entry.value
-                            AND map_contains(
-                                overlapping_tokens_this_l_and_r, entry.key[2]
-                            )
-                            AND overlapping_tokens_this_l_and_r[entry.key[2]]
-                                <= entry.value
+    completed = False
+    try:
+        con.sql(f"""
+            WITH grouped AS (
+                SELECT
+                    unique_id_l,
+                    unique_id_r,
+                    max_by(
+                        struct_pack(
+                            ukam_address_id_l := ukam_address_id_l,
+                            ukam_address_id_r := ukam_address_id_r,
+                            match_weight := match_weight
+                        ),
+                        struct_pack(
+                            match_weight := match_weight,
+                            ukam_address_id_r := ukam_address_id_r,
+                            ukam_address_id_l := ukam_address_id_l
                         )
-                    )
-                ) AS overlapping_bigrams_this_l_and_r_filtered,
-                map_from_entries(
-                    list_filter(
-                        map_entries(bigrams_elsewhere_in_block_but_not_this),
-                        entry -> NOT (
-                            map_contains(
-                                tokens_elsewhere_in_block_but_not_this,
-                                entry.key[1]
-                            )
-                            AND tokens_elsewhere_in_block_but_not_this[entry.key[1]]
-                                <= entry.value
-                            AND map_contains(
-                                tokens_elsewhere_in_block_but_not_this,
-                                entry.key[2]
-                            )
-                            AND tokens_elsewhere_in_block_but_not_this[entry.key[2]]
-                                <= entry.value
-                        )
-                    )
-                ) AS bigrams_elsewhere_in_block_but_not_this_filtered
-            FROM components
-        ),
-        scored_candidates AS (
+                    ) AS best
+                FROM df_predict
+                WHERE match_weight > {match_weight_threshold}
+                GROUP BY unique_id_l, unique_id_r, ukam_address_id_r
+            )
             SELECT
-                *,
-                COALESCE(list_sum(list_transform(
-                    map_values(overlapping_bigrams_this_l_and_r_filtered),
-                    value -> 1.0 / (value * value)
-                )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
-                COALESCE(len(map_entries(
-                    bigrams_elsewhere_in_block_but_not_this_filtered
-                )), 0)::DOUBLE
-                    * {BIGRAM_PUNISHMENT_MULTIPLIER} AS bigram_absence_penalty
-            FROM scored_components
+                unique_id_l,
+                unique_id_r,
+                best.ukam_address_id_l AS ukam_address_id_l,
+                best.ukam_address_id_r AS ukam_address_id_r,
+                best.match_weight AS match_weight
+            FROM grouped
+        """).create(good_match_keys_table)
+
+        candidate_search_depth = top_n_matches
+        if numeric_range_reranker is not None:
+            candidate_search_depth = max(
+                top_n_matches,
+                numeric_range_reranker.numeric_search_depth,
+            )
+        con.sql(f"""
+            WITH grouped AS (
+                SELECT
+                    unique_id_r,
+                    max_by(
+                        struct_pack(
+                            unique_id_l := unique_id_l,
+                            ukam_address_id_l := ukam_address_id_l,
+                            ukam_address_id_r := ukam_address_id_r
+                        ),
+                        struct_pack(
+                            match_weight := match_weight,
+                            unique_id_l := unique_id_l
+                        ),
+                        {candidate_search_depth}
+                    ) AS candidates
+                FROM {good_match_keys_table}
+                GROUP BY unique_id_r, ukam_address_id_r
+            )
+            SELECT
+                unique_id_r,
+                unnest(candidates, recursive := true)
+            FROM grouped
+        """).create(candidate_search_keys_table)
+
+        con.sql(f"""
+            SELECT prediction.*
+            FROM df_predict AS prediction
+            INNER JOIN {candidate_search_keys_table} AS candidate
+              ON candidate.unique_id_l = prediction.unique_id_l
+             AND candidate.unique_id_r = prediction.unique_id_r
+             AND candidate.ukam_address_id_l = prediction.ukam_address_id_l
+             AND candidate.ukam_address_id_r = prediction.ukam_address_id_r
+            WHERE prediction.match_weight > {match_weight_threshold}
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY prediction.ukam_address_id_r, prediction.unique_id_l
+                ORDER BY
+                    prediction.match_weight DESC,
+                    prediction.ukam_address_id_r DESC,
+                    prediction.ukam_address_id_l DESC
+            ) = 1
+        """).create(good_matches_table)
+
+        reranker_source = ""
+        range_intermediate_columns = ""
+        range_projection = ""
+        range_adjustment_sql = ""
+        token_adjustment_alias = "mw_adjustment"
+        range_source_column_names: list[str] = []
+        if numeric_range_reranker is not None:
+            reranked = build_numeric_range_candidate_pool(
+                con,
+                con.table(good_matches_table),
+                numeric_range_reranker,
+                top_n_matches=top_n_matches,
+                numeric_candidate_slots=(numeric_range_reranker.numeric_candidate_slots),
+                numeric_search_depth=numeric_range_reranker.numeric_search_depth,
+            )
+            range_intermediate_columns = """
+                candidate.legacy_numeric_bits,
+                candidate.numeric_range_relationship,
+                candidate.numeric_range_guard_passed,
+                candidate.numeric_range_guard_reason,
+                candidate.numeric_range_base_bits,
+                candidate.numeric_range_tf_bits,
+                candidate.numeric_range_adjustment,
+            """
+            range_projection = """
+            legacy_numeric_bits,
+            numeric_range_relationship,
+            numeric_range_guard_passed,
+            numeric_range_guard_reason,
+            numeric_range_base_bits,
+            numeric_range_tf_bits,
+            numeric_range_adjustment,
+            """
+            range_adjustment_sql = " + numeric_range_adjustment"
+            token_adjustment_alias = "distinguishing_token_adjustment"
+            range_source_column_names = [
+                "legacy_numeric_bits",
+                "numeric_range_relationship",
+                "numeric_range_guard_passed",
+                "numeric_range_guard_reason",
+                "numeric_range_base_bits",
+                "numeric_range_tf_bits",
+                "numeric_range_adjustment",
+            ]
+        else:
+            con.sql(f"""
+                SELECT *
+                FROM {good_matches_table}
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ukam_address_id_r
+                    ORDER BY match_weight DESC, unique_id_l DESC
+                ) <= {top_n_matches}
+            """).create(top_n_matches_table)
+            reranker_source = top_n_matches_table
+
+        source_column_names = [
+            "match_weight",
+            "match_probability",
+            "unique_id_l",
+            "unique_id_r",
+            "clean_full_address_l",
+            "clean_full_address_r",
+            "ukam_address_id_l",
+            "ukam_address_id_r",
+            "postcode_l",
+            "postcode_r",
+            *range_source_column_names,
+            *retained_column_names,
+        ]
+        if "common_end_tokens_hist_r" in df_predict.columns:
+            source_column_names.append("common_end_tokens_hist_r")
+        source_column_names = list(dict.fromkeys(source_column_names))
+        source_projection = ", ".join(
+            f"source.{column}" for column in source_column_names
         )
-        SELECT
-            unique_id_l,
-            unique_id_r,
-            ukam_address_id_r,
-            ukam_address_id_l,
-            match_weight AS match_weight_original,
-            {range_projection}
-            token_reward,
-            token_absence_penalty,
-            bigram_reward,
-            bigram_absence_penalty,
-            missing_token_penalty,
-            positional_conflict_penalty,
-            token_reward
-                - token_absence_penalty
-                + bigram_reward
-                - bigram_absence_penalty
-                - missing_token_penalty
-                - positional_conflict_penalty AS {token_adjustment_alias},
-            token_reward
-                - token_absence_penalty
-                + bigram_reward
-                - bigram_absence_penalty
-                - missing_token_penalty
-                - positional_conflict_penalty AS mw_adjustment,
-            match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
-            overlapping_tokens_this_l_and_r,
-            tokens_elsewhere_in_block_but_not_this,
-            hist_all_tokens_in_block_l,
-            hist_overlapping_tokens_r_block_l,
-            missing_tokens,
-            positional_tokens_l,
-            positional_tokens_r,
-            {"bigrams_l, bigrams_r, " if use_bigrams else ""}
-            {"overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
-            {"bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
-            {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
-            {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
-            {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
+        if numeric_range_reranker is not None:
+            con.sql(f"""
+                SELECT {source_projection}
+                FROM ({reranked.sql_query()}) AS source
+            """).create(top_n_matches_table)
+            reranker_source = top_n_matches_table
+
+        if (
+            "clean_full_address_tokens_l" not in df_predict.columns
+            and "clean_full_address_tokens_r" not in df_predict.columns
+            and df_addresses_to_match is not None
+            and df_addresses_to_search_within is not None
+            and "clean_full_address_tokens" in df_addresses_to_match.columns
+            and "clean_full_address_tokens" in df_addresses_to_search_within.columns
+        ):
+            canonical_tokens = df_addresses_to_search_within.select(
+                "ukam_address_id, clean_full_address_tokens"
+            )
+            con.sql(f"""
+                SELECT lookup.ukam_address_id, lookup.clean_full_address_tokens
+                FROM ({canonical_tokens.sql_query()}) AS lookup
+                INNER JOIN (
+                    SELECT DISTINCT ukam_address_id_l
+                    FROM {reranker_source}
+                ) AS candidate_keys
+                    ON candidate_keys.ukam_address_id_l = lookup.ukam_address_id
+            """).create(canonical_token_lookup_table)
+
+            messy_tokens = df_addresses_to_match.select(
+                "ukam_address_id, clean_full_address_tokens"
+            )
+            con.sql(f"""
+                SELECT lookup.ukam_address_id, lookup.clean_full_address_tokens
+                FROM ({messy_tokens.sql_query()}) AS lookup
+                INNER JOIN (
+                    SELECT DISTINCT ukam_address_id_r
+                    FROM {reranker_source}
+                ) AS candidate_keys
+                    ON candidate_keys.ukam_address_id_r = lookup.ukam_address_id
+            """).create(messy_token_lookup_table)
+
+            full_address_tokens_l_sql = (
+                "COALESCE(canonical_lookup.clean_full_address_tokens, "
+                f"{fallback_full_address_tokens_l_sql})"
+            )
+            full_address_tokens_r_sql = (
+                "COALESCE(messy_lookup.clean_full_address_tokens, "
+                f"{fallback_full_address_tokens_r_sql})"
+            )
+            token_lookup_joins = f"""
+                LEFT JOIN {canonical_token_lookup_table} AS canonical_lookup
+                    ON canonical_lookup.ukam_address_id = source.ukam_address_id_l
+                LEFT JOIN {messy_token_lookup_table} AS messy_lookup
+                    ON messy_lookup.ukam_address_id = source.ukam_address_id_r
+            """
+        else:
+            full_address_tokens_l_sql = (
+                "source.clean_full_address_tokens_l"
+                if "clean_full_address_tokens_l" in df_predict.columns
+                else fallback_full_address_tokens_l_sql
+            )
+            full_address_tokens_r_sql = (
+                "source.clean_full_address_tokens_r"
+                if "clean_full_address_tokens_r" in df_predict.columns
+                else fallback_full_address_tokens_r_sql
+            )
+
+        common_end_tokens_expression = (
+            "map_keys(source.common_end_tokens_hist_r)"
+            if "common_end_tokens_hist_r" in df_predict.columns
+            else "CAST([] AS VARCHAR[])"
+        )
+        sibling_location_join = ""
+        sibling_location_conflict = "FALSE"
+        if (
+            df_addresses_to_match is not None
+            and df_addresses_to_search_within is not None
+            and {"ukam_address_id", "sub_premise_location"}.issubset(
+                df_addresses_to_match.columns
+            )
+            and {"unique_id", "parentuprn", "sub_premise_location"}.issubset(
+                df_addresses_to_search_within.columns
+            )
+        ):
+            # The highest-scoring alias may omit the position. Only apply extra
+            # evidence when another shortlisted UPRN at that parent agrees.
+            sibling_location_join = _sibling_location_join_sql(
+                reranker_source, df_addresses_to_match, df_addresses_to_search_within
+            )
+            sibling_location_conflict = "positions.sibling_location_conflict"
+        con.sql(f"""
+            WITH intermediate AS (
+                SELECT
+                    {source_projection},
+                    {sibling_location_conflict} AS sibling_location_conflict,
+                    {common_end_tokens_expression} AS common_end_tokens_r,
+                    {full_address_tokens_l_sql} AS __full_address_tokens_l,
+                    {full_address_tokens_r_sql} AS __full_address_tokens_r
+                FROM {reranker_source} AS source
+                {token_lookup_joins}
+                {sibling_location_join}
+            ),
+            enriched AS (
+                SELECT
+                    *,
+                    COALESCE(
+                        common_end_tokens_r.list_transform(
+                            lambda value: COALESCE(
+                                struct_extract(
+                                    TRY_CAST(value AS STRUCT(
+                                        tok VARCHAR, rel_freq DOUBLE
+                                    )),
+                                    'tok'
+                                ),
+                                TRY_CAST(value AS VARCHAR)
+                            )
+                        ),
+                        CAST([] AS VARCHAR[])
+                    ) AS common_end_tokens_tok
+                FROM intermediate
+            )
+            SELECT
+                *,
+                __full_address_tokens_l
+                    .list_reverse()
+                    .list_filter(lambda token, position: NOT (
+                        position = 1 AND common_end_tokens_tok.list_contains(token)
+                    ))
+                    .list_filter(lambda token, position: NOT (
+                        position = 1 AND common_end_tokens_tok.list_contains(token)
+                    ))
+                    .list_reverse() AS __token_address_tokens_l,
+                __full_address_tokens_r
+                    .list_reverse()
+                    .list_filter(lambda token, position: NOT (
+                        position = 1 AND common_end_tokens_tok.list_contains(token)
+                    ))
+                    .list_filter(lambda token, position: NOT (
+                        position = 1 AND common_end_tokens_tok.list_contains(token)
+                    ))
+                    .list_reverse() AS __token_address_tokens_r
+            FROM enriched
+        """).create(token_addresses_table)
+
+        con.sql(f"""
+            WITH source_tokens AS (
+                SELECT DISTINCT
+                    ukam_address_id_r,
+                    {source_tokens_sql} AS tokens_r
+                FROM {token_addresses_table}
+            ),
+            block_tokens AS (
+                SELECT
+                    source.ukam_address_id_r,
+                    source.tokens_r,
+                    {candidate_tokens_sql} AS candidate_tokens
+                FROM {token_addresses_table} AS candidate
+                JOIN source_tokens AS source USING (ukam_address_id_r)
+                {eligibility_filter}
+            ),
+            block_histograms AS (
+                SELECT
+                    ukam_address_id_r,
+                    ANY_VALUE(tokens_r) AS tokens_r,
+                    list_aggregate(
+                        {candidate_token_lists_sql}.flatten(),
+                        'histogram'
+                    ) AS hist_all_tokens_in_block_l,
+                    {canonical_bigrams_sql}
+                FROM block_tokens
+                GROUP BY ukam_address_id_r
+            ),
+            block_overlap_statistics AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_all_tokens_in_block_l),
+                            lambda entry: list_contains(tokens_r, entry.key)
+                        )
+                    ) AS hist_overlapping_tokens_r_block_l,
+                    {block_bigrams_sql}
+                FROM block_histograms
+            )
+            SELECT
+                *,
+                map_from_entries(
+                    list_filter(
+                        map_entries(hist_all_bigrams_in_block_l),
+                        lambda entry: list_contains(bigrams_r, entry.key)
+                    )
+                ) AS hist_overlapping_bigrams_r_block_l
+            FROM block_overlap_statistics
+        """).create(block_statistics_table)
+
+        con.sql(f"""
+            WITH intermediate AS (
+                SELECT
+                    candidate.match_weight,
+                    candidate.match_probability,
+                    candidate.unique_id_l,
+                    candidate.unique_id_r,
+                    candidate.clean_full_address_l,
+                    candidate.clean_full_address_r,
+                    candidate.ukam_address_id_l,
+                    candidate.ukam_address_id_r,
+                    candidate.postcode_l,
+                    candidate.postcode_r,
+                    {candidate_tokens_l_sql} AS tokens_l,
+                    statistics.tokens_r,
+                    statistics.hist_all_tokens_in_block_l,
+                    statistics.hist_overlapping_tokens_r_block_l,
+                    statistics.hist_all_bigrams_in_block_l,
+                    statistics.hist_overlapping_bigrams_r_block_l,
+                    statistics.bigrams_r,
+                    {range_intermediate_columns}
+                    {retained_columns}
+                    candidate.sibling_location_conflict,
+                    list_distinct(
+                        list_filter(
+                            {candidate_tokens_l_sql},
+                                lambda token: token IN {_POSITIONAL_TOKENS_SQL}
+                        )
+                    ) AS positional_tokens_l,
+                    list_distinct(
+                        list_filter(
+                            statistics.tokens_r,
+                                lambda token: token IN {_POSITIONAL_TOKENS_SQL}
+                        )
+                    ) AS positional_tokens_r
+                FROM {token_addresses_table} AS candidate
+                LEFT JOIN {block_statistics_table} AS statistics USING (ukam_address_id_r)
+            ),
+            candidate_features AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_overlapping_tokens_r_block_l),
+                            lambda entry: list_contains(tokens_l, entry.key)
+                        )
+                    ) AS overlapping_tokens_this_l_and_r,
+                    map_from_entries(list_distinct(list_transform(
+                        list_filter(tokens_r, lambda token: token NOT IN tokens_l),
+                        lambda token: {{'key': token, 'value': true}}
+                    ))) AS tokens_r_not_in_l_map,
+                    list_filter(tokens_l, lambda token: token NOT IN tokens_r)
+                        AS missing_tokens,
+                    list_transform(
+                        list_zip(
+                            list_slice(tokens_l, 1, length(tokens_l) - 1),
+                            list_slice(tokens_l, 2, length(tokens_l))
+                        ),
+                        lambda pair: ARRAY[pair[1], pair[2]]
+                    ) AS bigrams_l
+                FROM intermediate
+            ),
+            evidence AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_all_tokens_in_block_l),
+                            lambda entry: map_contains(tokens_r_not_in_l_map, entry.key)
+                        )
+                    ) AS tokens_elsewhere_in_block_but_not_this,
+                    map_from_entries(list_distinct(list_transform(
+                        list_filter(bigrams_r, lambda bigram: bigram NOT IN bigrams_l),
+                        lambda bigram: {{'key': bigram, 'value': true}}
+                    ))) AS bigrams_r_not_in_l_map,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_overlapping_tokens_r_block_l),
+                            lambda entry: list_contains(tokens_l, entry.key)
+                        )
+                    ) AS overlapping_tokens_this_l_and_r_again
+                FROM candidate_features
+            ),
+            adjusted_evidence AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_all_bigrams_in_block_l),
+                            lambda entry: map_contains(bigrams_r_not_in_l_map, entry.key)
+                        )
+                    ) AS bigrams_elsewhere_in_block_but_not_this
+                FROM evidence
+            ),
+            components AS (
+                SELECT
+                    *,
+                    overlapping_tokens_this_l_and_r_again
+                        AS overlapping_tokens_this_l_and_r,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(hist_overlapping_bigrams_r_block_l),
+                            lambda entry: list_contains(bigrams_l, entry.key)
+                        )
+                    ) AS overlapping_bigrams_this_l_and_r,
+                    COALESCE(list_sum(list_transform(
+                        map_values(overlapping_tokens_this_l_and_r),
+                        lambda value: 1.0 / (value * value)
+                    )), 0.0) * {REWARD_MULTIPLIER} AS token_reward,
+                    COALESCE(len(map_entries(
+                        tokens_elsewhere_in_block_but_not_this
+                    )), 0)::DOUBLE
+                        * {PUNISHMENT_MULTIPLIER} AS token_absence_penalty,
+                    COALESCE(len(missing_tokens), 0)::DOUBLE * {MISSING_TOKEN_PENALTY}
+                        AS missing_token_penalty,
+                    CASE
+                        WHEN sibling_location_conflict OR (
+                            COALESCE(len(positional_tokens_l), 0) > 0
+                            AND COALESCE(len(positional_tokens_r), 0) > 0
+                            AND COALESCE(len(list_intersect(
+                                positional_tokens_l, positional_tokens_r
+                            )), 0) = 0
+                        )
+                        THEN {POSITIONAL_CONFLICT_PENALTY}
+                        ELSE 0.0
+                    END AS positional_conflict_penalty
+                FROM adjusted_evidence
+            ),
+            scored_components AS (
+                SELECT
+                    *,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(overlapping_bigrams_this_l_and_r),
+                            lambda entry: NOT (
+                                map_contains(
+                                    overlapping_tokens_this_l_and_r, entry.key[1]
+                                )
+                                AND overlapping_tokens_this_l_and_r[entry.key[1]]
+                                    <= entry.value
+                                AND map_contains(
+                                    overlapping_tokens_this_l_and_r, entry.key[2]
+                                )
+                                AND overlapping_tokens_this_l_and_r[entry.key[2]]
+                                    <= entry.value
+                            )
+                        )
+                    ) AS overlapping_bigrams_this_l_and_r_filtered,
+                    map_from_entries(
+                        list_filter(
+                            map_entries(bigrams_elsewhere_in_block_but_not_this),
+                            lambda entry: NOT (
+                                map_contains(
+                                    tokens_elsewhere_in_block_but_not_this,
+                                    entry.key[1]
+                                )
+                                AND tokens_elsewhere_in_block_but_not_this[entry.key[1]]
+                                    <= entry.value
+                                AND map_contains(
+                                    tokens_elsewhere_in_block_but_not_this,
+                                    entry.key[2]
+                                )
+                                AND tokens_elsewhere_in_block_but_not_this[entry.key[2]]
+                                    <= entry.value
+                            )
+                        )
+                    ) AS bigrams_elsewhere_in_block_but_not_this_filtered
+                FROM components
+            ),
+            scored_candidates AS (
+                SELECT
+                    *,
+                    COALESCE(list_sum(list_transform(
+                        map_values(overlapping_bigrams_this_l_and_r_filtered),
+                        lambda value: 1.0 / (value * value)
+                    )), 0.0) * {BIGRAM_REWARD_MULTIPLIER} AS bigram_reward,
+                    COALESCE(len(map_entries(
+                        bigrams_elsewhere_in_block_but_not_this_filtered
+                    )), 0)::DOUBLE
+                        * {BIGRAM_PUNISHMENT_MULTIPLIER} AS bigram_absence_penalty
+                FROM scored_components
+            )
+            SELECT
+                unique_id_l,
+                unique_id_r,
+                ukam_address_id_r,
+                ukam_address_id_l,
+                match_weight AS match_weight_original,
+                {range_projection}
+                token_reward,
+                token_absence_penalty,
+                bigram_reward,
+                bigram_absence_penalty,
+                missing_token_penalty,
+                positional_conflict_penalty,
+                token_reward
+                    - token_absence_penalty
+                    + bigram_reward
+                    - bigram_absence_penalty
+                    - missing_token_penalty
+                    - positional_conflict_penalty AS {token_adjustment_alias},
+                token_reward
+                    - token_absence_penalty
+                    + bigram_reward
+                    - bigram_absence_penalty
+                    - missing_token_penalty
+                    - positional_conflict_penalty AS mw_adjustment,
+                match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
+                overlapping_tokens_this_l_and_r,
+                tokens_elsewhere_in_block_but_not_this,
+                hist_all_tokens_in_block_l,
+                hist_overlapping_tokens_r_block_l,
+                missing_tokens,
+                positional_tokens_l,
+                positional_tokens_r,
+                {"bigrams_l, bigrams_r, " if use_bigrams else ""}
+                {"overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
+                {"bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
+                {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
+                {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
+                {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
             {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
-            clean_full_address_l,
-            postcode_l,
-            clean_full_address_r,
-            postcode_r,
-            {retained_columns}
-        FROM scored_candidates
-    """).create(matches_table)
+                clean_full_address_l,
+                postcode_l,
+                clean_full_address_r,
+                postcode_r,
+                {retained_columns}
+            FROM scored_candidates
+        """).create(matches_table)
+
+        completed = True
+    finally:
+        if not completed:
+            _drop_table_and_registered_aliases(con, matches_table)
+        for table_name in (
+            good_match_keys_table,
+            candidate_search_keys_table,
+            good_matches_table,
+            top_n_matches_table,
+            token_addresses_table,
+            block_statistics_table,
+            canonical_token_lookup_table,
+            messy_token_lookup_table,
+        ):
+            _drop_table_and_registered_aliases(con, table_name)
 
     return con.table(matches_table)

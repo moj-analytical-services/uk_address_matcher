@@ -15,7 +15,7 @@ Fast, simple address matching (geocoding) in Python.
 - **Simple.** Setup in seconds, runs on a laptop. No separate infrastructure of services needed.
 - **Fast.** Match 100,000 addresses in ~30 seconds.[^1]
 - **Proven accuracy.** We use public, labelled datasets to measure and document accuracy.
-- **Support for Ordnance Survey data.**  We provide a automated build pipeline for users wishing to match to Ordnance Survey data.  Matching to any other canonical dataset is also supported.
+- **\[OPTIONAL\] Support for Ordnance Survey data.** We provide an automated build pipeline for users wishing to match to Ordnance Survey data. Matching to any other canonical dataset is also supported.
 
 The end-to-end process of matching 100,000 addresses to Ordnance Survey data, including all software downloads and data processing takes:[^2]
 
@@ -30,28 +30,35 @@ pip install uk_address_matcher
 
 ## What does it do?
 
-Given the following data:
+`uk_address_matcher` finds the best known address for each address in your dataset.
 
--  a "messy" dataset of addresses that you want to match
--  a "canonical" dataset of known addresses, often an Ordnance Survey dataset such as AddressBase or NGD.
+<img src="assets/images/uk_address_matcher_dfd.excalidraw.png" alt="Data flow diagram showing how uk_address_matcher cleans and matches addresses" width="100%">
 
-this package will find the best matching canonical address for each messy address.
+- **\[OPTIONAL\]**: Construct Ordnance Survey canonical data using [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder). Skip this step if you already have a canonical dataset or are using another source.
+- **Input:** provide a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](get_started.md#input-data-requirements).
+- **Preparation:** addresses are cleaned, standardised, and enriched with useful features such as postcodes. See the [canonical dataset preprocessing guidance](get_started.md#choose-whether-to-pre-process-your-canonical-dataset).
+- **Matching:** configurable matching stages compare each messy address with candidate canonical addresses, from exact matches through to probabilistic matching with Splink. See [choosing a matching threshold](choosing_a_matching_threshold.md#choosing-a-matching-threshold).
+- **Output:** the best match, together with the match reason, match weight, and distinguishability score. The threshold guide explains [how to interpret these scores](choosing_a_matching_threshold.md#what-do-these-scores-mean).
 
 
 ## Example:
 
 Your data should be in the following format[^3]:
 
+Prefer `address_id`, or keep the supported `unique_id` input alias. Supply only
+one ID name per dataset. Entity IDs may repeat across textual variants;
+`postcode` can be omitted or null.
+
 ### Messy data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | m_1 | Flat A Example Court, 10 Demo Road, Townton | AB1 2BC |
 | ...more rows |
 
 ### Canonical data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | c_1 | Flat A, 10 Demo Road, Townton | AB1 2BC |
 | c_2 | Flat B, 10 Demo Road, Townton | AB1 2BC |
@@ -74,15 +81,20 @@ matcher = AddressMatcher(
     addresses_to_match=messy,
     con=con,
 )
-result = matcher.match()
-result.matches().show(max_width=10000)
+with matcher.match() as result:
+    result.matches().show(max_width=10000)
+con.close()
 ```
 
-Example output:
+Selected output columns:
 
-| unique_id | resolved_canonical_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
+| address_id | canonical_address_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
 |----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
 | m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
+
+Default results also include both per-run UKAM row keys. Use
+`matches(include_unmatched=False)` for successful matches only. See
+[Reading results](get_started.md#reading-results) for enrichment and resource lifetime.
 
 
 The above is recommended if your canonical dataset is relatively small, say, under 1 million rows. If you're matching to larger canonical dataset, a preprocessing step is recommended. See [choose whether to pre-process your canonical dataset](get_started.md#choose-whether-to-pre-process-your-canonical-dataset) for details.
@@ -91,10 +103,15 @@ The above is recommended if your canonical dataset is relatively small, say, und
 
 Here is a list of some of our known users and their use cases:
 
-=== "Public Sector (UK)"
+#### Public Sector (UK)
 
-	- The [Greater London Authority](https://www.london.gov.uk/)'s High Streets Data Service uses the `uk_address_matcher` to precisely geolocate London's businesses and assign each of them a commercial UPRN, in order to fully map the city's retail provision and commercial property use.
-    - [Homes England](https://www.gov.uk/government/organisations/homes-england) has tested the Splink-based address matcher to link the Land Registry Price Paid dataset with the Ordnance Survey National Geographic Database (NGD). In a Databricks environment, it links around 30 million records in under five hours with high accuracy, helping to identify and monitor new builds that contribute to the 1.5 million homes mandate.
+- The [Greater London Authority](https://www.london.gov.uk/)'s High Streets Data Service uses the `uk_address_matcher` to precisely geolocate London's businesses and assign each of them a commercial UPRN, in order to fully map the city's retail provision and commercial property use.
+- [Homes England](https://www.gov.uk/government/organisations/homes-england) has tested the Splink-based address matcher to link the Land Registry Price Paid dataset with the Ordnance Survey National Geographic Database (NGD). In a Databricks environment, it links around 30 million records in under five hours with high accuracy, helping to identify and monitor new builds that contribute to the 1.5 million homes mandate.
+- The Welsh Government's [DataMapWales](https://datamap.gov.wales/) team is using the `uk_address_matcher` to build a central, self-service address matching service in FME Flow. It matches free-text addresses, including Welsh language and bilingual addresses, against Ordnance Survey NGD, attaches UPRNs, and provides confidence ratings and review flags. By providing a simple user interface for the technical matching process, the service will make address matching capabilities accessible to teams without specialist coding or data engineering expertise.
+
+#### Academic (UK)
+
+- Sheffield Solar runs [PV_Live](https://api.pvlive.uk/), a near real-time estimate of solar PV generation across Great Britain, used by the National Energy System Operator (NESO), network operators, researchers and the public. A key input to PV_Live is a sitelist of GB PV installations, compiled from several source datasets. To link and de-duplicate these records, they match on address, install date, capacity (MWp) and other attributes using [Splink](github.com/moj-analytical-services/splink) and uk_address_matcher.
 
 ## Licence
 

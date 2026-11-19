@@ -16,12 +16,24 @@ For full documentation, see our [main documentation site](https://moj-analytical
 - **Simple.** Setup in seconds, runs on a laptop. No separate infrastructure of services needed.
 - **Fast.** Match 100,000 addresses in ~30 seconds.
 - **Proven accuracy.** We use public, labelled datasets to measure and document accuracy.
-- **Support for Ordnance Survey data.**  We provide a automated build pipeline for users wishing to match to Ordnance Survey data.  Matching to any other canonical dataset is also supported.
+- **Support for Ordnance Survey data.** We offer first-party support and an automated data preparation pipeline through [`ukam_os_builder`](https://github.com/moj-analytical-services/ukam_os_builder). You can also match against any other canonical dataset.
 
 The end-to-end process of matching 100,000 addresses to Ordnance Survey data, including all software downloads and data processing takes:
 
 - Less than a minute if you are matching to a small area such as a local council region.
 - If matching to the whole UK, there's a one-time preprocessing step that takes around 10 minutes.  Subsequent matching of 100k records takes less than a minute.
+
+## What does `uk_address_matcher` do?
+
+`uk_address_matcher` finds the best known address for each address in your dataset.
+
+<img src="docs/site/assets/images/uk_address_matcher_dfd.excalidraw.png" alt="Data flow diagram showing how uk_address_matcher cleans and matches addresses" width="100%">
+
+- **\[OPTIONAL\]**: Construct Ordnance Survey canonical data using [ukam_os_builder](https://github.com/moj-analytical-services/ukam_os_builder). Skip this step if you already have a canonical dataset or are using another source.
+- **Input:** provide a messy dataset, such as addresses typed by users, and a canonical dataset of known addresses. See the [input data requirements](https://moj-analytical-services.github.io/uk_address_matcher/get_started/#input-data-requirements).
+- **Preparation:** addresses are cleaned, standardised, and enriched with useful features such as postcodes. See the [canonical dataset preprocessing guidance](https://moj-analytical-services.github.io/uk_address_matcher/get_started/#choose-whether-to-pre-process-your-canonical-dataset).
+- **Matching:** configurable matching stages compare each messy address with candidate canonical addresses, from exact matches through to probabilistic matching with Splink. See [choosing a matching threshold](https://moj-analytical-services.github.io/uk_address_matcher/choosing_a_matching_threshold/#choosing-a-matching-threshold).
+- **Output:** the best match, together with the match reason, match weight, and distinguishability score. See [choosing a matching threshold](https://moj-analytical-services.github.io/uk_address_matcher/choosing_a_matching_threshold/) for how to interpret these scores.
 
 ## Installation
 
@@ -29,33 +41,35 @@ The end-to-end process of matching 100,000 addresses to Ordnance Survey data, in
 pip install uk_address_matcher
 ```
 
-## What does it do?
+## Inputs
 
-Given the following data:
+You provide two datasets:
 
 -  a "messy" dataset of addresses that you want to match
 -  a "canonical" dataset of known addresses, often an Ordnance Survey dataset such as AddressBase or NGD.
 
-this package will find the best matching canonical address for each messy address.
+The package will find the best matching canonical address for each messy address.
 
 ## Example:
 
-Your address files need, at minimum, two columns: `unique_id` and `address_concat`.
+Your address files need `address_concat` and an entity ID: prefer `address_id`,
+or use the supported `unique_id` alias. Supply exactly one ID column. Entity IDs
+may repeat across textual variants of an address.
 
-`postcode` is optional by recommended. If not provided an attempt is made to parse them out of `address_concat`
+`postcode` is optional; when omitted or null, it is extracted from `address_concat`.
 
 Given the following data:
 
 ### Messy data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | m_1 | Flat A Example Court, 10 Demo Road, Townton | AB1 2BC |
 | ...more rows |
 
 ### Canonical data
 
-| unique_id | address_concat | postcode |
+| address_id | address_concat | postcode |
 |----------|----------------|----------|
 | c_1 | Flat A, 10 Demo Road, Townton | AB1 2BC |
 | c_2 | Flat B, 10 Demo Road, Townton | AB1 2BC |
@@ -78,13 +92,14 @@ matcher = AddressMatcher(
     addresses_to_match=messy,
     con=con,
 )
-result = matcher.match()
-result.matches().show(max_width=10000)
+with matcher.match() as result:
+    result.matches().show(max_width=10000)
+con.close()
 ```
 
-Example output:
+Selected output columns:
 
-| unique_id | resolved_canonical_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
+| address_id | canonical_address_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
 |----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
 | m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
 
@@ -94,6 +109,14 @@ Example output:
 
 
 ## Development
+
+Before proposing changes, read the [contribution guidelines](CONTRIBUTING.md),
+including scope agreement, documentation and AI-use expectations.
+
+Security checks and maintainer setup are documented in
+[developer security administration](security/README.md). Contributors should run the
+checks but leave security baselines and exceptions to maintainers. Report vulnerabilities
+privately using the [security policy](SECURITY.md).
 
 The scripts and tests will run better if you create .vscode/settings.json with the following:
 

@@ -7,10 +7,7 @@ on:
       - "uk_address_matcher/**"
       - "tests/**"
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write # PR comments are issue comments under the hood; this avoids permission surprises
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,24 +16,27 @@ concurrency:
 jobs:
   test-address-matcher:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
-        python-version: '3.10'
+        python-version: '3.11'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         version: "0.11.3"
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
+        enable-cache: false
 
     - name: Install the project
-      run: uv sync --all-extras --dev
+      run: uv sync --all-extras --dev --locked
 
     - name: Run address matcher test
       id: run-test
@@ -65,11 +65,14 @@ jobs:
         echo "Preview (first 40 lines):"
         sed -n '1,40p' github-comment.md
 
-    - name: Comment on PR (sticky)
+    - name: Publish job summary
       if: always()
-      uses: marocchino/sticky-pull-request-comment@d4d6b0936434b21bc8345ad45a440c5f7d2c40ff # v3.0.3
+      run: cat github-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload comment data
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        header: address-matcher-edge-cases
+        name: edge-cases-comment
         path: github-comment.md
-        hide_and_recreate: false
-        skip_unchanged: false
+        retention-days: 3

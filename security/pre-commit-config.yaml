@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: detect-secrets
+        name: Scan secrets without modifying maintained baselines
+        entry: uv run --no-sync python -I dev_scripts/check_secrets.py
+        language: system
+        exclude: ^security/secrets\.baseline$
+        types: [text]
+      - id: bandit
+        name: Scan executable Python code with Bandit
+        entry: uv run --no-sync bandit -q --severity-level medium --confidence-level medium --baseline security/bandit.baseline
+        language: system
+        files: ^(uk_address_matcher|benchmarking|tests)/
+        types: [python]
+      - id: pip-audit
+        name: Audit locked Python dependencies
+        entry: uv run --no-sync python -I dev_scripts/audit_dependencies.py
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: zizmor
+        name: Audit GitHub Actions workflows
+        entry: uv run --no-sync zizmor --offline --persona auditor --min-severity medium --config security/zizmor.yml
+        language: system
+        files: ^\.github/workflows/.*\.ya?ml$

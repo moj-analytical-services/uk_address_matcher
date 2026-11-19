@@ -16,6 +16,13 @@ def _add_term_frequencies_to_address_tokens():
     SELECT * FROM {input}
     """
 
+    token_input_sql = """
+    SELECT
+        ukam_address_id,
+        address_without_numbers_tokenised
+    FROM {base}
+    """
+
     rel_tok_freq_cte_sql = """
     SELECT
         token,
@@ -23,7 +30,7 @@ def _add_term_frequencies_to_address_tokens():
     FROM (
         SELECT
             unnest(address_without_numbers_tokenised) AS token
-        FROM {base}
+        FROM {token_input}
     )
     GROUP BY token
     """
@@ -31,17 +38,17 @@ def _add_term_frequencies_to_address_tokens():
     # 1. Explode to rows - we only need ID, Token, and Index
     exploded_tokens_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         UNNEST(address_without_numbers_tokenised) AS token,
         GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
-    FROM {base}
+    FROM {token_input}
     """
 
     # 2. Join to frequencies - we ONLY keep the Frequency (Float) and the Index (Int)
     # We drop the Token string here. It is dead weight for the sort.
     joined_scalars_sql = """
     SELECT
-        e.__ukam_row_id,
+        e.ukam_address_id,
         e.token_idx,
         COALESCE(f.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -58,13 +65,13 @@ def _add_term_frequencies_to_address_tokens():
     # is unique within a group). This is ~3x faster with identical output.
     reaggregated_freqs_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
-            s -> s.freq
+            lambda s: s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY __ukam_row_id
+    GROUP BY ukam_address_id
     """
 
     # 4. Zip the sorted frequencies back to the ORIGINAL token list
@@ -75,15 +82,16 @@ def _add_term_frequencies_to_address_tokens():
         base.* EXCLUDE (address_without_numbers_tokenised),
         list_transform(
             list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
+            lambda x: struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.__ukam_row_id = agg.__ukam_row_id
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
+        CTEStep("token_input", token_input_sql),
         CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
         CTEStep("exploded_tokens", exploded_tokens_sql),
         CTEStep("joined_scalars", joined_scalars_sql),
@@ -106,20 +114,26 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
     SELECT * FROM {input}
     """
 
-    # 1. Explode to rows - we only need ID, Token, and Index
-    exploded_tokens_sql = """
+    token_input_sql = """
     SELECT
-        __ukam_row_id,
-        UNNEST(address_without_numbers_tokenised) AS token,
-        GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
+        ukam_address_id,
+        address_without_numbers_tokenised
     FROM {base}
     """
 
-    # 2. Join to frequencies - we ONLY keep the Frequency (Float) and the Index (Int)
-    # We drop the Token string here. It is dead weight for the sort.
+    # 1. Explode to rows - we only need ID, Token, and Index
+    exploded_tokens_sql = """
+    SELECT
+        ukam_address_id,
+        UNNEST(address_without_numbers_tokenised) AS token,
+        GENERATE_SUBSCRIPTS(address_without_numbers_tokenised, 1) AS token_idx
+    FROM {token_input}
+    """
+
+    # 2. Join to frequencies - keep only the frequency and token position.
     joined_scalars_sql = """
     SELECT
-        e.__ukam_row_id,
+        e.ukam_address_id,
         e.token_idx,
         COALESCE(__ukam__tmp_rel_tok_freq.rel_freq, 5e-5) AS rel_freq
     FROM {exploded_tokens} e
@@ -127,41 +141,34 @@ def _add_term_frequencies_to_address_tokens_using_registered_df():
         ON e.token = __ukam__tmp_rel_tok_freq.token
     """
 
-    # 3. Aggregate the frequencies back into a per-address array.
-    # A plain `list(rel_freq ORDER BY token_idx)` forces DuckDB to run an
-    # ordered list aggregate, which sorts within every group during the
-    # aggregation and dominates the cleaning plan. Instead we collect a single
-    # `list(struct(idx, freq))` (one aggregate, so idx/freq stay aligned) and
-    # sort it once with `list_sort` (token_idx is the leading struct field and
-    # is unique within a group). This is ~3x faster with identical output.
+    # 3. Aggregate frequencies back into each address's original token order.
     reaggregated_freqs_sql = """
     SELECT
-        __ukam_row_id,
+        ukam_address_id,
         list_transform(
             list_sort(list(struct_pack(idx := token_idx, freq := rel_freq))),
-            s -> s.freq
+            lambda s: s.freq
         ) AS freq_arr
     FROM {joined_scalars}
-    GROUP BY __ukam_row_id
+    GROUP BY ukam_address_id
     """
 
-    # 4. Zip the sorted frequencies back to the ORIGINAL token list
-    # This guarantees order (because the original list is the source of truth)
-    # and constructs the Structs at the very last moment
+    # 4. Zip the frequencies back to the original token list.
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
         list_transform(
             list_zip(base.address_without_numbers_tokenised, agg.freq_arr),
-            x -> struct_pack(tok := x[1], rel_freq := x[2])
+            lambda x: struct_pack(tok := x[1], rel_freq := x[2])
         ) AS token_rel_freq_arr
     FROM {base} AS base
     INNER JOIN {reaggregated_freqs} AS agg
-        ON base.__ukam_row_id = agg.__ukam_row_id
+        ON base.ukam_address_id = agg.ukam_address_id
     """
 
     steps = [
         CTEStep("base", base_sql),
+        CTEStep("token_input", token_input_sql),
         CTEStep("exploded_tokens", exploded_tokens_sql),
         CTEStep("joined_scalars", joined_scalars_sql),
         CTEStep("reaggregated_freqs", reaggregated_freqs_sql),
@@ -245,7 +252,7 @@ def _move_common_end_tokens_to_field():
         * EXCLUDE (end_tokens_to_remove),
         list_filter(
             token_rel_freq_arr[-3:],
-            x -> list_contains(end_tokens_to_remove, x.tok)
+            lambda x: list_contains(end_tokens_to_remove, x.tok)
         ) AS common_end_tokens
     FROM {joined}
     """
@@ -253,9 +260,9 @@ def _move_common_end_tokens_to_field():
     remove_end_tokens_expr = """
     list_filter(
         token_rel_freq_arr,
-        (x, i) -> NOT (
+        lambda x, i: NOT (
             i > len(token_rel_freq_arr) - 2
-            AND list_contains(list_transform(common_end_tokens, x -> x.tok), x.tok)
+            AND list_contains(list_transform(common_end_tokens, lambda x: x.tok), x.tok)
         )
     )
     """
@@ -287,7 +294,7 @@ def _first_unusual_token():
     """Attach the first token below the frequency threshold (0.001) if present."""
 
     first_token_expr = (
-        "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
+        "list_any_value(list_filter(token_rel_freq_arr, lambda x: x.rel_freq < 0.001))"
     )
 
     sql = f"""
@@ -318,7 +325,7 @@ def _use_first_unusual_token_if_no_numeric_token():
             WHEN {input}.numeric_token_1 IS NULL THEN
                 list_filter(
                     token_rel_freq_arr,
-                    x -> coalesce(x.tok != first_unusual_token.tok, TRUE)
+                    lambda x: coalesce(x.tok != first_unusual_token.tok, TRUE)
                 )
             ELSE token_rel_freq_arr
         END AS token_rel_freq_arr
@@ -342,21 +349,35 @@ def _separate_unusual_tokens():
             list_filter(
                 list_select(
                     token_rel_freq_arr,
-                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                    list_grade_up(
+                        list_transform(
+                            token_rel_freq_arr,
+                            lambda x, i: struct_pack(
+                                rel_freq := x.rel_freq, token_idx := i
+                            )
+                        )
+                    )
                 ),
-                x -> x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
+                lambda x: x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
             ),
-            x -> x.tok
+            lambda x: x.tok
         ) AS unusual_tokens_arr,
         list_transform(
             list_filter(
                 list_select(
                     token_rel_freq_arr,
-                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                    list_grade_up(
+                        list_transform(
+                            token_rel_freq_arr,
+                            lambda x, i: struct_pack(
+                                rel_freq := x.rel_freq, token_idx := i
+                            )
+                        )
+                    )
                 ),
-                x -> x.rel_freq < 1e-7
+                lambda x: x.rel_freq < 1e-7
             ),
-            x -> x.tok
+            lambda x: x.tok
         ) AS extremely_unusual_tokens_arr
     FROM {input}
     """
@@ -384,7 +405,7 @@ def _generalised_token_aliases():
     SELECT
         *,
         flatten(
-            list_transform(distinguishing_adj_start_tokens, token ->
+            list_transform(distinguishing_adj_start_tokens, lambda token:
                {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
             )
         ) AS distinguishing_adj_token_aliases
@@ -421,7 +442,7 @@ def _get_token_frequeny_table():
         list_concat(
             array_filter(
                 [numeric_token_1, numeric_token_2, numeric_token_3],
-                x -> x IS NOT NULL
+                lambda x: x IS NOT NULL
             ),
             address_without_numbers_tokenised
         ) AS all_tokens

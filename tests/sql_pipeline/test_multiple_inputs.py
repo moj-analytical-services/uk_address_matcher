@@ -30,10 +30,10 @@ def root_join_lookup_stage():
 
 
 def _setup_primary_lookup(duck_con: duckdb.DuckDBPyConnection) -> None:
-    duck_con.execute("CREATE TABLE primary_input (id INTEGER)")
-    duck_con.execute("INSERT INTO primary_input VALUES (1),(2)")
-    duck_con.execute("CREATE TABLE lookup_input (id INTEGER, extra INTEGER)")
-    duck_con.execute("INSERT INTO lookup_input VALUES (1, 100),(2, 200)")
+    duck_con.execute("CREATE TABLE primary_input (id INTEGER)").fetchall()
+    duck_con.execute("INSERT INTO primary_input VALUES (1),(2)").fetchall()
+    duck_con.execute("CREATE TABLE lookup_input (id INTEGER, extra INTEGER)").fetchall()
+    duck_con.execute("INSERT INTO lookup_input VALUES (1, 100),(2, 200)").fetchall()
 
 
 def test_multiple_input_bindings_register_aliases(duck_con):
@@ -55,7 +55,7 @@ def test_multiple_input_bindings_register_aliases(duck_con):
     assert set(alias_map) >= {"primary", "lookup", "root"}
     assert alias_map["root"] == alias_map["primary"]
     for name in ("primary", "lookup"):
-        duck_con.execute(f"SELECT COUNT(*) FROM {alias_map[name]}")
+        duck_con.execute(f"SELECT COUNT(*) FROM {alias_map[name]}").fetchall()
 
     assert pipeline.root_alias == alias_map["root"]
 
@@ -97,7 +97,7 @@ def test_input_bindings_with_slugged_placeholders(duck_con):
     assert "lookup-table" not in alias_map
     assert alias_map.keys() >= {"primary_input", "lookup_table", "root"}
     for name in ("primary_input", "lookup_table"):
-        duck_con.execute(f"SELECT COUNT(*) FROM {alias_map[name]}")
+        duck_con.execute(f"SELECT COUNT(*) FROM {alias_map[name]}").fetchall()
 
 
 def test_multi_input_pipeline_allows_root_placeholder(duck_con):

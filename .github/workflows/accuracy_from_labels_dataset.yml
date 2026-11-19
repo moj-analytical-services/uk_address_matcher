@@ -1,47 +1,54 @@
 name: Run address matcher with external labels
 
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+  push:
+    branches: [main]
     paths:
       - 'uk_address_matcher/**'
       - '.github/workflows/**'
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   run-address-matcher:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: private-labels
+    permissions:
+      contents: read
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: main
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
-        python-version: '3.10'
+        python-version: '3.11'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         version: "0.11.3"
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
+        enable-cache: false
 
     - name: Install the project
-      run: uv sync --all-extras --dev
+      run: uv sync --all-extras --dev --locked
 
     - name: Clone address_matching_labels repo
-      env:
-        LABELS_PAT: ${{ secrets.LABELS_PAT }}
-      run: |
-        git clone https://RobinL:${LABELS_PAT}@github.com/RobinL/address_matching_labels.git
-
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: RobinL/address_matching_labels
+        token: ${{ secrets.LABELS_PAT }}
+        path: address_matching_labels
+        persist-credentials: false
 
     - name: Run labels accuracy script and capture output
       run: uv run .github/workflows/run_labels_accuracy_test.py

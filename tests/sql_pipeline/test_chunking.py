@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+import uk_address_matcher.cleaning.chunking_strategies as chunking_strategies
 from uk_address_matcher.cleaning.chunking_strategies import (
     clean_data_pre_term_frequencies,
     derive_term_frequencies_table,
@@ -59,7 +60,10 @@ def test_chunking_yields_same_result_as_no_chunking(
     """
 
     # Get baseline metrics
-    baseline_stats = duck_con.sql(query.format(relation="baseline_rel")).fetchone()
+    baseline_stats = next(
+        iter(duck_con.sql(query.format(relation="baseline_rel")).limit(1).fetchall()),
+        None,
+    )
 
     (
         baseline_count,
@@ -70,7 +74,9 @@ def test_chunking_yields_same_result_as_no_chunking(
     ) = baseline_stats
 
     # Get chunked metrics
-    chunked_stats = duck_con.sql(query.format(relation="chunked_rel")).fetchone()
+    chunked_stats = next(
+        iter(duck_con.sql(query.format(relation="chunked_rel")).limit(1).fetchall()), None
+    )
 
     (
         chunked_count,
@@ -133,7 +139,9 @@ def test_chunking_yields_same_result_as_no_chunking(
 
     table_names = [name for (name,) in duck_con.execute("SHOW TABLES").fetchall()]
     leaked_chunk_tables = [
-        name for name in table_names if name.startswith("__ukam_chunk_input_")
+        name
+        for name in table_names
+        if name.startswith(("__ukam_chunk_input_", "__ukam_chunked_input_"))
     ]
     assert not leaked_chunk_tables, (
         "Chunk input tables should be cleaned by clean_data_pre_term_frequencies: "
@@ -145,10 +153,10 @@ def test_clean_data_using_precomputed_rel_tok_freq(
     duck_con, fhrs_data, mock_chunk_size_1k
 ):
     no_chunk_rel = prepare_data_for_matching(fhrs_data, con=duck_con)
-    no_chunk_count = no_chunk_rel.count("*").fetchone()[0]
+    no_chunk_count = no_chunk_rel.count("*").fetchall()[0][0]
 
     chunked_rel = prepare_data_for_matching(fhrs_data, con=duck_con, num_of_chunks=5)
-    chunked_count = chunked_rel.count("*").fetchone()[0]
+    chunked_count = chunked_rel.count("*").fetchall()[0][0]
 
     # Confirm we get the expected number of records out
     assert no_chunk_count == chunked_count == 5000
@@ -164,17 +172,28 @@ def test_clean_data_using_precomputed_rel_tok_freq(
         f"only_in_chunked={chunked_columns_excl_tf - set(no_chunk_rel.columns)}"
     )
 
-    ordered_columns = "postcode, unique_id, clean_full_address, ukam_address_id"
+    ordered_columns = "postcode, unique_id"
+    comparison_columns = [
+        column for column in no_chunk_rel.columns if column != "ukam_address_id"
+    ]
     assert (
-        no_chunk_rel.order(ordered_columns).fetchall()
-        == chunked_rel.order(ordered_columns).fetchall()
-    )
-    assert [
-        row[0]
-        for row in no_chunk_rel.order(ordered_columns)
-        .select("ukam_address_id")
+        no_chunk_rel.order(ordered_columns)
+        .select(", ".join(comparison_columns))
         .fetchall()
-    ] == list(range(1, no_chunk_count + 1))
+        == chunked_rel.order(ordered_columns)
+        .select(", ".join(comparison_columns))
+        .fetchall()
+    )
+    for relation in (no_chunk_rel, chunked_rel):
+        ids = [row[0] for row in relation.select("ukam_address_id").fetchall()]
+        assert sorted(ids) == list(range(1, no_chunk_count + 1))
+
+    chunked_ids = [row[0] for row in chunked_rel.select("ukam_address_id").fetchall()]
+    assert len(chunked_ids) == len(set(chunked_ids)) == chunked_count
+    assert sorted(chunked_ids) == list(range(1, chunked_count + 1))
+    assert sorted(chunked_rel.select("unique_id").fetchall()) == sorted(
+        fhrs_data.select("unique_id").fetchall()
+    )
 
 
 @pytest.mark.parametrize("use_data_specific_tfs", [True, False])
@@ -235,3 +254,34 @@ def test_token_rel_freq_arr_hist_consistent_across_chunks(
         "Token frequency histograms differ for "
         f"use_data_specific_tfs={use_data_specific_tfs}"
     )
+
+
+def test_prepare_failure_drops_generated_cleaning_relations(
+    duck_con, fhrs_data, mock_chunk_size_1k
+):
+    with patch(
+        "uk_address_matcher.cleaning.chunking_strategies._clean_data_using_precomputed_rel_tok_freq",
+        side_effect=RuntimeError("forced term-frequency failure"),
+    ):
+        with pytest.raises(RuntimeError, match="forced term-frequency failure"):
+            chunking_strategies.prepare_data_for_matching(
+                fhrs_data,
+                con=duck_con,
+                num_of_chunks=5,
+            )
+
+    relation_names = [name for (name,) in duck_con.execute("SHOW TABLES").fetchall()]
+    leaked_relations = [
+        name
+        for name in relation_names
+        if name.startswith(
+            (
+                "__ukam_chunk_input_",
+                "__ukam_chunked_input_",
+                "__ukam_cleaned_chunk_",
+                "__ukam_chunked_addresses_",
+                "__ukam__processed_",
+            )
+        )
+    ]
+    assert not leaked_relations

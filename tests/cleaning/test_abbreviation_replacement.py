@@ -4,11 +4,15 @@ from typing import Dict, List, Set, Tuple
 
 import pytest
 
+from uk_address_matcher.cleaning.chunking_strategies import derive_inverted_index
 from uk_address_matcher.cleaning.pipelines import QUEUE_CLEAN_FULL_ADDRESS
 from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
-    _join_excluding_with_next_token,
     _normalise_abbreviations_and_units,
+    _parse_out_address_structure_premise,
+    _parse_out_numbers,
+    _parse_out_sub_premise,
+    _split_letter_dash_letter,
 )
 from uk_address_matcher.sql_pipeline.runner import create_sql_pipeline
 
@@ -24,6 +28,8 @@ def test_abbr_data(duck_con):
             ('FLAT 10 OFFICE SUITE 200 BLVD DRIVE BIRMINGHAM'),
             ('123 TOWNHALL STREET CENTRE MANCHESTER'),
             ('THE COTTAGE WOOD LANE BRISTOL'),
+            ('2 SAMPLE COTTAGES'),
+            ('2 SAMPLE COTTS'),
             ('FACTORY WORKS WKS INDUSTRIAL ESTATE RD'),
             ('MUSEUM GALLERY THEATRE THEA CIVIC CENTRE'),
             ('FLAT 3D 12B BAKER AVE LONDON'),
@@ -31,6 +37,7 @@ def test_abbr_data(duck_con):
             ('10 LHS MEWS LONDON'),
             ('12 RHS COURT ROAD LONDON'),
             ('FLAT 1ST FLR FT 176 LOWER CLAPTON ROAD LONDON'),
+            ('FLAT UPPR 20 HIGH STREET LONDON'),
             ('FLAT 1ST FLR LT 4D UFTON ROAD LONDON'),
             ('FLAT 1ST FLR RT 10 RECTORY ROAD LONDON'),
         ) AS t(clean_full_address)
@@ -55,6 +62,8 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
         "FLAT 10 OFFICE SUITE 200 BOULEVARD DRIVE BIRMINGHAM",
         "123 TOWN HALL STREET CENTRE MANCHESTER",
         "THE COTTAGE WOOD LANE BRISTOL",
+        "2 SAMPLE COTTAGE",
+        "2 SAMPLE COTTAGE",
         "FACTORY WORKS WORKS INDUSTRIAL ESTATE ROAD",
         "MUSEUM GALLERY THEATRE THEATRE CIVIC CENTRE",
         "FLAT 3D 12B BAKER AVENUE LONDON",
@@ -62,11 +71,19 @@ def test_abbreviation_normalisation_sql(duck_con, test_abbr_data):
         "10 LEFT HAND SIDE MEWS LONDON",
         "12 RIGHT HAND SIDE COURT ROAD LONDON",
         "FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON",
+        "FLAT UPPER 20 HIGH STREET LONDON",
         "FLAT FIRST FLOOR LEFT 4D UFTON ROAD LONDON",
         "FLAT FIRST FLOOR RIGHT 10 RECTORY ROAD LONDON",
     ]
     for row, expected in zip(rows, expected_addresses):
         assert row[clean_idx] == expected
+
+    repeated = create_sql_pipeline(
+        con=duck_con,
+        input_rel=result_rel,
+        stage_specs=[_normalise_abbreviations_and_units],
+    ).run()
+    assert repeated.fetchall() == rows
 
 
 def test_abbreviations_expand_to_multi_word_business_shells(duck_con):
@@ -104,16 +121,22 @@ def test_abbreviations_expand_to_multi_word_business_shells(duck_con):
     ]
 
 
-def test_excluding_token_is_joined_with_following_token(duck_con):
+def test_confirmed_address_abbreviations_expand(duck_con):
     input_rel = duck_con.sql(
         """
         SELECT * FROM (VALUES
-            ('EXC BST 238 ALBION ROAD LONDON'),
-            ('HSE EXC BST 47 ALKHAM ROAD LONDON'),
-            ('SHOP EXCLUDING BASEMENT 1 TEST ROAD LONDON'),
-            ('SHOP (EXCLUDING BASEMENT) 2 TEST ROAD LONDON'),
-            ('HSE EXCL STUDIO 17 ASHTEAD ROAD LONDON'),
-            ('SHOP EXCLUDING GARAGE 1 TEST ROAD LONDON')
+            ('BST FNT 23 EXAMPLE STREET'),
+            ('LWR GND FLR 102 SAMPLE ROAD'),
+            ('HILLSIDE CFT SAMPLE PLACE'),
+            ('ALPHA LDGE SAMPLE PLACE'),
+            ('ALPHA LDG SAMPLE PLACE'),
+            ('ALPHA LGE SAMPLE PLACE'),
+            ('ALPHA NEW FARMHSE'),
+            ('SAMPLE FM'),
+            ('GAMEKPRS COTTAGE SAMPLE PLACE'),
+            ('UPPR SAMPLE PLACE'),
+            ('UPR SAMPLE PLACE'),
+            ('DR SAMPLE HOUSE')
         ) AS t(clean_full_address)
     """
     )
@@ -121,21 +144,53 @@ def test_excluding_token_is_joined_with_following_token(duck_con):
     pipeline = create_sql_pipeline(
         con=duck_con,
         input_rel=input_rel,
-        stage_specs=[
-            _normalise_abbreviations_and_units,
-            _join_excluding_with_next_token,
-        ],
+        stage_specs=[_normalise_abbreviations_and_units],
     )
     result_rel = pipeline.run()
     rows = [row[0] for row in result_rel.fetchall()]
 
     assert rows == [
-        "EXCLUDINGBASEMENT 238 ALBION ROAD LONDON",
-        "HOUSE EXCLUDINGBASEMENT 47 ALKHAM ROAD LONDON",
-        "SHOP EXCLUDINGBASEMENT 1 TEST ROAD LONDON",
-        "SHOP (EXCLUDINGBASEMENT) 2 TEST ROAD LONDON",
-        "HOUSE EXCLUDINGSTUDIO 17 ASHTEAD ROAD LONDON",
-        "SHOP EXCLUDINGGARAGE 1 TEST ROAD LONDON",
+        "BASEMENT FRONT 23 EXAMPLE STREET",
+        "LOWER GROUND FLOOR 102 SAMPLE ROAD",
+        "HILLSIDE CROFT SAMPLE PLACE",
+        "ALPHA LODGE SAMPLE PLACE",
+        "ALPHA LODGE SAMPLE PLACE",
+        "ALPHA LODGE SAMPLE PLACE",
+        "ALPHA NEW FARMHOUSE",
+        "SAMPLE FARM",
+        "GAMEKEEPERS COTTAGE SAMPLE PLACE",
+        "UPPER SAMPLE PLACE",
+        "UPPER SAMPLE PLACE",
+        "DR SAMPLE HOUSE",
+    ]
+
+
+def test_excluding_phrase_keeps_word_boundaries(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('EXC BST 238 TEST ROAD'),
+            ('HSE EXC BST 47 TEST ROAD'),
+            ('SHOP EXCLUDING BASEMENT 1 TEST ROAD'),
+            ('SHOP (EXCLUDING BASEMENT) 2 TEST ROAD'),
+            ('HSE EXCL STUDIO 17 TEST ROAD'),
+            ('SHOP EXCLUDING GARAGE 1 TEST ROAD')
+        ) AS t(clean_full_address)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_normalise_abbreviations_and_units],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "EXCLUDING BASEMENT 238 TEST ROAD",
+        "HOUSE EXCLUDING BASEMENT 47 TEST ROAD",
+        "SHOP EXCLUDING BASEMENT 1 TEST ROAD",
+        "SHOP (EXCLUDING BASEMENT) 2 TEST ROAD",
+        "HOUSE EXCLUDING STUDIO 17 TEST ROAD",
+        "SHOP EXCLUDING GARAGE 1 TEST ROAD",
     ]
 
 
@@ -167,11 +222,398 @@ def test_first_pass_splits_non_numeric_underscores_only(duck_con):
     ]
 
 
+def test_first_pass_normalises_unicode_punctuation_and_spacing(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE' || chr(8217) || 'S QUAY', 'FABLES QUAY'),
+            ('MYTHIC' || chr(8217) || 'S ROOM', 'MYTHICS ROOM'),
+            (chr(8211) || ' FABLE PORT', 'FABLE PORT'),
+            ('MYTHIC LTD ' || chr(8211), 'MYTHIC LTD'),
+            (chr(8211) || ' FABLE PORT OF MIST', 'FABLE PORT OF MIST'),
+            ('MYTHIC LTD ' || chr(8211) || ' FABLE PORT',
+             'MYTHIC LTD FABLE PORT'),
+            ('FICTIONAL UK LTD ' || chr(8211), 'FICTIONAL UK LTD'),
+            ('FABLE' || chr(160) || 'PORT OF MIST', 'FABLE PORT OF MIST'),
+            ('FABLE' || chr(160) || 'PORT OF MIST HALL',
+             'FABLE PORT OF MIST HALL'),
+            ('MYTHIC' || chr(160) || 'ROOM 2 WELL', 'MYTHIC ROOM 2 WELL'),
+            ('MYTHIC' || chr(160) || 'ROOM 2', 'MYTHIC ROOM 2'),
+            ('FABLE&FAUX 95% FINE!', 'FABLE&FAUX 95% FINE!')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLES QUAY", "FABLES QUAY"),
+        ("MYTHICS ROOM", "MYTHICS ROOM"),
+        ("FABLE PORT", "FABLE PORT"),
+        ("MYTHIC LTD", "MYTHIC LTD"),
+        ("FABLE PORT OF MIST", "FABLE PORT OF MIST"),
+        ("MYTHIC LTD FABLE PORT", "MYTHIC LTD FABLE PORT"),
+        ("FICTIONAL UK LTD", "FICTIONAL UK LTD"),
+        ("FABLE PORT OF MIST", "FABLE PORT OF MIST"),
+        ("FABLE PORT OF MIST HALL", "FABLE PORT OF MIST HALL"),
+        ("MYTHIC ROOM 2 WELL", "MYTHIC ROOM 2 WELL"),
+        ("MYTHIC ROOM 2", "MYTHIC ROOM 2"),
+        ("FABLE&FAUX 95% FINE!", "FABLE&FAUX 95% FINE!"),
+    ]
+
+
+def test_first_pass_strips_latin_accents(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE D' || chr(374) || ' QUAY', 'FABLE DY QUAY'),
+            ('52 FABLE D' || chr(212) || 'L', '52 FABLE DOL'),
+            ('44Y FABLE COEDEL' || chr(193) || 'I', '44Y FABLE COEDELAI'),
+            ('TY FABLE DD' || chr(212) || 'L', 'TY FABLE DDOL'),
+            ('1 FABLE TAI D' || chr(194) || 'R', '1 FABLE TAI DAR'),
+            ('3 FABLE GWYTH' || chr(207) || 'EN HALL', '3 FABLE GWYTHIEN HALL'),
+            ('FABLE L' || chr(212) || 'N QUAY', 'FABLE LON QUAY'),
+            ('101 35Y FABLE PAR' || chr(202) || 'D', '101 35Y FABLE PARED'),
+            ('B 4 FABLE T' || chr(374), 'B 4 FABLE TY'),
+            ('38 FABLE PARC T' || chr(374), '38 FABLE PARC TY')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLE DY QUAY", "FABLE DY QUAY"),
+        ("52 FABLE DOL", "52 FABLE DOL"),
+        ("44Y FABLE COEDELAI", "44Y FABLE COEDELAI"),
+        ("TY FABLE DDOL", "TY FABLE DDOL"),
+        ("1 FABLE TAI DAR", "1 FABLE TAI DAR"),
+        ("3 FABLE GWYTHIEN HALL", "3 FABLE GWYTHIEN HALL"),
+        ("FABLE LON QUAY", "FABLE LON QUAY"),
+        ("101 35Y FABLE PARED", "101 35Y FABLE PARED"),
+        ("B 4 FABLE TY", "B 4 FABLE TY"),
+        ("38 FABLE PARC TY", "38 FABLE PARC TY"),
+    ]
+
+
+def test_first_pass_removes_repeated_tokens(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FABLE FABLE HOUSE', 'FABLE HOUSE'),
+            ('FABLE FABLE FABLE HOUSE', 'FABLE HOUSE'),
+            ('MYTHIC MYTHIC QUAY', 'MYTHIC QUAY'),
+            ('NO NO ROOM', 'NO NO ROOM')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("FABLE HOUSE", "FABLE HOUSE"),
+        ("FABLE HOUSE", "FABLE HOUSE"),
+        ("MYTHIC QUAY", "MYTHIC QUAY"),
+        ("NO NO ROOM", "NO NO ROOM"),
+    ]
+
+
+def test_first_pass_handles_fflat_marker(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('FFLAT 3 02 AT TOWN')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "FFLAT 302 AT TOWN",
+    ]
+
+
+def test_first_pass_normalises_numeric_range_separators(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('HAFOD FLAT 55 TO 58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT'),
+            ('FLAT 12A THRU 14B HIGH STREET'),
+            ('FLAT 20 THROUGH 22 HIGH STREET'),
+            ('FLAT 30 UP TO 32 HIGH STREET'),
+            ('FLAT 40 - 42 HIGH STREET'),
+            ('FLAT 23TO24 HIGH STREET'),
+            ('FLAT 23 TO24 HIGH STREET'),
+            ('FLAT 23TO 24 HIGH STREET'),
+            ('FLAT 23To 24 HIGH STREET'),
+            ('FICTIONAL ROAD A 952 TO B 9001')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "HAFOD FLAT 55-58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT",
+        "FLAT 12A-14B HIGH STREET",
+        "FLAT 20-22 HIGH STREET",
+        "FLAT 30-32 HIGH STREET",
+        "FLAT 40-42 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FICTIONAL ROAD A 952 TO B 9001",
+    ]
+
+
+def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('MYTHIC-Y-FABLE'),
+            ('FABLE-NEXT-THE-MOON'),
+            ('FABLE102-NA'),
+            ('1-2 FABLE ROAD'),
+            ('10 - 12'),
+            ('23A - 24'),
+            ('20A - 22B'),
+            ('10 - 12, 14 - 16'),
+            ('FABLE102 - 13'),
+            ('UNIT 5/6')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _clean_address_string_first_pass,
+            _normalise_abbreviations_and_units,
+            _split_letter_dash_letter,
+        ],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "MYTHIC Y FABLE",
+        "FABLE NEXT THE MOON",
+        "FABLE102-NA",
+        "1-2 FABLE ROAD",
+        "10-12",
+        "23A-24",
+        "20A-22B",
+        "10-12 14-16",
+        "FABLE102 - 13",
+        "UNIT 5-6",
+    ]
+
+
+def test_specific_phrase_aliases_expand_before_letter_dash_splitting(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('F/F 23 EXAMPLE STREET'),
+            ('SAMPLE LDGE H/HEAD SAMPLE ROAD'),
+            ('BLCK/SMS SAMPLE CROFT'),
+            ('TRNRHALL SAMPLE CROFT'),
+            ('H HEAD SAMPLE HOUSE')
+        ) AS t(clean_full_address)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _clean_address_string_first_pass,
+            _normalise_abbreviations_and_units,
+            _split_letter_dash_letter,
+        ],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "FIRST FLOOR 23 EXAMPLE STREET",
+        "SAMPLE LODGE HILLHEAD SAMPLE ROAD",
+        "BLACKSMITHS SAMPLE CROFT",
+        "TURNERHALL SAMPLE CROFT",
+        "H HEAD SAMPLE HOUSE",
+    ]
+
+
+def test_flat_block_letter_and_generated_floor_are_parsed_consistently(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            (
+                'input',
+                'FLAT 7 2ND FL BLOCK E EXAMPLE UNIVERSITY CAMPUS SAMPLE TOWN'
+            ),
+            (
+                'correct_raw',
+                'FLAT 7, E BLOCK, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            (
+                'correct_generated',
+                'SECOND FLAT 7, E BLOCK, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            (
+                'wrong_generated',
+                'FIRST BLOCK E FLAT 7, EXAMPLE HALL, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            ('second_block', 'SECOND BLOCK E FLAT 7'),
+            ('first_block', 'FIRST BLOCK E FLAT 7'),
+            ('block_name', 'FIRST BLOCK MANAGEMENT 18 HIGH STREET')
+        ) AS t(unique_id, clean_full_address)
+        """
+    )
+    input_rel = input_rel.project("*, clean_full_address AS original_address_concat")
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _clean_address_string_first_pass,
+            _normalise_abbreviations_and_units,
+            _parse_out_sub_premise,
+            _parse_out_numbers,
+        ],
+    )
+
+    result = pipeline.run().project(
+        "unique_id, clean_full_address, flat_number, flat_letter, "
+        "flat_positional, flat_identity, numeric_tokens, floor_keys"
+    )
+    rows = {row[0]: row[1:] for row in result.fetchall()}
+
+    assert {key: row[-1] for key, row in rows.items()} == {
+        "input": ["SECOND"],
+        "correct_raw": [],
+        "correct_generated": ["SECOND"],
+        "wrong_generated": ["FIRST"],
+        "second_block": ["SECOND"],
+        "first_block": ["FIRST"],
+        "block_name": [],
+    }
+    assert rows["second_block"][1:4] == ("7", "E", "SECOND FLOOR")
+    assert rows["first_block"][1:4] == ("7", "E", "FIRST FLOOR")
+    assert rows["block_name"][3] == "BLOCK"
+
+    assert {
+        unique_id: (
+            flat_number,
+            flat_letter,
+            flat_positional,
+            flat_identity,
+            numeric_tokens,
+        )
+        for unique_id, (
+            _,
+            flat_number,
+            flat_letter,
+            flat_positional,
+            flat_identity,
+            numeric_tokens,
+            _,
+        ) in rows.items()
+        if unique_id in {"input", "correct_raw", "correct_generated", "wrong_generated"}
+    } == {
+        "input": ("7", "E", "SECOND FLOOR", "7_E_SECOND FLOOR", ["7"]),
+        "correct_raw": ("7", "E", "BLOCK", "7_E_BLOCK", ["7"]),
+        "correct_generated": (
+            "7",
+            "E",
+            "SECOND FLOOR",
+            "7_E_SECOND FLOOR",
+            ["7"],
+        ),
+        "wrong_generated": (
+            "7",
+            "E",
+            "FIRST FLOOR",
+            "7_E_FIRST FLOOR",
+            ["7"],
+        ),
+    }
+    assert "7E BLOCK" not in rows["correct_raw"][0]
+    assert "7E BLOCK" not in rows["correct_generated"][0]
+
+
+def test_exclusion_phrases_do_not_create_unit_or_premise_features(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('EXCLUDING BASEMENT 41 TEST ROAD', 'EXCLUDING BASEMENT 41 TEST ROAD'),
+            (
+                'HOUSE EXCLUDING STUDIO 17 TEST ROAD',
+                'HOUSE EXCLUDING STUDIO 17 TEST ROAD'
+            ),
+            ('SHOP EXCLUDING GARAGE 12 TEST ROAD', 'SHOP EXCLUDING GARAGE 12 TEST ROAD'),
+            ('BASEMENT FLAT A 11 TEST COURT', 'BASEMENT FLAT A 11 TEST COURT'),
+            ('STUDIO 4 TEST PLACE', 'STUDIO 4 TEST PLACE'),
+            ('GARAGE 4 TEST STREET', 'GARAGE 4 TEST STREET')
+        ) AS t(clean_full_address, original_address_concat)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _parse_out_sub_premise,
+            _parse_out_address_structure_premise,
+        ],
+    )
+
+    result_rel = pipeline.run()
+    rows = result_rel.fetchall()
+    columns = result_rel.columns
+    positional_idx = columns.index("flat_positional")
+    business_unit_idx = columns.index("business_unit_type")
+    premise_idx = columns.index("address_structure_premise_type")
+    assert [
+        (row[positional_idx], row[business_unit_idx], row[premise_idx]) for row in rows
+    ] == [
+        (None, None, None),
+        (None, None, None),
+        (None, None, "SHOP"),
+        ("BASEMENT", None, None),
+        (None, "STUDIO", None),
+        (None, None, "GARAGE"),
+    ]
+
+
+def test_letter_dash_split_is_enabled_by_default(duck_con):
+    input_rel = duck_con.sql("SELECT 'PEN-Y-GRAIG' AS clean_full_address")
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_split_letter_dash_letter],
+    )
+
+    assert pipeline.run().fetchall()[0][0] == "PEN Y GRAIG"
+
+
 def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_con):
     input_rel = duck_con.sql(
         """
         SELECT * FROM (VALUES
-            ('test-1', 1, 'EXCL_BSMT 41 LINTHORPE ROAD LONDON', NULL)
+            ('test-1', 1, 'EXCL_BSMT 41 TEST ROAD LONDON', NULL)
         ) AS t(unique_id, ukam_address_id, address_concat, postcode)
     """
     )
@@ -184,7 +626,42 @@ def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_co
     result_rel = pipeline.run()
     rows = result_rel.project("clean_full_address").fetchall()
 
-    assert rows == [("EXCLUDINGBASEMENT 41 LINTHORPE ROAD LONDON",)]
+    assert rows == [("EXCLUDING BASEMENT 41 TEST ROAD LONDON",)]
+    assert pipeline.run().project("clean_full_address_tokens").fetchall() == [
+        (["EXCLUDING", "BASEMENT", "41", "TEST", "ROAD", "LONDON"],)
+    ]
+
+
+def test_parenthetical_name_is_cleaned_before_inverted_indexing(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('inn-round', 1, '(FABLE INN EAST)', NULL),
+            ('inn-square', 2, '[FABLE INN EAST]', NULL)
+        ) AS t(unique_id, ukam_address_id, address_concat, postcode)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=QUEUE_CLEAN_FULL_ADDRESS,
+    )
+    cleaned = pipeline.run()
+
+    assert sorted(
+        cleaned.project(
+            "unique_id, clean_full_address, clean_full_address_tokens"
+        ).fetchall()
+    ) == [
+        ("inn-round", "FABLE INN EAST", ["FABLE", "INN", "EAST"]),
+        ("inn-square", "FABLE INN EAST", ["FABLE", "INN", "EAST"]),
+    ]
+
+    inverted_index = derive_inverted_index(cleaned, duck_con)
+    trigram_keys = (
+        inverted_index.filter("index_strategy = 'trigram'").project("key").fetchall()
+    )
+    assert trigram_keys == [("FABLE INN EAST",)]
 
 
 ## Checks to confirm our abbreviations file doesn't break the following properties:

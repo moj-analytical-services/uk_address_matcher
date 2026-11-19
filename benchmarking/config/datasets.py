@@ -35,6 +35,16 @@ _DATASETS: dict[str, dict[str, str]] = {
         "file_name": "ABERDEENSHIRE_CTBANDS_ONSUD_202512.csv",
         "data_path_env": "UKAM_ABERDEENSHIRE_DATA_PATH",
     },
+    "conwy": {
+        "label": "Conwy",
+        "file_name": "conwy-data.csv",
+        "data_path_env": "UKAM_CONWY_DATA_PATH",
+    },
+    "gwynedd": {
+        "label": "Gwynedd domestic property list",
+        "file_name": "Gwynedd-domestic-property-list-060626.csv",
+        "data_path_env": "UKAM_GWYNEDD_DATA_PATH",
+    },
     "hackney": {
         "label": "Hackney council tax",
         "file_name": "HACKNEY_CTBANDS_ONSUD_202507.csv",
@@ -57,7 +67,7 @@ _DATASETS: dict[str, dict[str, str]] = {
     },
     "mid_sussex": {
         "label": "Mid Sussex business rates",
-        "file_name": "mid_sussex_district_council_redacted-database-020226.xlsx",
+        "file_name": "mid_sussex_business_rates.csv",
         "data_path_env": "UKAM_MID_SUSSEX_DATA_PATH",
     },
     "rhondda": {
@@ -113,7 +123,25 @@ def _clean_output(
         WHERE unique_id IS NOT NULL
           AND address_concat IS NOT NULL
           AND TRIM(address_concat) != ''
-          AND postcode IS NOT NULL
+        """
+    )
+
+
+def filter_dataset_to_canonical_labels(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+    canonical_relation: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    return con.sql(
+        f"""
+        SELECT source.*
+        FROM ({relation.sql_query()}) AS source
+        WHERE EXISTS (
+            SELECT 1
+            FROM ({canonical_relation.sql_query()}) AS canonical
+            WHERE CAST(canonical.unique_id AS VARCHAR)
+                = CAST(source.ukam_label AS VARCHAR)
+        )
         """
     )
 
@@ -136,6 +164,54 @@ def _load_hackney(
             "POSTCODE" AS postcode
         FROM {reader}('{source_path}')
         WHERE "UPRN" IS NOT NULL
+        """
+    )
+    return _clean_output(con, relation)
+
+
+def _load_conwy(
+    con: duckdb.DuckDBPyConnection,
+    source_path: str,
+) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
+    uprn_expr = _normalise_uprn_expr('"uprn"')
+    address_expr = (
+        'regexp_replace(trim(concat_ws(\' \', "addr1", "addr2", '
+        "\"addr3\", \"addr4\")), '\\s+', ' ')"
+    )
+    relation = con.sql(
+        f"""
+        SELECT
+            {uprn_expr} AS unique_id,
+            {uprn_expr} AS ukam_label,
+            {address_expr} AS address_concat,
+            "postcode" AS postcode
+        FROM {reader}('{source_path}')
+            WHERE "uprn" IS NOT NULL
+        """
+    )
+    return _clean_output(con, relation)
+
+
+def _load_gwynedd(
+    con: duckdb.DuckDBPyConnection,
+    source_path: str,
+) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
+    uprn_expr = _normalise_uprn_expr('"uprn"')
+    address_expr = (
+        'regexp_replace(trim(concat_ws(\' \', "addr1", "addr2", '
+        "\"addr3\", \"addr4\")), '\\s+', ' ')"
+    )
+    relation = con.sql(
+        f"""
+        SELECT
+            {uprn_expr} AS unique_id,
+            {uprn_expr} AS ukam_label,
+            {address_expr} AS address_concat,
+            "postcode" AS postcode
+        FROM {reader}('{source_path}')
+        WHERE "uprn" IS NOT NULL
         """
     )
     return _clean_output(con, relation)
@@ -279,6 +355,7 @@ def _load_mid_sussex(
     con: duckdb.DuckDBPyConnection,
     source_path: str,
 ) -> duckdb.DuckDBPyRelation:
+    reader = _file_reader_for(source_path)
     relation = con.sql(
         f"""
         WITH cleaned AS (
@@ -292,7 +369,7 @@ def _load_mid_sussex(
                 NULLIF(NULLIF(TRIM("Address 2"), ''), 'NULL') AS address_2,
                 NULLIF(NULLIF(TRIM("Address 3"), ''), 'NULL') AS address_3,
                 NULLIF(NULLIF(TRIM("Address 4"), ''), 'NULL') AS address_4
-            FROM read_xlsx('{source_path}', all_varchar = true)
+            FROM {reader}('{source_path}', all_varchar = true)
         )
         SELECT
             unique_id,
@@ -340,9 +417,9 @@ def _load_pooled_councils(
     """Union Hackney, Rhondda and Aberdeenshire into one pooled benchmark dataset.
 
     Each member is loaded via its own source resolver. ``unique_id`` is prefixed
-    with the member key so the council-local PROPREF/identifier values cannot
-    collide once combined. ``ukam_label`` (the national UPRN) is left untouched so
-    accuracy scoring against the canonical dataset still works.
+    with the member key so council-local values cannot collide, and repeated source
+    identifiers receive a deterministic row suffix so reranking keeps observations
+    separate. ``ukam_label`` is left untouched for canonical accuracy scoring.
     """
     member_queries: list[str] = []
     for member_key in _POOLED_MEMBERS:
@@ -354,11 +431,25 @@ def _load_pooled_councils(
         member_queries.append(
             f"""
             SELECT
-                '{member_key}:' || unique_id AS unique_id,
+                '{member_key}:' || unique_id
+                    || CASE
+                        WHEN source_id_count > 1
+                            THEN ':row:' || CAST(source_id_row AS VARCHAR)
+                        ELSE ''
+                    END AS unique_id,
                 address_concat,
                 ukam_label,
                 postcode
-            FROM ({member_relation.sql_query()}) AS {member_key}_src
+            FROM (
+                SELECT
+                    *,
+                    count(*) OVER (PARTITION BY unique_id) AS source_id_count,
+                    row_number() OVER (
+                        PARTITION BY unique_id
+                        ORDER BY address_concat, postcode, ukam_label
+                    ) AS source_id_row
+                FROM ({member_relation.sql_query()}) AS source
+            ) AS identified
             """
         )
 
@@ -401,6 +492,8 @@ def load_dataset(
 
         loaders = {
             "aberdeenshire": _load_aberdeenshire,
+            "conwy": _load_conwy,
+            "gwynedd": _load_gwynedd,
             "hackney": _load_hackney,
             "lambeth_council_tax": _load_lambeth_council_tax,
             "lambeth_electoral_register": _load_lambeth_electoral_register,

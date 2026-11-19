@@ -6,6 +6,13 @@ from typing import TypeAlias, TypedDict
 import duckdb
 
 
+class _ColumnAlias(TypedDict):
+    """Rename an input column in joined match results"""
+
+    input_column: str
+    alias: str
+
+
 class StageDiagnosticRow(TypedDict):
     stage: str
     unmatched_before: int

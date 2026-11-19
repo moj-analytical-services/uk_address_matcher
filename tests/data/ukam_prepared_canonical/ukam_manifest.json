@@ -1,0 +1,62 @@
+{
+  "ukam_version": "1.2.0",
+  "created_at": "2026-09-22T08:56:41.524944+00:00",
+  "created_with_duckdb_version": "1.5.0",
+  "row_counts": {
+    "canonical_addresses": 10000,
+    "term_frequencies": 747,
+    "inverted_index": 38063,
+    "canonical_output_chunks": 1
+  },
+  "files": {
+    "ukam_canonical_addresses.parquet": {
+      "size_bytes": 647676,
+      "sha256": "5328cf6db7c18f9a35bb61e24e894263da84f766966b5b186edc935af7b33c8e",
+      "columns": [
+        "unique_id",
+        "original_address_concat",
+        "ukam_address_id",
+        "postcode",
+        "clean_full_address",
+        "flat_positional",
+        "flat_letter",
+        "flat_number",
+        "has_flat_indicator",
+        "flat_identity",
+        "business_unit_type",
+        "business_unit_id",
+        "has_business_unit",
+        "numeric_tokens",
+        "numeric_token_2",
+        "numeric_token_3",
+        "tf_numeric_token_1",
+        "tf_numeric_token_2",
+        "tf_numeric_token_3",
+        "numeric_token_1",
+        "unusual_tokens_arr",
+        "very_unusual_tokens_arr",
+        "extremely_unusual_tokens_arr",
+        "token_rel_freq_arr_hist",
+        "common_end_tokens_hist",
+        "exploding_unique_ids"
+      ]
+    },
+    "ukam_term_frequencies.parquet": {
+      "size_bytes": 5656,
+      "sha256": "48c2035c2cf2865a21c6eee5b7e3eb48acfd0e1d9d174e451e20a4cb9b9fd101",
+      "columns": [
+        "token",
+        "rel_freq"
+      ]
+    },
+    "ukam_inverted_index.parquet": {
+      "size_bytes": 593808,
+      "sha256": "d1fc036f0bc41954970d0b3ffe7f3b695928baf3cd5bc6785b2b65b7b04d0ff9",
+      "columns": [
+        "key",
+        "unique_ids",
+        "index_strategy"
+      ]
+    }
+  }
+}

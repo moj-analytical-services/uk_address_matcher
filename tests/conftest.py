@@ -4,8 +4,9 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
-# Disable Splink warnings in tests
+# Keep verbose dependency logs out of test output.
 logging.getLogger("splink").setLevel(logging.ERROR)
+logging.getLogger("sqlglot").setLevel(logging.WARNING)
 
 
 def _test_calculate_chunk_size(total_records: int, num_of_chunks: int) -> int:

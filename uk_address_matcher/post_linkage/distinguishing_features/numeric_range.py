@@ -38,9 +38,9 @@ _PAIR_KEY_COLUMNS = {
     "match_weight",
 }
 
-_LEGACY_NUMERIC_FACTOR_COLUMNS = [
-    *(f"bf_numeric_token_{position}" for position in range(1, 4)),
-    *(f"bf_tf_adj_numeric_token_{position}" for position in range(1, 4)),
+_NUMERIC_FACTOR_COLUMNS = [
+    *(f"mw_numeric_token_{position}" for position in range(1, 4)),
+    *(f"mw_tf_adj_numeric_token_{position}" for position in range(1, 4)),
 ]
 
 _NUMERIC_RANGE_STRUCT_TYPE = (
@@ -61,12 +61,13 @@ def ensure_numeric_range_struct(
     )
 
 
-def _validate_legacy_numeric_factors(relation: duckdb.DuckDBPyRelation) -> None:
-    missing_factors = [
-        column
-        for column in _LEGACY_NUMERIC_FACTOR_COLUMNS
-        if column not in relation.columns
-    ]
+def _validate_numeric_factors(
+    relation: duckdb.DuckDBPyRelation,
+) -> None:
+    missing_factors = []
+    for column in _NUMERIC_FACTOR_COLUMNS:
+        if column not in relation.columns:
+            missing_factors.append(column)
     if missing_factors:
         raise ValueError(
             "Numeric-range reranking requires Splink numeric factors: "
@@ -75,15 +76,10 @@ def _validate_legacy_numeric_factors(relation: duckdb.DuckDBPyRelation) -> None:
 
 
 def _legacy_numeric_bits_sql() -> str:
-    return """
-        COALESCE(LOG2(NULLIF(bf_numeric_token_1, 0)), 0.0)
-        + COALESCE(LOG2(NULLIF(bf_tf_adj_numeric_token_1, 0)), 0.0)
-        + COALESCE(LOG2(NULLIF(bf_numeric_token_2, 0)), 0.0)
-        + COALESCE(LOG2(NULLIF(bf_tf_adj_numeric_token_2, 0)), 0.0)
-        + COALESCE(LOG2(NULLIF(bf_numeric_token_3, 0)), 0.0)
-        + COALESCE(LOG2(NULLIF(bf_tf_adj_numeric_token_3, 0)), 0.0)
-            AS legacy_numeric_bits
-    """
+    return (
+        " + ".join(f"COALESCE({column}, 0.0)" for column in _NUMERIC_FACTOR_COLUMNS)
+        + " AS legacy_numeric_bits"
+    )
 
 
 def add_legacy_numeric_bits(
@@ -96,7 +92,7 @@ def add_legacy_numeric_bits(
     this function deliberately does not calculate a value for the wider
     prediction relation.
     """
-    _validate_legacy_numeric_factors(relation)
+    _validate_numeric_factors(relation)
     prediction_columns = list(_stable_prediction_columns(relation))
     prediction_columns.extend(
         column
@@ -116,7 +112,7 @@ def _stable_prediction_columns(relation: duckdb.DuckDBPyRelation) -> list[str]:
     excluded_columns = {
         column
         for column in relation.columns
-        if column.startswith(("gamma_", "bf_", "tf_"))
+        if column.startswith(("gamma_", "bf_", "mw_", "tf_"))
         or column.startswith("numeric_token_")
         or column == "legacy_numeric_bits"
     }
@@ -207,7 +203,7 @@ def build_numeric_range_candidate_pool(
         SELECT {pair_key_projection}, match_weight
         FROM ({relation.sql_query()}) AS candidate
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY match_weight DESC, unique_id_l DESC
         ) <= {search_depth}
     """).create(search_top_name)
@@ -216,7 +212,7 @@ def build_numeric_range_candidate_pool(
         SELECT {pair_key_projection}
         FROM {search_top_name}
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY match_weight DESC, unique_id_l DESC
         ) <= {top_n_matches}
     """).create(raw_top_name)
@@ -224,7 +220,7 @@ def build_numeric_range_candidate_pool(
     adjustment_input_columns = sorted(
         (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
         | _PAIR_KEY_COLUMNS
-        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
+        | set(_NUMERIC_FACTOR_COLUMNS)
     )
     search_join = " AND ".join(
         f"search.{column} = candidate.{column}" for column in pair_keys
@@ -249,7 +245,7 @@ def build_numeric_range_candidate_pool(
                         WHERE numeric_range_guard_passed
                             AND numeric_range_adjustment > 0.0
             QUALIFY ROW_NUMBER() OVER (
-                                PARTITION BY unique_id_r
+                                PARTITION BY ukam_address_id_r
                 ORDER BY
                                         match_weight + numeric_range_adjustment DESC,
                                         unique_id_l DESC
@@ -289,7 +285,7 @@ def build_numeric_range_candidate_pool(
         SELECT *
         FROM candidate_pool
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY unique_id_r
+            PARTITION BY ukam_address_id_r
             ORDER BY
                 match_weight + numeric_range_adjustment DESC,
                 unique_id_l DESC
@@ -305,7 +301,7 @@ def _materialise_numeric_range_adjustments(
     range_candidate_columns = sorted(
         (_RANGE_STRUCT_COLUMNS - {"legacy_numeric_bits"})
         | _PAIR_KEY_COLUMNS
-        | set(_LEGACY_NUMERIC_FACTOR_COLUMNS)
+        | set(_NUMERIC_FACTOR_COLUMNS)
     )
     range_candidates = con.sql(f"""
         SELECT {", ".join(range_candidate_columns)}
@@ -384,48 +380,48 @@ def build_numeric_range_adjustments(
                 list_transform(
                     list_filter(
                         numeric_tokens_l,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> TRY_CAST(
+                    lambda token: TRY_CAST(
                         regexp_extract(token, '^\\d{{1,5}}', 0) AS UINTEGER
                     )
                 ) AS numeric_scalar_tokens_l,
                 list_transform(
                     list_filter(
                         numeric_tokens_l,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> NULLIF(regexp_extract(token, '[A-Z]$', 0), '')
+                    lambda token: NULLIF(regexp_extract(token, '[A-Z]$', 0), '')
                 ) AS numeric_scalar_suffixes_l,
                 list_transform(
                     list_filter(
                         numeric_tokens_l,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> 0::UTINYINT
+                    lambda token: 0::UTINYINT
                 ) AS numeric_scalar_roles_l,
                 list_transform(
                     list_filter(
                         numeric_tokens_r,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> TRY_CAST(
+                    lambda token: TRY_CAST(
                         regexp_extract(token, '^\\d{{1,5}}', 0) AS UINTEGER
                     )
                 ) AS numeric_scalar_tokens_r,
                 list_transform(
                     list_filter(
                         numeric_tokens_r,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> NULLIF(regexp_extract(token, '[A-Z]$', 0), '')
+                    lambda token: NULLIF(regexp_extract(token, '[A-Z]$', 0), '')
                 ) AS numeric_scalar_suffixes_r,
                 list_transform(
                     list_filter(
                         numeric_tokens_r,
-                        token -> regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
+                        lambda token: regexp_matches(token, '^\\d{{1,5}}[A-Z]?$')
                     ),
-                    token -> 0::UTINYINT
+                    lambda token: 0::UTINYINT
                 ) AS numeric_scalar_roles_r
             FROM attributes
         ),
@@ -443,7 +439,7 @@ def build_numeric_range_adjustments(
                                 numeric_scalar_suffixes_r,
                                 numeric_scalar_roles_r
                             ),
-                            value -> (
+                            lambda value: (
                                 value[1] IN (range_l.lower, range_l.upper)
                                 AND value[2] IS NOT DISTINCT FROM CASE
                                     WHEN value[1] = range_l.lower
@@ -467,7 +463,7 @@ def build_numeric_range_adjustments(
                                 numeric_scalar_suffixes_l,
                                 numeric_scalar_roles_l
                             ),
-                            value -> (
+                            lambda value: (
                                 value[1] IN (range_r.lower, range_r.upper)
                                 AND value[2] IS NOT DISTINCT FROM CASE
                                     WHEN value[1] = range_r.lower
@@ -494,7 +490,7 @@ def build_numeric_range_adjustments(
                                 numeric_scalar_suffixes_r,
                                 numeric_scalar_roles_r
                             ),
-                            value -> (
+                            lambda value: (
                                 value[1] > range_l.lower
                                 AND value[1] < range_l.upper
                                 AND value[2] IS NULL
@@ -518,7 +514,7 @@ def build_numeric_range_adjustments(
                                 numeric_scalar_suffixes_l,
                                 numeric_scalar_roles_l
                             ),
-                            value -> (
+                            lambda value: (
                                 value[1] > range_r.lower
                                 AND value[1] < range_r.upper
                                 AND value[2] IS NULL

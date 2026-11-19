@@ -6,7 +6,7 @@ import pytest
 from splink import block_on
 
 from tests.utils import prepare_combined_test_data
-from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
@@ -39,7 +39,12 @@ def run_matcher_workflow(messy_addresses, canonical_addresses, duckdb_con=None):
     canonical_clean = prepare_data_for_matching(canonical_addresses, con=duckdb_con)
 
     # Configure the linker
-    columns_to_retain = ["original_address_concat", "true_match_id"]
+    columns_to_retain = [
+        "original_address_concat",
+        "true_match_id",
+        "common_end_tokens_hist",
+        "clean_full_address",
+    ]
     linker = _get_linker(
         df_addresses_to_match=messy_clean,
         df_addresses_to_search_within=canonical_clean,

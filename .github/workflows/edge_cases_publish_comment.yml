@@ -1,0 +1,106 @@
+name: Publish edge cases comment
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Completed Edge cases comment workflow run ID
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: edge-cases-comment-${{ inputs.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: {actions: read, pull-requests: write}
+    steps:
+      - name: Validate run, artefact and current PR
+        id: validate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = Number(process.env.RUN_ID);
+            if (!Number.isSafeInteger(runId) || runId < 1) {
+              core.setFailed('Run ID must be a positive integer.');
+              return;
+            }
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: runId,
+            });
+            if (run.event !== 'pull_request' || run.status !== 'completed' ||
+                run.path !== '.github/workflows/edge_cases_github_comment.yml') {
+              core.setFailed('Select a completed Edge cases comment PR run.');
+              return;
+            }
+            if (run.repository.full_name !== `${owner}/${repo}` || run.pull_requests.length !== 1) {
+              core.info('No uniquely associated PR; the result remains in the test summary.');
+              return;
+            }
+            const number = run.pull_requests[0].number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (pr.state !== 'open' || pr.head.sha !== run.head_sha) {
+              core.info('Ignoring results for an outdated or closed PR.');
+              return;
+            }
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner, repo, run_id: run.id,
+            });
+            const artefact = data.artifacts.find(item => item.name === 'edge-cases-comment');
+            if (!artefact || artefact.expired || artefact.size_in_bytes > 100_000) {
+              core.setFailed('Missing, expired or oversized comment artefact.');
+              return;
+            }
+            core.setOutput('number', String(number));
+            core.setOutput('artifact_id', String(artefact.id));
+            core.setOutput('run_id', String(runId));
+            core.setOutput('head_sha', run.head_sha);
+      - name: Download comment data only
+        if: steps.validate.outputs.number != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.validate.outputs.artifact_id }}
+          run-id: ${{ steps.validate.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/edge-cases-comment
+          merge-multiple: true
+      - name: Publish validated comment data without executing it
+        if: steps.validate.outputs.number != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ steps.validate.outputs.number }}
+          HEAD_SHA: ${{ steps.validate.outputs.head_sha }}
+          COMMENT_PATH: ${{ runner.temp }}/edge-cases-comment/github-comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+            if (pr.state !== 'open' || pr.head.sha !== process.env.HEAD_SHA) return;
+            const file = process.env.COMMENT_PATH;
+            if (!fs.lstatSync(file).isFile() || fs.statSync(file).size > 60_000) {
+              core.setFailed('Comment must be a regular Markdown file under 60 KB.');
+              return;
+            }
+            const marker = '<!-- ukam-edge-cases -->';
+            const body = `${marker}\n${fs.readFileSync(file, 'utf8')}`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(comment =>
+              comment.user.login === 'github-actions[bot]' && comment.body.startsWith(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

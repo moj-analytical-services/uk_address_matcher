@@ -116,6 +116,7 @@ class QueuedFragment:
     stage_name: Optional[str] = None
     fragment_name: Optional[str] = None
     stage_description: Optional[str] = None
+    materialised: bool = False
 
 
 class CTEPipeline:
@@ -134,6 +135,7 @@ class CTEPipeline:
         stage_name: Optional[str] = None,
         fragment_name: Optional[str] = None,
         stage_description: Optional[str] = None,
+        materialised: bool = False,
     ) -> None:
         if self.spent:
             raise ValueError("This pipeline has already been used (spent=True).")
@@ -144,6 +146,7 @@ class CTEPipeline:
                 stage_name=stage_name,
                 fragment_name=fragment_name,
                 stage_description=stage_description,
+                materialised=materialised,
             )
         )
 
@@ -156,7 +159,12 @@ class CTEPipeline:
         if not items:
             raise ValueError("Cannot compose SQL from an empty CTE list.")
         with_ctes_str = ",\n\n".join(
-            f"{item.alias} AS (\n{item.sql}\n)" for item in items
+            (
+                f"{item.alias} AS MATERIALIZED (\n{item.sql}\n)"
+                if item.materialised
+                else f"{item.alias} AS (\n{item.sql}\n)"
+            )
+            for item in items
         )
         return f"WITH\n{with_ctes_str}\n\nSELECT * FROM {items[-1].alias}"
 
@@ -188,6 +196,7 @@ def render_step_to_ctes(
     stage_description = None
     if step.stage_metadata and step.stage_metadata.description:
         stage_description = step.stage_metadata.description
+    materialised_output_name = step.output or step.steps[-1].name
 
     for frag in step.steps:
         alias = f"s{step_idx}_{_slug(step.name)}__{_slug(frag.name)}"
@@ -204,6 +213,7 @@ def render_step_to_ctes(
                 stage_name=step.name,
                 fragment_name=frag.name,
                 stage_description=stage_description if not ctes else None,
+                materialised=step.materialized and frag.name == materialised_output_name,
             )
         )
         frag_aliases[frag.name] = alias
@@ -480,6 +490,7 @@ class DuckDBPipeline(CTEPipeline):
                 stage_name=fragment.stage_name,
                 fragment_name=fragment.fragment_name,
                 stage_description=fragment.stage_description,
+                materialised=fragment.materialised,
             )
         self._current_output_alias = out_alias
         self._step_counter += 1
@@ -507,7 +518,7 @@ class DuckDBPipeline(CTEPipeline):
         sql = self.generate_cte_pipeline_sql(mark_spent=False)
         tmp = f"__seg_{_uid()}"
         self._materialised_sql_blocks.append((sql, tmp))
-        self.con.execute(f"CREATE OR REPLACE TEMP TABLE {tmp} AS {sql}")
+        self.con.execute(f"CREATE OR REPLACE TEMP TABLE {tmp} AS {sql}").fetchall()
         # reset the queue with a fresh seed reading from tmp
         self.queue.clear()
         seed = f"seed_{_uid()}"
@@ -624,7 +635,7 @@ class DuckDBPipeline(CTEPipeline):
             # ways we could try to catch this earlier.
             self.con.execute(
                 f"CREATE OR REPLACE TEMP TABLE {fragment.alias} AS {fragment.sql}"
-            )
+            ).fetchall()
             rel = self.con.table(fragment.alias)
             if max_rows is not None:
                 rel.show(max_rows=max_rows, max_width=50000)

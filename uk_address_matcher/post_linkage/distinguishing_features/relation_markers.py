@@ -31,54 +31,85 @@ def improve_predictions_using_relation_markers(
     """Prefer target-property evidence over relation-marker anchor evidence."""
 
     return con.sql(f"""
-        WITH normalised AS (
+        WITH source_addresses AS (
+            SELECT DISTINCT
+                unique_id_r,
+                clean_full_address_r
+            FROM df_predict
+        ),
+        possible_relation_sources AS (
             SELECT
-                *,
+                unique_id_r,
+                clean_full_address_r
+            FROM source_addresses
+            WHERE regexp_matches(
+                upper(clean_full_address_r),
+                'ADJ|OPP|REAR|BEHIND|NEXT|R[^A-Z0-9]*O'
+            )
+        ),
+        normalised_relation_sources AS (
+            SELECT
+                unique_id_r,
+                clean_full_address_r,
                 trim(
                     regexp_replace(
                         upper(clean_full_address_r), '[^A-Z0-9]+', ' ', 'g'
                     )
-                )
-                    AS source_address,
-                trim(
-                    regexp_replace(
-                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
-                    )
-                )
-                    AS candidate_address
-            FROM df_predict
+                ) AS source_address
+            FROM possible_relation_sources
         ),
-        relation_parts AS (
+        source_relation_parts AS (
             SELECT
-                *,
+                unique_id_r,
+                clean_full_address_r,
+                source_address,
                 regexp_extract(
                     source_address,
                     '(?:^| )({_RELATION_MARKERS_SQL})(?: |$)',
                     1
                 ) AS relation_marker
-            FROM normalised
+            FROM normalised_relation_sources
+        ),
+        relation_parts AS (
+            SELECT
+                candidates.*,
+                source_relation_parts.source_address,
+                COALESCE(source_relation_parts.relation_marker, '') AS relation_marker
+            FROM df_predict AS candidates
+            LEFT JOIN source_relation_parts USING (unique_id_r, clean_full_address_r)
+        ),
+        normalised AS (
+            SELECT
+                *,
+                trim(
+                    regexp_replace(
+                        upper(clean_full_address_l), '[^A-Z0-9]+', ' ', 'g'
+                    )
+                ) AS candidate_address
+            FROM relation_parts
+            WHERE relation_marker != ''
         ),
         split_addresses AS (
             SELECT
                 *,
                 trim(split_part(source_address, relation_marker, 1)) AS target_address,
                 trim(split_part(source_address, relation_marker, 2)) AS anchor_address
-            FROM relation_parts
+            FROM normalised
             WHERE relation_marker != ''
         ),
         tokenised AS (
             SELECT
                 *,
                 list_filter(
-                    regexp_split_to_array(target_address, ' '),
-                    token -> len(token) > 1
+                    string_split(target_address, ' '),
+                    lambda token: len(token) > 1
                         AND token NOT IN {_RELATION_STOP_TOKENS_SQL}
                 ) AS target_tokens,
-                regexp_split_to_array(candidate_address, ' ') AS candidate_tokens,
-                regexp_split_to_array(anchor_address, ' ') AS anchor_tokens,
+                string_split(candidate_address, ' ') AS candidate_tokens,
+                string_split(anchor_address, ' ') AS anchor_tokens,
                 list_filter(
-                    regexp_split_to_array(anchor_address, ' '),
-                    token -> regexp_full_match(token, '[0-9]+')
+                    string_split(anchor_address, ' '),
+                    lambda token: regexp_full_match(token, '[0-9]+')
                 ) AS anchor_number_tokens
             FROM split_addresses
         ),
@@ -196,12 +227,8 @@ def improve_predictions_using_relation_markers(
         UNION ALL
 
         SELECT
-            normalised.* EXCLUDE (source_address, candidate_address, match_weight),
+            relation_parts.* EXCLUDE (source_address, relation_marker, match_weight),
             match_weight
-        FROM normalised
-        WHERE regexp_extract(
-            source_address,
-            '(?:^| )({_RELATION_MARKERS_SQL})(?: |$)',
-            1
-        ) = ''
+        FROM relation_parts
+        WHERE relation_marker = ''
     """)

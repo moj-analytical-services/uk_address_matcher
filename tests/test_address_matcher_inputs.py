@@ -1,6 +1,13 @@
 import pytest
 
-from uk_address_matcher import AddressMatcher, AddressRecord, ExactMatchStage
+import uk_address_matcher
+from uk_address_matcher import (
+    AddressMatcher,
+    AddressRecord,
+    ExactMatchStage,
+    SplinkStage,
+    prepare_canonical_folder,
+)
 from uk_address_matcher.cleaning.chunking_strategies import (
     clean_data_pre_term_frequencies,
 )
@@ -26,7 +33,7 @@ def _run_matcher(duck_con, canonical_relation, addresses_to_match):
         stages=[ExactMatchStage()],
     )
     match_result = matcher.match()
-    row = match_result.matches().fetchone()
+    row = next(iter(match_result.matches().limit(1).fetchall()), None)
     assert row is not None
 
 
@@ -78,6 +85,141 @@ def test_addresses_to_match_without_postcode_column(duck_con, canonical_relation
         """
     )
     _run_matcher(duck_con, canonical_relation, messy_relation)
+
+
+def test_preferred_ids_optional_postcode_and_dictionary_metadata(duck_con, tmp_path):
+    canonical = duck_con.sql(
+        "SELECT 'C1' AS address_id, '10 DOWNING STREET SW1A 2AA' AS address_concat"
+    )
+    records = [
+        {
+            "address_id": "M1",
+            "address_concat": "10 DOWNING STREET SW1A 2AA",
+            "floor": 4,
+            "metadata": {"source": "kept"},
+        },
+        {"unique_id": "M1", "address_concat": "10 DOWNING STREET SW1A 2AA"},
+    ]
+    prepare_canonical_folder(
+        canonical,
+        tmp_path / "canonical",
+        con=duck_con,
+        cleaning_num_chunks=1,
+        show_progress="off",
+    )
+    with AddressMatcher(
+        tmp_path / "canonical",
+        records,
+        con=duck_con,
+        stages=[ExactMatchStage()],
+        show_progress="off",
+    ).match() as result:
+        enriched = result.join_input_columns(messy=["floor", "metadata"])
+        assert enriched.select("floor").order("floor NULLS LAST").fetchall() == [
+            (4,),
+            (None,),
+        ]
+        assert enriched.order("floor NULLS LAST").select("metadata").fetchall() == [
+            ({"source": "kept"},),
+            (None,),
+        ]
+        assert (result.matches().count("*").limit(1).fetchall())[0] == (2,)
+        with pytest.raises(
+            ValueError, match="must be unique for labelling bundle export"
+        ):
+            result._export_labelling_bundle_beta(tmp_path / "bundle")
+    assert "unique_id" not in records[0]
+    record = AddressRecord("10 DOWNING STREET SW1A 2AA", address_id="M1")
+    assert record.postcode is None
+    assert record.unique_id == record.address_id == "M1"
+    _run_matcher(duck_con, canonical, [record])
+    _run_matcher(duck_con, canonical, canonical.project("*, NULL AS postcode"))
+
+
+@pytest.mark.parametrize("dataset", ["canonical", "messy"])
+def test_dual_id_columns_are_rejected(duck_con, canonical_relation, dataset):
+    both_ids = canonical_relation.project("*, unique_id AS address_id")
+    matcher = AddressMatcher(
+        both_ids if dataset == "canonical" else canonical_relation,
+        both_ids if dataset == "messy" else canonical_relation,
+        con=duck_con,
+        stages=[ExactMatchStage()],
+    )
+    with pytest.raises(ValueError) as error:
+        matcher.match()
+    assert str(error.value) == (
+        f"Input {dataset} contained both `address_id` and `unique_id`. "
+        "Ensure only one is present, not both."
+    )
+
+
+def test_record_alias_validation_and_legacy_constructor():
+    record = AddressRecord("10 DOWNING STREET", None, "M1")
+    assert record.address_id == "M1"
+    record = AddressRecord.from_dict(
+        {"address_id": "M2", "address_concat": "12 HIGH STREET"}
+    )
+    assert record.postcode is None
+    for data in (
+        {"address_id": "M1", "unique_id": "M1"},
+        {"address_id": "M1", "unique_id": None},
+    ):
+        with pytest.raises(ValueError, match="Input messy contained both"):
+            AddressRecord(address_concat="10 DOWNING STREET", **data)
+    with pytest.raises(ValueError, match="address_concat"):
+        AddressRecord.from_dict({"address_id": "M1"})
+
+
+def test_root_api_exports():
+    assert set(uk_address_matcher.__all__) == {
+        "AddressMatcher",
+        "AddressRecord",
+        "MatchResult",
+        "prepare_canonical_folder",
+        "ExactMatchStage",
+        "UniqueTrigramStage",
+        "PeeledAddressStage",
+        "SplinkStage",
+    }
+    assert not hasattr(uk_address_matcher, "prepare_data_for_matching")
+    assert not hasattr(uk_address_matcher, "ukam_datasets")
+    assert isinstance(uk_address_matcher.__version__, str)
+
+
+@pytest.mark.parametrize(
+    "source_postcode",
+    [None, "NOT A POSTCODE"],
+    ids=["missing", "invalid"],
+)
+def test_canonical_without_valid_postcode_still_uses_roads(duck_con, source_postcode):
+    postcode_projection = (
+        "" if source_postcode is None else f", '{source_postcode}'::VARCHAR AS postcode"
+    )
+    canonical_relation = duck_con.sql(f"""
+        SELECT
+            1::BIGINT AS unique_id,
+            '12 HIGH STREET'::VARCHAR AS address_concat
+            {postcode_projection}
+    """)
+    messy_relation = duck_con.sql("""
+        SELECT
+            10::BIGINT AS unique_id,
+            '12 HIGH STREET'::VARCHAR AS address_concat
+    """)
+    matcher = AddressMatcher(
+        canonical_addresses=canonical_relation,
+        addresses_to_match=messy_relation,
+        con=duck_con,
+        stages=[SplinkStage()],
+        show_progress="off",
+    )
+
+    matcher._resolve_canonical_data()
+
+    assert matcher._roadlike_places is not None
+    assert (matcher._canonical_clean.project("road_1_norm").limit(1).fetchall())[0] == (
+        "HIGH STREET",
+    )
 
 
 @pytest.mark.parametrize("missing_column", ["unique_id", "address_concat"])
@@ -136,5 +278,5 @@ def test_canonical_relation_precleaned_pre_tf_still_matches(duck_con, canonical_
     )
 
     match_result = matcher.match()
-    row = match_result.matches().fetchone()
+    row = next(iter(match_result.matches().limit(1).fetchall()), None)
     assert row is not None

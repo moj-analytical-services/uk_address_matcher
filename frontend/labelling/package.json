@@ -1,0 +1,14 @@
+{
+  "name": "uk-address-matcher-labelling-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --watch"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.32.0",
+    "esbuild": "0.28.2"
+  },
+  "devDependencies": {}
+}

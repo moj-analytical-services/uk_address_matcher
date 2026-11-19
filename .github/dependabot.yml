@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    allow:
+      - dependency-type: all
+    schedule:
+      interval: cron
+      cronjob: '0 9 1,15 * *'
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+  - package-ecosystem: npm
+    directory: /frontend/labelling
+    schedule:
+      interval: cron
+      cronjob: '0 9 1,15 * *'
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: '0 9 1,15 * *'
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10

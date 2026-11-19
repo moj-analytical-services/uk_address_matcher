@@ -1,12 +1,18 @@
 name: Run pytest
 
 on:
+  workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        default: ""
   pull_request:
     paths:
       - "uk_address_matcher/**"
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "frontend/labelling/**"
   push:
     branches: [main]
     paths:
@@ -14,40 +20,93 @@ on:
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "frontend/labelling/**"
+
+permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: run-pytest-${{ inputs.target_sha && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  run-pytest:
+  run-pytest-primary:
+    name: Python 3.11 / locked dependencies
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
+          ref: ${{ inputs.target_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.11.3"
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          enable-cache: false
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --dev --group model-training --locked
 
       - name: Install project in editable mode
         run: uv pip install -e .
 
       - name: Run pytest
-        run: uv run pytest tests/ -vv
+        run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+  run-pytest-follow-up:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.test-label }}
+    needs: run-pytest-primary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11"
+            test-label: DuckDB 1.5.0 override
+            use-project-deps: false
+            duckdb-version: "1.5.0"
+          - python-version: "3.12"
+            test-label: locked dependencies
+            use-project-deps: true
+          - python-version: "3.13"
+            test-label: locked dependencies
+            use-project-deps: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --group model-training --locked
+
+      - name: Install project in editable mode
+        run: uv pip install -e .
+
+      - name: Run pytest with project dependencies
+        if: ${{ matrix.use-project-deps }}
+        run: uv run pytest tests/ --ignore=tests/labelling -vv
+
+      - name: Run pytest with DuckDB override
+        if: ${{ matrix.use-project-deps == false }}
+        run: uv run --with "duckdb==${{ matrix.duckdb-version }}" pytest tests/ --ignore=tests/labelling -vv

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
@@ -8,26 +6,29 @@ from uk_address_matcher.cleaning.steps import (
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
-    _clean_address_string_second_pass,
+    _clean_address_string_second_pass_and_tokenise,
+    _derive_missingness_aware_sub_premise_features,
+    _derive_numeric_context_roles,
     _derive_numeric_range,
     _extract_postcode_from_address,
     _first_unusual_token,
     _generalised_token_aliases,
     _get_token_frequeny_table,
-    _join_excluding_with_next_token,
     _lookup_keys_in_inverted_index,
     _move_common_end_tokens_to_field,
     _normalise_abbreviations_and_units,
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
+    _parse_out_address_structure_premise,
     _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
+    _prepare_roadlike_place_input,
     _preserve_original_address_concat,
     _remove_duplicate_end_tokens,
     _rename_and_select_columns,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
     _separate_unusual_tokens,
     _set_exploding_unique_ids_to_self,
+    _split_letter_dash_letter,
     _split_numeric_tokens_to_cols,
     _strip_country_suffix,
     _tokenise_address_without_numbers,
@@ -43,6 +44,7 @@ from uk_address_matcher.sql_pipeline.helpers import (
     package_resource_read_sql,
 )
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipeline
+from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 _NUMERIC_TOKENS_WORK_NAME = "__ukam__numeric_tokens_work"
 
@@ -83,21 +85,57 @@ QUEUE_CLEAN_FULL_ADDRESS = [
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
-    _join_excluding_with_next_token,
+    _split_letter_dash_letter,
     _strip_country_suffix,
-    _remove_duplicate_end_tokens,  # clean_full_address now completed
+    _remove_duplicate_end_tokens,  # clean_full_address and tokens now completed
 ]
 
 
+@pipeline_stage(
+    name="materialize_clean_full_address",
+    description="Materialize finalized address normalization before feature derivation",
+    tags="optimization",
+    materialized=True,
+)
+def _materialize_clean_full_address():
+    return "SELECT * FROM {input}"
+
+
+@pipeline_stage(
+    name="materialize_numeric_features",
+    description="Materialize numeric extraction before derived numeric features",
+    tags="optimization",
+    materialized=True,
+)
+def _materialize_numeric_features():
+    return "SELECT * FROM {input}"
+
+
 QUEUE_DERIVE_NON_TF_FEATURES = [
-    _parse_out_flat_position_and_letter,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
-    _parse_out_business_unit,
+    _parse_out_address_structure_premise,
     _parse_out_numbers,
     _derive_numeric_range,
-    _clean_address_string_second_pass,
+    _derive_missingness_aware_sub_premise_features,
+    _clean_address_string_second_pass_and_tokenise,
     _split_numeric_tokens_to_cols,
-    _tokenise_address_without_numbers,
+    _derive_numeric_context_roles,
+    _tokenise_address_without_numbers(use_precomputed_tokens=True),
+]
+
+QUEUE_DERIVE_NON_TF_FEATURES_MATERIALIZED = [
+    _parse_out_sub_premise,
+    _parse_out_sub_premise_location,
+    _parse_out_address_structure_premise,
+    _parse_out_numbers,
+    _materialize_numeric_features,
+    _derive_numeric_range,
+    _derive_missingness_aware_sub_premise_features,
+    _clean_address_string_second_pass_and_tokenise,
+    _split_numeric_tokens_to_cols,
+    _derive_numeric_context_roles,
+    _tokenise_address_without_numbers(use_precomputed_tokens=True),
 ]
 
 
@@ -106,12 +144,35 @@ QUEUE_PRE_TF = [
     *QUEUE_DERIVE_NON_TF_FEATURES,
 ]
 
+QUEUE_PRE_TF_MATERIALIZED = [
+    *QUEUE_CLEAN_FULL_ADDRESS,
+    _materialize_clean_full_address,
+    *QUEUE_DERIVE_NON_TF_FEATURES_MATERIALIZED,
+]
+
+
+QUEUE_ROADLIKE_PLACE_PREPARATION = [
+    _prepare_roadlike_place_input,
+]
+
 
 QUEUE_PRE_TF_WITH_DISTINGUISHING_WRT_ADJACENT = [
     *QUEUE_CLEAN_FULL_ADDRESS,
-    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+        use_precomputed_tokens=True
+    ),
     _generalised_token_aliases,
     *QUEUE_DERIVE_NON_TF_FEATURES,
+]
+
+QUEUE_PRE_TF_WITH_DISTINGUISHING_WRT_ADJACENT_MATERIALIZED = [
+    *QUEUE_CLEAN_FULL_ADDRESS,
+    _materialize_clean_full_address,
+    _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+        use_precomputed_tokens=True
+    ),
+    _generalised_token_aliases,
+    *QUEUE_DERIVE_NON_TF_FEATURES_MATERIALIZED,
 ]
 
 QUEUE_POST_TF = [
@@ -139,7 +200,7 @@ def _clean_data_pre_term_frequencies(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
     *,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     address_table_with_postcode = _ensure_postcode_column(address_table)
@@ -167,6 +228,76 @@ def _clean_data_pre_term_frequencies(
     return result
 
 
+def _run_narrow_precomputed_tf_pipeline(
+    address_table: DuckDBPyRelation,
+    con: DuckDBPyConnection,
+    stage_queue: list,
+    additional_stages: list,
+    debug_options: DebugOptions | None,
+) -> DuckDBPyRelation:
+    required_columns = [
+        "ukam_address_id",
+        "address_without_numbers_tokenised",
+        "numeric_token_1",
+        "numeric_token_2",
+        "numeric_token_3",
+    ]
+    if "numeric_range" in address_table.columns:
+        required_columns.append("numeric_range")
+    if additional_stages:
+        required_columns.extend(["unique_id", "postcode"])
+        required_columns.append(
+            "clean_full_address_tokens"
+            if "clean_full_address_tokens" in address_table.columns
+            else "clean_full_address"
+        )
+
+    feature_input = address_table.select(
+        ", ".join(f'"{column}"' for column in required_columns)
+    )
+    feature_pipeline = create_sql_pipeline(
+        con,
+        feature_input,
+        stage_queue,
+        pipeline_name="Apply term frequencies to narrow features",
+        pipeline_description=(
+            "Apply term frequencies and post-TF features without carrying the wide row"
+        ),
+    )
+    feature_result = feature_pipeline.run(debug_options)
+    feature_columns = set(feature_result.columns)
+    replaced_columns = {"numeric_token_1", "numeric_range"}
+
+    def qualified_column(alias: str, column: str) -> str:
+        escaped_column = column.replace('"', '""')
+        return f'{alias}."{escaped_column}"'
+
+    base_projection = []
+    for column in address_table.columns:
+        if column == "address_without_numbers_tokenised":
+            continue
+        source_alias = (
+            "features"
+            if column in replaced_columns and column in feature_columns
+            else "base"
+        )
+        base_projection.append(f'{qualified_column(source_alias, column)} AS "{column}"')
+
+    derived_projection = [
+        f'{qualified_column("features", column)} AS "{column}"'
+        for column in feature_result.columns
+        if column not in address_table.columns
+    ]
+    projection = ",\n            ".join(base_projection + derived_projection)
+    return con.sql(f"""
+        SELECT
+            {projection}
+        FROM ({address_table.sql_query()}) AS base
+        INNER JOIN ({feature_result.sql_query()}) AS features
+            ON base."ukam_address_id" = features."ukam_address_id"
+    """)
+
+
 def _clean_data_using_precomputed_rel_tok_freq(
     address_table: DuckDBPyRelation,
     con: DuckDBPyConnection,
@@ -174,7 +305,8 @@ def _clean_data_using_precomputed_rel_tok_freq(
     *,
     pre_cleaned_addresses: bool = False,
     additional_stages: list = [],
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
+    narrow_post_tf: bool = False,
 ) -> DuckDBPyRelation:
     # Ensure postcode column exists before pipeline entry
     if not pre_cleaned_addresses:
@@ -197,16 +329,25 @@ def _clean_data_using_precomputed_rel_tok_freq(
         else tf_and_post + additional_stages
     )
 
-    pipeline = create_sql_pipeline(
-        con,
-        address_table,
-        stage_queue,
-        pipeline_name="Clean data using precomputed term frequencies",
-        pipeline_description=(
-            "Clean address data using a supplied table of relative token frequencies"
-        ),
-    )
-    result = pipeline.run(debug_options)
+    if pre_cleaned_addresses and narrow_post_tf:
+        result = _run_narrow_precomputed_tf_pipeline(
+            address_table,
+            con,
+            stage_queue,
+            additional_stages,
+            debug_options,
+        )
+    else:
+        pipeline = create_sql_pipeline(
+            con,
+            address_table,
+            stage_queue,
+            pipeline_name="Clean data using precomputed term frequencies",
+            pipeline_description=(
+                "Clean address data using a supplied table of relative token frequencies"
+            ),
+        )
+        result = pipeline.run(debug_options)
 
     exclude_columns = []
     if "source_dataset" in result.columns:
@@ -228,14 +369,14 @@ def get_numeric_term_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
     ]
 
@@ -274,18 +415,18 @@ def get_address_token_frequencies_from_address_table(
     con: DuckDBPyConnection,
     *,
     pre_cleaned_addresses: bool = False,
-    debug_options: Optional[DebugOptions] = None,
+    debug_options: DebugOptions | None = None,
 ) -> DuckDBPyRelation:
     stage_queue = [
         _rename_and_select_columns,
         _trim_whitespace_address_and_postcode,
         _upper_case_address_and_postcode,
         _clean_address_string_first_pass,
-        _parse_out_flat_position_and_letter,
+        _parse_out_sub_premise,
         _parse_out_numbers,
-        _clean_address_string_second_pass,
+        _clean_address_string_second_pass_and_tokenise,
         _split_numeric_tokens_to_cols,
-        _tokenise_address_without_numbers,
+        _tokenise_address_without_numbers(use_precomputed_tokens=True),
         _get_token_frequeny_table,
     ]
     if pre_cleaned_addresses:
@@ -303,7 +444,7 @@ def get_address_token_frequencies_from_address_table(
 
 def _create_term_frequency_tables(
     con: DuckDBPyConnection,
-    term_frequency_lookup: Optional[DuckDBPyRelation] = None,
+    term_frequency_lookup: DuckDBPyRelation | None = None,
 ) -> DuckDBPyRelation:
     """Register address token  and numeric term frequency tables.
 
@@ -351,9 +492,9 @@ def _create_term_frequency_tables(
 
 def _register_inverted_index_table(
     con: DuckDBPyConnection,
-    inverted_index: Optional[DuckDBPyRelation] = None,
-    inverted_index_n: Optional[int] = None,
-) -> Optional[str]:
+    inverted_index: DuckDBPyRelation | None = None,
+    inverted_index_n: int | None = None,
+) -> str | None:
     """Register inverted index table for key lookups.
 
     Args:
@@ -376,7 +517,7 @@ def _register_inverted_index_table(
         con.sql("DROP VIEW IF EXISTS __ukam_inverted_index")
         con.execute(
             f"CREATE TEMP VIEW __ukam_inverted_index AS SELECT * FROM {existing_alias}"
-        )
+        ).fetchall()
     else:
         # Materialise to avoid lazy evaluation issues
         con.sql("DROP TABLE IF EXISTS __ukam_inverted_index")
@@ -390,7 +531,7 @@ def _register_inverted_index_table(
 
 def _register_inverted_index_meta(
     con: DuckDBPyConnection,
-    inverted_index_n: Optional[int],
+    inverted_index_n: int | None,
 ) -> None:
     """Register ``__ukam_index_meta`` holding ``N`` for IDF weighting.
 
@@ -402,7 +543,9 @@ def _register_inverted_index_meta(
         inverted_index_n = con.sql(
             "SELECT COUNT(DISTINCT u) "
             "FROM __ukam_inverted_index, unnest(unique_ids) AS t(u)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     n_value = max(int(inverted_index_n or 0), 1)
-    con.execute("DROP TABLE IF EXISTS __ukam_index_meta")
-    con.execute(f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n")
+    con.execute("DROP TABLE IF EXISTS __ukam_index_meta").fetchall()
+    con.execute(
+        f"CREATE TABLE __ukam_index_meta AS SELECT {n_value}::BIGINT AS n"
+    ).fetchall()

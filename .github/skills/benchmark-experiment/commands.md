@@ -17,7 +17,7 @@ Notes:
 ## Rebuild The Reduced Canonical
 
 ```bash
-uv run python scripts/reduced_canonical.py
+uv run python dev_scripts/reduced_canonical.py
 ```
 
 Use this when upstream cleaned features or canonical-side fields used by matching changed.

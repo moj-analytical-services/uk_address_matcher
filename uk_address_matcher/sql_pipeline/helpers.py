@@ -154,15 +154,27 @@ def package_resource_read_sql(package: str, filename: str) -> str:
 
 
 def _duckdb_table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
-    result = con.execute(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-        [table_name],
-    ).fetchone()
+    result = next(
+        iter(
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+                [table_name],
+            ).fetchall()
+        ),
+        None,
+    )
     return result[0] > 0
 
 
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def _normalise_identifier_case(identifier: str) -> str:
+    """Fold ASCII case to match DuckDB's identifier comparisons."""
+    return identifier.translate(
+        str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+    )
 
 
 def _relation_from_registered_alias(
@@ -183,20 +195,24 @@ def _drop_table_and_registered_aliases(
     con: duckdb.DuckDBPyConnection,
     table_name: str,
 ) -> None:
-    object_row = con.execute(
-        "SELECT table_type FROM information_schema.tables WHERE table_name = ?",
-        [table_name],
-    ).fetchone()
-
-    if object_row is None:
+    # information_schema.tables reports temporary tables AND temporary views
+    # as 'LOCAL TEMPORARY', so table_type cannot distinguish them. Check
+    # duckdb_views() (which covers regular views, temp views, and relations
+    # registered via con.register) and fall back to DROP TABLE IF EXISTS.
+    view_exists = next(
+        iter(
+            con.execute(
+                "SELECT 1 FROM duckdb_views() WHERE view_name = ?",
+                [table_name],
+            ).fetchall()
+        ),
+        None,
+    )
+    if view_exists is not None:
+        con.execute(f"DROP VIEW IF EXISTS {_quote_identifier(table_name)}").fetchall()
         return
 
-    object_type = object_row[0]
-    if object_type == "VIEW":
-        con.execute(f"DROP VIEW IF EXISTS {_quote_identifier(table_name)}")
-        return
-
-    con.execute(f"DROP TABLE IF EXISTS {_quote_identifier(table_name)}")
+    con.execute(f"DROP TABLE IF EXISTS {_quote_identifier(table_name)}").fetchall()
 
 
 def _register_input_relation_once(
@@ -233,7 +249,13 @@ def _register_input_relation_once(
     try:
         con.register(alias, relation)
     except duckdb.InvalidInputException as exc:
-        if "created by another Connection" not in str(exc):
+        if not any(
+            message in str(exc)
+            for message in (
+                "created by another Connection",
+                "cannot be read on a connection to another database",
+            )
+        ):
             raise
         con.register(alias, relation.to_arrow_table())
 
@@ -245,4 +267,4 @@ def _explain_debug(con: duckdb.DuckDBPyConnection, sql: str) -> None:
     _emit_debug(
         f"Generating EXPLAIN plan for final SQL.\n============================\n:{sql}\n"
     )
-    _emit_debug(con.sql(f"EXPLAIN {sql}").fetchone()[1])
+    _emit_debug(con.sql(f"EXPLAIN {sql}").fetchall()[0][1])

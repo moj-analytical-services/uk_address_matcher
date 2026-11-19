@@ -26,7 +26,7 @@ Use this skill for recurring benchmark workflows in `uk_address_matcher`.
 ## What This Skill Covers
 
 - Standard persisted benchmark runs via `benchmarking/run_benchmarking.py`
-- Reduced canonical rebuilds via `scripts/reduced_canonical.py`
+- Reduced canonical rebuilds via `dev_scripts/reduced_canonical.py`
 - Structural TF variant builds via `benchmarking/build_structural_tf_variant.py`
 - Replay audits and row-level loser analysis
 - Persisted artefact lookup under `benchmarking/results/<dataset>/<date>/<run_id>/`
@@ -41,7 +41,7 @@ Use this skill for recurring benchmark workflows in `uk_address_matcher`.
 ## Workflow Selection
 
 - Use `benchmarking/run_benchmarking.py` for normal persisted experiments.
-- Use `scripts/reduced_canonical.py` when upstream cleaned features or canonical-side fields changed and the standard reduced canonical needs rebuilding.
+- Use `dev_scripts/reduced_canonical.py` when upstream cleaned features or canonical-side fields changed and the standard reduced canonical needs rebuilding.
 - Use `benchmarking/build_structural_tf_variant.py` when the task is a structural TF ablation or variant comparison.
 - Use `benchmarking/structural_tf_recall_audit.py` when the user wants replayed threshold analysis or row-level lost-record exports.
 - Use `benchmarking/structural_tf_loser_viewer.py` when the user wants a portable HTML review surface from lost-record JSON.

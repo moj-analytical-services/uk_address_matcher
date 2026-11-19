@@ -4,7 +4,7 @@ applyTo:
   - "docs/findings/**/*.md"
   - "example_data/**/*"
   - "tests/**/*"
-  - "scripts/reduced_canonical.py"
+  - "dev_scripts/reduced_canonical.py"
 ---
 
 # Data handling and safety

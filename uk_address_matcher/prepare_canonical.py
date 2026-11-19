@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import shutil
-import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,8 +12,19 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
+from uk_address_matcher.cleaning.materialisation import (
+    _CanonicalIntermediates,
+    _input_has_collation,
+)
+from uk_address_matcher.cleaning.rehydration.token_views import (
+    _distinguishing_lexical_tokens_expression,
+    _distinguishing_token_parts_view_expressions,
+    _ensure_clean_full_address_views,
+    _ensure_sub_premise_views,
+)
 from uk_address_matcher.cleaning.steps.inverted_index import (
     BASE_INDEX_PORTFOLIO,
+    TRIGRAM_SINGLETON_DISTRICT_INDEX,
 )
 from uk_address_matcher.helpers.canonical_inputs import (
     normalise_and_validate_raw_canonical,
@@ -39,6 +49,7 @@ PREPARED_ADDRESSES_FILENAME = "ukam_canonical_addresses.parquet"
 PREPARED_ADDRESSES_CHUNK_DIRNAME = "ukam_canonical_addresses_chunks"
 PREPARED_TERM_FREQUENCIES_FILENAME = "ukam_term_frequencies.parquet"
 PREPARED_INVERTED_INDEX_FILENAME = "ukam_inverted_index.parquet"
+ROADLIKE_PLACES_FILENAME = "roadlike_places.parquet"
 MANIFEST_FILENAME = "ukam_manifest.json"
 CHUNK_FILE_INDEX_DIGITS = 5
 MAX_CHUNK_COUNT = (10**CHUNK_FILE_INDEX_DIGITS) - 1
@@ -53,36 +64,70 @@ _MANAGED_FILES = [
     PREPARED_ADDRESSES_FILENAME,
     PREPARED_ADDRESSES_CHUNK_DIRNAME,
     *REQUIRED_FILES,
+    ROADLIKE_PLACES_FILENAME,
     MANIFEST_FILENAME,
     f"{MANIFEST_FILENAME}.tmp",
 ]
 
-# Parquet write tuning for the prepared artefacts.
-PARQUET_COMPRESSION = "ZSTD"
-PARQUET_COMPRESSION_LEVEL = 15
-INVERTED_INDEX_COMPRESSION_LEVEL = 22
-PARQUET_VERSION = "V2"
-PARQUET_ROW_GROUP_SIZE = 122_880
 
-# Sorting canonical rows by these columns improves compression locality. Any
-# remaining source columns provide deterministic tie-breakers before the ID.
-CANONICAL_SORT_COLUMNS = (
-    "postcode",
-    "unique_id",
-    "clean_full_address",
-    "filename",
+@dataclass(frozen=True)
+class _ParquetArtefactSettings:
+    """Parquet format, compression, and ordering settings for one artefact."""
+
+    compression: str = "ZSTD"
+    compression_level: int = 6
+    version: str = "V2"
+    row_group_size: int = 122_880
+    sort_columns: tuple[str, ...] = ()
+    order_by: tuple[str, ...] = ()
+    max_threads: int | None = None
+
+
+_STANDARD_PARQUET_SETTINGS = _ParquetArtefactSettings()
+_CANONICAL_PARQUET_SETTINGS = _ParquetArtefactSettings(
+    max_threads=4,
+    sort_columns=(
+        "postcode",
+        "unique_id",
+        "clean_full_address",
+        "filename",
+    ),
 )
-INVERTED_INDEX_ORDER_BY = (
-    "index_strategy",
-    "left(key, 1)",
-    "unique_ids",
-    "key",
+_INVERTED_INDEX_PARQUET_SETTINGS = _ParquetArtefactSettings(
+    compression_level=9,
+    order_by=(
+        "index_strategy",
+        "left(key, 1)",
+        "unique_ids",
+        "key",
+    ),
 )
 
 # Columns that are not needed after preparation and therefore not persisted.
 # For canonical data ``exploding_unique_ids`` is always ``[unique_id]``.
-RECOMPUTABLE_DROP_COLUMNS = ("address_tokens", "exploding_unique_ids")
-DEBUG_ONLY_CANONICAL_COLUMNS = ("original_address_concat",)
+RECOMPUTABLE_DROP_COLUMNS = (
+    "address_tokens",
+    "business_unit_type",
+    "business_unit_id",
+    "has_business_unit",
+    "has_flat_indicator",
+    "flat_identity",
+    "flat_floor_prefixes",
+    "exploding_unique_ids",
+    "numeric_token_2",
+    "numeric_token_3",
+    "tf_numeric_token_1",
+    "tf_numeric_token_2",
+    "tf_numeric_token_3",
+)
+DEBUG_ONLY_CANONICAL_COLUMNS = (
+    "original_address_concat",
+    "numeric_role_keys",
+    "numeric_broad_roles",
+    "distinguishing_structural_tokens",
+    "distinguishing_adj_start_tokens",
+    "distinguishing_lexical_tokens",
+)
 
 
 @dataclass(frozen=True)
@@ -93,11 +138,14 @@ class _PreparedCanonical:
         addresses: Cleaned and tokenised canonical addresses.
         term_frequencies: Term frequency lookup table.
         inverted_index: Inverted index for candidate retrieval.
+        roadlike_places: Optional road phrase catalogue for inferred-road scoring.
     """
 
     addresses: duckdb.DuckDBPyRelation
     term_frequencies: duckdb.DuckDBPyRelation
     inverted_index: duckdb.DuckDBPyRelation
+    # TODO(ThomasHepworth): remove in 2.0; support old bundles without the catalogue.
+    roadlike_places: duckdb.DuckDBPyRelation | None = None
 
 
 @dataclass(frozen=True)
@@ -118,10 +166,8 @@ def _write_parquet_artefact(
     relation: duckdb.DuckDBPyRelation,
     path: str | Path,
     *,
-    sort_columns: tuple[str, ...] = (),
-    order_by: tuple[str, ...] | None = None,
+    settings: _ParquetArtefactSettings = _STANDARD_PARQUET_SETTINGS,
     drop_columns: tuple[str, ...] = (),
-    compression_level: int = PARQUET_COMPRESSION_LEVEL,
 ) -> None:
     """Write a relation to a Parquet file using the prepared-data settings.
 
@@ -133,18 +179,32 @@ def _write_parquet_artefact(
     columns = relation.columns
     existing_drops = [c for c in drop_columns if c in columns]
     drop_clause = f" EXCLUDE ({', '.join(existing_drops)})" if existing_drops else ""
-    order_terms = order_by or tuple(c for c in sort_columns if c in columns)
+    order_terms = settings.order_by or tuple(
+        c for c in settings.sort_columns if c in columns
+    )
     order_clause = (" ORDER BY " + ", ".join(order_terms)) if order_terms else ""
     escaped_path = _escape_sql_string(str(path))
-    con.execute(
-        f"COPY (SELECT *{drop_clause} "
-        f"FROM ({relation.sql_query()}) AS _ukam_src{order_clause}) "
-        f"TO '{escaped_path}' "
-        f"(FORMAT PARQUET, PARQUET_VERSION {PARQUET_VERSION}, "
-        f"COMPRESSION {PARQUET_COMPRESSION}, "
-        f"COMPRESSION_LEVEL {compression_level}, "
-        f"ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE})"
-    )
+    original_threads = None
+    if settings.max_threads is not None:
+        original_threads = int(
+            con.execute("SELECT current_setting('threads')").fetchall()[0][0]
+        )
+        con.execute(
+            "SET threads = ?", [min(original_threads, settings.max_threads)]
+        ).fetchall()
+    try:
+        con.execute(
+            f"COPY (SELECT *{drop_clause} "
+            f"FROM ({relation.sql_query()}) AS _ukam_src{order_clause}) "
+            f"TO '{escaped_path}' "
+            f"(FORMAT PARQUET, PARQUET_VERSION {settings.version}, "
+            f"COMPRESSION {settings.compression}, "
+            f"COMPRESSION_LEVEL {settings.compression_level}, "
+            f"ROW_GROUP_SIZE {settings.row_group_size})"
+        ).fetchall()
+    finally:
+        if original_threads is not None:
+            con.execute("SET threads = ?", [original_threads]).fetchall()
 
 
 def _describe_prepare_input(data: PrepareCanonicalInput) -> str:
@@ -193,7 +253,7 @@ def _remote_output_exists(
 
     for candidate_path in candidate_paths:
         try:
-            con.read_parquet(candidate_path).limit(1).fetchone()
+            con.read_parquet(candidate_path).limit(1).fetchall()
             return True
         except Exception as exc:
             _rollback_if_needed(con)
@@ -229,7 +289,7 @@ def _is_permission_error(exc: Exception) -> bool:
 def _rollback_if_needed(con: duckdb.DuckDBPyConnection) -> None:
     """Best-effort rollback to clear aborted transaction state."""
     try:
-        con.execute("ROLLBACK")
+        con.execute("ROLLBACK").fetchall()
     except Exception:
         # Ignore when there is no active transaction.
         pass
@@ -238,18 +298,61 @@ def _rollback_if_needed(con: duckdb.DuckDBPyConnection) -> None:
 def _rehydrate_canonical_addresses(
     addresses: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    """Restore recomputable columns not persisted in the canonical parquet.
+    """Restore compatibility columns missing from older canonical parquet.
 
-    ``exploding_unique_ids`` is always ``[unique_id]`` for canonical data. It is
-    omitted at write time and reconstructed here to keep the in-memory schema
-    identical to a freshly-prepared relation. ``address_tokens`` is no longer
-    part of the prepared schema; inverted-index stages derive it inline.
+    New canonical outputs persist the active address-structure feature views.
+    This fallback keeps older lean bundles usable. ``address_tokens`` and
+    ``common_adj_start_tokens`` are not part of the matching contract;
+    inverted-index stages derive address tokens inline and the linker adds a
+    neutral common-token array for legacy schema alignment when required.
     """
+    addresses = _ensure_sub_premise_views(_ensure_clean_full_address_views(addresses))
     columns = addresses.columns
     if "address_tokens" in columns:
         addresses = addresses.select("* EXCLUDE (address_tokens)")
     if "exploding_unique_ids" not in columns and "unique_id" in columns:
         addresses = addresses.select("*, list_value(unique_id) AS exploding_unique_ids")
+    columns = addresses.columns
+    if isinstance(columns, list) and "sub_premise_location" not in columns:
+        addresses = addresses.select("*, CAST(NULL AS VARCHAR) AS sub_premise_location")
+        columns = addresses.columns
+    numeric_token_views = [
+        "list_extract(regexp_extract_all(array_to_string(numeric_tokens, ' '), "
+        f"'\\d+'), {position}) AS numeric_token_{position}"
+        for position in (2, 3)
+        if f"numeric_token_{position}" not in columns
+    ]
+    if numeric_token_views and "numeric_tokens" in columns:
+        addresses = addresses.select("*, " + ", ".join(numeric_token_views))
+        columns = addresses.columns
+    if "distinguishing_token_parts" in columns:
+        view_expressions = _distinguishing_token_parts_view_expressions()
+        missing_views = [
+            expression
+            for column, expression in view_expressions.items()
+            if column not in columns
+        ]
+        projection = "* EXCLUDE (distinguishing_token_parts)"
+        if missing_views:
+            projection += ", " + ", ".join(missing_views)
+        addresses = addresses.select(projection)
+        columns = addresses.columns
+    if (
+        "distinguishing_lexical_tokens" not in columns
+        and "distinguishing_adj_start_tokens" in columns
+    ):
+        addresses = addresses.select(f"*, {_distinguishing_lexical_tokens_expression()}")
+    return addresses
+
+
+def _canonical_storage_relation(
+    addresses: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+    """Persist the token array while retaining the string only in memory."""
+    if "clean_full_address_tokens" not in addresses.columns:
+        raise ValueError("Canonical output must contain clean_full_address_tokens.")
+    if "clean_full_address" in addresses.columns:
+        addresses = addresses.select("* EXCLUDE (clean_full_address)")
     return addresses
 
 
@@ -265,6 +368,7 @@ def _load_prepared_canonical_data_remote(
 
     tf_uri = join_remote_path(folder_uri, PREPARED_TERM_FREQUENCIES_FILENAME)
     idx_uri = join_remote_path(folder_uri, PREPARED_INVERTED_INDEX_FILENAME)
+    roadlike_places_uri = join_remote_path(folder_uri, ROADLIKE_PLACES_FILENAME)
     single_canonical_uri = join_remote_path(folder_uri, PREPARED_ADDRESSES_FILENAME)
     chunk_glob_uri = join_remote_path(
         folder_uri,
@@ -277,9 +381,9 @@ def _load_prepared_canonical_data_remote(
 
     try:
         term_frequencies = con.read_parquet(tf_uri)
-        term_frequencies.limit(1).fetchone()
+        term_frequencies.limit(1).fetchall()
         inverted_index = con.read_parquet(idx_uri)
-        inverted_index.limit(1).fetchone()
+        inverted_index.limit(1).fetchall()
     except Exception as exc:
         _rollback_if_needed(con)
         if _is_permission_error(exc):
@@ -306,7 +410,7 @@ def _load_prepared_canonical_data_remote(
     for candidate_uri in address_candidates:
         try:
             addresses = con.read_parquet(candidate_uri)
-            addresses.limit(1).fetchone()
+            addresses.limit(1).fetchall()
             break
         except Exception as exc:
             read_errors.append(exc)
@@ -335,12 +439,30 @@ def _load_prepared_canonical_data_remote(
     if canonical_address_filter is not None:
         addresses = addresses.filter(canonical_address_filter)
 
+    roadlike_places: duckdb.DuckDBPyRelation | None = None
+    try:
+        roadlike_places = con.read_parquet(roadlike_places_uri)
+        roadlike_places.limit(1).fetchall()
+    except Exception as exc:
+        _rollback_if_needed(con)
+        if _is_permission_error(exc):
+            raise PermissionError(
+                f"Cannot access optional road catalogue at '{roadlike_places_uri}'. "
+                "Check object-store credentials and permissions. "
+                f"Underlying error: {exc}"
+            ) from exc
+        logger.debug(
+            "Optional road catalogue not found at remote '%s'; road parsing disabled",
+            folder_uri,
+        )
+
     logger.debug("Loaded prepared canonical data from remote '%s'", folder_uri)
 
     return _PreparedCanonical(
         addresses=addresses,
         term_frequencies=term_frequencies,
         inverted_index=inverted_index,
+        roadlike_places=roadlike_places,
     )
 
 
@@ -362,12 +484,6 @@ def _clear_stale_artefacts(folder: Path) -> None:
                 shutil.rmtree(p)
             else:
                 p.unlink()
-
-
-def _format_elapsed(elapsed_seconds: float) -> str:
-    total_seconds = int(round(max(0.0, elapsed_seconds)))
-    minutes, seconds = divmod(total_seconds, 60)
-    return f"{minutes}m {seconds:02d}s"
 
 
 def _chunk_file_name(chunk_index: int, total_chunks: int) -> str:
@@ -413,6 +529,16 @@ def _build_manifest(
     """Build the manifest payload shared by local and remote writers."""
     from uk_address_matcher import __version__
 
+    physical_indexes = [
+        {
+            "name": strategy.name,
+            "maximum_posting_size": strategy.maximum_posting_size,
+        }
+        for strategy in (
+            *BASE_INDEX_PORTFOLIO.physical_indexes,
+            TRIGRAM_SINGLETON_DISTRICT_INDEX,
+        )
+    ]
     return {
         "ukam_version": __version__,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -421,13 +547,7 @@ def _build_manifest(
         "preparation_options": preparation_options,
         "inverted_index_portfolio": {
             "name": BASE_INDEX_PORTFOLIO.name,
-            "physical_indexes": [
-                {
-                    "name": strategy.name,
-                    "maximum_posting_size": strategy.maximum_posting_size,
-                }
-                for strategy in BASE_INDEX_PORTFOLIO.physical_indexes
-            ],
+            "physical_indexes": physical_indexes,
         },
         "files": files_meta,
     }
@@ -438,7 +558,7 @@ def prepare_canonical_folder(
     output_folder: str | Path,
     *,
     con: duckdb.DuckDBPyConnection,
-    num_of_chunks: int = 10,
+    cleaning_num_chunks: int = 10,
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
@@ -448,7 +568,8 @@ def prepare_canonical_folder(
     """Prepare canonical data and persist to a folder for later use.
 
     Performs address cleaning and tokenisation, term frequency computation,
-    and inverted index generation. Writes two Parquet files, canonical
+    postcode-distinguishing name statistics, and inverted index generation.
+    Writes two Parquet files, canonical
     addresses (single-file or chunked), and a manifest
     to `output_folder`:
 
@@ -465,8 +586,10 @@ def prepare_canonical_folder(
             path, or a non-empty list of CSV/Parquet paths.
         output_folder: Folder to write prepared artefacts to.
         con: DuckDB connection.
-        num_of_chunks: Number of chunks to split the data into for cleaning
-            and term frequency derivation. Set to 1 for no chunking.
+        cleaning_num_chunks: Number of processing chunks for cleaning and term
+            frequency derivation, also used to batch postcode-local keys and road
+            parsing. Postcode batches retain whole districts and road fallback
+            groups, so small inputs can use fewer batches. Set to 1 for no chunking.
         output_chunk_count: Number of output chunks to write for canonical
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write contiguous globally ordered chunks under
@@ -491,9 +614,44 @@ def prepare_canonical_folder(
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
     """
+    _validate_chunk_count(cleaning_num_chunks, name="cleaning_num_chunks")
+    with _CanonicalIntermediates(con) as storage:
+        _prepare_canonical_folder(
+            data,
+            output_folder,
+            con=con,
+            num_of_chunks=cleaning_num_chunks,
+            output_chunk_count=output_chunk_count,
+            derive_distinguishing_wrt_adjacent_records=(
+                derive_distinguishing_wrt_adjacent_records
+            ),
+            overwrite=overwrite,
+            add_debug_features=add_debug_features,
+            show_progress=show_progress,
+            _storage=storage,
+        )
+
+
+def _prepare_canonical_folder(
+    data: PrepareCanonicalInput,
+    output_folder: str | Path,
+    *,
+    con: duckdb.DuckDBPyConnection,
+    num_of_chunks: int,
+    output_chunk_count: int,
+    derive_distinguishing_wrt_adjacent_records: bool,
+    overwrite: bool,
+    add_debug_features: bool,
+    show_progress: ShowProgress,
+    _storage: _CanonicalIntermediates | None,
+) -> None:
     from uk_address_matcher.cleaning.chunking_strategies import (
+        _add_canonical_road_blocking_keys,
+        _attach_canonical_features,
+        _derive_postcode_features,
+        _derive_term_frequencies_from_precleaned,
+        clean_data_pre_term_frequencies,
         derive_inverted_index,
-        derive_term_frequencies_table,
         prepare_data_for_matching,
     )
 
@@ -502,6 +660,8 @@ def prepare_canonical_folder(
     output_folder_path = None if output_is_remote else Path(output_folder)
     progress_mode = resolve_progress_mode(show_progress)
     data = _coerce_prepare_input_to_relation(data, con=con)
+    if _input_has_collation(con, data):
+        _storage = None
 
     logger.info("Preparing canonical data from '%s'", _describe_prepare_input(data))
     logger.info("Writing prepared canonical artefacts to '%s'", output_folder)
@@ -539,17 +699,33 @@ def prepare_canonical_folder(
             _clear_stale_artefacts(output_folder_path)
 
     # Derive artefacts / cleaned canonical data for export
-    logger.debug("Deriving term frequencies from canonical data")
-    tf_table = derive_term_frequencies_table(
+    logger.debug("Cleaning canonical addresses before term-frequency derivation")
+    owned_chunks: dict[str, int] = {}
+    preclean_drop_columns = (
+        (
+            "original_address_concat",
+            "numeric_role_keys",
+            "numeric_broad_roles",
+            "address_tokens",
+        )
+        if not add_debug_features
+        else ()
+    )
+    precleaned = clean_data_pre_term_frequencies(
         data,
         con=con,
         num_of_chunks=num_of_chunks,
+        _drop_columns=preclean_drop_columns,
+        _owned_chunks=owned_chunks,
         show_progress=progress_mode,
+        _storage=_storage,
     )
+    logger.debug("Deriving term frequencies from pre-cleaned canonical data")
+    tf_table = _derive_term_frequencies_from_precleaned(precleaned, con)
 
-    logger.debug("Cleaning canonical addresses")
+    logger.debug("Applying term frequencies to canonical addresses")
     df_clean = prepare_data_for_matching(
-        data,
+        precleaned,
         con=con,
         num_of_chunks=num_of_chunks,
         term_frequency_lookup=tf_table,
@@ -557,19 +733,63 @@ def prepare_canonical_folder(
             derive_distinguishing_wrt_adjacent_records
         ),
         dataset_role="canonical",
+        _precleaned_addresses=True,
+        _drop_columns=canonical_drop_columns,
+        _owned_chunks=owned_chunks,
         show_progress=progress_mode,
+        _storage=_storage,
     )
-
+    pre_artefact_drop_columns = tuple(
+        column for column in canonical_drop_columns if column in df_clean.columns
+    )
+    if pre_artefact_drop_columns:
+        df_clean = df_clean.select(f"* EXCLUDE ({', '.join(pre_artefact_drop_columns)})")
     logger.debug("Building inverted index")
     inverted_index = derive_inverted_index(
         df_clean,
         con=con,
         num_of_chunks=num_of_chunks,
         show_progress=progress_mode,
+        _storage=_storage,
     )
-
+    base_inverted_index_rows = inverted_index.count("*").fetchall()[0][0]
+    roadlike_places, local_features, updated_inverted_index = _derive_postcode_features(
+        df_clean,
+        con,
+        include_local_keys=True,
+        singleton_trigram_index=inverted_index,
+        num_of_chunks=num_of_chunks,
+        show_progress=progress_mode,
+        _storage=_storage,
+    )
+    if updated_inverted_index is not None:
+        inverted_index = updated_inverted_index
+    logger.debug("Deriving canonical road blocking keys")
+    road_features = _add_canonical_road_blocking_keys(
+        df_clean,
+        con,
+        num_of_chunks=num_of_chunks,
+        roadlike_places=roadlike_places,
+        # Precleaning assigned and stored one unique ID per canonical row.
+        _stored_unique_address_ids=True,
+        _storage=_storage,
+    )
+    logger.debug("Canonical road blocking keys derived")
+    df_clean = _attach_canonical_features(
+        df_clean,
+        con,
+        local_features.alias,
+        road_features=road_features,
+        _storage=_storage,
+    )
     canonical_output_relation = df_clean
-    addr_count = df_clean.count("*").fetchone()[0]
+    canonical_storage_relation = _canonical_storage_relation(canonical_output_relation)
+    canonical_storage_columns = [
+        column
+        for column in canonical_storage_relation.columns
+        if column not in canonical_drop_columns
+    ]
+    addr_count = df_clean.count("*").fetchall()[0][0]
 
     # Write parquet files
     tf_path = (
@@ -582,15 +802,21 @@ def prepare_canonical_folder(
         if output_is_remote
         else output_folder_path / PREPARED_INVERTED_INDEX_FILENAME
     )
+    roadlike_places_path = (
+        join_remote_path(output_folder_uri, ROADLIKE_PLACES_FILENAME)
+        if output_is_remote
+        else output_folder_path / ROADLIKE_PLACES_FILENAME
+    )
 
     _write_parquet_artefact(con, tf_table, tf_path)
     _write_parquet_artefact(
         con,
         inverted_index,
         idx_path,
-        order_by=INVERTED_INDEX_ORDER_BY,
-        compression_level=INVERTED_INDEX_COMPRESSION_LEVEL,
+        settings=_INVERTED_INDEX_PARQUET_SETTINGS,
     )
+    if roadlike_places is not None:
+        _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
 
     canonical_paths: list[str | Path]
     chunk_output_location: str | Path | None = None
@@ -602,9 +828,9 @@ def prepare_canonical_folder(
         )
         _write_parquet_artefact(
             con,
-            canonical_output_relation,
+            canonical_storage_relation,
             addr_path,
-            sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
+            settings=_CANONICAL_PARQUET_SETTINGS,
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -621,7 +847,6 @@ def prepare_canonical_folder(
         output_chunk_size = (addr_count + output_chunk_count - 1) // output_chunk_count
         canonical_paths = []
         for chunk_index in range(output_chunk_count):
-            started_at = time.perf_counter()
             first_id = chunk_index * output_chunk_size + 1
             last_id = min(
                 (chunk_index + 1) * output_chunk_size,
@@ -629,7 +854,7 @@ def prepare_canonical_folder(
             )
             chunk_query = con.sql(f"""
                 SELECT *
-                FROM ({canonical_output_relation.sql_query()}) AS canonical
+                FROM ({canonical_storage_relation.sql_query()}) AS canonical
                 WHERE canonical.ukam_address_id BETWEEN {first_id} AND {last_id}
             """)
             chunk_path = (
@@ -644,23 +869,22 @@ def prepare_canonical_folder(
                 con,
                 chunk_query,
                 chunk_path,
-                sort_columns=(*CANONICAL_SORT_COLUMNS, "ukam_address_id"),
+                settings=_CANONICAL_PARQUET_SETTINGS,
                 drop_columns=canonical_drop_columns,
             )
-            chunk_count = chunk_query.count("*").fetchone()[0]
+            chunk_count = last_id - first_id + 1
             canonical_paths.append(chunk_path)
             logger.debug(
-                "Wrote canonical output chunk %d/%d to '%s' (%d rows) - took %s",
+                "Wrote canonical output chunk %d/%d to '%s' (%d rows)",
                 chunk_index + 1,
                 output_chunk_count,
                 chunk_path,
                 chunk_count,
-                _format_elapsed(time.perf_counter() - started_at),
             )
 
     # Compute row counts once (avoids repeated full scans)
-    tf_count = tf_table.count("*").fetchone()[0]
-    idx_count = inverted_index.count("*").fetchone()[0]
+    tf_count = tf_table.count("*").fetchall()[0][0]
+    idx_count = inverted_index.count("*").fetchall()[0][0]
 
     logger.debug(
         "Wrote artefacts to '%s': %d addresses, %d term frequencies, %d index rows",
@@ -681,6 +905,8 @@ def prepare_canonical_folder(
         PREPARED_TERM_FREQUENCIES_FILENAME: tf_table.columns,
         PREPARED_INVERTED_INDEX_FILENAME: inverted_index.columns,
     }
+    if roadlike_places is not None:
+        artefact_columns[ROADLIKE_PLACES_FILENAME] = roadlike_places.columns
     for canonical_path in canonical_paths:
         relative_name = (
             relative_remote_path(output_folder_uri, str(canonical_path))
@@ -688,7 +914,7 @@ def prepare_canonical_folder(
             else str(Path(canonical_path).relative_to(output_folder_path))
         )
         artefact_columns[relative_name] = [
-            c for c in df_clean.columns if c not in canonical_drop_columns
+            c for c in canonical_storage_columns if c not in canonical_drop_columns
         ]
 
     manifest_row_counts = {
@@ -697,24 +923,33 @@ def prepare_canonical_folder(
         "inverted_index": idx_count,
         "canonical_output_chunks": output_chunk_count,
     }
+    manifest_row_counts[TRIGRAM_SINGLETON_DISTRICT_INDEX.name] = (
+        idx_count - base_inverted_index_rows
+    )
+    preparation_options = {"add_debug_features": add_debug_features}
+    artefact_paths: list[str | Path] = [*canonical_paths, tf_path, idx_path]
+    if roadlike_places is not None:
+        roadlike_count = roadlike_places.count("*").fetchall()[0][0]
+        manifest_row_counts["roadlike_places"] = roadlike_count
+        artefact_paths.append(roadlike_places_path)
 
     if output_is_remote:
         _write_manifest_remote(
             output_folder_uri,
             con=con,
-            artefact_paths=[str(path) for path in [*canonical_paths, tf_path, idx_path]],
+            artefact_paths=[str(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
+            preparation_options=preparation_options,
         )
     else:
         _write_manifest_local(
             output_folder_path,
             con=con,
-            artefact_paths=[Path(path) for path in [*canonical_paths, tf_path, idx_path]],
+            artefact_paths=[Path(path) for path in artefact_paths],
             artefact_columns=artefact_columns,
             row_counts=manifest_row_counts,
-            preparation_options={"add_debug_features": add_debug_features},
+            preparation_options=preparation_options,
         )
 
     logger.info("Prepared canonical artefacts written to '%s'", output_folder)
@@ -809,14 +1044,14 @@ def _write_manifest_remote(
             json.dumps(manifest["inverted_index_portfolio"]),
             json.dumps(manifest["files"]),
         ],
-    )
+    ).fetchall()
     try:
         con.execute(
             f"COPY {manifest_table} TO '{escaped_manifest_uri}' "
             "(FORMAT JSON, ARRAY false)"
-        )
+        ).fetchall()
     finally:
-        con.execute(f"DROP TABLE IF EXISTS {manifest_table}")
+        con.execute(f"DROP TABLE IF EXISTS {manifest_table}").fetchall()
 
     logger.debug("Manifest written to '%s'", manifest_uri)
 
@@ -912,10 +1147,15 @@ def _validate_prepared_folder(
 
     # Verify each file is a readable Parquet file
     required_paths = [folder / f for f in REQUIRED_FILES]
-    for path in [*canonical_paths, *required_paths]:
+    optional_paths = (
+        [folder / ROADLIKE_PLACES_FILENAME]
+        if (folder / ROADLIKE_PLACES_FILENAME).exists()
+        else []
+    )
+    for path in [*canonical_paths, *required_paths, *optional_paths]:
         relative_name = str(path.relative_to(folder))
         try:
-            con.read_parquet(str(path)).limit(1).fetchone()
+            con.read_parquet(str(path)).limit(1).fetchall()
         except Exception as exc:
             raise FileNotFoundError(
                 f"Artefact '{relative_name}' in '{folder}' exists but is not a valid "
@@ -960,6 +1200,13 @@ def load_prepared_canonical_data(
     inverted_index = con.read_parquet(
         str(layout.folder / PREPARED_INVERTED_INDEX_FILENAME)
     )
+    # TODO(ThomasHepworth): remove in 2.0; support old bundles without the catalogue.
+    roadlike_places_path = layout.folder / ROADLIKE_PLACES_FILENAME
+    roadlike_places = (
+        con.read_parquet(str(roadlike_places_path))
+        if roadlike_places_path.exists()
+        else None
+    )
 
     addresses = _rehydrate_canonical_addresses(addresses)
 
@@ -972,4 +1219,5 @@ def load_prepared_canonical_data(
         addresses=addresses,
         term_frequencies=term_frequencies,
         inverted_index=inverted_index,
+        roadlike_places=roadlike_places,
     )

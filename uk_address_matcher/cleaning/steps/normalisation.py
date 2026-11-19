@@ -5,14 +5,23 @@ from typing import Final
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
     merge_split_flat_number,
+    move_flat_block_letter_before_number,
     move_flat_to_front,
     remove_apostrophes,
+    remove_brackets,
     remove_commas_periods,
+    remove_curly_apostrophes,
     remove_multiple_spaces,
+    remove_repeated_tokens,
+    replace_en_dash_with_space,
     replace_fwd_slash_with_dash,
+    replace_non_breaking_space_with_space,
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
+    split_letter_dash_letter,
+    standarise_num_dash_num,
     standarise_num_letter,
+    strip_latin_accents,
     trim,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
@@ -196,17 +205,23 @@ def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "clean_full_address",
         [
+            strip_latin_accents,
             remove_commas_periods,
+            remove_brackets,
             remove_apostrophes,
+            remove_curly_apostrophes,
+            replace_en_dash_with_space,
+            replace_non_breaking_space_with_space,
             replace_non_numeric_adjacent_underscores,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
-            # standarise_num_dash_num,  # left commented as in original
+            standarise_num_dash_num,
             separate_letter_num,
+            move_flat_block_letter_before_number,
             standarise_num_letter,
             move_flat_to_front,
             merge_split_flat_number,
-            # remove_repeated_tokens,   # left commented as in original
+            remove_repeated_tokens,
             trim,
         ],
     )
@@ -265,31 +280,50 @@ def _strip_country_suffix() -> str:
     ),
     tags=["cleaning"],
 )
-def _remove_duplicate_end_tokens() -> str:
+def _remove_duplicate_end_tokens() -> list[CTEStep]:
     """
-    Removes duplicated tokens at the end of the address.
-    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
+    Remove duplicated end tokens and retain the finalized token array.
+
+    The token array used to be rebuilt by the following pipeline stage. Keeping
+    the post-deduplication list here lets downstream feature stages reuse it.
     """
-    sql = r"""
-    WITH tokenised AS (
-        SELECT *, string_split(clean_full_address, ' ') AS cleaned_tokenised
-        FROM {input}
-    )
-    SELECT
-        * EXCLUDE (cleaned_tokenised, clean_full_address),
-        CASE
-            WHEN array_length(cleaned_tokenised) >= 2
-                 AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
-            THEN array_to_string(cleaned_tokenised[:-2], ' ')
-            WHEN array_length(cleaned_tokenised) >= 4
-                 AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
-                 AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
-            THEN array_to_string(cleaned_tokenised[:-3], ' ')
-            ELSE clean_full_address
-        END AS clean_full_address
-    FROM tokenised
-    """
-    return sql
+    return [
+        CTEStep(
+            "tokenised",
+            r"""
+            SELECT *, string_split(clean_full_address, ' ') AS cleaned_tokenised
+            FROM {input}
+            """,
+        ),
+        CTEStep(
+            "deduplicated",
+            r"""
+            SELECT
+                * EXCLUDE (cleaned_tokenised, clean_full_address),
+                CASE
+                    WHEN array_length(cleaned_tokenised) >= 2
+                         AND cleaned_tokenised[-1] = cleaned_tokenised[-2]
+                    THEN cleaned_tokenised[:-2]
+                    WHEN array_length(cleaned_tokenised) >= 4
+                         AND cleaned_tokenised[-4] = cleaned_tokenised[-2]
+                         AND cleaned_tokenised[-3] = cleaned_tokenised[-1]
+                    THEN cleaned_tokenised[:-3]
+                    ELSE cleaned_tokenised
+                END AS deduplicated_tokens
+            FROM {tokenised}
+            """,
+        ),
+        CTEStep(
+            "final",
+            r"""
+            SELECT
+                * EXCLUDE (deduplicated_tokens),
+                array_to_string(deduplicated_tokens, ' ') AS clean_full_address,
+                deduplicated_tokens::VARCHAR[] AS clean_full_address_tokens
+            FROM {deduplicated}
+            """,
+        ),
+    ]
 
 
 @pipeline_stage(
@@ -391,7 +425,7 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
       array_to_string(
         list_transform(
         string_split(COALESCE(address.clean_full_address, ''), ' '),
-        x -> COALESCE(map_extract(m.abbr_map, x)[1], x)
+        lambda x: COALESCE(map_extract(m.abbr_map, x)[1], x)
         ),
         ' '
       ) AS clean_full_address
@@ -408,23 +442,14 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
 
 
 @pipeline_stage(
-    name="join_excluding_with_next_token",
-    description=(
-        "Join EXCLUDING with the following token to avoid false basement/studio "
-        "matches during tokenisation"
-    ),
+    name="split_letter_dash_letter",
+    description="Split letter-only dashes after abbreviation normalisation",
     tags=["normalisation", "cleaning"],
 )
-def _join_excluding_with_next_token() -> str:
-    sql = r"""
-    SELECT
-        * EXCLUDE (clean_full_address),
-        regexp_replace(
-            clean_full_address,
-            '(^|[ (])EXCLUDING +([^ )]+)',
-            '\1EXCLUDING\2',
-            'g'
-        ) AS clean_full_address
-    FROM {input}
+def _split_letter_dash_letter() -> str:
+    cleaned = split_letter_dash_letter("clean_full_address")
+    return f"""
+    SELECT * EXCLUDE (clean_full_address),
+        {cleaned} AS clean_full_address
+    FROM {{input}}
     """
-    return sql

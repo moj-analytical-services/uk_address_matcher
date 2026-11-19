@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
-from uk_address_matcher._typing import StageDiagnostics
+from uk_address_matcher._typing import StageDiagnostics, _ColumnAlias
 from uk_address_matcher.analysis.accuracy_analysis import (
     build_match_weight_rounding_expression,
     build_precision_recall_chart_definition,
@@ -27,9 +28,45 @@ from uk_address_matcher.post_linkage.match_result.debug_tools import (
     _MatchResultDebugTools,
 )
 from uk_address_matcher.post_linkage.match_result.splink_inspector import _SplinkInspector
+from uk_address_matcher.sql_pipeline.helpers import (
+    _drop_table_and_registered_aliases,
+    _normalise_identifier_case,
+    _quote_identifier,
+)
 
 if TYPE_CHECKING:
+    from tempfile import TemporaryDirectory
+
     from uk_address_matcher.linking_model.matching.stages.splink import SplinkStage
+
+
+def _enrichment_columns(
+    selections: list[str | _ColumnAlias] | None,
+    source: str,
+) -> list[tuple[str, str]]:
+    if selections is None:
+        return []
+    if not isinstance(selections, list):
+        raise TypeError(f"{source} must be a list of column names or alias dictionaries.")
+    columns = []
+    for index, selection in enumerate(selections):
+        location = f"{source}[{index}]"
+        if isinstance(selection, str):
+            input_column = alias = selection
+        elif isinstance(selection, dict):
+            if set(selection) != {"input_column", "alias"}:
+                raise ValueError(
+                    f"{location} must contain exactly 'input_column' and 'alias'."
+                )
+            input_column, alias = selection["input_column"], selection["alias"]
+        else:
+            raise TypeError(f"{location} must be a column name or alias dictionary.")
+        if not isinstance(input_column, str) or not isinstance(alias, str):
+            raise TypeError(f"{location}: input_column and alias must be strings.")
+        if not input_column or not alias:
+            raise ValueError(f"{location}: input_column and alias must not be empty.")
+        columns.append((input_column, alias))
+    return columns
 
 
 def _build_threshold_metrics_sql(rounding_expr: str) -> str:
@@ -45,7 +82,10 @@ class MatchResult:
 
     Key methods:
         match_metrics      - match-reason breakdown with counts and percentages.
-        match_reasons      - distinct match-reason values.
+        close              - drop every table/view retained for this result,
+                             including the result table itself. After close(),
+                             `.matches()` and the inspection methods no longer
+                             work. Also usable as a context manager.
         _splink_predictions - raw Splink predictions table (requires `SplinkStage`).
     """
 
@@ -55,6 +95,14 @@ class MatchResult:
     _canonical_relation: DuckDBPyRelation | None = None
     _messy_relation: DuckDBPyRelation | None = None
     _stage_diagnostics: StageDiagnostics | None = None
+    # Catalogue objects this result owns and drops on close(). Snapshotted at
+    # construction time, so reusing the same stage objects for a later run
+    # cannot repoint an earlier result's cleanup at the newer run's tables.
+    _owned_table_names: tuple[str, ...] = ()
+    # SplinkDataFrame handles for Splink-side tables, dropped via Splink's
+    # public API on close().
+    _owned_splink_frames: tuple = ()
+    _temporary_directory: TemporaryDirectory | None = None
 
     def __repr__(self) -> str:
         class_name = self.__class__.__name__
@@ -63,25 +111,55 @@ class MatchResult:
             "Use .matches() to retrieve your raw results as a DuckDB table."
         )
 
-    def matches(self, *, all_columns: bool = False) -> DuckDBPyRelation:
-        """The underlying DuckDB relation containing match results.
+    def matches(
+        self,
+        *,
+        all_columns: bool = False,
+        include_unmatched: bool = True,
+    ) -> DuckDBPyRelation:
+        """Return match results using public entity and row identifiers.
 
         Args:
-            all_columns: When True, return every column. By default only the
-                key result columns are returned.
+            all_columns: Include diagnostic columns as well as key result columns.
+            include_unmatched: Include every input row by default. When False,
+                return successful matches only, without changing metrics or accuracy.
+
+        Both column modes use `address_id` and `canonical_address_id` for entity
+        IDs. `ukam_address_id` and `canonical_ukam_address_id` identify rows within
+        this run, not stable entities. Consume the lazy relation before closing
+        this result or its connection.
         """
         relation_sql = self._relation.sql_query()
-        base_relation_sql = f"""
-        SELECT * REPLACE (
-            CAST(match_reason AS VARCHAR) AS match_reason
+        identifiers = {
+            "unique_id": "address_id",
+            "resolved_canonical_id": "canonical_address_id",
+        }
+        projections = []
+        for column in self._relation.columns:
+            if _normalise_identifier_case(column) in identifiers.values():
+                continue
+            expression = _quote_identifier(column)
+            if column == "match_reason":
+                expression = f"CAST({expression} AS VARCHAR)"
+            alias = identifiers.get(column, column)
+            projections.append(f"{expression} AS {_quote_identifier(alias)}")
+        row_filter = (
+            "" if include_unmatched else "WHERE resolved_canonical_id IS NOT NULL"
         )
+        base_relation_sql = f"""
+        SELECT {", ".join(projections)}
         FROM ({relation_sql}) AS match_result
+        {row_filter}
         """
         if all_columns:
             return self.con.sql(base_relation_sql)
         preferred = [
-            "unique_id",
-            "resolved_canonical_id",
+            "address_id",
+            "ukam_address_id",
+            "postcode",
+            "postcode_canonical",
+            "canonical_address_id",
+            "canonical_ukam_address_id",
             "ukam_label",
             "original_address_concat",
             "clean_full_address_canonical",
@@ -90,7 +168,7 @@ class MatchResult:
             "match_weight",
             "distinguishability",
         ]
-        available = set(self._relation.columns)
+        available = {identifiers.get(column, column) for column in self._relation.columns}
         cols = [c for c in preferred if c in available]
         return self.con.sql(
             f"""
@@ -98,6 +176,167 @@ class MatchResult:
                 {", ".join(cols)}
             FROM ({base_relation_sql}) AS match_result
             """
+        )
+
+    def join_input_columns(
+        self,
+        *,
+        canonical: list[str | _ColumnAlias] | None = None,
+        messy: list[str | _ColumnAlias] | None = None,
+    ) -> DuckDBPyRelation:
+        """Left join selected fields from the retained prepared inputs.
+
+        Args:
+            canonical: Column names, or dictionaries containing `input_column`
+                and `alias`, from the matched canonical row.
+            messy: The same selections from the messy row.
+
+        Returns:
+            Standard match columns plus the selected fields.
+
+        Raises:
+            TypeError: If selections have invalid types.
+            ValueError: If selections are empty, invalid, unavailable or collide.
+
+        Example:
+            result.join_input_columns(
+                canonical=[
+                    "classificationcode",
+                    {"input_column": "postcode", "alias": "canonical_postcode"},
+                ]
+            )
+        """
+        selections = {
+            "canonical": _enrichment_columns(canonical, "canonical"),
+            "messy": _enrichment_columns(messy, "messy"),
+        }
+        if not any(selections.values()):
+            raise ValueError(
+                "No input columns were selected. Provide canonical or messy columns."
+            )
+        base = self.matches()
+        output_names = {
+            _normalise_identifier_case(column): [f"matches.{column}"]
+            for column in base.columns
+        }
+        projections = [f"matched.{_quote_identifier(column)}" for column in base.columns]
+        joins = []
+        for source, columns in selections.items():
+            if not columns:
+                continue
+            relation = getattr(self, f"_{source}_relation")
+            if relation is None:
+                raise ValueError(f"{source}: input data is unavailable")
+            match_key = (
+                "canonical_ukam_address_id"
+                if source == "canonical"
+                else "ukam_address_id"
+            )
+            joins.append(
+                f"LEFT JOIN ({relation.sql_query()}) AS {source}_input "
+                f"ON {source}_input.ukam_address_id = matched.{match_key}"
+            )
+            for input_column, alias in columns:
+                output_names.setdefault(_normalise_identifier_case(alias), []).append(
+                    f"{source}.{input_column} AS {alias}"
+                )
+                projections.append(
+                    f"{source}_input.{_quote_identifier(input_column)} "
+                    f"AS {_quote_identifier(alias)}"
+                )
+        collisions = [
+            f"{name}: {', '.join(origins)}"
+            for name, origins in output_names.items()
+            if len(origins) > 1
+        ]
+        if collisions:
+            raise ValueError(
+                "Enrichment column name collisions:\n"
+                + "\n".join(collisions)
+                + '\nSupply distinct aliases using {"input_column": name, "alias": name}.'
+            )
+        return self.con.sql(
+            f"SELECT {', '.join(projections)} "
+            f"FROM ({self.matches(all_columns=True).sql_query()}) AS matched "
+            + " ".join(joins)
+        )
+
+    def close(self) -> None:
+        """Release retained tables, views and temporary Parquet parts.
+
+        Idempotent. Drops only objects owned by this result, so closing an
+        earlier result never invalidates a later live result on the same
+        connection. The caller's DuckDB connection remains open. Close results
+        before closing the connection. Relations backed by released tables can
+        no longer be queried; DuckDB may raise when a relation is executed.
+
+        Use a context manager to release a result even if processing fails::
+
+            with matcher.match() as result:
+                rows = result.matches().fetchall()
+
+        Materialised Python values such as ``rows`` remain usable after exit;
+        lazy DuckDB relations still depend on the released tables.
+        """
+        for frame in self._owned_splink_frames:
+            frame.drop_table_from_database_and_remove_from_cache(
+                force_non_splink_table=True
+            )
+        self._owned_splink_frames = ()
+        for table_name in self._owned_table_names:
+            _drop_table_and_registered_aliases(self.con, table_name)
+        self._owned_table_names = ()
+        if self._temporary_directory is not None:
+            self._temporary_directory.cleanup()
+            self._temporary_directory = None
+
+    def __enter__(self) -> MatchResult:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
+
+    def _export_labelling_bundle_beta(
+        self,
+        output_directory: str | Path = "ukam_labelling_bundle",
+        *,
+        top_n_candidates: int = 3,
+        overwrite: bool = False,
+        total_records_to_export: int | None = None,
+        review_data_chunk_count: int = 1,
+    ) -> Path:
+        """Export a durable bundle for the UKAM labelling workflow.
+
+        Args:
+            output_directory: Directory in which to create the bundle.
+            top_n_candidates: Maximum number of candidates to include per record.
+            overwrite: Replace an existing labelling bundle in ``output_directory``.
+            total_records_to_export: Exact number of messy records to export.
+                ``None`` exports every retained messy record. Records are selected
+                in ascending ``unique_id`` order for reproducibility.
+            review_data_chunk_count: Number of review-data Parquet files to create.
+                Records are divided into contiguous chunks whose sizes differ by at
+                most one record. ``1`` preserves the single-file bundle format.
+
+        Returns:
+            The resolved path to the created bundle directory.
+
+        Raises:
+            TypeError: If an integer argument has the wrong type.
+            ValueError: If the requested record count or chunk count is invalid.
+            FileExistsError: If the output directory is already populated and
+                ``overwrite`` is false.
+        """
+        from uk_address_matcher.labelling import _export_labelling_bundle_beta
+
+        return _export_labelling_bundle_beta(
+            match_result=self,
+            output_directory=output_directory,
+            top_n_candidates=top_n_candidates,
+            overwrite=overwrite,
+            total_records_to_export=total_records_to_export,
+            review_data_chunk_count=review_data_chunk_count,
         )
 
     def match_metrics(

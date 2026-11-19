@@ -3,14 +3,22 @@ import logging
 import duckdb
 
 from uk_address_matcher.cleaning import chunking_strategies
-from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
+from uk_address_matcher.cleaning.chunking_strategies import (
+    DISTINGUISHING_FEATURE_COLUMNS,
+    prepare_data_for_matching,
+)
 from uk_address_matcher.cleaning.steps import (
-    _parse_out_business_unit,
-    _parse_out_flat_position_and_letter,
+    _derive_numeric_range,
+    _parse_out_address_structure_premise,
+    _parse_out_numbers,
+    _parse_out_sub_premise,
     _parse_out_sub_premise_location,
     _remove_duplicate_end_tokens,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+    _separate_unusual_tokens,
+    _split_numeric_tokens_to_cols,
 )
+from uk_address_matcher.cleaning.steps.token_parsing import _address_for_parsing
 from uk_address_matcher.sql_pipeline.runner import DebugOptions, DuckDBPipeline
 
 
@@ -18,6 +26,227 @@ def _run_single_stage(stage_factory, input_relation, connection):
     pipeline = DuckDBPipeline(connection, input_relation)
     pipeline.add_step(stage_factory())
     return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def _run_adjacent_stage(input_relation, connection, *, use_precomputed_tokens=False):
+    pipeline = DuckDBPipeline(connection, input_relation)
+    pipeline.add_step(
+        _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
+            use_precomputed_tokens=use_precomputed_tokens
+        )
+    )
+    return pipeline.run(DebugOptions(pretty_print_sql=False))
+
+
+def test_address_for_parsing_only_rewrites_matching_exclusion_markers():
+    connection = duckdb.connect()
+    input_relation = connection.sql("""
+        SELECT * FROM (VALUES
+            ('EXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD'),
+            ('FLAT 2 (EXCLUDING ROAD) 42 FICTIONAL ROAD'),
+            ('UNEXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD'),
+            ('excluding road flat 2 42 fictional road')
+        ) AS addresses(address)
+    """)
+
+    parsed = input_relation.project(
+        f"{_address_for_parsing('address')} AS parsed_address"
+    ).fetchall()
+
+    assert parsed == [
+        ("EXCLUDING_ROAD FLAT 2 42 FICTIONAL ROAD",),
+        ("FLAT 2 (EXCLUDING_ROAD) 42 FICTIONAL ROAD",),
+        ("UNEXCLUDING ROAD FLAT 2 42 FICTIONAL ROAD",),
+        ("excluding road flat 2 42 fictional road",),
+    ]
+
+
+def _run_legacy_adjacent_query(input_relation, connection):
+    neighbour_names = ("lag_1", "lag_2", "lag_3", "lead_1", "lead_2", "lead_3")
+    suffix_length_expressions = []
+    for neighbour_name in neighbour_names:
+        suffix_length_expressions.append(
+            f"""
+            CASE
+                WHEN __{neighbour_name}_unique_id IS NULL
+                    OR __{neighbour_name}_unique_id = unique_id
+                    THEN 0
+                ELSE COALESCE(
+                    list_position(
+                        list_transform(
+                            list_zip(
+                                list_reverse(__tokens),
+                                list_reverse(__{neighbour_name}_tokens),
+                                true
+                            ),
+                            lambda token_pair: token_pair[1] != token_pair[2]
+                        ),
+                        true
+                    ) - 1,
+                    least(
+                        len(__tokens),
+                        len(__{neighbour_name}_tokens)
+                    )
+                )
+            END AS __{neighbour_name}_common_suffix_length
+            """
+        )
+
+    input_query = input_relation.sql_query()
+    return connection.sql(
+        f"""
+        WITH tokenised_addresses AS (
+            SELECT
+                ukam_address_id,
+                unique_id,
+                clean_full_address,
+                string_split(clean_full_address, ' ')::VARCHAR[] AS __tokens
+            FROM ({input_query}) AS input_address
+        ),
+        neighbouring_addresses AS (
+            SELECT
+                ukam_address_id,
+                unique_id,
+                __tokens,
+                lag(unique_id, 1) OVER address_order AS __lag_1_unique_id,
+                lag(__tokens, 1) OVER address_order AS __lag_1_tokens,
+                lag(unique_id, 2) OVER address_order AS __lag_2_unique_id,
+                lag(__tokens, 2) OVER address_order AS __lag_2_tokens,
+                lag(unique_id, 3) OVER address_order AS __lag_3_unique_id,
+                lag(__tokens, 3) OVER address_order AS __lag_3_tokens,
+                lead(unique_id, 1) OVER address_order AS __lead_1_unique_id,
+                lead(__tokens, 1) OVER address_order AS __lead_1_tokens,
+                lead(unique_id, 2) OVER address_order AS __lead_2_unique_id,
+                lead(__tokens, 2) OVER address_order AS __lead_2_tokens,
+                lead(unique_id, 3) OVER address_order AS __lead_3_unique_id,
+                lead(__tokens, 3) OVER address_order AS __lead_3_tokens
+            FROM tokenised_addresses
+            WINDOW address_order AS (
+                ORDER BY
+                    reverse(clean_full_address),
+                    CAST(unique_id AS VARCHAR),
+                    ukam_address_id
+            )
+        ),
+        suffix_lengths AS (
+            SELECT
+                ukam_address_id,
+                __tokens,
+                {", ".join(suffix_length_expressions)}
+            FROM neighbouring_addresses
+        ),
+        maximum_suffix_lengths AS (
+            SELECT
+                ukam_address_id,
+                __tokens,
+                greatest(
+                    __lag_1_common_suffix_length,
+                    __lag_2_common_suffix_length,
+                    __lag_3_common_suffix_length,
+                    __lead_1_common_suffix_length,
+                    __lead_2_common_suffix_length,
+                    __lead_3_common_suffix_length
+                ) AS __max_common_suffix_length
+            FROM suffix_lengths
+        )
+        SELECT
+            ukam_address_id,
+            CASE
+                WHEN COALESCE(__max_common_suffix_length, 0) > 0
+                    THEN COALESCE(
+                        list_slice(
+                            __tokens,
+                            1,
+                            len(__tokens) - __max_common_suffix_length
+                        ),
+                        []::VARCHAR[]
+                    )
+                ELSE []::VARCHAR[]
+            END::VARCHAR[] AS distinguishing_adj_start_tokens,
+            CASE
+                WHEN COALESCE(__max_common_suffix_length, 0) > 0
+                    THEN COALESCE(
+                        list_slice(
+                            __tokens,
+                            len(__tokens) - __max_common_suffix_length + 1,
+                            len(__tokens)
+                        ),
+                        []::VARCHAR[]
+                    )
+                ELSE COALESCE(__tokens, []::VARCHAR[])
+            END::VARCHAR[] AS common_adj_start_tokens
+        FROM maximum_suffix_lengths
+        """
+    )
+
+
+def test_parse_out_numbers_excludes_road_references():
+    with duckdb.connect() as connection:
+        source = connection.sql("""
+            SELECT *, clean_full_address AS original_address FROM (VALUES
+                ('FICTIONAL TEST CROFT A96T C110S', NULL, []::VARCHAR[]),
+                ('FICTIONAL TEST HOUSE A90T FICTIONAL TEST ROAD', NULL, []),
+                ('FICTIONAL TEST HOUSE A 952 TO B 9001', NULL, []),
+                ('FICTIONAL TEST FARM U36S B 992 TO A 947', NULL, []),
+                ('12 FICTIONAL TEST ROAD A96T C110S', NULL, ['12']),
+                ('12A FICTIONAL TEST ROAD B9001', NULL, ['12A']),
+                ('1-3 FICTIONAL TEST ROAD C110S', NULL, ['1-3']),
+                ('UNIT A12 7 FICTIONAL TEST ROAD A96T', NULL, ['A12', '7']),
+                ('FLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
+                ('FFLAT B12 8 FICTIONAL TEST ROAD C110S', NULL, ['B12', '8']),
+                ('FLAT A 12 8 FICTIONAL TEST ROAD A 952', NULL, ['12', '8']),
+                ('UNIT C4 FICTIONAL TEST ROAD A90T', NULL, ['C4']),
+                ('PLOT U123A 6 FICTIONAL TEST ROAD C110S', NULL, ['U123A', '6']),
+                ('FLAT 2 18 FICTIONAL TEST ROAD A90', '2', ['18']),
+                ('A96T C110S 42 7 FICTIONAL TEST ROAD', NULL, ['42', '7']),
+                ('FICTIONAL TEST ROAD D12 X24', NULL, ['D12', 'X24']),
+                ('FICTIONAL TEST COTTAGE', NULL, []),
+                (NULL, NULL, NULL),
+                ('UNIT A12 UNIT B34 7 FICTIONAL TEST ROAD', NULL, ['A12', 'B34', '7']),
+                ('1 FICTIONAL TEST ROAD B12', NULL, ['1']),
+                ('12 A FICTIONAL TEST ROAD', NULL, ['12'])
+            ) AS source(clean_full_address, flat_letter, expected_numeric_tokens)
+        """)
+        result = _run_single_stage(_parse_out_numbers, source, connection)
+        assert (
+            result.filter("""
+            numeric_tokens IS DISTINCT FROM expected_numeric_tokens
+            OR clean_full_address IS DISTINCT FROM original_address
+        """).fetchall()
+            == []
+        )
+        assert result.count("*").fetchall()[0][0] == 21
+        assert "__numeric_token_address" not in result.columns
+
+
+def test_separate_unusual_tokens_preserves_source_order_for_frequency_ties():
+    connection = duckdb.connect()
+    input_relation = connection.sql("""
+        SELECT [
+            {'tok': 'CLEEVE', 'rel_freq': 5e-5},
+            {'tok': 'ALCESTER', 'rel_freq': 5e-5},
+            {'tok': 'BENHOLMS', 'rel_freq': 5e-8},
+            {'tok': 'TILLYDRON', 'rel_freq': 5e-8}
+        ] AS token_rel_freq_arr
+    """)
+
+    result = next(
+        iter(
+            _run_single_stage(
+                _separate_unusual_tokens,
+                input_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
+
+    assert result[-2:] == (
+        ["CLEEVE", "ALCESTER"],
+        ["BENHOLMS", "TILLYDRON"],
+    )
 
 
 def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
@@ -30,7 +259,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
             (3, 'B1', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'preserved-c'),
             (4, 'B2', 'NEW STATION RAINBOW LANE TAUNTON', 'preserved-d'),
             (5, 'C1', '9 SOLO ROAD YORK', 'preserved-e')
-        ) AS t(__ukam_row_id, unique_id, clean_full_address, source_marker)
+        ) AS t(ukam_address_id, unique_id, clean_full_address, source_marker)
         """
     )
 
@@ -39,7 +268,7 @@ def test_separate_distinguishing_tokens_uses_valid_local_neighbours():
         input_relation,
         connection,
     )
-    assert result.columns.count("__ukam_row_id") == 1
+    assert result.columns.count("ukam_address_id") == 1
     actual = {
         unique_id: (distinguishing, common, source_marker)
         for unique_id, distinguishing, common, source_marker in result.project(
@@ -123,6 +352,250 @@ def test_prepare_data_derives_distinguishing_tokens_across_cleaning_chunks(
     assert all(
         common == ["1", "HIGH", "STREET", "CAMDEN", "LONDON"] for _, _, common in rows
     )
+    assert "clean_full_address_tokens" in result.columns
+
+
+def test_raw_canonical_preparation_preserves_distinguishing_features():
+    connection = duckdb.connect()
+    canonical = connection.sql("""
+        SELECT * FROM (VALUES
+            ('flat', 'FLAT A 1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('house', '1 HIGH STREET CAMDEN LONDON', 'N1 1AA'),
+            ('old', 'OLD STATION HOUSE RAINBOW LANE TAUNTON', 'TA1 1AA'),
+            ('new', 'NEW RAINBOW LANE TAUNTON', 'TA1 1AA')
+        ) AS t(unique_id, address_concat, postcode)
+    """)
+
+    prepared = prepare_data_for_matching(
+        canonical,
+        con=connection,
+        num_of_chunks=2,
+        derive_distinguishing_wrt_adjacent_records=True,
+        dataset_role="canonical",
+        show_progress=False,
+    )
+
+    assert set(DISTINGUISHING_FEATURE_COLUMNS) <= set(prepared.columns)
+    rows = {
+        unique_id: (distinguishing, common, structural, lexical, parts)
+        for unique_id, distinguishing, common, structural, lexical, parts in (
+            prepared.project(
+                "unique_id, " + ", ".join(DISTINGUISHING_FEATURE_COLUMNS)
+            ).fetchall()
+        )
+    }
+    assert rows == {
+        "flat": (
+            ["FLAT", "A"],
+            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
+            ["FLAT", "A"],
+            [],
+            [{"token": "FLAT", "is_lexical": False}, {"token": "A", "is_lexical": False}],
+        ),
+        "house": (
+            [],
+            ["1", "HIGH", "STREET", "CAMDEN", "LONDON"],
+            [],
+            [],
+            [],
+        ),
+        "old": (
+            ["OLD", "STATION", "HOUSE"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            [],
+            ["OLD", "STATION", "HOUSE"],
+            [
+                {"token": token, "is_lexical": True}
+                for token in ("OLD", "STATION", "HOUSE")
+            ],
+        ),
+        "new": (
+            ["NEW"],
+            ["RAINBOW", "LANE", "TAUNTON"],
+            [],
+            ["NEW"],
+            [{"token": "NEW", "is_lexical": True}],
+        ),
+    }
+
+
+def test_separate_distinguishing_tokens_matches_legacy_for_duplicate_ids():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT
+            *,
+            string_split(clean_full_address, ' ')::VARCHAR[]
+                AS clean_full_address_tokens
+        FROM (VALUES
+            (1, 'A', '1 ALPHA HIGH STREET LONDON'),
+            (2, 'A', '2 ALPHA HIGH STREET LONDON'),
+            (3, 'A', '3 ALPHA HIGH STREET LONDON'),
+            (4, 'B', '4 ALPHA HIGH STREET LONDON'),
+            (5, 'C', 'SAME ROAD'),
+            (6, 'D', 'SAME ROAD'),
+            (7, 'E', 'ORANGE'),
+            (8, 'F', 'PURPLE')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = (
+        _run_adjacent_stage(
+            input_relation,
+            connection,
+            use_precomputed_tokens=True,
+        )
+        .project(
+            """
+        ukam_address_id,
+        distinguishing_adj_start_tokens,
+        common_adj_start_tokens
+        """
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
+    expected = (
+        _run_legacy_adjacent_query(connection.sql(input_relation.sql_query()), connection)
+        .project(
+            """
+        ukam_address_id,
+        distinguishing_adj_start_tokens,
+        common_adj_start_tokens
+        """
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
+
+    assert actual == expected
+    assert actual[:4] == [
+        (1, ["1"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (2, ["2"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (3, ["3"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+        (4, ["4"], ["ALPHA", "HIGH", "STREET", "LONDON"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_handles_boundary_and_no_common_suffix():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'A', 'ORANGE'),
+            (2, 'B', 'PURPLE')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            input_relation,
+            connection,
+        )
+        .project(
+            "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
+
+    assert actual == [
+        (1, [], ["ORANGE"]),
+        (2, [], ["PURPLE"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_handles_whole_shared_address():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'A', 'SAME ROAD'),
+            (2, 'B', 'SAME ROAD')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    actual = (
+        _run_single_stage(
+            _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+            input_relation,
+            connection,
+        )
+        .project(
+            "ukam_address_id, distinguishing_adj_start_tokens, common_adj_start_tokens"
+        )
+        .order("ukam_address_id")
+        .fetchall()
+    )
+
+    assert actual == [
+        (1, [], ["SAME", "ROAD"]),
+        (2, [], ["SAME", "ROAD"]),
+    ]
+
+
+def test_separate_distinguishing_tokens_can_choose_best_left_or_right_neighbour():
+    connection = duckdb.connect()
+    left_input = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'LEFT', '1 COMMON ROAD LONDON'),
+            (2, 'TARGET', '2 COMMON ROAD LONDON'),
+            (3, 'RIGHT', '3 ZZZ LONDON')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+    right_input = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (1, 'LEFT', '1 AAA LONDON'),
+            (2, 'TARGET', '2 COMMON ROAD LONDON'),
+            (3, 'RIGHT', '3 COMMON ROAD LONDON')
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
+        """
+    )
+
+    left_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                left_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
+    right_target = next(
+        iter(
+            _run_single_stage(
+                _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,
+                right_input,
+                connection,
+            )
+            .filter("ukam_address_id = 2")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
+
+    assert left_target == (
+        ["2"],
+        ["COMMON", "ROAD", "LONDON"],
+    )
+    assert right_target == (
+        ["2"],
+        ["COMMON", "ROAD", "LONDON"],
+    )
 
 
 def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
@@ -134,7 +607,7 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
             (2, 'U3', 'ALPHA RAINBOW LANE TAUNTON'),
             (3, 'U3', 'ALPHB RAINBOW LANE TAUNTON'),
             (4, 'U3', 'ALPHC RAINBOW LANE TAUNTON')
-        ) AS t(__ukam_row_id, unique_id, clean_full_address)
+        ) AS t(ukam_address_id, unique_id, clean_full_address)
         """
     )
 
@@ -143,10 +616,14 @@ def test_separate_distinguishing_tokens_skips_same_id_to_offset_three():
         input_relation,
         connection,
     )
-    target = (
-        result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
-        .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
-        .fetchone()
+    target = next(
+        iter(
+            result.filter("clean_full_address = 'ALPHC RAINBOW LANE TAUNTON'")
+            .project("distinguishing_adj_start_tokens, common_adj_start_tokens")
+            .limit(1)
+            .fetchall()
+        ),
+        None,
     )
 
     assert target == (["ALPHC", "RAINBOW"], ["LANE", "TAUNTON"])
@@ -168,6 +645,7 @@ def test_parse_out_flat_positional():
     test_cases = [
         ("11A SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("FLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
+        ("FFLAT A 11 SPITFIRE COURT BIRMINGHAM", None, "A", None),
         ("BASEMENT FLAT A 11 SPITFIRE COURT BIRMINGHAM", "BASEMENT", "A", None),
         (
             "BASEMENT FLAT 11 243 SPITFIRE COURT BIRMINGHAM",
@@ -177,22 +655,27 @@ def test_parse_out_flat_positional():
         ),
         ("GARDEN FLAT 11 243 SPITFIRE COURT BIRMINGHAM", "GARDEN", None, "11"),
         ("TOP FLOOR FLAT 12A HIGH STREET", "TOP FLOOR", "A", "12"),
+        ("ATTIC FLAT 12 HIGH STREET", "TOP FLOOR", None, None),
+        ("FLAT ATTIC FLOOR 12 HIGH STREET", "TOP FLOOR", None, None),
         ("SECOND FLOOR FLAT 12 A HIGH STREET", "SECOND FLOOR", "A", "12"),
         ("GROUND FLOOR FLAT B 25 MAIN ROAD", "GROUND FLOOR", "B", None),
         ("FIRST FLOOR 15B LONDON ROAD", "FIRST FLOOR", "B", None),
         ("FLAT C MY HOUSE 120 MY ROAD", None, "C", None),
-        ("FLAT 2 733 GIPSY HILL", None, None, "2"),
+        ("FLAT 2 733 FICTIONAL ROAD", None, None, "2"),
+        ("FFLAT 2 733 FICTIONAL ROAD", None, None, "2"),
         (
-            "2 7 GIPSY HILL",
+            "2 7 FICTIONAL ROAD",
             None,
             None,
             None,
         ),  # Ambiguous - no explicit FLAT indicator
-        ("773 GIPSY HILL", None, None, None),
+        ("773 FICTIONAL ROAD", None, None, None),
         ("FLAT C SECOND FLOOR 27 OK ROAD", "SECOND FLOOR", "C", None),
         ("FLAT A GROUND FLOOR 18 RAVENSWOOD STREET", "GROUND FLOOR", "A", None),
         ("FLAT 3/2 41 DUMMY ROAD", None, None, "2"),
+        ("FFLAT 3/2 41 DUMMY ROAD", None, None, "2"),
         ("FLAT THE CROWN TESTING ROAD", None, None, None),
+        ("FFLAT THE CROWN TESTING ROAD", None, None, None),
         (
             "FLAT 12A HIGH STREET",
             None,
@@ -205,6 +688,7 @@ def test_parse_out_flat_positional():
             "B",
             "2",
         ),
+        ("SNOWDON HALL FLAT 4", None, None, "4"),
         (
             "15B LONDON ROAD",
             None,
@@ -223,12 +707,14 @@ def test_parse_out_flat_positional():
             "A",
             None,
         ),
-        # Only one number - indicates that it's a house number, not flat number
+        # Floor-first single numbers remain ambiguous.
         ("UPPER FLOOR FLAT 120 TEST", "UPPER FLOOR", None, None),
-        # LOWER GROUND variants (canonicalised to GROUND FLOOR)
-        ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
-        ("LOWER GROUND FLAT 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
-        ("LOWER GROUND 35 ATOP THE HILL LONDON", "GROUND FLOOR", None, None),
+        ("FIRST FLOOR FFLAT 120 TEST", "FIRST FLOOR", None, None),
+        ("GROUND FLAT 4 HIGH STREET", None, None, None),
+        ("FLAT LOWER GROUND FLOOR 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("FLAT LOWER GROUND 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("LOWER GROUND FLAT 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
+        ("LOWER GROUND 35 ATOP THE HILL LONDON", "BASEMENT", None, None),
         ("LOWER FLOOR FLAT 10 TEST ROAD", "LOWER FLOOR", None, None),
         # UPPER GROUND variant
         ("UPPER GROUND FLAT 20 EXAMPLE STREET", "UPPER GROUND", None, None),
@@ -278,9 +764,7 @@ def test_parse_out_flat_positional():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(
-        _parse_out_flat_position_and_letter, input_relation, connection
-    )
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     positional_idx = columns.index("flat_positional")
@@ -320,6 +804,27 @@ def test_parse_out_flat_positional():
             f"but got '{row[indicator_idx]}'"
         )
 
+    comma_separated_flat_relation = connection.sql(
+        "SELECT "
+        + _sql_literal("FLAT 6 HIGH STREET")
+        + " AS clean_full_address, "
+        + _sql_literal("FLAT, 6 HIGH STREET")
+        + " AS original_address_concat"
+    )
+    comma_separated_flat_row = next(
+        iter(
+            _run_single_stage(
+                _parse_out_sub_premise,
+                comma_separated_flat_relation,
+                connection,
+            )
+            .limit(1)
+            .fetchall()
+        ),
+        None,
+    )
+    assert comma_separated_flat_row[number_idx] is None
+
 
 def test_parse_out_sub_premise_location():
     connection = duckdb.connect()
@@ -330,22 +835,31 @@ def test_parse_out_sub_premise_location():
         ("FLAT SECOND FLOOR CENTRE 5 MORESBY ROAD LONDON", "CENTRE"),
         ("FLAT FIRST FLOOR FRONT 176 LOWER CLAPTON ROAD LONDON", "FRONT"),
         ("FLAT FIRST FLOOR REAR 176 LOWER CLAPTON ROAD LONDON", "REAR"),
+        ("MAISONETTE GROUND FIRST AND SECOND FLOOR REAR 18 HIGH ROAD", "REAR"),
+        ("FLAT 5 FIRST FLOOR MIDDLE 20 HIGH STREET", "CENTRE"),
+        ("MIDDLE FLAT 20 HIGH STREET", "CENTRE"),
+        ("FIRST FLOOR FLAT 20 MIDDLE STREET", None),
+        ("FLAT 5 FIRST FLOOR 20 FRONT STREET", None),
+        ("FFLAT RIGHT MAIN ROAD", "RIGHT"),
         (
             "MAISONETTE BASEMENT AND GROUND FLOOR RIGHT 46 LANSDOWNE DRIVE LONDON",
             "RIGHT",
         ),
         ("COMMERCIAL CENTRE 40 MARTELL ROAD", None),
         ("GROUND FLOOR FLAT 4 UFTON ROAD LONDON", None),
+        ("UNIT 4 REAR 42 TEST ROAD", "REAR"),
+        ("UNIT 4 LEFT 42 TEST ROAD", "LEFT"),
     ]
 
     input_relation = connection.sql(
-        "SELECT * FROM (VALUES "
+        "SELECT *, regexp_split_to_array(clean_full_address, '\\s+')::VARCHAR[] "
+        "AS clean_full_address_tokens FROM (VALUES "
         + ",".join(f"('{address}', '{address}')" for address, _expected in test_cases)
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
     pipeline = DuckDBPipeline(connection, input_relation)
-    pipeline.add_step(_parse_out_flat_position_and_letter())
+    pipeline.add_step(_parse_out_sub_premise())
     pipeline.add_step(_parse_out_sub_premise_location())
     result = pipeline.run(DebugOptions(pretty_print_sql=False))
 
@@ -357,6 +871,83 @@ def test_parse_out_sub_premise_location():
             f"Address '{address}' expected location '{expected_location}' "
             f"but got '{row[location_idx]}'"
         )
+
+
+def test_split_numeric_tokens_to_cols_extracts_scalars_once():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            (['1', '20A-22B', '20A-22B']::VARCHAR[]),
+            (['A5', '6', '7']::VARCHAR[]),
+            ([]::VARCHAR[]),
+            (NULL::VARCHAR[])
+        ) AS t(numeric_tokens)
+        """
+    )
+
+    result = (
+        _run_single_stage(
+            _split_numeric_tokens_to_cols,
+            input_relation,
+            connection,
+        )
+        .project("numeric_token_1, numeric_token_2, numeric_token_3")
+        .fetchall()
+    )
+
+    assert result == [
+        ("1", "20", "22"),
+        ("5", "6", "7"),
+        (None, None, None),
+        (None, None, None),
+    ]
+
+
+def test_derive_numeric_range_preserves_typed_flags_and_first_range():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT * FROM (VALUES
+            ('10-12', ['10-12']::VARCHAR[]),
+            ('12-10', ['12-10']::VARCHAR[]),
+            ('10-10', ['10-10']::VARCHAR[]),
+            ('10A-12B', ['10A-12B']::VARCHAR[]),
+            ('1-30', ['1-30']::VARCHAR[]),
+            ('REFERENCE 1-2', ['1-2']::VARCHAR[]),
+            ('30-40 50-60', ['30-40', '50-60']::VARCHAR[])
+        ) AS t(clean_full_address, numeric_tokens)
+        """
+    )
+
+    result = (
+        _run_single_stage(
+            _derive_numeric_range,
+            input_relation,
+            connection,
+        )
+        .project("numeric_range")
+        .fetchall()
+    )
+
+    assert result[0][0] == {
+        "raw": "10-12",
+        "lower": 10,
+        "upper": 12,
+        "width": 2,
+        "lower_suffix": None,
+        "upper_suffix": None,
+        "role": 1,
+        "flags": 0,
+        "lower_tf": None,
+    }
+    assert result[1][0]["flags"] == 1
+    assert result[2][0]["flags"] == 2
+    assert result[3][0]["flags"] == 4
+    assert result[4][0]["flags"] == 8
+    assert result[5][0]["role"] == 3
+    assert result[5][0]["flags"] == 16
+    assert result[6][0]["raw"] == "30-40"
 
 
 def test_remove_duplicate_end_tokens():
@@ -474,7 +1065,7 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
             show_progress="off",
         )
 
-    assert cleaned.count("*").fetchone()[0] == 1
+    assert cleaned.count("*").fetchall()[0][0] == 1
     stage_prefixes = ("Cleaning and preprocessing", "Applying term frequencies")
     assert not any(
         record.getMessage().startswith(stage_prefix)
@@ -485,6 +1076,29 @@ def test_prepare_data_progress_off_suppresses_stage_status_logs(caplog):
         for record in caplog.records
         for stage_prefix in stage_prefixes
     )
+
+
+def test_parse_out_address_structure_premise_keeps_legacy_aliases():
+    connection = duckdb.connect()
+    input_relation = connection.sql(
+        """
+        SELECT 'PARKING SPACE 12 HIGH STREET' AS clean_full_address
+        """
+    )
+
+    stage = _parse_out_address_structure_premise()
+    result = _run_single_stage(
+        _parse_out_address_structure_premise,
+        input_relation,
+        connection,
+    )
+
+    assert stage.name == "parse_out_address_structure_premise"
+    assert result.project(
+        "address_structure_premise_type, address_structure_premise_id, "
+        "has_address_structure_premise, commercial_premise_type, "
+        "commercial_premise_id, has_commercial_premise"
+    ).fetchall() == [("PARKING SPACE", "12", True, "PARKING SPACE", "12", True)]
 
 
 def test_parse_out_business_unit():
@@ -535,7 +1149,7 @@ def test_parse_out_business_unit():
         + ") AS t(clean_full_address, original_address_concat)"
     )
 
-    result = _run_single_stage(_parse_out_business_unit, input_relation, connection)
+    result = _run_single_stage(_parse_out_sub_premise, input_relation, connection)
     rows = result.fetchall()
     columns = result.columns
     type_idx = columns.index("business_unit_type")
@@ -549,9 +1163,12 @@ def test_parse_out_business_unit():
             f"Address '{address}' expected type '{expected_type}' "
             f"but got '{row[type_idx]}'"
         )
-        assert row[id_idx] == expected_id, (
-            f"Address '{address}' expected id '{expected_id}' but got '{row[id_idx]}'"
+        id_error = "Address '{}' expected id '{}' but got '{}'".format(
+            address,
+            expected_id,
+            row[id_idx],
         )
+        assert row[id_idx] == expected_id, id_error
         assert row[indicator_idx] == expected_indicator, (
             f"Address '{address}' expected has_business_unit={expected_indicator} "
             f"but got {row[indicator_idx]}"

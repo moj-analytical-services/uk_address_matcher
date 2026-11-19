@@ -37,9 +37,11 @@ def generate_test_data(
             "original_address_concat_r": messy_address,
             "clean_full_address_l": canonical_address,
             "clean_full_address_r": messy_address,
+            "clean_full_address_tokens_l": canonical_address.split(),
+            "clean_full_address_tokens_r": messy_address.split(),
             "common_end_token": common_end_token,
-            "postcode_l": "W1A",
-            "postcode_r": "W1A",
+            "postcode_l": "W1A 1AA",
+            "postcode_r": "W1A 1AA",
             "ukam_address_id_l": i,
             "ukam_address_id_r": 1,
         }
@@ -80,6 +82,61 @@ def test_relation_marker_reranker_prefers_target_over_anchor_only_candidate():
     assert scores["ordinary"] == 11.0
 
 
+def test_distinguishing_reranker_joins_cached_tokens_from_cleaned_inputs():
+    con = duckdb.connect()
+    try:
+        predictions = con.sql("""
+            SELECT * FROM (
+                VALUES (
+                    'candidate', 'source', 101::BIGINT, 1::BIGINT,
+                    0.0::DOUBLE, 0.5::DOUBLE,
+                    '10 X Y Z', '10 X Y Z', 'W1A 1AA', 'W1A 1AA'
+                )
+            ) AS predictions(
+                unique_id_l,
+                unique_id_r,
+                ukam_address_id_l,
+                ukam_address_id_r,
+                match_weight,
+                match_probability,
+                clean_full_address_l,
+                clean_full_address_r,
+                postcode_l,
+                postcode_r
+            )
+        """)
+        canonical = con.sql(
+            """
+            SELECT
+                101::BIGINT AS ukam_address_id,
+                ['10', 'X', 'Y', 'Z']::VARCHAR[] AS clean_full_address_tokens
+            """
+        )
+        messy = con.sql(
+            """
+            SELECT
+                1::BIGINT AS ukam_address_id,
+                ['10', 'X', 'Y', 'Z']::VARCHAR[] AS clean_full_address_tokens
+            """
+        )
+
+        result = improve_predictions_using_distinguishing_tokens(
+            df_predict=predictions,
+            con=con,
+            match_weight_threshold=-100,
+            use_bigrams=False,
+            df_addresses_to_match=messy,
+            df_addresses_to_search_within=canonical,
+        )
+
+        overlap = con.sql(
+            f"SELECT overlapping_tokens_this_l_and_r FROM ({result.sql_query()})"
+        ).fetchall()[0][0]
+        assert dict(overlap)["10"] == 1
+    finally:
+        con.close()
+
+
 def run_assertions(
     messy_address: str,
     canonical_data: list[dict],
@@ -106,6 +163,8 @@ def run_assertions(
                 original_address_concat_r varchar,
                 clean_full_address_l varchar,
                 clean_full_address_r varchar,
+                    clean_full_address_tokens_l varchar[],
+                    clean_full_address_tokens_r varchar[],
                 common_end_token varchar,
                 postcode_l varchar,
                 postcode_r varchar,
@@ -113,7 +172,7 @@ def run_assertions(
                 ukam_address_id_r integer
             )
             """
-        )
+        ).fetchall()
         rows = [
             (
                 row["match_weight"],
@@ -126,6 +185,8 @@ def run_assertions(
                 row["original_address_concat_r"],
                 row["clean_full_address_l"],
                 row["clean_full_address_r"],
+                row["clean_full_address_tokens_l"],
+                row["clean_full_address_tokens_r"],
                 row["common_end_token"],
                 row["postcode_l"],
                 row["postcode_r"],
@@ -137,7 +198,7 @@ def run_assertions(
         con.executemany(
             """
             insert into df values (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             rows,
@@ -184,7 +245,7 @@ def run_assertions(
             from df_improved
             where unique_id_l = '{unique_id_l}'
             """
-            row = con.sql(sql).fetchone()
+            row = next(iter(con.sql(sql).limit(1).fetchall()), None)
 
             # Unpack the row into five variables
             (

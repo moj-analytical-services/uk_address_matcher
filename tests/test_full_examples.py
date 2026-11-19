@@ -27,6 +27,11 @@ def test_example_matching():
     assert result.returncode == 0, (
         f"Script failed!\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
+    matched_records_output = result.stdout.split(
+        "=== First 10 matched records ===", maxsplit=1
+    )[1].split("=== Match metrics ===", maxsplit=1)[0]
+    assert "postcode" in matched_records_output
+    assert "postcode_canonical" in matched_records_output
 
 
 def test_example_analysis_outputs_render_on_dummy_data():
