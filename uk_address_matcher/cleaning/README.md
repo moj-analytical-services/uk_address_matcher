@@ -61,3 +61,10 @@ identifier. Identities, business-unit fields, flags and floor-prefix lists are
 recomputed on load. `sub_premise_building_number` records a unique building
 number in the remaining address, rejecting nested descriptors and multiple
 numbers; older bundles use null for new explicit fields until rebuilt.
+
+| Input | Parsed keys (`premise_keys`) |
+| --- | --- |
+| `BUILDING B UNIT 4` | `BUILDING: B`, `UNIT: 4` |
+| `UNIT 4, BUILDING B, EXAMPLE ROAD` | `BUILDING: B`, `UNIT: 4` |
+| `BUILDING C UNIT 4` | `BUILDING: C`, `UNIT: 4` |
+| `BLOCK B UNIT 4` | `BLOCK: B`, `UNIT: 4` |
