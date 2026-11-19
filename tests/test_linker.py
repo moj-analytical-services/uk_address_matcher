@@ -354,6 +354,7 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
         include_full_postcode_block=True,
         include_outside_postcode_block=False,
         retain_intermediate_calculation_columns=True,
+        include_splink_salt=True,
     )
     predictions = linker.inference.predict(threshold_match_weight=-100)
     prediction_rows = predictions.as_pandas_dataframe()
@@ -372,6 +373,11 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
             )
 
     assert actual_weights == pytest.approx(expected_weights)
+
+    linker.training.estimate_u_using_random_sampling(
+        max_pairs=100_001,
+        seed=42,
+    )
 
 
 def test_address_matcher_derives_distinguishing_tokens_only_for_canonical(duck_con):

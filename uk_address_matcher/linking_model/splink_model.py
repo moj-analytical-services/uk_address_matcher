@@ -126,6 +126,7 @@ def _get_linker(
     precomputed_numeric_tf_table: DuckDBPyRelation | None = None,
     retain_intermediate_calculation_columns=False,
     retain_matching_columns=True,
+    include_splink_salt: bool = False,
     settings: SettingsCreator | None = None,
 ) -> Linker:
     # Check if either input dataset contains a source_dataset column
@@ -347,14 +348,15 @@ def _get_linker(
         if column != "original_address_concat"
     ]
     select_expr = ", ".join(cols_to_select)
+    salt_column_sql = ", random() AS __splink_salt" if include_splink_salt else ""
     messy_subquery = df_addresses_to_match_fix.sql_query()
     canonical_subquery = df_addresses_to_search_within_fix.sql_query()
 
     sql = f"""
-    select {select_expr}, 'm_' as source_dataset
+    select {select_expr}, 'm_' as source_dataset{salt_column_sql}
     from ({messy_subquery}) as df_addresses_to_match_fix
     UNION ALL
-    select {select_expr}, 'c_' as source_dataset
+    select {select_expr}, 'c_' as source_dataset{salt_column_sql}
     from ({canonical_subquery}) as df_addresses_to_search_within_fix
 
     """
