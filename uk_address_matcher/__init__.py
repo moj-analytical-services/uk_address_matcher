@@ -14,6 +14,7 @@ from uk_address_matcher.linking_model.address_record import AddressRecord
 from uk_address_matcher.linking_model.matching import (
     ExactMatchStage,
     PeeledAddressStage,
+    PostcodeFreeMatchStage,
     SplinkStage,
     UniqueTrigramStage,
 )
@@ -33,5 +34,6 @@ __all__ = [
     "ExactMatchStage",
     "UniqueTrigramStage",
     "PeeledAddressStage",
+    "PostcodeFreeMatchStage",
     "SplinkStage",
 ]
