@@ -115,22 +115,32 @@ def _nominations(prefix: str) -> list[CTEStep]:
             "pc_inputs",
             f"""
             SELECT {_recovery_address_columns("qid")}, signature_unique_hits_map AS hits
-            FROM {{pc_messy}}
+            FROM {{pc_messy}} m
+            ANTI JOIN (
+                SELECT ukam_address_id AS strong_id FROM {{pc_stock}}
+                WHERE match_weight>=25
+            ) s ON m.ukam_address_id=s.strong_id
             WHERE nullif(replace(postcode,' ',''),'') IS NOT NULL
               AND nullif(clean_full_address,'') IS NOT NULL
               AND nullif(road_1_norm,'') IS NOT NULL
             """,
         ),
         CTEStep(
+            "pc_requested_road_support",
+            """
+            SELECT c.pc,c.road,min(c.uprn)<>max(c.uprn) AS multiple
+            FROM {pc_canonical} c SEMI JOIN (
+                SELECT left(pc,-3) AS outward,road FROM {pc_inputs}
+            ) requests USING (outward,road)
+            WHERE c.uprn IS NOT NULL
+            GROUP BY c.pc,c.road
+            """,
+        ),
+        CTEStep(
             "pc_eligible",
             """
-            SELECT q.*
-            FROM {pc_inputs} q ANTI JOIN (
-                SELECT c.pc,c.road FROM {pc_canonical} c
-                SEMI JOIN {pc_inputs} i USING (pc,road)
-                WHERE c.uprn IS NOT NULL
-                GROUP BY c.pc,c.road
-            ) p USING (pc,road)
+            SELECT q.* FROM {pc_inputs} q
+            ANTI JOIN {pc_requested_road_support} p USING (pc,road)
         """,
         ),
         CTEStep(
@@ -164,8 +174,8 @@ def _nominations(prefix: str) -> list[CTEStep]:
         CTEStep(
             "pc_street_inputs",
             """
-        SELECT * FROM {pc_evidence}
-        WHERE NOT full_identity AND weak IS TRUE AND len(nums)>0
+        SELECT *, left(pc,-3) AS outward FROM {pc_evidence}
+        WHERE length(pc)>3 AND NOT full_identity AND weak IS TRUE AND len(nums)>0
           AND (stock_uprn IS NULL OR stock_weight<25)
         """,
         ),
@@ -182,19 +192,13 @@ def _nominations(prefix: str) -> list[CTEStep]:
         CTEStep(
             "pc_road_aliases",
             """
-        -- Pool both routes' alias inputs without changing their ranking sets.
-        WITH candidates AS MATERIALIZED (
-            SELECT c.*
-            FROM {pc_canonical} c
-            LEFT JOIN (
-                SELECT DISTINCT road,nums, true AS matched FROM {pc_street_inputs}
-            ) s ON c.road=s.road AND c.nums=s.nums
-            LEFT JOIN (
-                SELECT DISTINCT outward,nums, true AS matched FROM {pc_road_seed}
-            ) r ON c.outward=r.outward AND c.nums=r.nums
-            WHERE nullif(c.road,'') IS NOT NULL AND (s.matched OR r.matched)
-        )
-        SELECT * FROM candidates
+        SELECT c.*, pc_compact(c.road) AS road_key
+        FROM {pc_canonical} c SEMI JOIN (
+            SELECT outward,nums FROM {pc_street_inputs}
+            UNION
+            SELECT outward,nums FROM {pc_road_seed}
+        ) requested USING (outward,nums)
+        WHERE nullif(c.road,'') IS NOT NULL
         """,
         ),
         CTEStep(
@@ -207,14 +211,14 @@ def _nominations(prefix: str) -> list[CTEStep]:
                                        regexp_extract_all(c.address,'[A-Z]{{3,}}')))
                         -len(list_distinct(regexp_extract_all(q.road,'[A-Z]{{3,}}')))
                         AS context_count,
-                    {_PREMISE} AS conflict,c.pc<>q.pc AS different,
-                    c.outward=left(q.pc,-3) AS district
+                    {_PREMISE} AS conflict,c.pc,c.pc<>q.pc AS different
                 FROM {{pc_street_inputs}} q
-                JOIN {{pc_road_aliases}} c ON c.road=q.road AND c.nums=q.nums
+                JOIN {{pc_road_aliases}} c USING (outward,road,nums)
             ), street_uprns AS (
                 SELECT qid,uprn,first(alias_id ORDER BY sim DESC,alias_id) AS alias_id,
+                    first(pc ORDER BY sim DESC,alias_id) AS pc,
                     max(sim) AS sim,max(context_count) AS context_count,
-                    bool_and(different) AS different,bool_or(district) AS district
+                    bool_and(different) AS different
                 FROM street_scores GROUP BY qid,uprn HAVING NOT bool_and(conflict)
             ), street_ranked AS (
                 SELECT *,row_number() OVER w AS rn,lead(sim) OVER w AS runner
@@ -223,30 +227,27 @@ def _nominations(prefix: str) -> list[CTEStep]:
             ), street_eligible AS (
                 SELECT n.*,q.road FROM street_ranked n JOIN {{pc_street_inputs}} q
                     USING (qid)
-                WHERE rn=1 AND uprn IS DISTINCT FROM stock_uprn AND different AND district
+                WHERE rn=1 AND uprn IS DISTINCT FROM stock_uprn AND different
                   AND sim>=.89 AND sim>=coalesce(stock_text,0)+.05 AND context_count>=1
                   AND (runner IS NULL OR sim-runner>=.012)
             ), unique_postcodes AS (
-                SELECT c.uprn,min(c.pc) AS pc
-                FROM {{pc_canonical}} c SEMI JOIN street_eligible n USING (uprn)
+                SELECT c.uprn FROM {{pc_canonical}} c
+                SEMI JOIN street_eligible USING (uprn)
                 GROUP BY c.uprn HAVING min(c.pc)=max(c.pc)
-            ), postcode_keys AS (
-                SELECT n.*,u.pc
-                FROM street_eligible n JOIN unique_postcodes u USING (uprn)
-            ), supported_roads AS (
-                SELECT c.pc,c.road FROM {{pc_canonical}} c
-                SEMI JOIN postcode_keys p USING (pc,road)
-                GROUP BY c.pc,c.road HAVING min(c.uprn)<>max(c.uprn)
             )
             SELECT qid,uprn,alias_id,NULL::DOUBLE AS w,'catalogue_street_number' AS route
-            FROM postcode_keys SEMI JOIN supported_roads USING (pc,road)
+            FROM street_eligible SEMI JOIN unique_postcodes USING (uprn)
+            SEMI JOIN (
+                SELECT pc,road FROM {{pc_requested_road_support}} WHERE multiple
+            ) supported_roads USING (pc,road)
         """,
         ),
         CTEStep("pc_guarded_shortlist", shortlist_sql),
         CTEStep(
             "pc_road_inputs",
             """
-            SELECT q.*, pc_context(q.address,q.road) AS road_ctx
+            SELECT q.*, pc_context(q.address,q.road) AS road_ctx,
+                pc_compact(q.road) AS road_key
             FROM {pc_road_seed} q
             ANTI JOIN {pc_catalogue} USING (qid)
             ANTI JOIN {pc_guarded_shortlist} USING (qid)
@@ -259,27 +260,33 @@ def _nominations(prefix: str) -> list[CTEStep]:
                 SELECT q.qid,c.alias_id,c.uprn,
                     q.address AS q_address,c.address AS c_address,
                     q.road_ctx AS q_context,q.road AS q_road,c.road AS c_road,
+                    q.road_key AS q_key,c.road_key AS c_key,
                     q.stock_uprn,q.stock_text
                 FROM {{pc_road_inputs}} q JOIN {{pc_road_aliases}} c USING (outward,nums)
                 WHERE c.pc<>q.pc AND NOT {_PREMISE}
             ), keyed_pairs AS (
                 SELECT qid,alias_id,uprn,q_address,c_address,q_context,c_road,
-                    stock_uprn,stock_text,
-                    levenshtein(pc_compact(q_road),pc_compact(c_road)) AS road_edits,
-                    (pc_missing_type(q_road,c_road)
-                        OR pc_missing_type(c_road,q_road)) AS matches_stem
+                    stock_uprn,stock_text,q_key,c_key,
+                    CASE WHEN abs(length(q_key)-length(c_key))<=1
+                        THEN levenshtein(q_key,c_key) END AS spelling_edits,
+                    CASE
+                        WHEN starts_with(c_key,q_key) THEN pc_missing_type(q_road,c_road)
+                        WHEN starts_with(q_key,c_key) THEN pc_missing_type(c_road,q_road)
+                        ELSE false
+                    END AS matches_stem
                 FROM coarse_pairs
             ), candidates AS MATERIALIZED (
-                SELECT * FROM keyed_pairs WHERE road_edits<=1 OR matches_stem
+                SELECT * FROM keyed_pairs WHERE spelling_edits<=1 OR matches_stem
             ), pairs AS (
-                SELECT qid,alias_id,uprn,route,road_edits,
+                SELECT qid,alias_id,uprn,route,
+                    coalesce(spelling_edits,levenshtein(q_key,c_key)) AS road_edits,
                     len(list_intersect(q_context,pc_context(c_address,c_road)))
                         AS context_count,
                     jaro_winkler_similarity(q_address,c_address) AS sim,
                     stock_uprn,stock_text
                 FROM candidates
                 CROSS JOIN (VALUES ('spelling'), ('stem')) routes(route)
-                WHERE (route='spelling' AND road_edits<=1)
+                WHERE (route='spelling' AND spelling_edits<=1)
                    OR (route='stem' AND matches_stem)
             ), one_alias AS (
                 SELECT * FROM pairs WHERE context_count>=1
