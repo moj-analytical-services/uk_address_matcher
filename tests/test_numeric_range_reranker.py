@@ -461,7 +461,8 @@ def test_numeric_window_metadata_is_derived_only_from_supported_tokens():
 
     assert rows[0][1]["lower"] == 20
     assert rows[0][1]["upper"] == 23
-    assert rows[1][1] is None
+    assert rows[1][1]["lower"] == 20
+    assert rows[1][1]["upper"] == 23
     assert rows[2][1]["lower"] == 20
     assert rows[2][1]["upper"] == 23
     con.close()

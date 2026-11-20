@@ -365,7 +365,7 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
     tags=["token_extraction", "sub_premise_parsing"],
 )
 def _parse_out_sub_premise():
-    """Derive flat and business-unit fields from one explicit descriptor match."""
+    """Derive sub-premise fields; map lower ground to basement and attic to top floor."""
 
     # Floor positions: BASEMENT, GARDEN, and BLOCK are standalone;
     # others are paired with FLOOR/GROUND.
@@ -376,7 +376,7 @@ def _parse_out_sub_premise():
         "SEVENTH EIGHTH NINTH TENTH TOP"
     ).split()
     # Build regex: standalone floors OR (prefix + FLOOR) OR
-    # (prefix + GROUND for LOWER/UPPER)
+    # lower/upper ground and attic variants
     # Also handle multi-floor patterns like "GROUND FIRST SECOND AND THIRD FLOORS"
     # or comma-separated "FIRST, SECOND AND THIRD FLOORS"
     # Pattern handles: WORD, or WORD (space) or AND, followed by final floor + FLOORS
@@ -390,7 +390,7 @@ def _parse_out_sub_premise():
         + "|".join(
             standalone_floors
             + [f"{f} FLOOR" for f in floor_with_suffix]
-            + [f"{f} GROUND" for f in ["LOWER", "UPPER"]]
+            + [r"LOWER GROUND(?: FLOOR)?", "UPPER GROUND", r"ATTIC(?: FLOOR)?"]
         )
         + r"|"
         + multi_floor_pattern
@@ -406,6 +406,11 @@ def _parse_out_sub_premise():
         + rf")\s+(?:{flat_marker}|APARTMENT|MAISONETTE|PENTHOUSE)\b"
     )
     leading_bare_floor_position = rf"^\s*({numbered_floor_pattern})\s+\d"
+    leading_sub_premise_floor = (
+        rf"^\s*({'|'.join(floor_with_suffix[3:])})\s+"
+        rf"(?:BLOCK\s+[A-Z]\s+)?(?:{flat_marker}|APARTMENT|MAISONETTE|PENTHOUSE)"
+        r"\s+\d{1,5}[A-Z]?\b"
+    )
     # Core token patterns (RE2-compatible; avoid lookbehind)
     num_letter_anywhere = r"\b(\d{1,4})([A-Za-z])\b"  # e.g., 15B (anywhere)
     leading_num_letter = (
@@ -479,6 +484,8 @@ def _parse_out_sub_premise():
     """
     identifier_sql = rf"""
     SELECT * EXCLUDE (__sub_premise_match),
+        nullif(regexp_extract(__sub_premise_address, '{leading_sub_premise_floor}', 1),
+            '') AS __leading_sub_premise_floor,
         nullif(replace(regexp_replace(__sub_premise_match.descriptor, 'S$', ''),
             'FFLAT', 'FLAT'), '') AS __descriptor,
         CASE
@@ -530,8 +537,12 @@ def _parse_out_sub_premise():
             WHEN NULLIF(
                 regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
-            ) = 'LOWER GROUND'
-                THEN 'GROUND FLOOR'
+            ) IN ('LOWER GROUND', 'LOWER GROUND FLOOR')
+                THEN 'BASEMENT'
+            WHEN regexp_extract(
+                i.__sub_premise_address, '{floor_positions}', 1
+            ) IN ('ATTIC', 'ATTIC FLOOR')
+                THEN 'TOP FLOOR'
             WHEN NULLIF(
                 regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
@@ -556,6 +567,8 @@ def _parse_out_sub_premise():
                     ),
                     ' FLOOR'
                 )
+            WHEN __leading_sub_premise_floor IS NOT NULL
+                THEN __leading_sub_premise_floor || ' FLOOR'
             ELSE NULLIF(
                 regexp_extract(i.__sub_premise_address, '{floor_positions}', 1),
                 ''
@@ -1079,14 +1092,14 @@ def _floor_key_set_sql(floor_names: list[str]) -> str:
     )
     return f"""
     SELECT
-        * EXCLUDE (__floor_parse_address),
-        list_sort(list_distinct(list_transform(
+        * EXCLUDE (__floor_parse_address, __leading_sub_premise_floor),
+        list_sort(list_distinct(list_concat(list_transform(
             flatten(list_transform(
                 regexp_extract_all(__floor_parse_address, '{floor_list_pattern}', 0),
                 lambda segment: regexp_extract_all(segment, '{floor_token_pattern}', 0)
             )),
             lambda floor_name: {floor_normalisation}
-        ))) AS floor_keys,
+        ), [__leading_sub_premise_floor]))) AS floor_keys,
         len(floor_keys) > 0
             AND regexp_matches(__floor_parse_address, '{uncertain_pattern}')
             AS floor_scope_uncertain

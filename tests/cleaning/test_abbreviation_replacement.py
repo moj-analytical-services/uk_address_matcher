@@ -10,6 +10,7 @@ from uk_address_matcher.cleaning.steps import (
     _clean_address_string_first_pass,
     _normalise_abbreviations_and_units,
     _parse_out_address_structure_premise,
+    _parse_out_numbers,
     _parse_out_sub_premise,
     _split_letter_dash_letter,
 )
@@ -346,6 +347,44 @@ def test_first_pass_handles_fflat_marker(duck_con):
     ]
 
 
+def test_first_pass_normalises_numeric_range_separators(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('HAFOD FLAT 55 TO 58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT'),
+            ('FLAT 12A THRU 14B HIGH STREET'),
+            ('FLAT 20 THROUGH 22 HIGH STREET'),
+            ('FLAT 30 UP TO 32 HIGH STREET'),
+            ('FLAT 40 - 42 HIGH STREET'),
+            ('FLAT 23TO24 HIGH STREET'),
+            ('FLAT 23 TO24 HIGH STREET'),
+            ('FLAT 23TO 24 HIGH STREET'),
+            ('FLAT 23To 24 HIGH STREET'),
+            ('FICTIONAL ROAD A 952 TO B 9001')
+        ) AS t(clean_full_address)
+        """
+    )
+
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert [row[0] for row in pipeline.run().fetchall()] == [
+        "HAFOD FLAT 55-58 BLOCK D ANSARI COURT YNYSMAERDY LLANTRISANT",
+        "FLAT 12A-14B HIGH STREET",
+        "FLAT 20-22 HIGH STREET",
+        "FLAT 30-32 HIGH STREET",
+        "FLAT 40-42 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FLAT 23-24 HIGH STREET",
+        "FICTIONAL ROAD A 952 TO B 9001",
+    ]
+
+
 def test_post_abbreviation_split_preserves_names_and_numeric_ranges(duck_con):
     input_rel = duck_con.sql(
         """
@@ -417,6 +456,103 @@ def test_specific_phrase_aliases_expand_before_letter_dash_splitting(duck_con):
         "TURNERHALL SAMPLE CROFT",
         "H HEAD SAMPLE HOUSE",
     ]
+
+
+def test_flat_block_letter_and_generated_floor_are_parsed_consistently(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            (
+                'input',
+                'FLAT 7 2ND FL BLOCK E EXAMPLE UNIVERSITY CAMPUS SAMPLE TOWN'
+            ),
+            (
+                'correct_raw',
+                'FLAT 7, E BLOCK, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            (
+                'correct_generated',
+                'SECOND FLAT 7, E BLOCK, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            (
+                'wrong_generated',
+                'FIRST BLOCK E FLAT 7, EXAMPLE HALL, EXAMPLE ROAD, SAMPLE TOWN'
+            ),
+            ('second_block', 'SECOND BLOCK E FLAT 7'),
+            ('first_block', 'FIRST BLOCK E FLAT 7'),
+            ('block_name', 'FIRST BLOCK MANAGEMENT 18 HIGH STREET')
+        ) AS t(unique_id, clean_full_address)
+        """
+    )
+    input_rel = input_rel.project("*, clean_full_address AS original_address_concat")
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            _clean_address_string_first_pass,
+            _normalise_abbreviations_and_units,
+            _parse_out_sub_premise,
+            _parse_out_numbers,
+        ],
+    )
+
+    result = pipeline.run().project(
+        "unique_id, clean_full_address, flat_number, flat_letter, "
+        "flat_positional, flat_identity, numeric_tokens, floor_keys"
+    )
+    rows = {row[0]: row[1:] for row in result.fetchall()}
+
+    assert {key: row[-1] for key, row in rows.items()} == {
+        "input": ["SECOND"],
+        "correct_raw": [],
+        "correct_generated": ["SECOND"],
+        "wrong_generated": ["FIRST"],
+        "second_block": ["SECOND"],
+        "first_block": ["FIRST"],
+        "block_name": [],
+    }
+    assert rows["second_block"][1:4] == ("7", "E", "SECOND FLOOR")
+    assert rows["first_block"][1:4] == ("7", "E", "FIRST FLOOR")
+    assert rows["block_name"][3] == "BLOCK"
+
+    assert {
+        unique_id: (
+            flat_number,
+            flat_letter,
+            flat_positional,
+            flat_identity,
+            numeric_tokens,
+        )
+        for unique_id, (
+            _,
+            flat_number,
+            flat_letter,
+            flat_positional,
+            flat_identity,
+            numeric_tokens,
+            _,
+        ) in rows.items()
+        if unique_id in {"input", "correct_raw", "correct_generated", "wrong_generated"}
+    } == {
+        "input": ("7", "E", "SECOND FLOOR", "7_E_SECOND FLOOR", ["7"]),
+        "correct_raw": ("7", "E", "BLOCK", "7_E_BLOCK", ["7"]),
+        "correct_generated": (
+            "7",
+            "E",
+            "SECOND FLOOR",
+            "7_E_SECOND FLOOR",
+            ["7"],
+        ),
+        "wrong_generated": (
+            "7",
+            "E",
+            "FIRST FLOOR",
+            "7_E_FIRST FLOOR",
+            ["7"],
+        ),
+    }
+    assert "7E BLOCK" not in rows["correct_raw"][0]
+    assert "7E BLOCK" not in rows["correct_generated"][0]
 
 
 def test_exclusion_phrases_do_not_create_unit_or_premise_features(duck_con):

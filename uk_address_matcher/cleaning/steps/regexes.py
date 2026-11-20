@@ -45,10 +45,12 @@ def merge_split_flat_number(input: str):
 
 def standarise_num_dash_num(input: str):
     """
-    Standardizes numeric ranges with dashes by removing spaces around the dash.
+    Standardize numeric ranges using dashes or common worded separators.
 
     Examples:
         '23A - 24' -> '23A-24'
+        '23 TO 24' -> '23-24'
+        '23 THROUGH 24B' -> '23-24B'
         '230-234' -> '230-234'
         '1 - 123' -> '1-123'
         'WELLS-NEXT-THE-SEA' -> 'WELLS-NEXT-THE-SEA' (unchanged)
@@ -60,9 +62,9 @@ def standarise_num_dash_num(input: str):
         str: The standardized string with numeric ranges formatted correctly.
     """
     regex_pattern = (
-        r"\b(\d+[A-Za-z]?)"  # Match a number with an optional single letter
-        r"\s*-\s*"  # Matches spaces around a dash
-        r"(\d+[A-Za-z]?)\b"  # Require a word boundary after the range.
+        r"\b(\d{1,5}[A-Za-z]?)"  # Match a number with an optional single letter
+        r"(?:\s*-\s*|(?i:\s*(?:UP\s*)?(?:TO|THRU|THROUGH)\s*))"
+        r"(\d{1,5}[A-Za-z]?)\b"
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
@@ -134,6 +136,12 @@ def standarise_num_letter(input: str):
         r"\s"  # Matches a space
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2 ', 'g')"
+
+
+def move_flat_block_letter_before_number(input: str):
+    """Canonicalise a separated block letter before generic number-letter merging."""
+    regex_pattern = r"\b(F?FLAT)\s+(\d{1,4})\s+([A-Za-z])\s+BLOCK\b"
+    return f"regexp_replace({input}, '{regex_pattern}', 'BLOCK \\3 \\1 \\2', 'g')"
 
 
 def separate_letter_num(input: str):

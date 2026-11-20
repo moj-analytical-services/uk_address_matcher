@@ -226,25 +226,3 @@ supported for matching, not for labelling-bundle export.
 If you know the correct match for each address, add a `ukam_label` column to
 your messy data. It propagates through to results, enabling accuracy analysis
 with `MatchResult.accuracy_analysis()`.
-
-## Migrating to 2.0
-
-| Previous usage | 2.0 usage |
-| --- | --- |
-| Input `unique_id` | Still supported; prefer `address_id` for new datasets. Never supply both. |
-| Result `unique_id` | `address_id`, including with `all_columns=True`. |
-| Result `resolved_canonical_id` | `canonical_address_id`. |
-| Row keys only in diagnostics | Both UKAM row keys are included by default. |
-| Root `ukam_datasets` import | `from uk_address_matcher.datasets import ukam_datasets`. |
-| Root `prepare_data_for_matching` import | Use `AddressMatcher` or `prepare_canonical_folder`; lower-level implementation remains in `uk_address_matcher.cleaning.chunking_strategies`. |
-| Preparation `num_of_chunks` | `cleaning_num_chunks`; `output_chunk_count` still controls output files separately. |
-| Preparation `_derive_road_catalogue` | No longer a public option; normal preparation derives road artefacts. |
-
-`matches()` still includes unmatched rows by default. Use `include_unmatched=False`
-to exclude them. Exported `MatchResult` supports type annotations and context
-management; its private construction fields are not public configuration.
-`cleaning_num_chunks` also sets the target number of postcode-district batches
-for local keys and road parsing. Each batch keeps whole districts and fixed
-16-district road fallback groups together, so small inputs can use fewer batches.
-The default is ten batches, not ten districts per batch; `output_chunk_count`
-continues to control output files independently.

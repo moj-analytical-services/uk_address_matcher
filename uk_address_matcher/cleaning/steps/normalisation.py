@@ -5,6 +5,7 @@ from typing import Final
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
     merge_split_flat_number,
+    move_flat_block_letter_before_number,
     move_flat_to_front,
     remove_apostrophes,
     remove_brackets,
@@ -216,6 +217,7 @@ def _clean_address_string_first_pass() -> str:
             replace_fwd_slash_with_dash,
             standarise_num_dash_num,
             separate_letter_num,
+            move_flat_block_letter_before_number,
             standarise_num_letter,
             move_flat_to_front,
             merge_split_flat_number,
