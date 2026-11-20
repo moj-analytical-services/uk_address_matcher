@@ -428,6 +428,7 @@ def _get_linker(
     owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
     canonical_cache_path: str | None = None,
+    aligned_inputs: list[DuckDBPyRelation] | None = None,
 ) -> Linker:
     """Build a configured Splink linker for the given relations.
 
@@ -805,6 +806,10 @@ def _get_linker(
         df_addresses_to_match_fix = df_addresses_to_match_fix.project(projection)
 
     db_api = DuckDBAPI(connection=con)
+    if aligned_inputs is not None:
+        aligned_inputs.extend(
+            (df_addresses_to_match_fix, df_addresses_to_search_within_fix)
+        )
     input_frames = []
     for table_name, relation in (
         ("m_", df_addresses_to_match_fix),
