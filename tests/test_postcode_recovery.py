@@ -24,7 +24,8 @@ def test_road_recovery_scores_only_physical_aliases():
             FROM (VALUES
                 (1, 'a', 'CF37 2AA', 'WILLOW ROAD', '12 WILLOW ROAD PONTYPRIDD'),
                 (2, 'a', 'CF37 2AA', 'WILLOW ROAD', '12 WILLOW ROAD PONTYPRIDD'),
-                (3, 'b', 'CF37 3AA', 'CHESTNUT AVENUE', '12 CHESTNUT AVENUE PONTYPRIDD'),
+                (3, 'b', 'CF37 3AA', 'CHESTNUT GARDENS AVENUE',
+                    '12 CHESTNUT GARDENS AVENUE PONTYPRIDD'),
                 (4, 'c', 'CF37 4AA', NULL, 'PINE VIEW MANOR PONTYPRIDD')
             ) t(ukam_address_id, unique_id, postcode, road_1_norm, clean_full_address)
         """)
@@ -34,11 +35,13 @@ def test_road_recovery_scores_only_physical_aliases():
                 nums AS numeric_tokens)
             FROM ({canonical.sql_query()}) c CROSS JOIN (VALUES
                 (101, 'CF37 1ZZ', 'WILOW ROAD', '12 WILOW ROAD PONTYPRIDD', [12]),
-                (102, 'CF37 1ZZ', 'CHESTNUT', '12 CHESTNUT PONTYPRIDD', [12]),
+                (102, 'CF37 1ZZ', 'CHESTNUT GARDENS',
+                    '12 CHESTNUT GARDENS PONTYPRIDD', [12]),
                 (103, 'CF38 1ZZ', 'WILOW ROAD', '12 WILOW ROAD PONTYPRIDD', [12]),
                 (104, 'CF37 1ZZ', 'WILOW ROAD', '13 WILOW ROAD PONTYPRIDD', [13]),
                 (105, 'CF37 1ZZ', 'WILOW ROAD', '12 WILOW ROAD CARDIFF', [12]),
-                (106, 'CF37 1ZZ', 'CHESTNUT LANE', '12 CHESTNUT LANE PONTYPRIDD', [12]),
+                (106, 'CF37 1ZZ', 'CHESTNUT GARDENS LANE',
+                    '12 CHESTNUT GARDENS LANE PONTYPRIDD', [12]),
                 (107, 'CF37 1ZZ', NULL, 'PINE VIEW MANOR PONTYPRIDD', [])
             ) q(id,pc,road,address,nums)
             WHERE c.ukam_address_id=1

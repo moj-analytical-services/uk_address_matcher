@@ -266,8 +266,8 @@ def _nominations(prefix: str) -> list[CTEStep]:
                 SELECT qid,alias_id,uprn,q_address,c_address,q_context,c_road,
                     stock_uprn,stock_text,
                     levenshtein(pc_compact(q_road),pc_compact(c_road)) AS road_edits,
-                    (len(pc_stem(q_road))>=6 AND pc_stem(q_road)=pc_stem(c_road)
-                        AND pc_has_type(q_road)<>pc_has_type(c_road)) AS matches_stem
+                    (pc_missing_type(q_road,c_road)
+                        OR pc_missing_type(c_road,q_road)) AS matches_stem
                 FROM coarse_pairs
             ), candidates AS MATERIALIZED (
                 SELECT * FROM keyed_pairs WHERE road_edits<=1 OR matches_stem
@@ -340,8 +340,8 @@ def apply_postcode_recovery(
             *_DECISION_MACROS,
             f"pc_has_type(r) AS (contains([{terminals}], split_part(r,' ',-1)) "
             "AND contains(r,' '))",
-            "pc_stem(r) AS array_to_string(list_slice(string_split(r,' '), 1, "
-            "CASE WHEN pc_has_type(r) THEN -2 ELSE -1 END),'')",
+            "pc_missing_type(a,b) AS (pc_has_type(b) AND len(pc_compact(a))>=6 "
+            "AND pc_compact(a)=array_to_string(list_slice(string_split(b,' '),1,-2),''))",
         ):
             con.execute(f"CREATE TEMP MACRO {_scope_sql(macro, prefix)}")
             cleanup.callback(con.execute, f"DROP MACRO {prefix}{macro.split('(', 1)[0]}")
