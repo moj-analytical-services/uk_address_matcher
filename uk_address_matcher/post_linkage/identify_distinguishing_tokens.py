@@ -775,18 +775,11 @@ def improve_predictions_using_distinguishing_tokens(
                         unique_id_l,
                         ukam_address_id_l,
                         __reranked_mw,
+                        clean_full_address_l,
+                        clean_full_address_r,
+                        postcode_l,
+                        postcode_r,
                         postcode_l = postcode_r AS __same_pc,
-                        split_part(upper(trim(postcode_l)), ' ', 1)
-                            = split_part(upper(trim(postcode_r)), ' ', 1) AS __same_dist,
-                        jaro_winkler_similarity(
-                            clean_full_address_r, clean_full_address_l
-                        ) AS __jw,
-                        jaro_winkler_similarity(
-                            regexp_replace(clean_full_address_r, '[0-9]+', '!', 'g'),
-                            regexp_replace(clean_full_address_l, '[0-9]+', '!', 'g')
-                        ) AS __mask_jw,
-                        regexp_extract_all(clean_full_address_l, '[0-9]+') AS __nums_l,
-                        regexp_extract_all(clean_full_address_r, '[0-9]+') AS __nums_r,
                         road_1_norm_l,
                         road_1_norm_r,
                         {
@@ -806,51 +799,77 @@ def improve_predictions_using_distinguishing_tokens(
                     SELECT
                         ukam_address_id_r,
                         __reranked_mw AS __top_mw,
-                        __same_pc AS __top_same_pc,
-                        __jw AS __top_jw,
-                        __mask_jw AS __top_mask_jw,
-                        road_1_norm_l AS __top_road_l,
-                        road_1_norm_r AS __top_road_r
+                        clean_full_address_l AS __top_addr_l,
+                        clean_full_address_r AS __top_addr_r
                     FROM ranked
                     WHERE __rnk = 1
+                      AND __same_pc
+                      AND __reranked_mw < 25.0
+                      AND nullif(road_1_norm_l, '')
+                          IS DISTINCT FROM nullif(road_1_norm_r, '')
+                ),
+                contenders AS (
+                    SELECT
+                        r.ukam_address_id_r,
+                        r.unique_id_l,
+                        r.ukam_address_id_l,
+                        r.__reranked_mw,
+                        t.__top_mw,
+                        split_part(upper(trim(r.postcode_l)), ' ', 1)
+                            = split_part(upper(trim(r.postcode_r)), ' ', 1)
+                            AS __same_dist,
+                        jaro_winkler_similarity(
+                            r.clean_full_address_r, r.clean_full_address_l
+                        ) AS __jw,
+                        jaro_winkler_similarity(
+                            t.__top_addr_r, t.__top_addr_l
+                        ) AS __top_jw,
+                        jaro_winkler_similarity(
+                            regexp_replace(r.clean_full_address_r, '[0-9]+', '!', 'g'),
+                            regexp_replace(r.clean_full_address_l, '[0-9]+', '!', 'g')
+                        ) AS __mask_jw,
+                        jaro_winkler_similarity(
+                            regexp_replace(t.__top_addr_r, '[0-9]+', '!', 'g'),
+                            regexp_replace(t.__top_addr_l, '[0-9]+', '!', 'g')
+                        ) AS __top_mask_jw,
+                        regexp_extract_all(r.clean_full_address_l, '[0-9]+') AS __nums_l,
+                        regexp_extract_all(r.clean_full_address_r, '[0-9]+') AS __nums_r
+                    FROM ranked r
+                    JOIN top1 t USING (ukam_address_id_r)
+                    WHERE r.__rnk > 1
+                      AND NOT r.__same_pc
+                      AND r.__reranked_mw >= 0.0
+                      AND (t.__top_mw - r.__reranked_mw) <= 12.0
+                      AND NOT (
+                          nullif(r.flat_identity_l, '')
+                              IS DISTINCT FROM nullif(r.flat_identity_r, '')
+                          AND (
+                              nullif(r.flat_identity_l, '') IS NOT NULL
+                              OR nullif(r.flat_identity_r, '') IS NOT NULL
+                          )
+                      )
                 )
                 SELECT
-                    r.ukam_address_id_r,
-                    r.unique_id_l,
-                    r.ukam_address_id_l,
-                    t.__top_mw + 1.0 AS __promoted_mw
-                FROM ranked r
-                JOIN top1 t USING (ukam_address_id_r)
-                WHERE r.__rnk > 1
-                  AND t.__top_same_pc AND NOT r.__same_pc
-                  AND nullif(t.__top_road_l, '')
-                      IS DISTINCT FROM nullif(t.__top_road_r, '')
-                  AND t.__top_mw < 25.0
-                  AND r.__reranked_mw >= 0.0
-                  AND (t.__top_mw - r.__reranked_mw) <= 12.0
-                  AND r.__jw >= 0.85
-                  AND r.__jw >= t.__top_jw + 0.05
-                  AND r.__mask_jw >= t.__top_mask_jw + 0.08
+                    ukam_address_id_r,
+                    unique_id_l,
+                    ukam_address_id_l,
+                    __top_mw + 1.0 AS __promoted_mw
+                FROM contenders
+                WHERE __jw >= 0.85
+                  AND __jw >= __top_jw + 0.05
+                  AND __mask_jw >= __top_mask_jw + 0.08
                   AND NOT (
-                      len(r.__nums_r) > 0
-                      AND len(r.__nums_l) > 0
-                      AND r.__nums_r <> r.__nums_l
-                  )
-                  AND NOT (
-                      nullif(r.flat_identity_l, '')
-                          IS DISTINCT FROM nullif(r.flat_identity_r, '')
-                      AND (
-                          nullif(r.flat_identity_l, '') IS NOT NULL
-                          OR nullif(r.flat_identity_r, '') IS NOT NULL
-                      )
+                      len(__nums_r) > 0
+                      AND len(__nums_l) > 0
+                      AND __nums_r <> __nums_l
                   )
                 QUALIFY row_number() OVER (
-                    PARTITION BY r.ukam_address_id_r
+                    PARTITION BY ukam_address_id_r
                     ORDER BY
-                        r.__same_dist DESC,
-                        r.__jw DESC,
-                        r.__reranked_mw DESC,
-                        r.unique_id_l
+                        __same_dist DESC,
+                        __jw DESC,
+                        __reranked_mw DESC,
+                        unique_id_l
                 ) = 1
                 '''
             if has_road_columns
