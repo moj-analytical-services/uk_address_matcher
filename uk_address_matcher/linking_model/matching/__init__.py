@@ -3,6 +3,7 @@ from uk_address_matcher.linking_model.matching.stages import (
     ExactMatchStage,
     MatchingStage,
     PeeledAddressStage,
+    PostcodeFreeMatchStage,
     SplinkStage,
     UniqueTrigramStage,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "ExactMatchStage",
     "UniqueTrigramStage",
     "PeeledAddressStage",
+    "PostcodeFreeMatchStage",
     "SplinkStage",
     "_run_matching",
 ]
