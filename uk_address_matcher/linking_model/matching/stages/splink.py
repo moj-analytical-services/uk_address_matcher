@@ -379,6 +379,11 @@ class SplinkStage(MatchingStage):
                 "clean_full_address",
                 "postcode",
             ]
+            if (
+                "road_1_norm" in df_canonical.columns
+                and "road_1_norm" in df_unmatched.columns
+            ):
+                linker_columns.append("road_1_norm")
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
             linker_columns = list(dict.fromkeys(linker_columns))

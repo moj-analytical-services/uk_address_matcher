@@ -54,6 +54,14 @@
     {
       "blocking_rule": "l.postcode = r.postcode AND r.lk_eligible AND map_contains(r.lk_level_by_alias, l.ukam_address_id::VARCHAR)",
       "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.road_1_norm = r.road_1_norm and l.numeric_token_1 = r.numeric_token_1 and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1)",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.numeric_token_1 = r.numeric_token_1 and split_part(l.postcode, ' ', 1) = split_part(r.postcode, ' ', 1) and left(l.road_1_norm, 4) = left(r.road_1_norm, 4) and length(l.road_1_norm) >= 6 and length(r.road_1_norm) >= 6 and (levenshtein(l.road_1_norm, r.road_1_norm) <= 1 or starts_with(replace(l.road_1_norm, ' ', ''), replace(r.road_1_norm, ' ', '')) or starts_with(replace(r.road_1_norm, ' ', ''), replace(l.road_1_norm, ' ', '')))",
+      "sql_dialect": "duckdb"
     }
   ],
   "comparisons": [

@@ -663,8 +663,13 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 10
-    assert "map_contains(r.lk_level_by_alias" in packaged_rules[-1]
+    assert len(packaged_rules) == 12
+    assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
+    assert any(
+        "l.road_1_norm = r.road_1_norm" in rule
+        and "split_part(l.postcode, ' ', 1)" in rule
+        for rule in packaged_rules
+    )
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules

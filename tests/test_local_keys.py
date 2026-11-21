@@ -547,9 +547,9 @@ def test_model_includes_local_key_comparison_and_block():
         "coalesce" not in level["sql_condition"].lower()
         for level in comparison["comparison_levels"]
     )
-    assert (
-        "map_contains(r.lk_level_by_alias"
-        in model["blocking_rules_to_generate_predictions"][-1]["blocking_rule"]
+    assert any(
+        "map_contains(r.lk_level_by_alias" in rule["blocking_rule"]
+        for rule in model["blocking_rules_to_generate_predictions"]
     )
     assert [
         level["m_probability"] / level["u_probability"]
