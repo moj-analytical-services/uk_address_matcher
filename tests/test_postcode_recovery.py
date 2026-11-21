@@ -120,6 +120,186 @@ def test_wrong_postcode_promotion_active_locality_disagreement_only():
         assert winners == [("q1", 20), ("q2", 30), ("q3", 50), ("q4", 80)]
 
 
+def test_wrong_postcode_promotion_uses_three_way_locality_evidence():
+    with duckdb.connect() as con:
+        df_predict = con.sql("""
+            SELECT * FROM (VALUES
+                -- Exact and extended locality: promote despite the old whole-address
+                -- JW improvement guards.
+                (1, 10, 'exact', 1,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL LAMBETH LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (2, 11, 'exact', 1,
+                 '69 GIPSY HILL LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL LAMBETH LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                (3, 20, 'extended', 2,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 26.0::DOUBLE, 0.99::DOUBLE),
+                (4, 21, 'extended', 2,
+                 '69 GIPSY HILL LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 20.0::DOUBLE, 0.95::DOUBLE),
+                (5, 30, 'short', 3,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 28.0::DOUBLE, 0.99::DOUBLE),
+                (6, 31, 'short', 3,
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 24.0::DOUBLE, 0.95::DOUBLE),
+                -- A missing postcode activates a separate conservative path.
+                (7, 40, 'missing_pc', 4,
+                 '69 GIPSY HILL HACKNEY LONDON', 'E8 1AA',
+                 '69 GIPSY HILL NORWOOD', NULL::VARCHAR,
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 28.0::DOUBLE, 0.99::DOUBLE),
+                (8, 41, 'missing_pc', 4,
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD', NULL::VARCHAR,
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                -- Omitted detail on the input side is not a contradiction.
+                (9, 50, 'one_sided', 5,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (10, 51, 'one_sided', 5,
+                 '69 GIPSY HILL LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL LONDON', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                -- Input and contender must directly corroborate one locality.
+                (11, 60, 'no_corroboration', 6,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (12, 61, 'no_corroboration', 6,
+                 '69 GIPSY HILL LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                -- Spacing-only place-name differences must abstain.
+                (13, 70, 'spacing', 7,
+                 '69 GIPSY HILL PONTYCLUN', 'CF72 4AA',
+                 '69 GIPSY HILL PONT Y CLUN', 'CF72 4AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 34.0::DOUBLE, 0.99::DOUBLE),
+                (14, 71, 'spacing', 7,
+                 '69 GIPSY HILL PONT Y CLUN', 'CF72 4AB',
+                 '69 GIPSY HILL PONT Y CLUN', 'CF72 4AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 18.0::DOUBLE, 0.95::DOUBLE),
+                -- Numeric and flat conflicts remain hard guards.
+                (15, 80, 'house_number', 8,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL LAMBETH', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (16, 81, 'house_number', 8,
+                 '70 GIPSY HILL LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL LAMBETH', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                (17, 90, 'flat', 9,
+                 'FLAT A 69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 'FLAT A 69 GIPSY HILL LAMBETH', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', 'A', 'A',
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (18, 91, 'flat', 9,
+                 'FLAT B 69 GIPSY HILL LAMBETH LONDON', 'SW9 9AB',
+                 'FLAT A 69 GIPSY HILL LAMBETH', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', 'B', 'A',
+                 29.0::DOUBLE, 0.95::DOUBLE),
+                -- A road that is not a whole-token substring produces no strict tail.
+                (19, 100, 'road_failure', 10,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GYPSY HILL', 'GYPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (20, 101, 'road_failure', 10,
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GYPSY HILL', 'GYPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                -- Duplicate/compound tokens and a shared suffix remain safe.
+                (21, 110, 'compound', 11,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD NORWOOD LONDON BRIDGE SOUTHWARK',
+                 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 29.0::DOUBLE, 0.99::DOUBLE),
+                (22, 111, 'compound', 11,
+                 '69 GIPSY HILL NORWOOD LONDON BRIDGE SOUTHWARK LONDON',
+                 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD NORWOOD LONDON BRIDGE SOUTHWARK',
+                 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 23.0::DOUBLE, 0.95::DOUBLE),
+                -- Deterministic ordering is retained with multiple plausible contenders.
+                (23, 120, 'multiple', 12,
+                 '69 GIPSY HILL HACKNEY LONDON', 'SW9 9AA',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 28.0::DOUBLE, 0.99::DOUBLE),
+                (24, 121, 'multiple', 12,
+                 '69 GIPSY HILL NORWOOD LAMBETH LONDON', 'SW9 9AB',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 24.0::DOUBLE, 0.95::DOUBLE),
+                (25, 122, 'multiple', 12,
+                 '69 GIPSY HILL NORWOOD SOUTHWARK LONDON', 'SW9 9AC',
+                 '69 GIPSY HILL NORWOOD', 'SW9 9AA',
+                 'GIPSY HILL', 'GIPSY HILL', NULL::VARCHAR, NULL::VARCHAR,
+                 25.0::DOUBLE, 0.95::DOUBLE)
+            ) t(
+                ukam_address_id_l, unique_id_l, unique_id_r, ukam_address_id_r,
+                clean_full_address_l, postcode_l, clean_full_address_r, postcode_r,
+                road_1_norm_l, road_1_norm_r, flat_identity_l, flat_identity_r,
+                match_weight, match_probability
+            )
+        """)
+        improved = improve_predictions_using_distinguishing_tokens(
+            df_predict=df_predict,
+            con=con,
+            match_weight_threshold=-20.0,
+        )
+        winners = dict(
+            con.sql(f"""
+                SELECT unique_id_r, unique_id_l
+                FROM ({improved.sql_query()})
+                QUALIFY row_number() OVER (
+                    PARTITION BY unique_id_r ORDER BY match_weight DESC
+                ) = 1
+            """).fetchall()
+        )
+
+        assert winners == {
+            "compound": 111,
+            "exact": 11,
+            "extended": 21,
+            "flat": 90,
+            "house_number": 80,
+            "missing_pc": 41,
+            "multiple": 122,
+            "no_corroboration": 60,
+            "one_sided": 50,
+            "road_failure": 100,
+            "short": 31,
+            "spacing": 70,
+        }
+
+
 def test_wrong_postcode_recovery_end_to_end(tmp_path):
     with duckdb.connect() as con:
         canonical_source = con.sql("""
