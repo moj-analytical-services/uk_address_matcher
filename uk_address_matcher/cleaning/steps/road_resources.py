@@ -27,12 +27,36 @@ def token_pattern(tokens: Sequence[str]) -> str:
     return "(^| )(" + "|".join(re.escape(token) for token in tokens) + ")( |$)"
 
 
+def sql_in_list(tokens: Sequence[str]) -> str:
+    return ", ".join(sql_text(token) for token in tokens)
+
+
 @lru_cache(maxsize=1)
 def token_policy() -> dict[str, object]:
     policy_path = files("uk_address_matcher.data").joinpath(
         "road_candidate_token_policy.json"
     )
     return json.loads(policy_path.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def welsh_road_prefix_mapping() -> dict[str, str]:
+    raw = token_policy().get("welsh_road_prefix_to_terminal", {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(prefix).strip().upper(): str(terminal).strip().upper()
+        for prefix, terminal in raw.items()
+    }
+
+
+def welsh_prefix_terminal_case_sql(token_expression: str) -> str:
+    mapping = welsh_road_prefix_mapping()
+    when_clauses = " ".join(
+        f"WHEN {sql_text(prefix)} THEN {sql_text(terminal)}"
+        for prefix, terminal in mapping.items()
+    )
+    return f"CASE {token_expression} {when_clauses} END"
 
 
 @lru_cache(maxsize=1)

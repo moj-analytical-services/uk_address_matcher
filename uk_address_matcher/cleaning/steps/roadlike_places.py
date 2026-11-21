@@ -10,10 +10,13 @@ import duckdb
 
 from uk_address_matcher.cleaning.steps.road_resources import (
     facility_clause_removal_sql,
+    sql_in_list,
     sql_text,
     suffix_peel_regex_sql_literal,
     token_pattern,
     token_policy,
+    welsh_prefix_terminal_case_sql,
+    welsh_road_prefix_mapping,
 )
 from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
@@ -94,7 +97,7 @@ def _road_candidate_feature_sql(
     residence_pattern = sql_text(
         token_pattern(tuple(policy["residence_or_non_road_any_token"]))
     )
-    road_pattern = sql_text(token_pattern(tuple(policy["road_syntax_terminal_tokens"])))
+    road_terminal_in_list = sql_in_list(tuple(policy["road_syntax_terminal_tokens"]))
     business_pattern = sql_text("(^| )(BUSINESS|ESTATE|PARK)( |$)")
     catalogue_join = "INNER JOIN" if require_catalogue_support else "LEFT JOIN"
     catalogue_keys = "candidate_phrase, terminal_token"
@@ -108,8 +111,10 @@ def _road_candidate_feature_sql(
                 AS contains_residence_token,
             regexp_matches(candidates.candidate_phrase, {business_pattern})::DOUBLE
                 AS contains_business_token,
-            regexp_matches(candidates.terminal_token, {road_pattern})::DOUBLE
-                AS road_syntax_terminal,
+            CASE
+                WHEN candidates.terminal_token IS NOT NULL
+                THEN (candidates.terminal_token IN ({road_terminal_in_list}))::DOUBLE
+            END AS road_syntax_terminal,
             (candidates.candidate_start_position - candidates.numeric_anchor)::DOUBLE
                 / greatest(candidates.tail_length, 1) AS start_tail_fraction,
             (candidates.candidate_end_position - candidates.numeric_anchor)::DOUBLE
@@ -461,8 +466,13 @@ def roadlike_place_prepared_candidate_sql(
     )
     block_candidate_pattern = sql_text(BLOCK_CANDIDATE_PATTERN)
     facility_candidate_pattern = sql_text(FACILITY_CANDIDATE_PATTERN)
-    road_terminal_pattern = sql_text(
-        token_pattern(tuple(token_policy()["road_syntax_terminal_tokens"]))
+    road_terminal_in_list = sql_in_list(
+        tuple(token_policy()["road_syntax_terminal_tokens"])
+    )
+    welsh_prefixes = tuple(welsh_road_prefix_mapping().keys())
+    welsh_prefix_in_list = sql_in_list(welsh_prefixes)
+    welsh_terminal_expr = welsh_prefix_terminal_case_sql(
+        "list_extract(address_tokens, starts.start_position)"
     )
     candidate_union = """
         SELECT *
@@ -473,6 +483,7 @@ def roadlike_place_prepared_candidate_sql(
     """
     width_support_cte = ""
     terminal_width_join = ""
+    welsh_width_join = ""
     fallback_width_join = ""
     fallback_filter_ctes = f"""
         ), fallback_candidate_flags AS (
@@ -525,6 +536,12 @@ def roadlike_place_prepared_candidate_sql(
                AND supported_widths.candidate_width = widths.width
                {width_district_join}
         """
+        welsh_width_join = f"""
+            INNER JOIN supported_widths
+                ON supported_widths.terminal_token = {welsh_terminal_expr}
+               AND supported_widths.candidate_width = widths.width
+               {width_district_join}
+        """
         fallback_width_join = f"""
             INNER JOIN supported_phrases
                 ON supported_phrases.candidate_phrase = array_to_string(
@@ -562,6 +579,45 @@ def roadlike_place_prepared_candidate_sql(
     template_district_projection = (
         "candidate_sources.postcode_district, " if district_scoped_templates else ""
     )
+    welsh_terminal_union = ""
+    if welsh_prefixes:
+        welsh_terminal_union = f"""
+            UNION ALL
+            SELECT
+                {template_district_projection}
+                numeric_anchor,
+                address_tokens,
+                array_length(address_tokens) - numeric_anchor AS tail_length,
+                starts.start_position AS candidate_start_position,
+                widths.width AS candidate_width,
+                starts.start_position + widths.width - 1 AS candidate_end_position,
+                array_to_string(
+                    list_slice(
+                        address_tokens,
+                        starts.start_position + 1,
+                        starts.start_position + widths.width - 1
+                    ),
+                    ' '
+                ) || ' ' || {welsh_terminal_expr} AS candidate_phrase,
+                {welsh_terminal_expr} AS terminal_token
+            FROM terminal_shapes AS candidate_sources
+            CROSS JOIN unnest(list_filter(
+                range(numeric_anchor + 1, array_length(address_tokens)),
+                lambda position: list_extract(address_tokens, position)
+                    IN ({welsh_prefix_in_list})
+            )) AS starts(start_position)
+            CROSS JOIN (VALUES (2), (3)) AS widths(width)
+            {welsh_width_join}
+            WHERE starts.start_position + widths.width - 1
+                    <= array_length(address_tokens)
+              AND NOT (
+                  widths.width = 2
+                  AND (
+                      length(list_extract(address_tokens, starts.start_position + 1)) = 1
+                      OR list_extract(address_tokens, starts.start_position + 1) = 'YR'
+                  )
+              )
+        """
     return f"""
         WITH candidate_sources AS {source_cte_hint} (
             SELECT *
@@ -590,14 +646,13 @@ def roadlike_place_prepared_candidate_sql(
             FROM terminal_shapes AS candidate_sources
             CROSS JOIN unnest(list_filter(
                 range(numeric_anchor + 2, array_length(address_tokens) + 1),
-                lambda position: regexp_matches(
-                    list_extract(address_tokens, position),
-                    {road_terminal_pattern}
-                )
+                lambda position: list_extract(address_tokens, position)
+                    IN ({road_terminal_in_list})
             )) AS ends(end_position)
             CROSS JOIN (VALUES (2), (3)) AS widths(width)
             {terminal_width_join}
             WHERE ends.end_position - widths.width + 1 > numeric_anchor
+            {welsh_terminal_union}
         ), terminal_candidates AS (
             SELECT
                 source.address_id {source_scope_projection},
@@ -727,9 +782,56 @@ def roadlike_place_candidate_sql(source_relation: str) -> str:
     raw_text_pattern = sql_text(AMBIGUOUS_ADDRESS_PATTERN)
     block_candidate_pattern = sql_text(BLOCK_CANDIDATE_PATTERN)
     facility_candidate_pattern = sql_text(FACILITY_CANDIDATE_PATTERN)
-    road_terminal_pattern = sql_text(
-        token_pattern(tuple(token_policy()["road_syntax_terminal_tokens"]))
+    road_terminal_in_list = sql_in_list(
+        tuple(token_policy()["road_syntax_terminal_tokens"])
     )
+    welsh_prefixes = tuple(welsh_road_prefix_mapping().keys())
+    welsh_prefix_in_list = sql_in_list(welsh_prefixes)
+    welsh_terminal_expr = welsh_prefix_terminal_case_sql(
+        "list_extract(address_tokens, starts.start_position)"
+    )
+    welsh_window_union = ""
+    if welsh_prefixes:
+        welsh_window_union = f"""
+            UNION ALL
+            SELECT
+                address_id,
+                full_postcode,
+                postcode_district,
+                list_extract(address_tokens, numeric_anchor) AS rightmost_numeric_value,
+                numeric_anchor,
+                array_length(address_tokens) - numeric_anchor AS tail_length,
+                starts.start_position AS candidate_start_position,
+                widths.width AS candidate_width,
+                starts.start_position + widths.width - 1 AS candidate_end_position,
+                array_to_string(
+                    list_slice(
+                        address_tokens,
+                        starts.start_position + 1,
+                        starts.start_position + widths.width - 1
+                    ),
+                    ' '
+                ) || ' ' || {welsh_terminal_expr} AS candidate_phrase,
+                {welsh_terminal_expr} AS terminal_token,
+                true AS is_welsh_prefix
+            FROM anchors
+            CROSS JOIN unnest(list_filter(
+                range(numeric_anchor + 1, array_length(address_tokens)),
+                lambda position: list_extract(address_tokens, position)
+                    IN ({welsh_prefix_in_list})
+            )) AS starts(start_position)
+            CROSS JOIN (VALUES (2), (3)) AS widths(width)
+            WHERE numeric_anchor IS NOT NULL
+              AND starts.start_position + widths.width - 1
+                    <= array_length(address_tokens)
+              AND NOT (
+                  widths.width = 2
+                  AND (
+                      length(list_extract(address_tokens, starts.start_position + 1)) = 1
+                      OR list_extract(address_tokens, starts.start_position + 1) = 'YR'
+                  )
+              )
+        """
     return f"""
         WITH source_rows AS (
             SELECT
@@ -793,7 +895,8 @@ def roadlike_place_candidate_sql(source_relation: str) -> str:
                 ) AS candidate_phrase,
                 list_extract(
                     address_tokens, starts.start_position + widths.width - 1
-                ) AS terminal_token
+                ) AS terminal_token,
+                false AS is_welsh_prefix
             FROM anchors
             CROSS JOIN range(
                 numeric_anchor + 1, array_length(address_tokens) + 1
@@ -802,12 +905,18 @@ def roadlike_place_candidate_sql(source_relation: str) -> str:
             WHERE numeric_anchor IS NOT NULL
               AND starts.start_position + widths.width - 1
                     <= array_length(address_tokens)
+            {welsh_window_union}
         ), candidate_terminals AS (
             SELECT
                 *,
-                regexp_matches(terminal_token, {road_terminal_pattern})
-                    AS road_syntax_terminal,
-                max(regexp_matches(terminal_token, {road_terminal_pattern})::INTEGER)
+                (
+                    is_welsh_prefix
+                    OR coalesce(terminal_token IN ({road_terminal_in_list}), false)
+                ) AS road_syntax_terminal,
+                max((
+                    is_welsh_prefix
+                    OR coalesce(terminal_token IN ({road_terminal_in_list}), false)
+                )::INTEGER)
                     OVER (PARTITION BY address_id) AS has_road_syntax_terminal
             FROM candidate_windows
             WHERE NOT regexp_matches(candidate_phrase, {facility_candidate_pattern})
@@ -851,7 +960,7 @@ def roadlike_place_catalog_sql(
                 count(DISTINCT address_id) AS phrase_addresses,
                 approx_count_distinct(rightmost_numeric_value) AS distinct_numbers,
                 approx_count_distinct(full_postcode) AS distinct_postcodes,
-                approx_count_distinct(postcode_district) AS distinct_districts
+                count(DISTINCT postcode_district) AS distinct_districts
             FROM {candidate_relation}
             GROUP BY {district_column} candidate_phrase, terminal_token
         )
@@ -869,6 +978,38 @@ def roadlike_place_catalog_sql(
             count(*) OVER (PARTITION BY {terminal_partition})
                 AS terminal_distinct_phrases
         FROM candidate_stats
+    """
+
+
+def roadlike_place_national_rollup_sql(batch_catalogue_relation: str) -> str:
+    """Roll up disjoint district-batch road catalogues into a national index."""
+    return f"""
+        WITH national_stats AS (
+            SELECT
+                candidate_phrase,
+                terminal_token,
+                sum(phrase_support)::BIGINT AS phrase_support,
+                sum(phrase_addresses)::BIGINT AS phrase_addresses,
+                least(sum(distinct_numbers), sum(phrase_addresses))::BIGINT
+                    AS distinct_numbers,
+                sum(distinct_postcodes)::BIGINT AS distinct_postcodes,
+                sum(distinct_districts)::BIGINT AS distinct_districts
+            FROM {batch_catalogue_relation}
+            GROUP BY candidate_phrase, terminal_token
+        )
+        SELECT
+            candidate_phrase,
+            terminal_token,
+            phrase_support,
+            phrase_addresses,
+            distinct_numbers,
+            distinct_postcodes,
+            distinct_districts,
+            sum(phrase_support) OVER (PARTITION BY terminal_token)
+                AS terminal_support,
+            count(*) OVER (PARTITION BY terminal_token)
+                AS terminal_distinct_phrases
+        FROM national_stats
     """
 
 
@@ -915,9 +1056,15 @@ def _materialized_road_scores(
             )
             scorecard = json.loads(model_path.read_text(encoding="utf-8"))
             candidate_source = prepared_table
+            candidate_source_relation: str | None = None
             if deduplicate_tails:
                 signature_district = (
                     ", postcode_district" if catalogue_has_district else ""
+                )
+                signature_district_projection = (
+                    "postcode_district"
+                    if catalogue_has_district
+                    else "'' AS postcode_district"
                 )
                 con.execute(
                     f"CREATE TEMPORARY TABLE {tails_table} AS "
@@ -927,49 +1074,25 @@ def _materialized_road_scores(
                     CREATE TEMPORARY TABLE {signatures_table} AS
                     SELECT
                         min(unique_id) AS address_id,
-                        road_tail_tokens{signature_district},
+                        '' AS full_postcode,
+                        {signature_district_projection},
+                        '0' AS rightmost_numeric_value,
+                        0::INTEGER AS numeric_anchor,
+                        road_tail_tokens,
+                        road_tail_tokens AS address_tokens,
                         allow_truncated_windows
                     FROM {tails_table}
                     WHERE array_length(road_tail_tokens) >= 2
                     GROUP BY road_tail_tokens, allow_truncated_windows
                         {signature_district}
                 """).fetchall()
-                candidate_source = f"""(
-                    SELECT
-                        address_id AS unique_id,
-                        array_to_string(
-                            list_prepend('0', road_tail_tokens), ' '
-                        ) AS clean_full_address,
-                        '' AS postcode,
-                        {
-                    "postcode_district" if catalogue_has_district else "''"
-                } AS postcode_district,
-                        '0' AS rightmost_numeric_value,
-                        1 AS rightmost_numeric_position,
-                        list_prepend('0', road_tail_tokens) AS peeled_tokens,
-                        ['0'] AS numeric_tokens
-                    FROM {signatures_table}
-                    WHERE allow_truncated_windows
-                    UNION ALL
-                    SELECT
-                        prepared.unique_id,
-                        prepared.clean_full_address,
-                        prepared.postcode,
-                        prepared.postcode_district,
-                        prepared.rightmost_numeric_value,
-                        prepared.rightmost_numeric_position,
-                        prepared.peeled_tokens,
-                        prepared.numeric_tokens
-                    FROM {signatures_table} AS signatures
-                    JOIN {prepared_table} AS prepared
-                        ON signatures.address_id = CAST(prepared.unique_id AS VARCHAR)
-                    WHERE NOT signatures.allow_truncated_windows
-                )"""
+                candidate_source_relation = signatures_table
             candidate_sql = roadlike_place_prepared_candidate_sql(
                 candidate_source,
                 catalogue_width_relation=(
                     catalogue_view if require_catalogue_support else None
                 ),
+                candidate_source_relation=candidate_source_relation,
                 catalogue_has_district=catalogue_has_district,
             )
             _score_road_candidates(
@@ -1184,6 +1307,7 @@ __all__ = [
     "derive_rightmost_numeric_position_sql",
     "roadlike_place_candidate_sql",
     "roadlike_place_catalog_sql",
+    "roadlike_place_national_rollup_sql",
     "roadlike_place_prepared_candidate_sql",
     "roadlike_place_prepared_input_sql",
 ]
