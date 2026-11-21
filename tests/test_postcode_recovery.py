@@ -55,6 +55,71 @@ def test_wrong_postcode_promotion_respects_road_and_premise_guards():
         assert winners == [("q1", 20), ("q2", 30), ("q3", 50)]
 
 
+def test_wrong_postcode_promotion_active_locality_disagreement_only():
+    with duckdb.connect() as con:
+        df_predict = con.sql("""
+            SELECT * FROM (VALUES
+                -- q1: active locality disagreement (NEW BYTH vs CUMINESTOWN), same road,
+                -- close gap -> promotes right-locality contender
+                (1, 10, 'q1', 1, '34 MAIN STREET CUMINESTOWN TURRIFF', 'AB53 5YJ',
+                 '34 MAIN STREET NEW BYTH TURRIFF', 'AB53 5YJ',
+                 'MAIN STREET', 'MAIN STREET',
+                 NULL::VARCHAR, NULL::VARCHAR, 27.0::DOUBLE, 0.99::DOUBLE),
+                (2, 20, 'q1', 1, '34 MAIN STREET NEW BYTH TURRIFF', 'AB53 5XD',
+                 '34 MAIN STREET NEW BYTH TURRIFF', 'AB53 5YJ',
+                 'MAIN STREET', 'MAIN STREET',
+                 NULL::VARCHAR, NULL::VARCHAR, 20.0::DOUBLE, 0.95::DOUBLE),
+                -- q2: locality absent on one side (LONDON vs HACKNEY LONDON) -> blocked
+                (3, 30, 'q2', 2, '10 KENMURE ROAD HACKNEY LONDON', 'E8 1JU',
+                 '10 KENMURE ROAD LONDON', 'E8 1JU',
+                 'KENMURE ROAD', 'KENMURE ROAD',
+                 NULL::VARCHAR, NULL::VARCHAR, 27.0::DOUBLE, 0.99::DOUBLE),
+                (4, 40, 'q2', 2, '10 KENMURE ROAD LONDON', 'E8 1JX',
+                 '10 KENMURE ROAD LONDON', 'E8 1JU',
+                 'KENMURE ROAD', 'KENMURE ROAD',
+                 NULL::VARCHAR, NULL::VARCHAR, 20.0::DOUBLE, 0.95::DOUBLE),
+                -- q3: whitespace-split place name + Welsh prefix (HEOL Y) -> blocked
+                (5, 50, 'q3', 3, '16 HEOL Y NANT LLANILID PONT Y CLUN', 'CF72 4AB',
+                 '16 HEOL Y LLINOS LLANILID PONTYCLUN', 'CF72 4AB',
+                 'HEOL Y', 'HEOL Y',
+                 NULL::VARCHAR, NULL::VARCHAR, 40.0::DOUBLE, 0.99::DOUBLE),
+                (6, 60, 'q3', 3, '16 HEOL Y LLINOS LLANILID PONTYCLUN', 'CF72 4BA',
+                 '16 HEOL Y LLINOS LLANILID PONTYCLUN', 'CF72 4AB',
+                 'HEOL Y', 'HEOL Y',
+                 NULL::VARCHAR, NULL::VARCHAR, 18.0::DOUBLE, 0.95::DOUBLE),
+                -- q4: low-MW cross-district active locality disagreement
+                -- (GELLI PENTRE vs LLWYNYPIA TONYPANDY) -> promotes
+                (7, 70, 'q4', 4, '10 TREM Y RHEILFFORDD LLWYNYPIA TONYPANDY', 'CF40 2TJ',
+                 '10 SWN YR AFON DOROTHY STREET GELLI PENTRE', 'CF40 2TJ',
+                 'RAILWAY VIEW', 'DOROTHY STREET',
+                 NULL::VARCHAR, NULL::VARCHAR, -0.8::DOUBLE, 0.40::DOUBLE),
+                (8, 80, 'q4', 4, '10 SWN YR AFON GELLI PENTRE', 'CF41 7UN',
+                 '10 SWN YR AFON DOROTHY STREET GELLI PENTRE', 'CF40 2TJ',
+                 'SWN YR', 'DOROTHY STREET',
+                 NULL::VARCHAR, NULL::VARCHAR, -6.5::DOUBLE, 0.05::DOUBLE)
+            ) t(
+                ukam_address_id_l, unique_id_l, unique_id_r, ukam_address_id_r,
+                clean_full_address_l, postcode_l, clean_full_address_r, postcode_r,
+                road_1_norm_l, road_1_norm_r, flat_identity_l, flat_identity_r,
+                match_weight, match_probability
+            )
+        """)
+        improved = improve_predictions_using_distinguishing_tokens(
+            df_predict=df_predict,
+            con=con,
+            match_weight_threshold=-20.0,
+        )
+        winners = con.sql(f"""
+            SELECT unique_id_r, unique_id_l
+            FROM ({improved.sql_query()})
+            QUALIFY row_number() OVER (
+                PARTITION BY unique_id_r ORDER BY match_weight DESC
+            ) = 1
+            ORDER BY unique_id_r
+        """).fetchall()
+        assert winners == [("q1", 20), ("q2", 30), ("q3", 50), ("q4", 80)]
+
+
 def test_wrong_postcode_recovery_end_to_end(tmp_path):
     with duckdb.connect() as con:
         canonical_source = con.sql("""
