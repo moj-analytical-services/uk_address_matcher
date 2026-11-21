@@ -1,7 +1,9 @@
 ---
+name: summarise-experiment
 description: "Use when: writing a Markdown report for a completed benchmark experiment, including measured accuracy, runtime, storage and promotion evidence."
+disable-model-invocation: true
+argument-hint: "Experiment run IDs, comparison baseline and artefact paths"
 ---
-
 # Summarise a benchmark experiment
 
 Write a concise Markdown experiment report in `docs/experiments/` using British
@@ -10,31 +12,10 @@ or directly measured files. Do not invent missing metrics.
 
 ## Experiment context
 
-```text
-Question:
-${input:question:What hypothesis did the experiment test?}
-
-Change:
-${input:change:What implementation, model, feature or threshold changed?}
-
-Baseline:
-${input:baseline:What is the baseline run ID and baseline artefact?}
-
-Variants:
-${input:variants:Which controls, candidates and ablations were run?}
-
-Datasets:
-${input:datasets:Which datasets and row counts were used?}
-
-Canonical rebuild:
-${input:rebuild:Was the canonical rebuilt, and from which input and output paths?}
-
-Storage paths:
-${input:storage:Which files were measured before and after?}
-
-Artefacts:
-${input:artefacts:Where are the persisted manifests, charts, audits and transition tables?}
-```
+Resolve the hypothesis, implementation change, baseline, variants, datasets,
+canonical rebuild, storage paths and artefact paths from the arguments and
+persisted evidence. Ask for missing run identifiers or paths rather than inventing
+them.
 
 ## Required report structure
 

@@ -1,19 +1,19 @@
 ---
+name: pr-summary
 description: "Draft an evidence-backed PR summary in British English, with a fictional worked example, council benchmarks, precision-recall overlays and performance costs."
-agent: agent
+disable-model-invocation: true
 argument-hint: "Feature or commit range; optional benchmark run IDs"
 ---
-
 # Write a PR summary
 
 Produce a concise, copy-ready Markdown PR summary in British English, without
 em dashes. Use the feature or commit range supplied in chat; otherwise use the
 current feature commits. Do not include unrelated worktree changes.
 
-Follow [repository workflow](../instructions/repo-workflow.instructions.md),
-[benchmark evidence](../instructions/benchmark-experiments.instructions.md)
-and [data safety](../instructions/data-handling.instructions.md). Reuse the
-[benchmark skill](../skills/benchmark-experiment/SKILL.md) and existing reports
+Follow [repository workflow](../../instructions/repo-workflow.instructions.md),
+[benchmark evidence](../../instructions/benchmark-experiments.instructions.md)
+and [data safety](../../instructions/data-handling.instructions.md). Reuse the
+[benchmark skill](../benchmark-experiment/SKILL.md) and existing reports
 in `docs/experiments/` before running new experiments.
 
 ## Required sections

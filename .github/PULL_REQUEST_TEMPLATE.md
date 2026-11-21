@@ -20,6 +20,7 @@ List the checks you ran and their results. If tests are not applicable, explain 
 
 ## PR checklist
 
+- [ ] Agent-assisted change.
 - [ ] Read the [contribution guidelines](https://github.com/moj-analytical-services/uk_address_matcher/blob/main/CONTRIBUTING.md) and agreed the scope where required.
 - [ ] Added tests (if appropriate).
 - [ ] Run the [Ruff linter](https://docs.astral.sh/ruff/linter/).

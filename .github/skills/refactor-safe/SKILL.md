@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: refactor-safe
 description: "Perform a behaviour-preserving refactor with explicit boundaries and targeted validation."
+disable-model-invocation: true
 ---
-
 Perform the refactor without behavioural drift.
 
 Success means:

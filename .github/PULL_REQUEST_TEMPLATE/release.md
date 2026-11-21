@@ -12,7 +12,7 @@ Briefly summarise the changes in this release.
 
 ## Validation Checklist
 
-- [ ] Run the [release E2E validation prompt](https://github.com/moj-analytical-services/uk_address_matcher/blob/main/.github/prompts/release-e2e.prompt.md) for the target version and reviewed its results.
+- [ ] Run the [release E2E skill](https://github.com/moj-analytical-services/uk_address_matcher/blob/main/.github/skills/release-e2e/SKILL.md) for the target version and reviewed its results.
 - [ ] Included `docs/runtime/<target-release>/manifest.json` and `docs/runtime/<target-release>/report.md` in this PR.
 - [ ] Confirmed preparation and matching runtimes look sensible against the comparison baseline.
 - [ ] Reviewed preparation and pooled-council peak RSS, spill usage and cleanup; the figures look sensible.
