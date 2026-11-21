@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from duckdb import InvalidInputException
 
@@ -206,11 +206,12 @@ class SplinkStage(MatchingStage):
       means the winner is clearer. ``NULL`` usually means there was only one
       candidate left after blocking.
 
-    Setting ``final_match_weight_threshold=-20`` and
-    ``final_distinguishability_threshold=0.0`` is a permissive configuration
-    that keeps almost all top-ranked Splink candidates. Raising either
-    threshold filters out more weak or ambiguous matches, typically improving
-    precision at the cost of recall.
+    ``acceptance_profile`` controls how sensitive the final decision is to
+    false positives, from coverage-oriented top-1 selection to a conservative
+    precision policy. It does not replace the minimum thresholds: a candidate
+    must pass the profile and both ``minimum_match_weight`` and
+    ``minimum_distinguishability``. Raise these minimums separately when the
+    benchmark evidence requires a stricter operating point.
 
     Args:
         predict_threshold_match_weight: Initial minimum score passed to
@@ -228,11 +229,19 @@ class SplinkStage(MatchingStage):
             agreement in the local reranker.
         reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
             agreement in the local reranker.
-        final_match_weight_threshold: Minimum ``match_weight`` required for a
-            Splink match to be emitted in the final results.
-        final_distinguishability_threshold: Minimum distinguishability required
-            for a Splink match to be emitted. Set to ``None`` to disable this
-            filter.
+        acceptance_profile: Final acceptance formula. ``"coverage"`` emits the
+            reranked top-1 candidate after the minimum filters. ``"balanced"``
+            additionally requires ``MW + 1.7 * gap >= 13.2``. ``"precision"``
+            additionally requires ``gap >= max(0, 8 - 0.2 * MW)``. The latter
+            profiles remove ambiguous winners to reduce false positives.
+        minimum_match_weight: Minimum ``match_weight`` required after reranking.
+        minimum_distinguishability: Minimum distinguishability required after
+            reranking. ``NULL`` distinguishability is accepted as a
+            single-candidate result.
+        final_match_weight_threshold: Deprecated alias for
+            ``minimum_match_weight``.
+        final_distinguishability_threshold: Deprecated alias for
+            ``minimum_distinguishability``. ``None`` disables that minimum.
         include_full_postcode_block: Whether to include a strict full-postcode
             blocking rule when generating Splink candidate pairs.
         include_outside_postcode_block: Whether to include broader blocking
@@ -256,9 +265,13 @@ class SplinkStage(MatchingStage):
     reranker_token_reward_multiplier: float = 3.0
     reranker_bigram_reward_multiplier: float = 2.2
 
-    # Thresholds for final candidate selection
-    final_match_weight_threshold: float = -20.0
-    final_distinguishability_threshold: float | None = 0.0
+    acceptance_profile: Literal["coverage", "balanced", "precision"] = "coverage"
+    minimum_match_weight: float = -20.0
+    minimum_distinguishability: float | None = 0.0
+
+    # Deprecated aliases retained for compatibility during the API transition.
+    final_match_weight_threshold: float = field(default=-20.0, repr=False)
+    final_distinguishability_threshold: float | None = field(default=0.0, repr=False)
 
     # Blocking configuration
     include_full_postcode_block: bool = False
@@ -291,6 +304,58 @@ class SplinkStage(MatchingStage):
     _canonical_cache_path: str | None = field(
         default=None, init=False, repr=False, compare=False
     )
+
+    def __post_init__(self) -> None:
+        if self.acceptance_profile not in {"coverage", "balanced", "precision"}:
+            raise ValueError(
+                "acceptance_profile must be 'coverage', 'balanced', or 'precision'."
+            )
+
+        if self.final_match_weight_threshold != -20.0:
+            if (
+                self.minimum_match_weight != -20.0
+                and self.minimum_match_weight != self.final_match_weight_threshold
+            ):
+                raise ValueError(
+                    "Set minimum_match_weight or final_match_weight_threshold, not both."
+                )
+            self.minimum_match_weight = self.final_match_weight_threshold
+        self.final_match_weight_threshold = self.minimum_match_weight
+
+        if self.final_distinguishability_threshold != 0.0:
+            if (
+                self.minimum_distinguishability != 0.0
+                and self.minimum_distinguishability
+                != self.final_distinguishability_threshold
+            ):
+                raise ValueError(
+                    "Set minimum_distinguishability or "
+                    "final_distinguishability_threshold, not both."
+                )
+            self.minimum_distinguishability = self.final_distinguishability_threshold
+        self.final_distinguishability_threshold = self.minimum_distinguishability
+
+    def _final_acceptance_filter_sql(self) -> str:
+        """Build the post-reranking acceptance filter."""
+        filters = [
+            f"match_weight >= {self.minimum_match_weight}",
+        ]
+        if self.minimum_distinguishability is not None:
+            filters.append(
+                "(distinguishability IS NULL "
+                f"OR distinguishability >= {self.minimum_distinguishability})"
+            )
+        if self.acceptance_profile == "balanced":
+            filters.append(
+                "(distinguishability IS NULL "
+                "OR match_weight + 1.7 * distinguishability >= 13.2)"
+            )
+        elif self.acceptance_profile == "precision":
+            filters.append(
+                "(distinguishability IS NULL "
+                "OR distinguishability >= GREATEST(0.0, 8.0 - 0.2 * match_weight))"
+            )
+        return " AND ".join(filters)
 
     def _release_splink_tables(self) -> None:
         """Drop this run's Splink tables via Splink's public API."""
@@ -497,12 +562,7 @@ class SplinkStage(MatchingStage):
             # Step 5: Apply thresholds and project to standard columns
             splink_label = MatchReason.SPLINK.value
 
-            dist_filter = ""
-            if self.final_distinguishability_threshold is not None:
-                dist_filter = (
-                    "AND (distinguishability IS NULL "
-                    f"OR distinguishability >= {self.final_distinguishability_threshold})"
-                )
+            acceptance_filter = self._final_acceptance_filter_sql()
 
             range_audit_projection = ""
             range_audit_projection = "".join(
@@ -533,8 +593,7 @@ class SplinkStage(MatchingStage):
                     FROM {df_best_name}
                     WHERE candidate_rank = 1
                 ) AS best_match
-                WHERE best_match.match_weight >= {self.final_match_weight_threshold}
-                {dist_filter}
+                WHERE {acceptance_filter}
                 AND best_match.unique_id_l IS NOT NULL
             """)
             completed = True
