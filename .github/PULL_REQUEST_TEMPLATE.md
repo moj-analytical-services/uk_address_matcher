@@ -4,6 +4,7 @@
 - [ ] FEAT
 - [ ] MAINT
 - [ ] DOC
+- [ ] AGENT
 
 ## Related issue
 

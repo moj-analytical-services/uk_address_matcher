@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: bugfix
 description: "Resolve a bug in uk_address_matcher with a root-cause-first fix and targeted validation."
+disable-model-invocation: true
 ---
-
 Resolve the bug end to end with a root-cause-first approach.
 
 Success means:
