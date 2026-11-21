@@ -16,9 +16,6 @@ from uk_address_matcher.post_linkage.distinguishing_features.numeric_range impor
     ensure_numeric_range_struct,
     project_splink_predictions,
 )
-from uk_address_matcher.post_linkage.distinguishing_features.postcode_recovery import (
-    apply_postcode_recovery,
-)
 from uk_address_matcher.sql_pipeline.helpers import _uid
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
@@ -382,20 +379,15 @@ class SplinkStage(MatchingStage):
                 "clean_full_address",
                 "postcode",
             ]
+            if (
+                "road_1_norm" in df_canonical.columns
+                and "road_1_norm" in df_unmatched.columns
+            ):
+                linker_columns.append("road_1_norm")
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
             linker_columns = list(dict.fromkeys(linker_columns))
 
-            # Recovery uses address evidence rather than the Splink score policy.
-            aligned_inputs = (
-                []
-                if self.settings is None
-                and self.final_match_weight_threshold == -20
-                and self.final_distinguishability_threshold == 0
-                and self.predict_threshold_match_weight == -20
-                and self.improve_threshold_match_weight == -20
-                else None
-            )
             # Step 1: Build linker
             linker = _get_linker(
                 df_addresses_to_match=df_unmatched,
@@ -409,7 +401,6 @@ class SplinkStage(MatchingStage):
                 owned_splink_frames=owned_frames,
                 retain_matching_columns=False,
                 canonical_cache_path=self._canonical_cache_path,
-                aligned_inputs=aligned_inputs,
             )
 
             self.linker = linker
@@ -551,17 +542,6 @@ class SplinkStage(MatchingStage):
                 {dist_filter}
                 AND best_match.unique_id_l IS NOT NULL
             """)
-            if aligned_inputs is not None:
-                result = apply_postcode_recovery(
-                    con,
-                    linker,
-                    result,
-                    con.table(df_best_name),
-                    df_unmatched,
-                    df_canonical,
-                    aligned_inputs,
-                    owned_frames,
-                )
             completed = True
             return result
         finally:
