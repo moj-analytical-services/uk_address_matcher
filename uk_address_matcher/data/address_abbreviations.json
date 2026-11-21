@@ -200,8 +200,6 @@
   { "token": "PASS", "replacement": "PASSAGE" },
   { "token": "PSGR", "replacement": "PASSAGE" },
 
-  { "token": "PEN", "replacement": "PENINSULA" },
-
   { "token": "PK", "replacement": "PARK" },
 
   { "token": "PL", "replacement": "PLACE" },
