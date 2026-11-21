@@ -15,6 +15,55 @@ _POSITIONAL_TOKENS_SQL = "('LEFT', 'RIGHT', 'CENTRE', 'FRONT')"
 _DEPTH_POSITIONS_SQL = "('FRONT', 'REAR', 'CENTRE')"
 
 
+def _locality_tokens_sql(
+    addr_col: str,
+    road_col: str,
+    *,
+    require_road: bool = False,
+    max_tokens: int | None = None,
+) -> str:
+    null_branch = (
+        f"WHEN nullif({road_col}, '') IS NULL THEN CAST([] AS VARCHAR[])"
+        if require_road
+        else ""
+    )
+    filtered = f"""
+        list_filter(
+            CASE
+                {null_branch}
+                WHEN nullif({road_col}, '') IS NOT NULL
+                     AND instr({addr_col}, {road_col}) > 0
+                THEN string_split(
+                    trim(substr(
+                        {addr_col},
+                        instr({addr_col}, {road_col}) + length({road_col})
+                    )),
+                    ' '
+                )
+                ELSE list_slice(string_split({addr_col}, ' '), -2, -1)
+            END,
+            lambda tok: length(tok) >= 3 AND NOT regexp_matches(tok, '[0-9]')
+        )
+    """
+    return (
+        f"list_slice({filtered}, -{max_tokens}, -1)"
+        if max_tokens is not None
+        else filtered
+    )
+
+
+def _active_locality_disagreement_sql(r_only_col: str, top_only_col: str) -> str:
+    return f"""(
+        len({r_only_col}) > 0
+        AND len({top_only_col}) > 0
+        AND len(list_intersect({r_only_col}, __cand_toks_l)) > 0
+        AND len(list_filter(
+            {top_only_col},
+            lambda tok: instr(__compact_cand_l, tok) > 0
+        )) = 0
+    )"""
+
+
 def _sibling_location_join_sql(
     shortlist: str,
     messy: DuckDBPyRelation,
@@ -800,13 +849,16 @@ def improve_predictions_using_distinguishing_tokens(
                         ukam_address_id_r,
                         __reranked_mw AS __top_mw,
                         clean_full_address_l AS __top_addr_l,
-                        clean_full_address_r AS __top_addr_r
+                        clean_full_address_r AS __top_addr_r,
+                        road_1_norm_l AS __top_road_l,
+                        road_1_norm_r AS __top_road_r,
+                        nullif(road_1_norm_l, '')
+                            IS DISTINCT FROM nullif(road_1_norm_r, '')
+                            AS __top_road_diff
                     FROM ranked
                     WHERE __rnk = 1
                       AND __same_pc
-                      AND __reranked_mw < 25.0
-                      AND nullif(road_1_norm_l, '')
-                          IS DISTINCT FROM nullif(road_1_norm_r, '')
+                      AND __reranked_mw < 35.0
                 ),
                 contenders AS (
                     SELECT
@@ -815,6 +867,12 @@ def improve_predictions_using_distinguishing_tokens(
                         r.ukam_address_id_l,
                         r.__reranked_mw,
                         t.__top_mw,
+                        t.__top_road_diff,
+                        r.clean_full_address_l,
+                        t.__top_addr_l,
+                        t.__top_addr_r,
+                        t.__top_road_l,
+                        t.__top_road_r,
                         split_part(upper(trim(r.postcode_l)), ' ', 1)
                             = split_part(upper(trim(r.postcode_r)), ' ', 1)
                             AS __same_dist,
@@ -838,8 +896,26 @@ def improve_predictions_using_distinguishing_tokens(
                     JOIN top1 t USING (ukam_address_id_r)
                     WHERE r.__rnk > 1
                       AND NOT r.__same_pc
-                      AND r.__reranked_mw >= 0.0
-                      AND (t.__top_mw - r.__reranked_mw) <= 12.0
+                      AND (
+                          (
+                              t.__top_road_diff
+                              AND t.__top_mw < 25.0
+                              AND r.__reranked_mw >= 0.0
+                              AND (t.__top_mw - r.__reranked_mw) <= 12.0
+                          )
+                          OR (
+                              t.__top_road_diff
+                              AND t.__top_mw < 12.0
+                              AND r.__reranked_mw >= -8.0
+                              AND (t.__top_mw - r.__reranked_mw) <= 10.0
+                          )
+                          OR (
+                              r.__reranked_mw >= 0.0
+                              AND (t.__top_mw - r.__reranked_mw) <= 10.0
+                              AND split_part(upper(trim(r.postcode_l)), ' ', 1)
+                                  = split_part(upper(trim(r.postcode_r)), ' ', 1)
+                          )
+                      )
                       AND NOT (
                           nullif(r.flat_identity_l, '')
                               IS DISTINCT FROM nullif(r.flat_identity_r, '')
@@ -848,20 +924,102 @@ def improve_predictions_using_distinguishing_tokens(
                               OR nullif(r.flat_identity_r, '') IS NOT NULL
                           )
                       )
+                ),
+                text_passed AS (
+                    SELECT
+                        ukam_address_id_r,
+                        unique_id_l,
+                        ukam_address_id_l,
+                        __reranked_mw,
+                        __top_mw,
+                        __top_road_diff,
+                        __same_dist,
+                        __jw,
+                        (
+                            __top_road_diff
+                            AND __top_mw < 25.0
+                            AND __reranked_mw >= 0.0
+                        ) AS __base_eligible,
+                        {_locality_tokens_sql("__top_addr_r", "__top_road_r")}
+                            AS __tail_r,
+                        {_locality_tokens_sql("__top_addr_l", "__top_road_l")}
+                            AS __top_tail_l,
+                        {
+                _locality_tokens_sql(
+                    "__top_addr_r", "__top_road_r", require_road=True, max_tokens=2
+                )
+            } AS __end_r,
+                        {
+                _locality_tokens_sql(
+                    "__top_addr_l", "__top_road_l", require_road=True, max_tokens=2
+                )
+            } AS __top_end_l,
+                        replace(__top_addr_r, ' ', '') AS __compact_r,
+                        replace(__top_addr_l, ' ', '') AS __compact_top_l,
+                        replace(clean_full_address_l, ' ', '') AS __compact_cand_l,
+                        string_split(clean_full_address_l, ' ') AS __cand_toks_l
+                    FROM contenders
+                    WHERE __jw >= 0.85
+                      AND __jw >= __top_jw + 0.05
+                      AND __mask_jw >= __top_mask_jw + 0.08
+                      AND NOT (
+                          len(__nums_r) > 0
+                          AND len(__nums_l) > 0
+                          AND __nums_r <> __nums_l
+                      )
+                ),
+                locality_checked AS (
+                    SELECT
+                        ukam_address_id_r,
+                        unique_id_l,
+                        ukam_address_id_l,
+                        __reranked_mw,
+                        __top_mw,
+                        __top_road_diff,
+                        __same_dist,
+                        __jw,
+                        __base_eligible,
+                        __compact_cand_l,
+                        __cand_toks_l,
+                        list_filter(
+                            __tail_r,
+                            lambda tok: instr(__compact_top_l, tok) = 0
+                        ) AS __r_only_tail,
+                        list_filter(
+                            __top_tail_l,
+                            lambda tok: instr(__compact_r, tok) = 0
+                        ) AS __top_only_tail,
+                        list_filter(
+                            __end_r,
+                            lambda tok: instr(__compact_top_l, tok) = 0
+                        ) AS __r_only_end,
+                        list_filter(
+                            __top_end_l,
+                            lambda tok: instr(__compact_r, tok) = 0
+                        ) AS __top_only_end
+                    FROM text_passed
                 )
                 SELECT
                     ukam_address_id_r,
                     unique_id_l,
                     ukam_address_id_l,
                     __top_mw + 1.0 AS __promoted_mw
-                FROM contenders
-                WHERE __jw >= 0.85
-                  AND __jw >= __top_jw + 0.05
-                  AND __mask_jw >= __top_mask_jw + 0.08
-                  AND NOT (
-                      len(__nums_r) > 0
-                      AND len(__nums_l) > 0
-                      AND __nums_r <> __nums_l
+                FROM locality_checked
+                WHERE __base_eligible
+                  OR (
+                      __top_road_diff
+                      AND __top_mw < 12.0
+                      AND __reranked_mw >= -8.0
+                      AND {
+                _active_locality_disagreement_sql("__r_only_tail", "__top_only_tail")
+            }
+                  )
+                  OR (
+                      __reranked_mw >= 0.0
+                      AND __same_dist
+                      AND {
+                _active_locality_disagreement_sql("__r_only_end", "__top_only_end")
+            }
                   )
                 QUALIFY row_number() OVER (
                     PARTITION BY ukam_address_id_r
