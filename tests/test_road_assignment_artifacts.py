@@ -33,7 +33,7 @@ def test_prepared_address_candidates_start_after_rightmost_numeric_token() -> No
                 (3, '12 GREAT FIELD COLINDALE ABERDEEN', 'AB10 1AA', ['12'])
         ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
         """
-    )
+    ).fetchall()
 
     create_phrase_catalog(con, source_relation="canonical")
     features = con.execute(online_feature_sql("canonical")).fetchdf()
@@ -83,7 +83,7 @@ def test_candidate_generation_abstains_for_ambiguous_text_and_excluded_classes()
             classificationcode
         )
         """
-    )
+    ).fetchall()
 
     candidates = con.execute(
         canonical_candidate_sql(
@@ -121,7 +121,7 @@ def test_folded_sql_score_uses_materialized_candidates() -> None:
             VALUES (1, '12 GREAT FIELD COLINDALE', 'NW9 5AA', ['12'])
         ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
         """
-    )
+    ).fetchall()
     create_candidate_table(con, source_relation="canonical")
     create_phrase_catalog(con, source_relation="canonical")
 
@@ -138,9 +138,11 @@ def test_folded_sql_score_uses_materialized_candidates() -> None:
     )
 
     assert scored == 3
-    assert con.execute(
-        "SELECT candidate_phrase FROM road_assignment_additive_winners"
-    ).fetchone() == ("FIELD COLINDALE",)
+    assert (
+        con.execute(
+            "SELECT candidate_phrase FROM road_assignment_additive_winners"
+        ).fetchall()
+    )[0] == ("FIELD COLINDALE",)
 
 
 def test_prepared_candidates_reuse_tokens_and_keep_facility_fallback() -> None:
@@ -182,7 +184,7 @@ def test_prepared_candidates_reuse_tokens_and_keep_facility_fallback() -> None:
             numeric_tokens
         )
         """
-    )
+    ).fetchall()
 
     candidates = con.execute(prepared_candidate_sql("prepared")).fetchdf()
 
@@ -214,8 +216,8 @@ def test_build_catalog_assigns_canonical_rows_and_writes_manifest(tmp_path) -> N
             classificationcode
         )
         """
-    )
-    con.execute(f"COPY canonical TO '{canonical_path}' (FORMAT PARQUET)")
+    ).fetchall()
+    con.execute(f"COPY canonical TO '{canonical_path}' (FORMAT PARQUET)").fetchall()
     con.close()
     feature_columns = [name for name, _ in ADDITIVE_FEATURES]
     folded_model_path.write_text(
@@ -246,12 +248,14 @@ def test_build_catalog_assigns_canonical_rows_and_writes_manifest(tmp_path) -> N
     )
 
     con = duckdb.connect(str(output_database), read_only=True)
-    assert con.execute(
-        "SELECT candidate_phrase FROM road_assignment_canonical_labels"
-    ).fetchone() == ("FIELD COLINDALE",)
-    assert con.execute(
-        "SELECT count(*) FROM road_assignment_phrase_catalog"
-    ).fetchone() == (3,)
+    assert (
+        con.execute(
+            "SELECT candidate_phrase FROM road_assignment_canonical_labels"
+        ).fetchall()
+    )[0] == ("FIELD COLINDALE",)
+    assert (
+        con.execute("SELECT count(*) FROM road_assignment_phrase_catalog").fetchall()
+    )[0] == (3,)
     assert con.execute(
         "SELECT table_name FROM duckdb_tables() ORDER BY table_name"
     ).fetchall() == [

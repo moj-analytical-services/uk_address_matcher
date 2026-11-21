@@ -4,7 +4,7 @@ applyTo:
   - "**/*.sql"
   - "tests/**/*"
   - "frontend/**/*"
-  - "shell/**/*.sh"
+  - "dev_scripts/shell/**/*.sh"
   - ".github/**/*.md"
   - ".github/workflows/**/*.yml"
   - ".github/workflows/**/*.yaml"

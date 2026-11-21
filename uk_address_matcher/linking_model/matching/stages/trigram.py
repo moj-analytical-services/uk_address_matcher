@@ -83,7 +83,7 @@ def _ngram_expression(tokens_column: str, ngram_size: int) -> str:
     return f"""
         list_transform(
             range(1, length({tokens_column}) - {ngram_size} + 2),
-            i -> {tokens_column}[i : i + {ngram_size} - 1]
+            lambda i: {tokens_column}[i : i + {ngram_size} - 1]
         )
     """.strip()
 

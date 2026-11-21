@@ -4,7 +4,8 @@ from pathlib import Path
 
 import duckdb
 
-from uk_address_matcher import ExactMatchStage, SplinkStage, prepare_data_for_matching
+from uk_address_matcher import ExactMatchStage, SplinkStage
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.matching.runner import _run_matching
 from uk_address_matcher.linking_model.training import get_settings_for_training
 

@@ -174,8 +174,8 @@ def test_prepare_splink_candidates_returns_top_results(
         splink_candidates_with_duplicates.select("unique_id_r")
         .distinct()
         .count("*")
-        .fetchone()[0]
-        == result.count("*").fetchone()[0]
+        .fetchall()[0][0]
+        == result.count("*").fetchall()[0][0]
     )
     # Check that we have selected the top match for unique IDs
     expected_matches = [(1, 0.85), (2, 0.91), (3, 0.92), (4, 0.94)]
@@ -184,7 +184,7 @@ def test_prepare_splink_candidates_returns_top_results(
             float(
                 result.filter(f"unique_id = {unique_id}")
                 .select("match_weight")
-                .fetchone()[0]
+                .fetchall()[0][0]
             )
             == match_weight
         )

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TOKENS_PATH="${1:-${REPO_ROOT}/uk_address_matcher/data/common_uk_end_tokens.json}"
 
 python3 - <<'PY' "${TOKENS_PATH}"

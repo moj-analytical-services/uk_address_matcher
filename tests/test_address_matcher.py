@@ -94,7 +94,7 @@ def test_match_with_default_stages(con, canonical_data, messy_data):
 
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_match_with_explicit_stages(con, canonical_data, messy_data):
@@ -109,7 +109,7 @@ def test_match_with_explicit_stages(con, canonical_data, messy_data):
 
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 @pytest.mark.parametrize("matching_num_chunks", [3, 32])
@@ -149,8 +149,8 @@ def test_chunked_matching_preserves_all_rows(
         caplog.clear()
         actual = matcher.match()
 
-    columns = "unique_id, resolved_canonical_id, match_reason"
-    assert actual.matches().count("*").fetchone()[0] == len(records)
+    columns = "address_id, canonical_address_id, match_reason"
+    assert actual.matches().count("*").fetchall()[0][0] == len(records)
     assert actual.matches().project(columns).order("ALL").fetchall() == (
         expected.matches().project(columns).order("ALL").fetchall()
     )
@@ -181,7 +181,8 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
 
     folder = tmp_path / "prepared"
     canonical_data = canonical_data.select(
-        "*, 123456789012345678901234567890::HUGEINT AS cached_number"
+        "*, 123456789012345678901234567890::HUGEINT AS cached_number, "
+        "'canonical'::ENUM('canonical', 'messy') AS cached_enum"
     )
     prepare_canonical_folder(
         canonical_data, output_folder=folder, con=con, show_progress="off"
@@ -192,9 +193,14 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
     ]
     matcher = AddressMatcher(
         folder,
-        _make_addresses(con, records).select("*, NULL::HUGEINT AS cached_number"),
+        _make_addresses(con, records).select(
+            "*, NULL::HUGEINT AS cached_number, "
+            "NULL::ENUM('canonical', 'messy') AS cached_enum"
+        ),
         con=con,
-        stages=[SplinkStage(additional_columns_to_retain=["cached_number"])],
+        stages=[
+            SplinkStage(additional_columns_to_retain=["cached_number", "cached_enum"])
+        ],
         show_progress="off",
     )
     original_register_index = matcher._register_inverted_index
@@ -204,7 +210,7 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
         assert con.sql(
             "SELECT count(*) FROM duckdb_tables() WHERE table_name = ?",
             params=[matcher._inverted_index_table_name],
-        ).fetchone() == (int(matcher.matching_num_chunks == 1),)
+        ).fetchall() == [(int(matcher.matching_num_chunks == 1),)]
 
     monkeypatch.setattr(matcher, "_register_inverted_index", register_index)
     expected = matcher.match()
@@ -217,8 +223,8 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
                 "SELECT 1 FROM duckdb_tables() "
                 "WHERE table_name IN (?, '__ukam_inverted_index')",
                 params=[matcher._inverted_index_table_name],
-            ).fetchone()
-            is None
+            ).fetchall()
+            == []
         )
         kwargs["df_addresses_to_search_within"] = kwargs[
             "df_addresses_to_search_within"
@@ -227,9 +233,16 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
         path = Path(kwargs["canonical_cache_path"])
         cached_files.append((path, path.stat().st_mtime_ns))
         assert "local_key_index" not in con.read_parquet(str(path)).columns
-        assert con.table("c_").select("cached_number").fetchall() == [
-            (123456789012345678901234567890,)
-        ] * len(CANONICAL_RECORDS)
+        canonical_frame = next(
+            frame
+            for frame in linker._input_tables_dict.values()
+            if frame.dataset_display_name == "c_"
+        )
+        assert canonical_frame.as_duckdbpyrelation().select(
+            "cached_number, cached_enum"
+        ).fetchall() == [(123456789012345678901234567890, "canonical")] * len(
+            CANONICAL_RECORDS
+        )
         if fail_on_second_chunk and len(cached_files) == 2:
             raise RuntimeError("stop on second chunk")
         return linker
@@ -241,8 +254,9 @@ def test_chunked_splink_reuses_and_cleans_canonical_cache(
             matcher.match()
     else:
         actual = matcher.match()
-        assert actual.matches().order("unique_id").fetchall() == (
-            expected.matches().order("unique_id").fetchall()
+        stable_columns = "* EXCLUDE (ukam_address_id, canonical_ukam_address_id)"
+        assert actual.matches().select(stable_columns).order("ALL").fetchall() == (
+            expected.matches().select(stable_columns).order("ALL").fetchall()
         )
         actual.close()
     assert len(cached_files) > 1
@@ -281,7 +295,7 @@ def test_chunked_canonical_count_refreshes_between_matches(con, canonical_data):
             )
         result = matcher.match()
         assert matcher._canonical_count == expected_count
-        assert result.matches().select("resolved_canonical_id").fetchall() == [
+        assert result.matches().select("canonical_address_id").fetchall() == [
             ("C1",)
         ] * len(records)
         result.close()
@@ -306,13 +320,13 @@ def test_chunked_matching_with_prepared_canonical(con, canonical_data, tmp_path)
     assert len(list(output_directory.glob("*.parquet"))) == 2
     assert str(output_directory) in actual._relation.sql_query()
 
-    assert actual.matches().order("unique_id").fetchall() == (
-        expected.matches().order("unique_id").fetchall()
+    assert actual.matches().order("address_id").fetchall() == (
+        expected.matches().order("address_id").fetchall()
     )
     assert actual.join_input_columns(
         canonical=[{"input_column": "unique_id", "alias": "canonical_id"}],
         messy=["source_id"],
-    ).select("unique_id, canonical_id, source_id").order("unique_id").fetchall() == [
+    ).select("address_id, canonical_id, source_id").order("address_id").fetchall() == [
         ("M1", "C1", "M1"),
         ("M2", "C2", "M2"),
     ]
@@ -326,9 +340,9 @@ def test_chunked_matching_with_prepared_canonical(con, canonical_data, tmp_path)
     actual.close()
     actual.close()
     assert not output_directory.exists()
-    assert expected.matches().count("*").fetchone()[0] == 2
+    assert expected.matches().count("*").fetchall()[0][0] == 2
     expected.close()
-    assert canonical_data.count("*").fetchone()[0] == len(CANONICAL_RECORDS)
+    assert canonical_data.count("*").fetchall()[0][0] == len(CANONICAL_RECORDS)
 
 
 @pytest.mark.parametrize("matching_num_chunks", [1, 3])
@@ -394,15 +408,15 @@ def test_match_5000_rows_with_repeated_external_ids(
                 .aggregate("""
                 COUNT(*),
                 COUNT(DISTINCT ukam_address_id),
-                COUNT(DISTINCT unique_id),
+                COUNT(DISTINCT address_id),
                 COUNT(*) FILTER (
-                    WHERE resolved_canonical_id = CASE
+                    WHERE canonical_address_id = CASE
                         WHEN postcode = 'SW1A 1AA' THEN 'C1'
                         ELSE 'C2'
                     END
                 )
             """)
-                .fetchone()
+                .fetchall()[0]
             )
             assert counts == (5_000, 5_000, 1 if repeated_ids else 5_000, 5_000)
             elapsed = perf_counter() - started
@@ -460,7 +474,7 @@ def test_match_with_relations_from_different_connection(con):
     result = matcher.match()
 
     assert isinstance(result, MatchResult)
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_match_result_has_expected_columns(con, canonical_data, messy_data):
@@ -473,7 +487,7 @@ def test_match_result_has_expected_columns(con, canonical_data, messy_data):
     result = matcher.match()
     cols = result.matches().columns
 
-    assert "unique_id_l" in cols or "unique_id" in cols
+    assert "address_id" in cols
     assert "match_reason" in cols
     assert "postcode" in cols
     assert "postcode_canonical" in cols
@@ -505,6 +519,33 @@ def enrichment_result(con):
     )
 
 
+def test_public_matches_filter_and_identifiers(enrichment_result):
+    relation = enrichment_result._relation.project(
+        "*, CASE WHEN canonical_ukam_address_id IS NOT NULL THEN 'C1' END "
+        "AS resolved_canonical_id, 'source metadata' AS address_id, "
+        "'other metadata' AS canonical_address_id"
+    )
+    result = MatchResult(relation, con=enrichment_result.con)
+    metrics = result.match_metrics().fetchall()
+    for all_columns in (False, True):
+        rows = result.matches(all_columns=all_columns)
+        assert "unique_id" not in rows.columns
+        assert "resolved_canonical_id" not in rows.columns
+        assert len(rows.columns) == len(set(rows.columns))
+        assert rows.select(
+            "address_id, ukam_address_id, canonical_address_id, canonical_ukam_address_id"
+        ).order("ukam_address_id").fetchall() == [
+            ("M1", 1, "C1", 101),
+            ("M2", 2, None, None),
+            ("M1", 3, "C1", 102),
+        ]
+        assert result.matches(all_columns=all_columns, include_unmatched=False).select(
+            "ukam_address_id"
+        ).order("ukam_address_id").fetchall() == [(1,), (3,)]
+    assert (result.matches().count("*").limit(1).fetchall())[0] == (3,)
+    assert result.match_metrics().fetchall() == metrics
+
+
 def test_join_input_columns_mixed_selections_aliases_and_unmatched_rows(
     enrichment_result,
 ):
@@ -524,11 +565,17 @@ def test_join_input_columns_mixed_selections_aliases_and_unmatched_rows(
         "messy_postcode",
     ]
     assert enriched.order("customer_id").fetchall() == [
-        ("M1", "SW1A 1AA", "exact", "RD", 7, 11, "one"),
-        ("M2", "M1 1AA", None, None, None, 12, "two"),
-        ("M1", "SW1A 1AA", "exact", "CO", 8, 13, "three"),
+        ("M1", 1, "SW1A 1AA", 101, "exact", "RD", 7, 11, "one"),
+        ("M2", 2, "M1 1AA", None, None, None, None, 12, "two"),
+        ("M1", 3, "SW1A 1AA", 102, "exact", "CO", 8, 13, "three"),
     ]
-    assert result.matches().columns == ["unique_id", "postcode", "match_reason"]
+    assert result.matches().columns == [
+        "address_id",
+        "ukam_address_id",
+        "postcode",
+        "canonical_ukam_address_id",
+        "match_reason",
+    ]
 
 
 def test_join_input_columns_reports_all_output_collisions(enrichment_result):
@@ -608,7 +655,7 @@ def test_join_input_columns_prepared_canonical_uses_supplied_dataset(
     ).match()
     assert result.join_input_columns(
         canonical=[{"input_column": "unique_id", "alias": "source_canonical_id"}]
-    ).select("unique_id, source_canonical_id").fetchall() == [("M1", "C1")]
+    ).select("address_id, source_canonical_id").fetchall() == [("M1", "C1")]
     with pytest.raises(duckdb.BinderException, match="unavailable_upstream"):
         result.join_input_columns(canonical=["unavailable_upstream"])
 
@@ -628,21 +675,21 @@ def test_join_input_columns_lifetime_is_scoped_to_each_result(
     canonical = ["classificationcode"]
     first = matcher.match()
     first_relation = first.join_input_columns(canonical=canonical, messy=["customer_id"])
-    first_rows = first_relation.order("unique_id").fetchall()
+    first_rows = first_relation.order("address_id").fetchall()
     second = matcher.match()
     assert first._canonical_relation is not second._canonical_relation
-    assert first_relation.order("unique_id").fetchall() == first_rows
+    assert first_relation.order("address_id").fetchall() == first_rows
     first.close()
     first.close()
     assert (
         second.join_input_columns(canonical=canonical, messy=["customer_id"])
-        .order("unique_id")
+        .order("address_id")
         .fetchall()
         == first_rows
     )
     second.close()
-    assert canonical_data.count("*").fetchone()[0] == 3
-    assert messy_data.count("*").fetchone()[0] == 2
+    assert canonical_data.count("*").fetchall()[0][0] == 3
+    assert messy_data.count("*").fetchall()[0][0] == 2
 
 
 def test_lean_and_debug_prepared_canonical_matching_is_identical(
@@ -679,11 +726,11 @@ def test_lean_and_debug_prepared_canonical_matching_is_identical(
                 (
                     set(all_matches.columns),
                     all_matches.select(
-                        "unique_id, resolved_canonical_id, "
+                        "address_id, canonical_address_id, "
                         "canonical_ukam_address_id, match_reason, match_weight, "
                         "distinguishability"
                     )
-                    .order("unique_id")
+                    .order("address_id")
                     .fetchall(),
                 )
             )
@@ -750,7 +797,7 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
             FROM read_parquet('{canonical_path}')
         ) TO '{legacy_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
     canonical_path.unlink()
     legacy_path.rename(canonical_path)
 
@@ -768,9 +815,9 @@ def test_legacy_prepared_canonical_keeps_canonical_raw_result_column(
     assert "original_address_concat_canonical" in result.matches().columns
     assert (
         result.matches()
-        .filter("unique_id = 'M2'")
+        .filter("address_id = 'M2'")
         .select("original_address_concat_canonical")
-        .fetchone()[0]
+        .fetchall()[0][0]
         == "2 low street manchester"
     )
     assert "original_address_concat_canonical" in result.matches(all_columns=True).columns
@@ -801,10 +848,14 @@ def test_v1_2_0_prepared_canonical_matches(con):
             ],
         ).match()
 
-    assert result.matches().count("*").fetchone() == (1,)
-    assert result.matches().filter("resolved_canonical_id IS NOT NULL").count(
-        "*"
-    ).fetchone() == (1,)
+    assert (result.matches().count("*").limit(1).fetchall())[0] == (1,)
+    assert (
+        result.matches()
+        .filter("canonical_address_id IS NOT NULL")
+        .count("*")
+        .limit(1)
+        .fetchall()
+    )[0] == (1,)
 
 
 def test_prepared_canonical_without_numeric_range_still_matches(
@@ -831,7 +882,7 @@ def test_prepared_canonical_without_numeric_range_still_matches(
             FROM read_parquet('{canonical_path}')
         ) TO '{without_range_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
     canonical_path.unlink()
     without_range_path.rename(canonical_path)
 
@@ -843,7 +894,7 @@ def test_prepared_canonical_without_numeric_range_still_matches(
         show_progress=False,
     ).match()
 
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_inferred_road_scoring_without_road_catalogue_still_matches(
@@ -854,7 +905,6 @@ def test_inferred_road_scoring_without_road_catalogue_still_matches(
         canonical_data,
         output_folder=prepared_folder,
         con=con,
-        _derive_road_catalogue=True,
         overwrite=True,
     )
 
@@ -867,7 +917,7 @@ def test_inferred_road_scoring_without_road_catalogue_still_matches(
             FROM read_parquet('{canonical_path}')
         ) TO '{without_road_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
-    )
+    ).fetchall()
     canonical_path.unlink()
     without_road_path.rename(canonical_path)
     (prepared_folder / "roadlike_places.parquet").unlink()
@@ -881,7 +931,7 @@ def test_inferred_road_scoring_without_road_catalogue_still_matches(
             show_progress=False,
         ).match()
 
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
     assert any(
         record.getMessage() == "No road catalogue available; skipping road parsing"
         for record in caplog.records
@@ -1083,8 +1133,8 @@ def test_sequential_matchers_share_connection_with_splink(
         stages=stages,
     ).match()
 
-    assert first_result.matches().count("*").fetchone()[0] == 2
-    assert second_result.matches().count("*").fetchone()[0] == 1
+    assert first_result.matches().count("*").fetchall()[0][0] == 2
+    assert second_result.matches().count("*").fetchall()[0][0] == 1
     reranker_intermediates = con.execute(
         """
         SELECT table_name
@@ -1125,7 +1175,9 @@ def test_splink_matching_preserves_user_tables_with_legacy_internal_names(
         "__ukam__distinguishability_matches",
     )
     for table_name in user_table_names:
-        con.execute(f"CREATE TABLE \"{table_name}\" AS SELECT 'user data' AS marker")
+        con.execute(
+            f"CREATE TABLE \"{table_name}\" AS SELECT 'user data' AS marker"
+        ).fetchall()
 
     result = AddressMatcher(
         canonical_addresses=canonical_data,
@@ -1134,7 +1186,7 @@ def test_splink_matching_preserves_user_tables_with_legacy_internal_names(
         stages=[SplinkStage(final_match_weight_threshold=-20.0)],
     ).match()
 
-    assert result.matches().count("*").fetchone()[0] == 2
+    assert result.matches().count("*").fetchall()[0][0] == 2
     for table_name in user_table_names:
         assert con.table(table_name).fetchall() == [("user data",)]
 
@@ -1147,8 +1199,8 @@ def test_splink_stage_failure_restores_user_tables_and_leaves_no_leftovers(
     import uk_address_matcher.post_linkage.analyse_results as analyse_results
 
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    con.execute("CREATE TABLE m_ AS SELECT 'user data' AS marker")
-    con.execute("CREATE TABLE c_ AS SELECT 'user data' AS marker")
+    con.execute("CREATE TABLE m_ AS SELECT 'user data' AS marker").fetchall()
+    con.execute("CREATE TABLE c_ AS SELECT 'user data' AS marker").fetchall()
 
     def boom(**kwargs):
         raise RuntimeError("simulated failure mid-splink")
@@ -1214,7 +1266,7 @@ def test_match_result_close_is_scoped_and_idempotent(con, canonical_data, messy_
     second_predictions = second_result._splink_predictions().fetchall()
     # Closing the earlier result must not break the later live one
     first_result.close()
-    assert second_result.matches().count("*").fetchone()[0] == 1
+    assert second_result.matches().count("*").fetchall()[0][0] == 1
     assert second_result._splink_predictions().fetchall() == second_predictions
 
     second_result.close()
@@ -1244,7 +1296,7 @@ def test_match_result_is_a_context_manager(con, canonical_data, messy_data):
         con=con,
         stages=[ExactMatchStage()],
     ).match() as result:
-        assert result.matches().count("*").fetchone()[0] == 2
+        assert result.matches().count("*").fetchall()[0][0] == 2
     assert result._owned_table_names == ()
 
 
@@ -1304,7 +1356,7 @@ def test_match_from_prepared_folder(con, canonical_data, messy_data):
 
         assert isinstance(result, MatchResult)
         assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
-        assert result.matches().count("*").fetchone()[0] > 0
+        assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data):
@@ -1321,7 +1373,7 @@ def test_match_from_prepared_folder_path_object(con, canonical_data, messy_data)
             stages=[ExactMatchStage()],
         )
         result = matcher.match()
-        assert result.matches().count("*").fetchone()[0] > 0
+        assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_cleaning_reuses_existing_inverted_index_table(con):
@@ -1333,7 +1385,7 @@ def test_cleaning_reuses_existing_inverted_index_table(con):
             ['C1']::VARCHAR[] AS unique_ids,
             'postcode' AS index_strategy
         """
-    )
+    ).fetchall()
 
     table_name = _register_inverted_index_table(
         con,
@@ -1370,7 +1422,7 @@ def test_inverted_index_property_returns_registered_relation(
 
     assert inverted_index is not None
     assert {"key", "unique_ids", "index_strategy"}.issubset(inverted_index.columns)
-    assert inverted_index.count("*").fetchone()[0] > 0
+    assert inverted_index.count("*").fetchall()[0][0] > 0
 
 
 @pytest.mark.parametrize("output_chunk_count", [1, 5])
@@ -1401,7 +1453,7 @@ def test_match_from_prepared_folder_e2e_chunked_output(
 
     assert isinstance(result, MatchResult)
     assert isinstance(result.matches(), duckdb.DuckDBPyRelation)
-    assert result.matches().count("*").fetchone()[0] > 0
+    assert result.matches().count("*").fetchall()[0][0] > 0
 
 
 def test_canonical_address_filter_applies_to_prepared_folder(con):
@@ -1455,8 +1507,8 @@ def test_canonical_address_filter_applies_to_prepared_folder(con):
             con=con,
             stages=[ExactMatchStage()],
         )
-        result = matcher.match().matches().order("unique_id")
-        rows = result.select("unique_id, resolved_canonical_id").fetchall()
+        result = matcher.match().matches().order("address_id")
+        rows = result.select("address_id, canonical_address_id").fetchall()
 
     assert rows == [("M1", "C1"), ("M2", None)]
 
@@ -1503,8 +1555,8 @@ def test_canonical_address_filter_applies_to_relation(con):
         con=con,
         stages=[ExactMatchStage()],
     )
-    result = matcher.match().matches().order("unique_id")
-    rows = result.select("unique_id, resolved_canonical_id").fetchall()
+    result = matcher.match().matches().order("address_id")
+    rows = result.select("address_id, canonical_address_id").fetchall()
 
     assert rows == [("M1", "C1"), ("M2", None)]
 
@@ -1637,7 +1689,7 @@ def test_linker_setup_failure_cleans_only_new_objects(
     previous = matcher.match()
     previous_predictions = previous._splink_predictions().fetchall()
     for name in ("m_", "c_", "__ukam_results_existing", "__ukam__tmp_existing"):
-        con.execute(f"CREATE TABLE {name} AS SELECT 'user data' AS marker")
+        con.execute(f"CREATE TABLE {name} AS SELECT 'user data' AS marker").fetchall()
     baseline = _catalogue_snapshot(con)
     original_get_linker = splink_model._get_linker
 
@@ -1652,7 +1704,7 @@ def test_linker_setup_failure_cleans_only_new_objects(
         matcher.match()
 
     assert _catalogue_snapshot(con) == baseline
-    assert previous.matches().count("*").fetchone()[0] == 2
+    assert previous.matches().count("*").fetchall()[0][0] == 2
     assert previous._splink_predictions().fetchall() == previous_predictions
     for name in ("m_", "c_", "__ukam_results_existing", "__ukam__tmp_existing"):
         assert con.table(name).fetchall() == [("user data",)]
@@ -1672,7 +1724,7 @@ def test_failed_stage_write_removes_results_and_stage_tables(
 
     def fail_write(self, **kwargs):
         assert kwargs["results_table"] in _catalogue_snapshot(con)
-        con.execute("CREATE TABLE __ukam_stage_matches_failure AS SELECT 1")
+        con.execute("CREATE TABLE __ukam_stage_matches_failure AS SELECT 1").fetchall()
         raise RuntimeError("simulated stage write failure")
 
     monkeypatch.setattr(ExactMatchStage, "_write_matches_to_results", fail_write)
@@ -1683,7 +1735,9 @@ def test_failed_stage_write_removes_results_and_stage_tables(
 
 
 def test_result_context_manager_releases_tables_when_body_raises(con):
-    con.execute("CREATE TABLE __ukam_final_matches_context AS SELECT 1 AS marker")
+    con.execute(
+        "CREATE TABLE __ukam_final_matches_context AS SELECT 1 AS marker"
+    ).fetchall()
     result = MatchResult(
         con.table("__ukam_final_matches_context"),
         con=con,
@@ -1693,7 +1747,7 @@ def test_result_context_manager_releases_tables_when_body_raises(con):
         with result:
             raise ValueError("consumer failed")
     assert "__ukam_final_matches_context" not in _catalogue_snapshot(con)
-    assert con.sql("SELECT 42").fetchone() == (42,)
+    assert (con.sql("SELECT 42").limit(1).fetchall())[0] == (42,)
     result.close()
 
 

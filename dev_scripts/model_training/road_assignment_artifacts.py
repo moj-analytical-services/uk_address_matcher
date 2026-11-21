@@ -142,7 +142,7 @@ def canonical_candidate_sql(
                   [{excluded_prefixes}],
                   list_transform(
                       range(1, length({classification_code_column}) + 1),
-                      position -> left({classification_code_column}, position)
+                      lambda position: left({classification_code_column}, position)
                   )
               )
         """
@@ -182,7 +182,7 @@ def canonical_candidate_sql(
                 addresses.*,
                 list_max(list_transform(
                     range(1, array_length(address_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens, list_extract(address_tokens, position)
                         )
@@ -333,7 +333,7 @@ def prepared_candidate_sql(source_relation: str) -> str:
                 *,
                 list_max(list_transform(
                     range(1, array_length(address_tokens) + 1),
-                    position -> CASE
+                    lambda position: CASE
                         WHEN list_contains(
                             numeric_tokens, list_extract(address_tokens, position)
                         ) THEN position

@@ -95,7 +95,7 @@ def test_local_canonical_search_projects_required_columns(tmp_path: Path) -> Non
             ) TO ? (FORMAT PARQUET)
             """,
             [str(canonical_file)],
-        )
+        ).fetchall()
     finally:
         connection.close()
     static = tmp_path / "static"
@@ -150,7 +150,7 @@ def test_local_canonical_parquet_enables_native_search(tmp_path: Path) -> None:
             ) TO ? (FORMAT PARQUET)
             """,
             [str(canonical_path)],
-        )
+        ).fetchall()
     finally:
         connection.close()
     static = tmp_path / "static"
@@ -207,7 +207,7 @@ def test_local_launcher_prefers_bundle_canonical_lookup(tmp_path: Path) -> None:
             ) TO ? (FORMAT PARQUET)
             """,
             [str(canonical_lookup)],
-        )
+        ).fetchall()
     finally:
         connection.close()
     manifest_path = bundle / "manifest.json"
@@ -291,13 +291,15 @@ def test_local_launcher_persists_events_without_applying_input_dataset(
         ]
         connection = duckdb.connect()
         try:
-            assert connection.execute(
-                "SELECT ukam_label, ukam_user_label, "
-                "ukam_user_label_clean_full_address, ukam_user_label_postcode "
-                "FROM read_parquet(?) "
-                "WHERE unique_id = 'messy-1'",
-                [str(bundle / "labelled_review_data.parquet")],
-            ).fetchone() == (
+            assert (
+                connection.execute(
+                    "SELECT ukam_label, ukam_user_label, "
+                    "ukam_user_label_clean_full_address, ukam_user_label_postcode "
+                    "FROM read_parquet(?) "
+                    "WHERE unique_id = 'messy-1'",
+                    [str(bundle / "labelled_review_data.parquet")],
+                ).fetchall()
+            )[0] == (
                 None,
                 "label-1",
                 "1 TEST ROAD LONDON",
@@ -314,9 +316,11 @@ def test_local_launcher_persists_events_without_applying_input_dataset(
         ]
         connection = duckdb.connect()
         try:
-            assert connection.execute(
-                "SELECT review_label FROM read_csv_auto(?)", [str(input_file)]
-            ).fetchone() == ("old",)
+            assert (
+                connection.execute(
+                    "SELECT review_label FROM read_csv_auto(?)", [str(input_file)]
+                ).fetchall()
+            )[0] == ("old",)
         finally:
             connection.close()
 
@@ -327,10 +331,13 @@ def test_local_launcher_persists_events_without_applying_input_dataset(
         assert status == 200
         connection = duckdb.connect()
         try:
-            assert connection.execute(
-                "SELECT ukam_user_label FROM read_parquet(?) WHERE unique_id = 'messy-1'",
-                [str(bundle / "labelled_review_data.parquet")],
-            ).fetchone() == (None,)
+            assert (
+                connection.execute(
+                    "SELECT ukam_user_label FROM read_parquet(?) "
+                    "WHERE unique_id = 'messy-1'",
+                    [str(bundle / "labelled_review_data.parquet")],
+                ).fetchall()
+            )[0] == (None,)
         finally:
             connection.close()
     finally:
@@ -356,7 +363,7 @@ def test_local_launcher_serves_chunked_review_bundle(tmp_path: Path) -> None:
             connection.execute(
                 query,
                 [str(source)],
-            )
+            ).fetchall()
     finally:
         connection.close()
     manifest_path = bundle / "manifest.json"

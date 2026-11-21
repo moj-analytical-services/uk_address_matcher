@@ -123,7 +123,6 @@ def _clean_output(
         WHERE unique_id IS NOT NULL
           AND address_concat IS NOT NULL
           AND TRIM(address_concat) != ''
-          AND postcode IS NOT NULL
         """
     )
 
