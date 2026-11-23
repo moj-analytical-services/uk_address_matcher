@@ -96,20 +96,6 @@ def _derive_local_key_tokens(*, numericless_only: bool = True):
                             key := __local_tokens[position] || ' '
                                 || __local_tokens[position + 1]
                         )
-                    ),
-                    list_transform(
-                        list_filter(range(1, greatest(len(__local_tokens) - 1, 1)),
-                            lambda position:
-                                __local_lexical[position]
-                                AND __local_tokens[position + 1] IN ('Y', 'YR')
-                                AND __local_lexical[position + 2]
-                        ),
-                        lambda position: struct_pack(
-                            pos := position::INTEGER, kind := 'phrase',
-                            key := __local_tokens[position] || ' '
-                                || __local_tokens[position + 1] || ' '
-                                || __local_tokens[position + 2]
-                        )
                     )
                 ) ELSE []::STRUCT(pos INTEGER, kind VARCHAR, key VARCHAR)[] END
                     AS local_key_tokens

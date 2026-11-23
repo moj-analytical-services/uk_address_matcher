@@ -181,17 +181,20 @@ def test_derive_roadlike_places_batches_by_district_and_writes_parquet(
     )
 
     assert output_path.is_file()
-    assert catalogue.order("candidate_phrase").fetchall() == [
-        ("HIGH STREET", "STREET", 2, 2, 2, 2, 2, 3, 2),
-        ("SHERWOOD STREET", "STREET", 1, 1, 1, 1, 1, 3, 2),
+    assert catalogue.order("postcode_district, candidate_phrase").fetchall() == [
+        ("AB1", "HIGH STREET", "STREET", 1, 1, 1, 1, 1, 1, 1),
+        ("AB2", "HIGH STREET", "STREET", 1, 1, 1, 1, 1, 1, 1),
+        ("TF1", "SHERWOOD STREET", "STREET", 1, 1, 1, 1, 1, 1, 1),
     ]
-    written_catalogue = duck_con.read_parquet(str(output_path)).order("candidate_phrase")
+    written_catalogue = duck_con.read_parquet(str(output_path)).order(
+        "postcode_district, candidate_phrase"
+    )
     assert written_catalogue.fetchall() == (
-        catalogue.order("candidate_phrase").fetchall()
+        catalogue.order("postcode_district, candidate_phrase").fetchall()
     )
 
 
-def test_roadlike_catalogue_rolls_up_nationally_across_batch_sizes(duck_con):
+def test_roadlike_catalogue_keeps_district_evidence_separate_by_default(duck_con):
     source = duck_con.sql("""
         SELECT * FROM (VALUES
             ('1', '12 HIGH STREET', 'AB1 2CD', ['12']),
@@ -199,13 +202,23 @@ def test_roadlike_catalogue_rolls_up_nationally_across_batch_sizes(duck_con):
             ('3', '16 HIGH STREET', 'AB2 2CD', ['16'])
         ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
     """)
+    expected = [
+        ("AB1", "HIGH STREET", 2, 1),
+        ("AB2", "HIGH STREET", 1, 1),
+    ]
+
     for options in ({}, {"postcode_districts_per_batch": 1}):
-        national = derive_roadlike_places(
+        catalogue = derive_roadlike_places(
             source, duck_con, show_progress="off", **options
         )
-        assert national.select(
-            "candidate_phrase, phrase_support, phrase_addresses, distinct_districts"
-        ).fetchall() == [("HIGH STREET", 3, 3, 2)]
+        assert (
+            catalogue.select(
+                "postcode_district, candidate_phrase, phrase_support, distinct_districts"
+            )
+            .order("postcode_district")
+            .fetchall()
+            == expected
+        )
 
 
 def test_single_roadlike_batch_does_not_write_partition_files(
@@ -253,9 +266,7 @@ def test_roadlike_default_prepares_at_most_128_districts_per_batch(duck_con, mon
     catalogue = derive_roadlike_places(source, duck_con, show_progress="off")
 
     assert batch_rows == [128, 1]
-    assert catalogue.select(
-        "candidate_phrase, phrase_support, distinct_districts"
-    ).fetchall() == [("HIGH STREET", 129, 129)]
+    assert (catalogue.count("*").limit(1).fetchall())[0] == (129,)
 
 
 def test_derive_roadlike_places_filters_before_district_batching(duck_con):
@@ -277,8 +288,11 @@ def test_derive_roadlike_places_filters_before_district_batching(duck_con):
     )
 
     assert catalogue.select(
-        "candidate_phrase, phrase_support, distinct_districts"
-    ).fetchall() == [("HIGH STREET", 2, 2)]
+        "postcode_district, candidate_phrase, phrase_support, distinct_districts"
+    ).order("postcode_district").fetchall() == [
+        ("AB1", "HIGH STREET", 1, 1),
+        ("AB2", "HIGH STREET", 1, 1),
+    ]
 
 
 def test_derive_roadlike_places_scopes_districts_with_classified_rows(duck_con):
@@ -300,11 +314,12 @@ def test_derive_roadlike_places_scopes_districts_with_classified_rows(duck_con):
         show_progress="off",
     )
 
-    assert catalogue.select("candidate_phrase, phrase_support").order(
-        "candidate_phrase"
+    assert catalogue.select("postcode_district, candidate_phrase").order(
+        "postcode_district, candidate_phrase"
     ).fetchall() == [
-        ("HIGH STREET", 2),
-        ("MAIN ROAD", 1),
+        ("AB1", "HIGH STREET"),
+        ("AB1", "MAIN ROAD"),
+        ("AB2", "HIGH STREET"),
     ]
 
 
@@ -449,11 +464,11 @@ def test_road_blocking_preserves_rows_with_repeated_external_ids(duck_con):
 
 
 @pytest.mark.parametrize("stored_ids", [False, True])
-def test_canonical_road_keys_score_each_alias_independently(duck_con, stored_ids):
+def test_canonical_road_keys_use_preferred_row_and_rejoin_variants(duck_con, stored_ids):
     duck_con.execute("SET preserve_insertion_order = true").fetchall()
     source = duck_con.sql("""
         SELECT * FROM (VALUES
-            ('1', 1, '12 STATION TERRACE', 'AB1 2CD', ['12'], [], 'CUSTOM_LEVEL', '12'),
+            ('1', 1, '12 WRONG ROAD', 'AB1 2CD', ['12'], [], 'CUSTOM_LEVEL', '12'),
             (
                 '1', 2, '12 HIGH STREET', 'AB1 2CD', ['12'], [],
                 'add_gb_builtaddress.parquet', '12'
@@ -477,10 +492,11 @@ def test_canonical_road_keys_score_each_alias_independently(duck_con, stored_ids
         roadlike_places=_catalogue_from_source(duck_con, source),
         _stored_unique_address_ids=stored_ids,
     )
+    # Consume after the scorer's preferred-address and chunk tables are released.
     rows = enriched.order("ukam_address_id").fetchall()
 
     assert len(rows) == 2
-    assert [row[8] for row in rows] == ["STATION TERRACE", "HIGH STREET"]
+    assert [row[8] for row in rows] == ["HIGH STREET", "HIGH STREET"]
     assert (
         duck_con.execute("SELECT current_setting('preserve_insertion_order')").fetchall()
     )[0] == (True,)
@@ -492,89 +508,6 @@ def test_canonical_road_keys_score_each_alias_independently(duck_con, stored_ids
         SELECT temporary FROM duckdb_tables()
         WHERE starts_with(table_name, '__ukam_canonical_road_')
     """).fetchall() == [(True,)]
-
-
-def test_canonical_road_keys_backfill_null_alias_from_sibling_uprn(duck_con):
-    source = duck_con.sql("""
-        SELECT * FROM (VALUES
-            (
-                '1', 1, 'BROOK CORNER FLAT BROOK STREET FERNDALE',
-                'CF43 4LE', []::VARCHAR[], 'add_gb_builtaddress.parquet'
-            ),
-            (
-                '1', 2, '1B HIGH STREET FERNDALE',
-                'CF43 4LE', ['1B'], 'add_gb_builtaddress_altadd.parquet'
-            )
-        ) AS rows(
-            unique_id, ukam_address_id, clean_full_address, postcode,
-            numeric_tokens, filename
-        )
-    """)
-    enriched = _add_canonical_road_blocking_keys(
-        source,
-        duck_con,
-        roadlike_places=_catalogue_from_source(duck_con, source),
-        _stored_unique_address_ids=True,
-    )
-    assert enriched.select("ukam_address_id, road_1_norm").order(
-        "ukam_address_id"
-    ).fetchall() == [(1, "HIGH STREET"), (2, "HIGH STREET")]
-
-
-def test_welsh_road_prefix_normalises_to_canonical_english_terminal(duck_con):
-    canonical = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('1', 1, '2 STRYD THOMAS TONYPANDY', 'CF40 2AH', ['2']),
-            ('1', 2, '2 THOMAS STREET TONYPANDY', 'CF40 2AH', ['2']),
-            ('2', 3, '4 CLOS CADWGAN YSTRAD PENTRE', 'CF41 7QH', ['4']),
-            ('2', 4, '4 CADOGAN CLOSE YSTRAD PENTRE', 'CF41 7QH', ['4']),
-            ('3', 5, '13 HEOL Y MYNYDD YSTRAD PENTRE', 'CF41 7QQ', ['13'])
-        ) AS rows(
-            unique_id, ukam_address_id, clean_full_address, postcode, numeric_tokens
-        )
-    """)
-    catalogue = derive_roadlike_places(canonical, duck_con, show_progress="off")
-    enriched = _add_canonical_road_blocking_keys(
-        canonical,
-        duck_con,
-        roadlike_places=catalogue,
-        _stored_unique_address_ids=True,
-    )
-    assert enriched.select("ukam_address_id, road_1_norm").order(
-        "ukam_address_id"
-    ).fetchall() == [
-        (1, "THOMAS STREET"),
-        (2, "THOMAS STREET"),
-        (3, "CADWGAN CLOSE"),
-        (4, "CADOGAN CLOSE"),
-        (5, "Y MYNYDD ROAD"),
-    ]
-
-
-def test_national_road_index_resolves_blank_and_wrong_district_postcodes(duck_con):
-    canonical = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('1', '12 LLWYNYPIA ROAD TONYPANDY', 'CF40 2EL', ['12']),
-            ('2', '14 LLWYNYPIA ROAD TONYPANDY', 'CF40 2EL', ['14'])
-        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
-    """)
-    catalogue = derive_roadlike_places(canonical, duck_con, show_progress="off")
-    messy = duck_con.sql("""
-        SELECT * FROM (VALUES
-            ('m1', '12 LLWYNYPIA ROAD TONYPANDY', '', ['12']),
-            ('m2', '14 LLWYNYPIA ROAD TONYPANDY', 'SW1A 1AA', ['14'])
-        ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
-    """)
-    keys = derive_top_1_road_keys(
-        duck_con,
-        messy,
-        roadlike_places=catalogue,
-        require_catalogue_support=True,
-    ).order("unique_id")
-    assert keys.fetchall() == [
-        ("m1", "LLWYNYPIA ROAD"),
-        ("m2", "LLWYNYPIA ROAD"),
-    ]
 
 
 def test_canonical_road_keys_preserve_empty_input_schema(duck_con):
@@ -645,15 +578,9 @@ def test_road_scoring_batches_preserve_keys(duck_con, monkeypatch, district_cata
             ('4', '18 OAK LANE', 'AB2 3CD', ['18'])
         ) AS rows(unique_id, clean_full_address, postcode, numeric_tokens)
     """)
-    if district_catalogue:
-        duck_con.register("district_batch_src", source)
-        cands = duck_con.sql(roadlike_place_candidate_sql("district_batch_src"))
-        duck_con.register("district_batch_cands", cands)
-        catalogue = duck_con.sql(
-            roadlike_place_catalog_sql("district_batch_cands", by_postcode_district=True)
-        )
-    else:
-        catalogue = derive_roadlike_places(source, duck_con, show_progress="off")
+    catalogue = _catalogue_from_source(duck_con, source)
+    if not district_catalogue:
+        catalogue = catalogue.select("* EXCLUDE (postcode_district)")
     expected = (
         _add_canonical_road_blocking_keys(source, duck_con, roadlike_places=catalogue)
         .order("unique_id")
@@ -754,9 +681,7 @@ def test_catalogue_road_tails_preserve_variant_support(duck_con, id_type):
     )
     duck_con.register("duplicate_tail_candidates", candidates)
     expected = duck_con.sql(
-        roadlike_place_catalog_sql(
-            "duplicate_tail_candidates", by_postcode_district=False
-        )
+        roadlike_place_catalog_sql("duplicate_tail_candidates", by_postcode_district=True)
     )
     actual = derive_roadlike_places(source, duck_con, show_progress="off")
     assert actual.types == expected.types

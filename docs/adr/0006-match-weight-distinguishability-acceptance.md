@@ -36,18 +36,16 @@ balanced and precision-focused outcomes.
 
 ## Decision
 
-Add an acceptance profile to `SplinkStage` for the two user outcomes that
-are meaningfully different:
+Add two acceptance profiles to `SplinkStage`:
 
 | Mode | Behaviour |
 | --- | --- |
-| `"balanced"` | "I want the best overall trade-off": require the versioned linear boundary currently proposed as `MW + 1.7 * distinguishability >= 13.2`, selected from the fixed-MW benchmark as the F1-oriented profile. |
-| `"precision"` | "I care most about avoiding false matches": apply the conservative decaying requirement currently proposed as `distinguishability >= max(0, 8 - 0.2 * MW)`. |
+| `"balanced"` | Apply the versioned linear boundary `MW + 2.5 * distinguishability >= 11.35`. |
+| `"precision"` | "I care most about avoiding false matches": apply `distinguishability >= max(0, 12.85 - 0.12 * MW)`, selected to exceed 99.70% precision on the current pooled release benchmark. |
 
-Do not add a third mode for returning every available top-1 candidate. Its
-behaviour is sufficiently similar to the balanced profile once the
-distinguishability minimum excludes ties, and realised recall still depends on
-candidate generation, the MW floor and the correctness of those winners.
+`"balanced"` is the release default. Both profile coefficients are sensitive to
+canonical preparation, candidate generation, reranking and labelled cohorts and
+must be revalidated for each release.
 
 Retain two independent, user-facing controls:
 
@@ -80,13 +78,14 @@ between these formulae does not have a validated monotonic meaning.
 
 Candidate generation, retention and reranking remain unchanged. Acceptance is
 applied only after the winner and distinguishability have been calculated.
-The API should use `balanced` and `precision` rather than `None`, `more_recall`,
-`maximum_precision` or `coverage`.
+The API should use `balanced` and `precision` rather than `None`, `more_recall`
+or `maximum_precision`.
 
 ## Consequences
 
-- `balanced` provides a mild false-positive reduction without changing the
-  user-controlled MW floor.
+- `balanced` provides the F1-oriented operating point without changing the
+  user-controlled MW floor. It must be recalibrated when release evidence
+  changes.
 - `precision` provides a stricter option when avoiding a false match is
   materially more costly than leaving a record unmatched.
 - Stricter profiles remove records from circulation. They can improve precision

@@ -91,9 +91,11 @@ SplinkStage(
 
 `acceptance_profile` determines how sensitive matching is to false positives:
 
-- `balanced` also requires `MW + 1.7 * distinguishability >= 13.2`.
+- `balanced` requires `MW + 2.5 * distinguishability >= 11.35`. This is the
+  F1-oriented decision boundary on the current release benchmark.
 - `precision` also requires
-  `distinguishability >= max(0, 8 - 0.2 * MW)`.
+  `distinguishability >= max(0, 12.85 - 0.12 * MW)`. This boundary achieved
+  99.70% precision on the current pooled release benchmark.
 
 The profile does not replace the minimum values. They still need tuning for the
 input data and use case. A sole candidate with `NULL` distinguishability passes
