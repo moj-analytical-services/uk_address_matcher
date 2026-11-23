@@ -283,7 +283,7 @@ def test_larger_road_batches_preserve_fallback_scope(con, num_of_chunks):
     )
     columns = ", ".join(expected.columns)
     expected_rows = expected.order(columns).fetchall()
-    assert any(row[1] == "MYSTERY HAMLET" for row in expected_rows)
+    assert any(row[0] == "MYSTERY HAMLET" for row in expected_rows)
     actual = chunking_strategies.derive_roadlike_places(source, con, show_progress="off")
     assert actual.order(columns).fetchall() == expected_rows
 
@@ -645,9 +645,7 @@ def test_prepare_uses_roads_without_valid_postcode(con, tmp_path, source_postcod
 
     assert prepared.roadlike_places is not None
     assert (output_folder / "roadlike_places.parquet").exists()
-    assert (prepared.roadlike_places.project("postcode_district").limit(1).fetchall())[
-        0
-    ] == ("",)
+    assert "postcode_district" not in prepared.roadlike_places.columns
     assert "postcode_district" not in prepared.addresses.columns
     assert (prepared.addresses.project("road_1_norm").limit(1).fetchall())[0] == (
         "HIGH STREET",

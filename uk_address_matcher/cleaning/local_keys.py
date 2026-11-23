@@ -231,6 +231,15 @@ def add_local_key_features(
                     UNNEST(range(2, length(key) - 1)) splits(split_at)
                 WHERE kind = 'word' AND pos <= 3 AND length(key) >= 6
                 UNION ALL
+                SELECT alias_id, postcode, key AS compact_key,
+                    'phrase' AS kind,
+                    left(key, split_at::INTEGER - 1) || ' Y ' ||
+                        substr(key, split_at::INTEGER + 1) AS spelling
+                FROM "{source_keys_table}",
+                    UNNEST(range(3, length(key) - 1)) splits(split_at)
+                WHERE kind = 'word' AND pos <= 3 AND length(key) >= 6
+                    AND substr(key, split_at::INTEGER, 1) = 'Y'
+                UNION ALL
                 SELECT alias_id, postcode, replace(key, ' ', '') AS compact_key,
                     'word' AS kind, replace(key, ' ', '') AS spelling
                 FROM "{source_keys_table}"
@@ -348,6 +357,13 @@ def add_local_key_features(
                         substr(compact_key, split_at::INTEGER + 1) AS spelling
                 FROM compact_candidates,
                     UNNEST(range(2, length(compact_key) - 1)) splits(split_at)
+                UNION ALL
+                SELECT postcode, compact_key,
+                    left(compact_key, split_at::INTEGER - 1) || ' Y ' ||
+                        substr(compact_key, split_at::INTEGER + 1) AS spelling
+                FROM compact_candidates,
+                    UNNEST(range(3, length(compact_key) - 1)) splits(split_at)
+                WHERE substr(compact_key, split_at::INTEGER, 1) = 'Y'
             ), canonical_occurrences AS (
                 SELECT postcode, unique_id, occurrence.key
                 FROM ({spacing_tokens.sql_query()}) canonical,
