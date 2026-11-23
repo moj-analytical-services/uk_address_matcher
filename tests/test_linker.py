@@ -823,3 +823,59 @@ def test_get_linker_accepts_canonical_without_raw_address(
     """).fetchall()
         == []
     )
+
+
+@pytest.mark.parametrize(
+    ("retain_intermediate", "additional_columns", "custom_settings", "expected"),
+    [
+        (False, None, False, False),
+        (True, None, False, True),
+        (
+            False,
+            ["signature_score_map", "signature_unique_hits_map"],
+            False,
+            True,
+        ),
+        (False, None, True, True),
+    ],
+)
+def test_bundled_linker_only_retains_signature_maps_when_requested(
+    duck_con,
+    unresolved_matches,
+    canonical_without_raw_address,
+    retain_intermediate,
+    additional_columns,
+    custom_settings,
+    expected,
+):
+    messy = unresolved_matches.select(
+        "*, map(['100'], [40.0::DOUBLE]) AS signature_score_map, "
+        "map(['100'], [1::BIGINT]) AS signature_unique_hits_map, "
+        "'unused' AS unused_runtime_payload"
+    )
+    canonical = canonical_without_raw_address.select(
+        "*, 'unused' AS unused_runtime_payload"
+    )
+    settings = (
+        SettingsCreator.from_path_or_dict(_get_model_settings_dict())
+        if custom_settings
+        else None
+    )
+
+    linker = _get_linker(
+        messy,
+        canonical,
+        con=duck_con,
+        additional_columns_to_retain=additional_columns,
+        retain_intermediate_calculation_columns=retain_intermediate,
+        settings=settings,
+        project_input_columns=True,
+    )
+
+    retained = linker._settings_obj.as_dict()["additional_columns_to_retain"]
+    signature_maps = {"signature_score_map", "signature_unique_hits_map"}
+    assert signature_maps.issubset(retained) is expected
+    for frame in linker._input_tables_dict.values():
+        input_relation = duck_con.table(frame.physical_name)
+        assert signature_maps.issubset(input_relation.columns)
+        assert "unused_runtime_payload" not in input_relation.columns

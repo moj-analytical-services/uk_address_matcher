@@ -397,10 +397,14 @@ class SplinkStage(MatchingStage):
                 include_outside_postcode_block=self.include_outside_postcode_block,
                 additional_columns_to_retain=linker_columns or None,
                 retain_intermediate_calculation_columns=True,
+                retain_signature_map_columns=(
+                    self.retain_intermediate_calculation_columns
+                ),
                 settings=self.settings,
                 owned_splink_frames=owned_frames,
                 retain_matching_columns=False,
                 canonical_cache_path=self._canonical_cache_path,
+                project_input_columns=True,
             )
 
             self.linker = linker
