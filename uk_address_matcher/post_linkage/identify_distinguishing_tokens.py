@@ -341,8 +341,21 @@ def improve_predictions_using_distinguishing_tokens(
             *range_source_column_names,
             *retained_column_names,
         ]
-        if "common_end_tokens_hist_r" in df_predict.columns:
+        source_columns_available = set(
+            reranked.columns if numeric_range_reranker is not None else df_predict.columns
+        )
+        if "common_end_tokens_hist_r" in source_columns_available:
             source_column_names.append("common_end_tokens_hist_r")
+        has_road_columns = {"road_1_norm_l", "road_1_norm_r"}.issubset(
+            source_columns_available
+        )
+        has_flat_columns = {"flat_identity_l", "flat_identity_r"}.issubset(
+            source_columns_available
+        )
+        if has_road_columns:
+            source_column_names.extend(("road_1_norm_l", "road_1_norm_r"))
+        if has_flat_columns:
+            source_column_names.extend(("flat_identity_l", "flat_identity_r"))
         source_column_names = list(dict.fromkeys(source_column_names))
         source_projection = ", ".join(
             f"source.{column}" for column in source_column_names
@@ -542,6 +555,15 @@ def improve_predictions_using_distinguishing_tokens(
             FROM block_overlap_statistics
         """).create(block_statistics_table)
 
+        promotion_intermediate_columns = "".join(
+            f"candidate.{column}, "
+            for column in (
+                *(("road_1_norm_l", "road_1_norm_r") if has_road_columns else ()),
+                *(("flat_identity_l", "flat_identity_r") if has_flat_columns else ()),
+            )
+            if column not in retained_column_names
+        )
+
         con.sql(f"""
             WITH intermediate AS (
                 SELECT
@@ -564,6 +586,7 @@ def improve_predictions_using_distinguishing_tokens(
                     statistics.bigrams_r,
                     {range_intermediate_columns}
                     {retained_columns}
+                    {promotion_intermediate_columns}
                     candidate.sibling_location_conflict,
                     list_distinct(
                         list_filter(
@@ -723,53 +746,185 @@ def improve_predictions_using_distinguishing_tokens(
                     )), 0)::DOUBLE
                         * {BIGRAM_PUNISHMENT_MULTIPLIER} AS bigram_absence_penalty
                 FROM scored_components
+            ),
+            reranked_candidates AS (
+                SELECT
+                    *,
+                    token_reward
+                        - token_absence_penalty
+                        + bigram_reward
+                        - bigram_absence_penalty
+                        - missing_token_penalty
+                        - positional_conflict_penalty AS __token_adj,
+                    match_weight + (
+                        token_reward
+                        - token_absence_penalty
+                        + bigram_reward
+                        - bigram_absence_penalty
+                        - missing_token_penalty
+                        - positional_conflict_penalty
+                    ){range_adjustment_sql} AS __reranked_mw
+                FROM scored_candidates
+            ),
+            wrong_postcode_promoted AS (
+                {
+            f'''
+                WITH ranked AS (
+                    SELECT
+                        ukam_address_id_r,
+                        unique_id_l,
+                        ukam_address_id_l,
+                        __reranked_mw,
+                        clean_full_address_l,
+                        clean_full_address_r,
+                        postcode_l,
+                        postcode_r,
+                        postcode_l = postcode_r AS __same_pc,
+                        road_1_norm_l,
+                        road_1_norm_r,
+                        {
+                "flat_identity_l, flat_identity_r,"
+                if has_flat_columns
+                else (
+                    "NULL::VARCHAR AS flat_identity_l, NULL::VARCHAR AS flat_identity_r,"
+                )
+            }
+                        row_number() OVER (
+                            PARTITION BY ukam_address_id_r
+                            ORDER BY __reranked_mw DESC, unique_id_l
+                        ) AS __rnk
+                    FROM reranked_candidates
+                ),
+                top1 AS (
+                    SELECT
+                        ukam_address_id_r,
+                        __reranked_mw AS __top_mw,
+                        clean_full_address_l AS __top_addr_l,
+                        clean_full_address_r AS __top_addr_r
+                    FROM ranked
+                    WHERE __rnk = 1
+                      AND __same_pc
+                      AND __reranked_mw < 25.0
+                      AND nullif(road_1_norm_l, '')
+                          IS DISTINCT FROM nullif(road_1_norm_r, '')
+                ),
+                contenders AS (
+                    SELECT
+                        r.ukam_address_id_r,
+                        r.unique_id_l,
+                        r.ukam_address_id_l,
+                        r.__reranked_mw,
+                        t.__top_mw,
+                        split_part(upper(trim(r.postcode_l)), ' ', 1)
+                            = split_part(upper(trim(r.postcode_r)), ' ', 1)
+                            AS __same_dist,
+                        jaro_winkler_similarity(
+                            r.clean_full_address_r, r.clean_full_address_l
+                        ) AS __jw,
+                        jaro_winkler_similarity(
+                            t.__top_addr_r, t.__top_addr_l
+                        ) AS __top_jw,
+                        jaro_winkler_similarity(
+                            regexp_replace(r.clean_full_address_r, '[0-9]+', '!', 'g'),
+                            regexp_replace(r.clean_full_address_l, '[0-9]+', '!', 'g')
+                        ) AS __mask_jw,
+                        jaro_winkler_similarity(
+                            regexp_replace(t.__top_addr_r, '[0-9]+', '!', 'g'),
+                            regexp_replace(t.__top_addr_l, '[0-9]+', '!', 'g')
+                        ) AS __top_mask_jw,
+                        regexp_extract_all(r.clean_full_address_l, '[0-9]+') AS __nums_l,
+                        regexp_extract_all(r.clean_full_address_r, '[0-9]+') AS __nums_r
+                    FROM ranked r
+                    JOIN top1 t USING (ukam_address_id_r)
+                    WHERE r.__rnk > 1
+                      AND NOT r.__same_pc
+                      AND r.__reranked_mw >= 0.0
+                      AND (t.__top_mw - r.__reranked_mw) <= 12.0
+                      AND NOT (
+                          nullif(r.flat_identity_l, '')
+                              IS DISTINCT FROM nullif(r.flat_identity_r, '')
+                          AND (
+                              nullif(r.flat_identity_l, '') IS NOT NULL
+                              OR nullif(r.flat_identity_r, '') IS NOT NULL
+                          )
+                      )
+                )
+                SELECT
+                    ukam_address_id_r,
+                    unique_id_l,
+                    ukam_address_id_l,
+                    __top_mw + 1.0 AS __promoted_mw
+                FROM contenders
+                WHERE __jw >= 0.85
+                  AND __jw >= __top_jw + 0.05
+                  AND __mask_jw >= __top_mask_jw + 0.08
+                  AND NOT (
+                      len(__nums_r) > 0
+                      AND len(__nums_l) > 0
+                      AND __nums_r <> __nums_l
+                  )
+                QUALIFY row_number() OVER (
+                    PARTITION BY ukam_address_id_r
+                    ORDER BY
+                        __same_dist DESC,
+                        __jw DESC,
+                        __reranked_mw DESC,
+                        unique_id_l
+                ) = 1
+                '''
+            if has_road_columns
+            else '''
+                SELECT
+                    NULL::BIGINT AS ukam_address_id_r,
+                    NULL::VARCHAR AS unique_id_l,
+                    NULL::BIGINT AS ukam_address_id_l,
+                    NULL::DOUBLE AS __promoted_mw
+                WHERE FALSE
+                '''
+        }
             )
             SELECT
-                unique_id_l,
-                unique_id_r,
-                ukam_address_id_r,
-                ukam_address_id_l,
-                match_weight AS match_weight_original,
+                c.unique_id_l,
+                c.unique_id_r,
+                c.ukam_address_id_r,
+                c.ukam_address_id_l,
+                c.match_weight AS match_weight_original,
                 {range_projection}
-                token_reward,
-                token_absence_penalty,
-                bigram_reward,
-                bigram_absence_penalty,
-                missing_token_penalty,
-                positional_conflict_penalty,
-                token_reward
-                    - token_absence_penalty
-                    + bigram_reward
-                    - bigram_absence_penalty
-                    - missing_token_penalty
-                    - positional_conflict_penalty AS {token_adjustment_alias},
-                token_reward
-                    - token_absence_penalty
-                    + bigram_reward
-                    - bigram_absence_penalty
-                    - missing_token_penalty
-                    - positional_conflict_penalty AS mw_adjustment,
-                match_weight + mw_adjustment{range_adjustment_sql} AS match_weight,
-                overlapping_tokens_this_l_and_r,
-                tokens_elsewhere_in_block_but_not_this,
-                hist_all_tokens_in_block_l,
-                hist_overlapping_tokens_r_block_l,
-                missing_tokens,
-                positional_tokens_l,
-                positional_tokens_r,
-                {"bigrams_l, bigrams_r, " if use_bigrams else ""}
-                {"overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
-                {"bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
-                {"hist_all_bigrams_in_block_l, " if use_bigrams else ""}
-                {"hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
-                {"overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
-            {"bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""}
-                clean_full_address_l,
-                postcode_l,
-                clean_full_address_r,
-                postcode_r,
+                c.token_reward,
+                c.token_absence_penalty,
+                c.bigram_reward,
+                c.bigram_absence_penalty,
+                c.missing_token_penalty,
+                c.positional_conflict_penalty,
+                c.__token_adj AS {token_adjustment_alias},
+                c.__token_adj AS mw_adjustment,
+                COALESCE(p.__promoted_mw, c.__reranked_mw) AS match_weight,
+                c.overlapping_tokens_this_l_and_r,
+                c.tokens_elsewhere_in_block_but_not_this,
+                c.hist_all_tokens_in_block_l,
+                c.hist_overlapping_tokens_r_block_l,
+                c.missing_tokens,
+                c.positional_tokens_l,
+                c.positional_tokens_r,
+                {"c.bigrams_l, c.bigrams_r, " if use_bigrams else ""}
+                {"c.overlapping_bigrams_this_l_and_r, " if use_bigrams else ""}
+                {"c.bigrams_elsewhere_in_block_but_not_this, " if use_bigrams else ""}
+                {"c.hist_all_bigrams_in_block_l, " if use_bigrams else ""}
+                {"c.hist_overlapping_bigrams_r_block_l, " if use_bigrams else ""}
+                {"c.overlapping_bigrams_this_l_and_r_filtered, " if use_bigrams else ""}
+                {
+            "c.bigrams_elsewhere_in_block_but_not_this_filtered, " if use_bigrams else ""
+        }
+                c.clean_full_address_l,
+                c.postcode_l,
+                c.clean_full_address_r,
+                c.postcode_r,
                 {retained_columns}
-            FROM scored_candidates
+            FROM reranked_candidates c
+            LEFT JOIN wrong_postcode_promoted p
+              ON c.ukam_address_id_r = p.ukam_address_id_r
+             AND c.unique_id_l = p.unique_id_l
+             AND c.ukam_address_id_l = p.ukam_address_id_l
         """).create(matches_table)
 
         completed = True
