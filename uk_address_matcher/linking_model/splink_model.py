@@ -423,11 +423,13 @@ def _get_linker(
     include_outside_postcode_block=True,
     precomputed_numeric_tf_table: DuckDBPyRelation | None = None,
     retain_intermediate_calculation_columns=False,
+    retain_signature_map_columns: bool | None = None,
     retain_matching_columns=True,
     settings: SettingsCreator | None = None,
     owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
     canonical_cache_path: str | None = None,
+    project_input_columns: bool = False,
 ) -> Linker:
     """Build a configured Splink linker for the given relations.
 
@@ -546,7 +548,11 @@ def _get_linker(
         con=con,
     )
 
-    if settings is None:
+    if retain_signature_map_columns is None:
+        retain_signature_map_columns = retain_intermediate_calculation_columns
+
+    using_bundled_settings = settings is None
+    if using_bundled_settings:
         settings_as_dict = _get_model_settings_dict()
     else:
         settings_as_dict = settings.create_settings_dict("duckdb")
@@ -597,6 +603,7 @@ def _get_linker(
     settings_as_dict["linker_uid"] = None
     settings_as_dict = _sanitise_null_comparison_levels(settings_as_dict)
 
+    explicitly_retained_columns = set(additional_columns_to_retain or [])
     available_columns = set(df_addresses_to_match.columns).intersection(
         df_addresses_to_search_within.columns
     )
@@ -632,7 +639,9 @@ def _get_linker(
     # built before this column existed will not have it. The linker concat
     # selects the messy column set from BOTH frames, so add an empty,
     # type-compatible map to whichever side is missing it to avoid binder
-    # errors. Only retain it for the comparison when present on the messy side.
+    # errors. Keep the model input without retaining it in every scored pair
+    # unless requested for diagnostics, explicitly retained, or using custom
+    # settings that rely on the previous behaviour.
     _empty_score_map = (
         FunctionExpression("map")
         .cast("MAP(VARCHAR, DOUBLE)")
@@ -650,7 +659,11 @@ def _get_linker(
         df_addresses_to_match = df_addresses_to_match.select(
             StarExpression(), _empty_score_map
         )
-    if messy_has_score_map or canonical_has_score_map:
+    if (messy_has_score_map or canonical_has_score_map) and (
+        not using_bundled_settings
+        or retain_signature_map_columns
+        or "signature_score_map" in explicitly_retained_columns
+    ):
         settings_as_dict["additional_columns_to_retain"] = list(
             dict.fromkeys(
                 settings_as_dict["additional_columns_to_retain"] + ["signature_score_map"]
@@ -678,7 +691,11 @@ def _get_linker(
         df_addresses_to_match = df_addresses_to_match.select(
             StarExpression(), _empty_hits_map
         )
-    if messy_has_hits_map or canonical_has_hits_map:
+    if (messy_has_hits_map or canonical_has_hits_map) and (
+        not using_bundled_settings
+        or retain_signature_map_columns
+        or "signature_unique_hits_map" in explicitly_retained_columns
+    ):
         settings_as_dict["additional_columns_to_retain"] = list(
             dict.fromkeys(
                 settings_as_dict["additional_columns_to_retain"]
@@ -746,7 +763,7 @@ def _get_linker(
         shared_columns
     )
 
-    if canonical_cache_path is not None:
+    if project_input_columns or canonical_cache_path is not None:
         model_settings = settings.get_settings("duckdb")
         queries = ["SELECT " + ", ".join(model_settings._columns_to_select_for_blocking)]
         for rule in model_settings._blocking_rules_to_generate_predictions:
@@ -765,6 +782,13 @@ def _get_linker(
             for column in df_addresses_to_search_within_fix.columns
             if column in required_columns
         ]
+        projection = ", ".join(_quote_identifier(column) for column in columns)
+        df_addresses_to_match_fix = df_addresses_to_match_fix.project(projection)
+        df_addresses_to_search_within_fix = df_addresses_to_search_within_fix.project(
+            projection
+        )
+
+    if canonical_cache_path is not None:
         encoded_types = {
             column: kind
             for column, kind in zip(
@@ -774,7 +798,6 @@ def _get_linker(
             )
             if column in columns and not _parquet_preserves_type(kind)
         }
-        projection = ", ".join(_quote_identifier(column) for column in columns)
         cache_path = Path(canonical_cache_path)
         if not cache_path.exists():
             cache_projection = ", ".join(
@@ -802,7 +825,6 @@ def _get_linker(
                 f"* REPLACE ({', '.join(restored)})"
             )
         df_addresses_to_search_within_fix = cached_canonical
-        df_addresses_to_match_fix = df_addresses_to_match_fix.project(projection)
 
     db_api = DuckDBAPI(connection=con)
     input_frames = []
