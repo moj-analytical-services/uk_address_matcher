@@ -29,17 +29,6 @@
     "CROFT",
     "LOAN"
   ],
-  "welsh_road_prefix_to_terminal": {
-    "HEOL": "ROAD",
-    "FFORDD": "ROAD",
-    "STRYD": "STREET",
-    "CLOS": "CLOSE",
-    "LON": "LANE",
-    "RHODFA": "AVENUE",
-    "TERAS": "TERRACE",
-    "GERDDI": "GARDENS",
-    "SGWAR": "SQUARE"
-  },
   "policy": {
     "residence_or_non_road_action": "exclude_from_guarded_ranking",
     "road_syntax_action": "diagnostic_only"

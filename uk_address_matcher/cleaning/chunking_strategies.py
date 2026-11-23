@@ -42,7 +42,6 @@ from uk_address_matcher.cleaning.steps.roadlike_places import (
     _prepare_roadlike_place_input,
     derive_top_1_road_keys,
     roadlike_place_catalog_sql,
-    roadlike_place_national_rollup_sql,
     roadlike_place_prepared_candidate_sources_sql,
     roadlike_place_prepared_candidate_sql,
 )
@@ -191,7 +190,7 @@ def _add_canonical_road_blocking_keys(
     _stored_unique_address_ids: bool = False,
     _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
-    """Add per-alias road keys; the ID fast path requires stored, unique, non-null IDs."""
+    """Add road keys; the ID fast path requires stored, unique, non-null IDs."""
     if "road_1_norm" in canonical_addresses.columns:
         return canonical_addresses
     if roadlike_places is None:
@@ -199,239 +198,143 @@ def _add_canonical_road_blocking_keys(
         return canonical_addresses.select("*, NULL::VARCHAR AS road_1_norm")
 
     uid = _uid()
-    scoring_input_table = f"__ukam_canonical_road_input_{uid}"
+    preferred_table = f"__ukam_canonical_road_preferred_{uid}"
     road_keys_table = f"__ukam_canonical_road_keys_{uid}"
-    raw_road_keys_table = f"__ukam_canonical_road_raw_keys_{uid}"
     chunk_keys_table = f"__ukam_canonical_road_chunk_{uid}"
     enriched_table = f"__ukam_canonical_with_road_{uid}"
-    catalogue_has_district = "postcode_district" in roadlike_places.columns
-    has_precomputed_pos = "rightmost_numeric_position" in canonical_addresses.columns
-    has_filename = "filename" in canonical_addresses.columns
-    pos_select = ", rightmost_numeric_position" if has_precomputed_pos else ""
-    district_expr = r"""regexp_extract(
-        upper(coalesce(postcode, '')),
-        '^\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s+\d', 1
-    )"""
-
+    preferred_columns = [
+        "unique_id",
+        "clean_full_address",
+        "postcode",
+        "numeric_tokens",
+    ]
+    if "rightmost_numeric_position" in canonical_addresses.columns:
+        preferred_columns.append("rightmost_numeric_position")
+    preferred_value_fields = ", ".join(
+        f'"{column}" := source."{column}"'
+        for column in preferred_columns
+        if column != "unique_id"
+    )
+    preferred_order_fields = []
+    if "filename" in canonical_addresses.columns:
+        preferred_order_fields.append("""
+            file_rank := CASE source.filename
+                WHEN 'add_gb_builtaddress.parquet' THEN 1
+                WHEN 'add_gb_royalmailaddress.parquet' THEN 2
+                ELSE 3
+            END
+        """)
+    preferred_order_fields.extend(
+        f'"{column}" := source."{column}"'
+        for column in ("clean_full_address", "postcode", "ukam_address_id")
+        if column in canonical_addresses.columns
+    )
+    preferred_order = ", ".join(preferred_order_fields)
+    preferred_value = f"struct_pack({preferred_value_fields})"
+    preferred_source = "preferred"
+    preferred_join = ""
+    if _stored_unique_address_ids:
+        # Keep text/lists out of aggregate state; recover the winning row by ID.
+        preferred_value = "source.ukam_address_id"
+        preferred_source = "chosen"
+        preferred_join = f"""
+            INNER JOIN ({canonical_addresses.sql_query()}) AS chosen
+                ON chosen.ukam_address_id = grouped.preferred
+        """
     preserve_insertion_order = bool(
         con.execute("SELECT current_setting('preserve_insertion_order')").fetchall()[0][0]
     )
     con.execute("SET preserve_insertion_order = false").fetchall()
     try:
-        if _stored_unique_address_ids:
-            id_type = dict(
-                zip(canonical_addresses.columns, canonical_addresses.types, strict=True)
-            )["ukam_address_id"]
-            file_select = ", filename" if has_filename else ""
-            scoring_source = con.sql(f"""
+        preferred = con.sql(f"""
+            WITH grouped AS (
                 SELECT
-                    CAST(ukam_address_id AS VARCHAR) AS unique_id,
-                    unique_id AS __ukam_uprn,
-                    ukam_address_id,
-                    clean_full_address,
-                    postcode,
-                    numeric_tokens{pos_select}{file_select}
+                    source.unique_id,
+                    min_by(
+                        {preferred_value},
+                        struct_pack({preferred_order})
+                    ) AS preferred
                 FROM ({canonical_addresses.sql_query()}) AS source
-            """)
-            scoring_input = _materialise_relation(
-                con,
-                scoring_source,
-                scoring_input_table,
-                _storage=_storage,
-                temporary=True,
+                GROUP BY source.unique_id
             )
-            scoring_row_count = int(scoring_input.count("*").fetchall()[0][0])
-        else:
-            district_group = f", {district_expr}" if catalogue_has_district else ""
-            district_key_select = (
-                f", {district_expr} AS __ukam_road_district"
-                if catalogue_has_district
-                else ""
+            SELECT
+                grouped.unique_id,
+                {
+            ", ".join(
+                f'{preferred_source}."{column}" AS "{column}"'
+                for column in preferred_columns
+                if column != "unique_id"
             )
-            pos_agg = (
-                ", any_value(rightmost_numeric_position) AS rightmost_numeric_position"
-                if has_precomputed_pos
-                else ""
-            )
-            scoring_source = con.sql(f"""
-                WITH distinct_aliases AS (
-                    SELECT
-                        clean_full_address,
-                        numeric_tokens,
-                        any_value(postcode) AS postcode,
-                        min(CAST(unique_id AS VARCHAR)) AS __ukam_sample_uid
-                        {district_key_select}
-                        {pos_agg}
-                    FROM ({canonical_addresses.sql_query()}) AS source
-                    GROUP BY clean_full_address, numeric_tokens{district_group}
-                )
-                SELECT
-                    CASE
-                        WHEN count(*) OVER (PARTITION BY __ukam_sample_uid) = 1
-                            AND __ukam_sample_uid IS NOT NULL
-                        THEN __ukam_sample_uid
-                        ELSE '__alias_' || CAST(row_number() OVER () AS VARCHAR)
-                    END AS unique_id,
-                    clean_full_address,
-                    postcode,
-                    numeric_tokens
-                    {", __ukam_road_district" if catalogue_has_district else ""}
-                    {pos_select}
-                FROM distinct_aliases
-            """)
-            scoring_input = _materialise_relation(
-                con,
-                scoring_source,
-                scoring_input_table,
-                _storage=_storage,
-                temporary=True,
-            )
-            scoring_row_count = int(scoring_input.count("*").fetchall()[0][0])
+        }
+            FROM grouped
+            {preferred_join}
+        """)
+        preferred_addresses = _materialise_relation(
+            con,
+            preferred,
+            preferred_table,
+            _storage=_storage,
+            temporary=True,
+        )
+        preferred_row_count = int(preferred_addresses.count("*").fetchall()[0][0])
     except Exception:
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
         ).fetchall()
         raise
-
     required_chunks = max(
         1,
-        (scoring_row_count + ROAD_SCORING_CHUNK_ROWS - 1) // ROAD_SCORING_CHUNK_ROWS,
+        (preferred_row_count + ROAD_SCORING_CHUNK_ROWS - 1) // ROAD_SCORING_CHUNK_ROWS,
     )
     road_chunk_count = min(max(1, num_of_chunks), required_chunks)
-    road_chunk_key = district_expr if catalogue_has_district else "unique_id"
-    target_keys_table = (
-        raw_road_keys_table if _stored_unique_address_ids else road_keys_table
-    )
+    road_chunk_key = "CAST(unique_id AS VARCHAR)"
+    if "postcode_district" in roadlike_places.columns:
+        road_chunk_key = r"""regexp_extract(
+            upper(coalesce(postcode, '')),
+            '^\s*([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s+\d', 1
+        )"""
     _drop_materialised_relation(con, road_keys_table, _storage)
-    _drop_materialised_relation(con, raw_road_keys_table, _storage)
     try:
         for chunk_index in range(road_chunk_count):
             if road_chunk_count == 1:
-                chunk = scoring_input
+                chunk = preferred_addresses
             else:
                 chunk = con.sql(f"""
                     SELECT *
-                    FROM {scoring_input_table}
+                    FROM {preferred_table}
                     WHERE hash({road_chunk_key}) % {road_chunk_count}
                         = {chunk_index}
                 """)
-            derive_top_1_road_keys(
+            chunk_keys = derive_top_1_road_keys(
                 con,
                 chunk,
                 output_table=chunk_keys_table,
                 roadlike_places=roadlike_places,
                 require_catalogue_support=require_catalogue_support,
             )
-            if _stored_unique_address_ids:
-                chunk_result = con.sql(f"""
-                    SELECT
-                        CAST(unique_id AS {id_type}) AS ukam_address_id,
-                        road_1_norm
-                    FROM {chunk_keys_table}
-                """)
-            else:
-                district_col = (
-                    ", inp.__ukam_road_district" if catalogue_has_district else ""
-                )
-                chunk_result = con.sql(f"""
-                    SELECT
-                        inp.clean_full_address,
-                        inp.numeric_tokens{district_col},
-                        keys.road_1_norm
-                    FROM {chunk_keys_table} AS keys
-                    JOIN {scoring_input_table} AS inp USING (unique_id)
-                """)
             _materialise_relation(
                 con,
-                chunk_result,
-                target_keys_table,
+                chunk_keys,
+                road_keys_table,
                 _storage=_storage,
                 append=chunk_index > 0,
                 temporary=True,
             )
             _drop_table_and_registered_aliases(con, chunk_keys_table)
-
-        if _stored_unique_address_ids:
-            # Backfill NULL alias roads from a non-null sibling of the same UPRN
-            # without overwriting any alias's own parsed road.
-            file_rank_order = (
-                """
-                    file_rank := CASE inp.filename
-                        WHEN 'add_gb_builtaddress.parquet' THEN 1
-                        WHEN 'add_gb_royalmailaddress.parquet' THEN 2
-                        ELSE 3
-                    END,
-                """
-                if has_filename
-                else ""
-            )
-            coalesced_keys = con.sql(f"""
-                WITH uprn_fallback AS (
-                    SELECT
-                        inp.__ukam_uprn,
-                        min_by(
-                            raw.road_1_norm,
-                            struct_pack(
-                                {file_rank_order}
-                                road := raw.road_1_norm
-                            )
-                        ) AS fallback_road_1_norm
-                    FROM {scoring_input_table} AS inp
-                    INNER JOIN {raw_road_keys_table} AS raw USING (ukam_address_id)
-                    WHERE raw.road_1_norm IS NOT NULL
-                    GROUP BY inp.__ukam_uprn
-                )
-                SELECT
-                    inp.ukam_address_id,
-                    coalesce(raw.road_1_norm, fb.fallback_road_1_norm) AS road_1_norm
-                FROM {scoring_input_table} AS inp
-                LEFT JOIN {raw_road_keys_table} AS raw USING (ukam_address_id)
-                LEFT JOIN uprn_fallback AS fb USING (__ukam_uprn)
-                WHERE coalesce(raw.road_1_norm, fb.fallback_road_1_norm) IS NOT NULL
-            """)
-            _materialise_relation(
-                con,
-                coalesced_keys,
-                road_keys_table,
-                _storage=_storage,
-                temporary=True,
-            )
-            _drop_materialised_relation(con, raw_road_keys_table, _storage)
     except Exception:
-        _drop_materialised_relation(con, raw_road_keys_table, _storage)
         _drop_materialised_relation(con, road_keys_table, _storage)
         raise
     finally:
         _drop_table_and_registered_aliases(con, chunk_keys_table)
-        _drop_materialised_relation(con, raw_road_keys_table, _storage)
-        _drop_materialised_relation(con, scoring_input_table, _storage)
+        _drop_materialised_relation(con, preferred_table, _storage)
         con.execute(
             f"SET preserve_insertion_order = {str(preserve_insertion_order).lower()}"
         ).fetchall()
-
-    if _stored_unique_address_ids:
-        enriched = con.sql(f"""
-            SELECT canonical.*, road_features.road_1_norm
-            FROM ({canonical_addresses.sql_query()}) AS canonical
-            LEFT JOIN {road_keys_table} AS road_features USING (ukam_address_id)
-        """)
-    else:
-        district_join = (
-            f"AND {district_expr.replace('postcode', 'canonical.postcode')} "
-            "IS NOT DISTINCT FROM road_features.__ukam_road_district"
-            if catalogue_has_district
-            else ""
-        )
-        enriched = con.sql(f"""
-            SELECT canonical.*, road_features.road_1_norm
-            FROM ({canonical_addresses.sql_query()}) AS canonical
-            LEFT JOIN {road_keys_table} AS road_features
-                ON canonical.clean_full_address
-                    IS NOT DISTINCT FROM road_features.clean_full_address
-               AND canonical.numeric_tokens
-                    IS NOT DISTINCT FROM road_features.numeric_tokens
-               {district_join}
-        """)
+    enriched = con.sql(f"""
+        SELECT canonical.*, road_features.road_1_norm
+        FROM ({canonical_addresses.sql_query()}) AS canonical
+        LEFT JOIN {road_keys_table} AS road_features USING (unique_id)
+    """)
     try:
         # Retain the narrow road keys instead of copying every canonical column.
         con.execute(
@@ -596,17 +499,16 @@ def derive_roadlike_places(
     show_progress: ShowProgress = "auto",
     _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
-    """Build a national roadlike-place catalogue from canonical addresses.
+    """Build a roadlike-place catalogue from canonical addresses.
 
     The input must already be canonical-cleaned, including ``clean_full_address``
     and ``numeric_tokens``. Road preparation and candidate extraction run in
-    batches of postcode districts, then batch evidence is rolled up into a
-    national road index. ``postcode_districts`` restricts the source before
-    batching. Physical batches default to 128 districts; road fallback groups
-    retain their existing 16-district boundaries. Larger requested batches are
-    rounded down to a whole number of fallback groups. `num_of_chunks`, when
-    supplied, takes precedence and divides whole fallback groups across at most
-    that many batches.
+    batches of postcode districts; catalogue evidence is local to each district.
+    ``postcode_districts`` restricts the source before batching.
+    Physical batches default to 128 districts; road fallback groups retain their
+    existing 16-district boundaries. Larger requested batches are rounded down
+    to a whole number of fallback groups. `num_of_chunks`, when supplied, takes
+    precedence and divides whole fallback groups across at most that many batches.
     """
     catalogue, _, _ = _derive_postcode_features(
         canonical_address_table,
@@ -693,7 +595,6 @@ def _derive_postcode_features(
     progress_mode = resolve_progress_mode(show_progress)
     uid = _uid()
     candidate_sources_table = f"__ukam_roadlike_candidate_sources_{uid}"
-    batch_catalogue_table = f"__ukam_roadlike_places_batch_{uid}"
     catalogue_table = f"__ukam_roadlike_places_{uid}"
     local_key_table = f"__ukam_local_key_features_{uid}"
     singleton_table = f"__ukam_district_singleton_trigrams_{uid}"
@@ -803,11 +704,10 @@ def _derive_postcode_features(
                         con,
                         con.sql(
                             roadlike_place_catalog_sql(
-                                f"({candidate_relation})",
-                                by_postcode_district=True,
+                                f"({candidate_relation})", by_postcode_district=True
                             )
                         ),
-                        batch_catalogue_table,
+                        catalogue_table,
                         _storage=_storage,
                         append=batch_index > 0,
                     )
@@ -824,14 +724,6 @@ def _derive_postcode_features(
                     chunk_index=batch_index,
                     total_chunks=total_batches,
                 )
-        if include_road_catalogue:
-            _materialise_relation(
-                con,
-                con.sql(roadlike_place_national_rollup_sql(batch_catalogue_table)),
-                catalogue_table,
-                _storage=_storage,
-            )
-            _drop_materialised_relation(con, batch_catalogue_table, _storage)
         if singleton_trigram_index is not None:
             updated_inverted_index = _materialise_relation(
                 con,
@@ -863,7 +755,6 @@ def _derive_postcode_features(
             ).fetchall()
     except BaseException:
         _drop_materialised_relation(con, local_key_table, _storage)
-        _drop_materialised_relation(con, batch_catalogue_table, _storage)
         _drop_materialised_relation(con, catalogue_table, _storage)
         _drop_materialised_relation(con, updated_index_table, _storage)
         raise
@@ -872,7 +763,6 @@ def _derive_postcode_features(
             progress.close()
         _drop_materialised_relation(con, singleton_table, _storage)
         _drop_materialised_relation(con, candidate_sources_table, _storage)
-        _drop_materialised_relation(con, batch_catalogue_table, _storage)
 
     log_stage_complete(
         stage_label,

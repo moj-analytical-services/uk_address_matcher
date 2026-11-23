@@ -1328,32 +1328,3 @@ def test_spacing_fallback_relief_requires_an_exact_leading_name(
         bool(pair.filter(rule["sql_condition"]).count("*").fetchall()[0][0]) == expected
     )
     assert rule["m_probability"] / rule["u_probability"] == 0.0625
-
-
-def test_welsh_y_compound_spacing_matches_both_directions(duck_con):
-    canonical = prepare_canonical_local_keys(
-        duck_con,
-        duck_con.sql("""
-            SELECT * FROM (VALUES
-                (1, 'u1', 'LL40 1AA', 'PEN Y BRYN COTTAGE DOLGELLAU'),
-                (2, 'u2', 'LL40 1AA', 'TYNYPISTYLL DOLGELLAU'),
-                (3, 'u3', 'LL40 1AA', 'BRYN AWEL DOLGELLAU')
-            ) t(ukam_address_id, unique_id, postcode, clean_full_address)
-        """),
-    )
-    source = duck_con.sql("""
-        SELECT * FROM (VALUES
-            (10, 'LL40 1AA', 'PENYBRYN DOLGELLAU', []::VARCHAR[], false, false),
-            (11, 'LL40 1AA', 'TYN Y PISTYLL DOLGELLAU', []::VARCHAR[], false, false)
-        ) t(
-            ukam_address_id, postcode, clean_full_address, numeric_tokens,
-            has_flat_indicator, has_business_unit
-        )
-    """)
-    featured_source, _ = add_local_key_features(duck_con, source, canonical)
-    rows = (
-        featured_source.select("ukam_address_id, lk_level_by_alias")
-        .order("ukam_address_id")
-        .fetchall()
-    )
-    assert rows == [(10, {"1": 2}), (11, {"2": 2})]

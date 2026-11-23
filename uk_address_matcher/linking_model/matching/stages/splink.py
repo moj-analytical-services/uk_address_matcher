@@ -207,11 +207,8 @@ class SplinkStage(MatchingStage):
       candidate left after blocking.
 
     ``acceptance_profile`` controls how sensitive the final decision is to
-    false positives, from the balanced policy to a conservative precision
-    policy. It does not replace the minimum thresholds: a candidate
-    must pass the profile and both ``minimum_match_weight`` and
-    ``minimum_distinguishability``. Raise these minimums separately when the
-    benchmark evidence requires a stricter operating point.
+    false positives. ``"balanced"`` targets the pooled F1 optimum, while
+    ``"precision"`` applies a stricter post-reranking boundary.
 
     Args:
         predict_threshold_match_weight: Initial minimum score passed to
@@ -230,9 +227,8 @@ class SplinkStage(MatchingStage):
         reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
             agreement in the local reranker.
         acceptance_profile: Final acceptance formula. ``"balanced"`` requires
-            ``MW + 1.7 * gap >= 13.2``. ``"precision"`` requires
-            ``gap >= max(0, 8 - 0.2 * MW)``. Both profiles remove ambiguous
-            winners to reduce false positives.
+            ``MW + 2.5 * gap >= 11.35``. ``"precision"`` requires
+            ``gap >= max(0, 12.85 - 0.12 * MW)``.
         minimum_match_weight: Minimum ``match_weight`` required after reranking.
         minimum_distinguishability: Minimum distinguishability required after
             reranking. ``NULL`` distinguishability is accepted as a
@@ -334,9 +330,7 @@ class SplinkStage(MatchingStage):
 
     def _final_acceptance_filter_sql(self) -> str:
         """Build the post-reranking acceptance filter."""
-        filters = [
-            f"match_weight >= {self.minimum_match_weight}",
-        ]
+        filters = [f"match_weight >= {self.minimum_match_weight}"]
         if self.minimum_distinguishability is not None:
             filters.append(
                 "(distinguishability IS NULL "
@@ -345,12 +339,13 @@ class SplinkStage(MatchingStage):
         if self.acceptance_profile == "balanced":
             filters.append(
                 "(distinguishability IS NULL "
-                "OR match_weight + 1.7 * distinguishability >= 13.2)"
+                "OR match_weight + 2.5 * distinguishability >= 11.35)"
             )
         elif self.acceptance_profile == "precision":
             filters.append(
                 "(distinguishability IS NULL "
-                "OR distinguishability >= GREATEST(0.0, 8.0 - 0.2 * match_weight))"
+                "OR distinguishability >= "
+                "GREATEST(0.0, 12.85 - 0.12 * match_weight))"
             )
         return " AND ".join(filters)
 

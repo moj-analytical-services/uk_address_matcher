@@ -31,7 +31,7 @@ def _accepted_rows(
     ).fetchall()
 
 
-def test_default_acceptance_policy_rejects_zero_distinguishability() -> None:
+def test_default_acceptance_policy_uses_balanced_profile() -> None:
     with duckdb.connect() as con:
         stage = SplinkStage(minimum_match_weight=10)
         rows = _accepted_rows(con, stage)
@@ -39,6 +39,7 @@ def test_default_acceptance_policy_rejects_zero_distinguishability() -> None:
     assert stage.acceptance_profile == "balanced"
     assert stage.minimum_distinguishability == 0.1
     assert rows == [
+        (10.0, 1.0),
         (10.0, 2.0),
         (13.0, 1.0),
         (15.0, 2.0),
@@ -54,11 +55,12 @@ def test_balanced_profile_applies_linear_mw_distinguishability_boundary() -> Non
             SplinkStage(
                 acceptance_profile="balanced",
                 minimum_match_weight=10,
-                minimum_distinguishability=0,
+                minimum_distinguishability=0.1,
             ),
         )
 
     assert rows == [
+        (10.0, 1.0),
         (10.0, 2.0),
         (13.0, 1.0),
         (15.0, 2.0),
@@ -74,11 +76,30 @@ def test_precision_profile_applies_decaying_distinguishability_requirement() -> 
             SplinkStage(
                 acceptance_profile="precision",
                 minimum_match_weight=10,
-                minimum_distinguishability=0,
+                minimum_distinguishability=0.1,
             ),
         )
 
-    assert rows == [(20.0, 4.0), (20.0, None)]
+    assert rows == [(20.0, None)]
+
+
+def test_precision_profile_accepts_sufficiently_distinguishable_match() -> None:
+    with duckdb.connect() as con:
+        rows = con.sql(
+            f"""
+            SELECT match_weight, distinguishability
+            FROM (VALUES (20.0, 10.0), (20.0, 11.0))
+                candidates(match_weight, distinguishability)
+            WHERE {
+                SplinkStage(
+                    acceptance_profile="precision",
+                    minimum_match_weight=10,
+                )._final_acceptance_filter_sql()
+            }
+            """
+        ).fetchall()
+
+    assert rows == [(20.0, 11.0)]
 
 
 def test_single_candidate_distinguishability_passes_profile_formula() -> None:
@@ -105,6 +126,11 @@ def test_minimum_distinguishability_none_disables_the_minimum() -> None:
         "(distinguishability IS NULL OR distinguishability >="
         not in stage._final_acceptance_filter_sql()
     )
+
+
+def test_zero_distinguishability_is_rejected_by_default() -> None:
+    stage = SplinkStage(minimum_match_weight=10)
+    assert "distinguishability >= 0.1" in stage._final_acceptance_filter_sql()
 
 
 def test_deprecated_threshold_names_remain_compatible() -> None:
