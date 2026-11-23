@@ -2,9 +2,10 @@
 
 Fuzzy matches found by `uk_address_matcher` in the `matcher.match().matches()` table have two scores associated with them: `match_weight` and `distinguishability`.[^splink-only]
 
-By default, `SplinkStage` uses permissive MW and distinguishability minimums and
-the `coverage` profile. The user should tune the acceptance policy to the
-quality of their input data and the cost of a false match.
+By default, `SplinkStage` uses a permissive MW minimum of `-20.0`, a
+distinguishability minimum of `0.1`, and the `balanced` profile. The user
+should tune the acceptance policy to the quality of their input data and the
+cost of a false match.
 
 Once you have decided on a threshold, you can set it in the `SplinkStage` parameters:
 
@@ -90,7 +91,6 @@ SplinkStage(
 
 `acceptance_profile` determines how sensitive matching is to false positives:
 
-- `coverage` accepts the reranked top-1 result after the minimum filters.
 - `balanced` also requires `MW + 1.7 * distinguishability >= 13.2`.
 - `precision` also requires
   `distinguishability >= max(0, 8 - 0.2 * MW)`.

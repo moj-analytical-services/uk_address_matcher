@@ -207,8 +207,8 @@ class SplinkStage(MatchingStage):
       candidate left after blocking.
 
     ``acceptance_profile`` controls how sensitive the final decision is to
-    false positives, from coverage-oriented top-1 selection to a conservative
-    precision policy. It does not replace the minimum thresholds: a candidate
+    false positives, from the balanced policy to a conservative precision
+    policy. It does not replace the minimum thresholds: a candidate
     must pass the profile and both ``minimum_match_weight`` and
     ``minimum_distinguishability``. Raise these minimums separately when the
     benchmark evidence requires a stricter operating point.
@@ -229,11 +229,10 @@ class SplinkStage(MatchingStage):
             agreement in the local reranker.
         reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
             agreement in the local reranker.
-        acceptance_profile: Final acceptance formula. ``"coverage"`` emits the
-            reranked top-1 candidate after the minimum filters. ``"balanced"``
-            additionally requires ``MW + 1.7 * gap >= 13.2``. ``"precision"``
-            additionally requires ``gap >= max(0, 8 - 0.2 * MW)``. The latter
-            profiles remove ambiguous winners to reduce false positives.
+        acceptance_profile: Final acceptance formula. ``"balanced"`` requires
+            ``MW + 1.7 * gap >= 13.2``. ``"precision"`` requires
+            ``gap >= max(0, 8 - 0.2 * MW)``. Both profiles remove ambiguous
+            winners to reduce false positives.
         minimum_match_weight: Minimum ``match_weight`` required after reranking.
         minimum_distinguishability: Minimum distinguishability required after
             reranking. ``NULL`` distinguishability is accepted as a
@@ -265,13 +264,13 @@ class SplinkStage(MatchingStage):
     reranker_token_reward_multiplier: float = 3.0
     reranker_bigram_reward_multiplier: float = 2.2
 
-    acceptance_profile: Literal["coverage", "balanced", "precision"] = "coverage"
+    acceptance_profile: Literal["balanced", "precision"] = "balanced"
     minimum_match_weight: float = -20.0
-    minimum_distinguishability: float | None = 0.0
+    minimum_distinguishability: float | None = 0.1
 
     # Deprecated aliases retained for compatibility during the API transition.
     final_match_weight_threshold: float = field(default=-20.0, repr=False)
-    final_distinguishability_threshold: float | None = field(default=0.0, repr=False)
+    final_distinguishability_threshold: float | None = field(default=0.1, repr=False)
 
     # Blocking configuration
     include_full_postcode_block: bool = False
@@ -306,10 +305,8 @@ class SplinkStage(MatchingStage):
     )
 
     def __post_init__(self) -> None:
-        if self.acceptance_profile not in {"coverage", "balanced", "precision"}:
-            raise ValueError(
-                "acceptance_profile must be 'coverage', 'balanced', or 'precision'."
-            )
+        if self.acceptance_profile not in {"balanced", "precision"}:
+            raise ValueError("acceptance_profile must be 'balanced' or 'precision'.")
 
         if self.final_match_weight_threshold != -20.0:
             if (
@@ -322,9 +319,9 @@ class SplinkStage(MatchingStage):
             self.minimum_match_weight = self.final_match_weight_threshold
         self.final_match_weight_threshold = self.minimum_match_weight
 
-        if self.final_distinguishability_threshold != 0.0:
+        if self.final_distinguishability_threshold != 0.1:
             if (
-                self.minimum_distinguishability != 0.0
+                self.minimum_distinguishability != 0.1
                 and self.minimum_distinguishability
                 != self.final_distinguishability_threshold
             ):

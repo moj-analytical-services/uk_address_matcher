@@ -17,6 +17,7 @@ def _accepted_rows(
         FROM (
             VALUES
                 (9.0, 20.0),
+                (10.0, 0.0),
                 (10.0, 1.0),
                 (10.0, 2.0),
                 (13.0, 1.0),
@@ -30,19 +31,14 @@ def _accepted_rows(
     ).fetchall()
 
 
-def test_coverage_profile_preserves_top_one_above_minimums() -> None:
+def test_default_acceptance_policy_rejects_zero_distinguishability() -> None:
     with duckdb.connect() as con:
-        rows = _accepted_rows(
-            con,
-            SplinkStage(
-                acceptance_profile="coverage",
-                minimum_match_weight=10,
-                minimum_distinguishability=1,
-            ),
-        )
+        stage = SplinkStage(minimum_match_weight=10)
+        rows = _accepted_rows(con, stage)
 
+    assert stage.acceptance_profile == "balanced"
+    assert stage.minimum_distinguishability == 0.1
     assert rows == [
-        (10.0, 1.0),
         (10.0, 2.0),
         (13.0, 1.0),
         (15.0, 2.0),
@@ -101,12 +97,14 @@ def test_single_candidate_distinguishability_passes_profile_formula() -> None:
 
 def test_minimum_distinguishability_none_disables_the_minimum() -> None:
     stage = SplinkStage(
-        acceptance_profile="coverage",
         minimum_match_weight=10,
         minimum_distinguishability=None,
     )
 
-    assert "distinguishability >=" not in stage._final_acceptance_filter_sql()
+    assert (
+        "(distinguishability IS NULL OR distinguishability >="
+        not in stage._final_acceptance_filter_sql()
+    )
 
 
 def test_deprecated_threshold_names_remain_compatible() -> None:
@@ -144,6 +142,7 @@ def test_new_and_deprecated_thresholds_cannot_both_be_set() -> None:
         )
 
 
-def test_acceptance_profile_is_validated() -> None:
+@pytest.mark.parametrize("profile", ["coverage", "strict"])
+def test_acceptance_profile_is_validated(profile: str) -> None:
     with pytest.raises(ValueError, match="acceptance_profile"):
-        SplinkStage(acceptance_profile="strict")  # type: ignore[arg-type]
+        SplinkStage(acceptance_profile=profile)  # type: ignore[arg-type]

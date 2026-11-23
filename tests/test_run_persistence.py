@@ -88,9 +88,9 @@ def test_splink_stage_definition_resolves_default_and_custom_settings() -> None:
     assert isinstance(default_settings, dict)
     assert default_settings == custom_settings
     assert default_settings["comparisons"]
-    assert default_stage["params"]["acceptance_profile"] == "coverage"
+    assert default_stage["params"]["acceptance_profile"] == "balanced"
     assert default_stage["params"]["minimum_match_weight"] == -20.0
-    assert default_stage["params"]["minimum_distinguishability"] == 0.0
+    assert default_stage["params"]["minimum_distinguishability"] == 0.1
     assert "final_match_weight_threshold" not in default_stage["params"]
     assert "final_distinguishability_threshold" not in default_stage["params"]
 

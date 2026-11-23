@@ -36,19 +36,18 @@ balanced and precision-focused outcomes.
 
 ## Decision
 
-Add an acceptance profile to `SplinkStage` for the three user outcomes that
+Add an acceptance profile to `SplinkStage` for the two user outcomes that
 are meaningfully different:
 
 | Mode | Behaviour |
 | --- | --- |
-| `"coverage"` | "I want the top candidate available": emit the reranked top-1 candidate when the explicit MW and distinguishability minimums pass, without an additional formula. This prioritises candidate coverage rather than claiming a calibrated recall target. |
 | `"balanced"` | "I want the best overall trade-off": require the versioned linear boundary currently proposed as `MW + 1.7 * distinguishability >= 13.2`, selected from the fixed-MW benchmark as the F1-oriented profile. |
 | `"precision"` | "I care most about avoiding false matches": apply the conservative decaying requirement currently proposed as `distinguishability >= max(0, 8 - 0.2 * MW)`. |
 
-Do not call the first mode `more_recall`, `recall` or `None`. Returning every
-available top-1 candidate affects coverage; realised recall still depends on
+Do not add a third mode for returning every available top-1 candidate. Its
+behaviour is sufficiently similar to the balanced profile once the
+distinguishability minimum excludes ties, and realised recall still depends on
 candidate generation, the MW floor and the correctness of those winners.
-Likewise, `None` does not communicate the user outcome.
 
 Retain two independent, user-facing controls:
 
@@ -56,19 +55,17 @@ Retain two independent, user-facing controls:
 SplinkStage(
     acceptance_profile="balanced",
     minimum_match_weight=10,
-    minimum_distinguishability=0,
+    minimum_distinguishability=0.1,
 )
 ```
 
 The profile selects the formula shape. A match must also satisfy
-`minimum_match_weight` and `minimum_distinguishability`; both defaults are
-subject to final API and benchmark review.
+`minimum_match_weight` and `minimum_distinguishability`. The defaults are
+`balanced` and `0.1` respectively, alongside the existing permissive default MW
+minimum.
 
 The corresponding refined user stories are:
 
-- As a user who wants the broadest usable candidate coverage, I want every
-  reranked top-1 candidate above my MW floor so that I can handle uncertain
-  matches downstream.
 - As a user who wants the best overall operating point, I want an
   automatically benchmarked MW/distinguishability trade-off so that F1 is
   prioritised for my chosen minimums. The coefficients are selected during
@@ -83,13 +80,11 @@ between these formulae does not have a validated monotonic meaning.
 
 Candidate generation, retention and reranking remain unchanged. Acceptance is
 applied only after the winner and distinguishability have been calculated.
-The first API trial should use `coverage`, `balanced` and `precision` rather
-than `None`, `more_recall` or `maximum_precision`.
+The API should use `balanced` and `precision` rather than `None`, `more_recall`,
+`maximum_precision` or `coverage`.
 
 ## Consequences
 
-- `coverage` preserves top-1 MW-only behaviour subject to the explicit
-  minimums.
 - `balanced` provides a mild false-positive reduction without changing the
   user-controlled MW floor.
 - `precision` provides a stricter option when avoiding a false match is
