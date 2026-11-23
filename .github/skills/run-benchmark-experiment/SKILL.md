@@ -1,35 +1,19 @@
 ---
+name: run-benchmark-experiment
 description: "Use when: running a persisted benchmark experiment, comparing a model or threshold change against a baseline, or producing benchmark audit artefacts."
+disable-model-invocation: true
+argument-hint: "Hypothesis, proposed change, baseline run, datasets, stages, threshold and audit option"
 ---
-
 # Run a benchmark experiment
 
-Follow the full [benchmark experiment instructions](../instructions/benchmark-experiments.instructions.md).
+Follow the full [benchmark experiment instructions](../../instructions/benchmark-experiments.instructions.md).
 
-## Experiment
+## Inputs
 
-```
-Question:
-${input:question:What hypothesis should this experiment test?}
-
-Proposed change:
-${input:change:What exact model, feature, threshold or implementation change should be tested?}
-
-Baseline run:
-${input:baseline:latest}
-
-Datasets:
-${input:datasets:Which benchmark datasets should be used?}
-
-Stages:
-${input:stages:Which matching stages should be run?}
-
-Primary operating point:
-${input:threshold:MW 10}
-
-Record-level audit:
-${input:audit:Yes or no}
-```
+Resolve the hypothesis, proposed change, baseline run, datasets, matching stages,
+primary operating point and record-level audit request from the arguments. Ask for
+anything material that is missing. Default the baseline to `latest` and the primary
+operating point to MW 10 when those choices are not supplied.
 
 ## Objective
 

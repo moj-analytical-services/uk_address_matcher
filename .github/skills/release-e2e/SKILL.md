@@ -1,9 +1,9 @@
 ---
+name: release-e2e
 description: "Validate a fresh release end-to-end: national preparation, filtered council benchmarks, laptop runtime manifest, and gated performance-documentation updates."
-agent: agent
+disable-model-invocation: true
 argument-hint: "Target release v1.x.x, source ref or wheel, raw canonical path, optional DuckDB constraints"
 ---
-
 # Release end-to-end validation
 
 Execute this workflow from a fresh installation and raw national data through
@@ -11,12 +11,12 @@ persisted benchmarks and verified reports. Do not publish, commit, push or deplo
 cloud infrastructure. Keep addresses, row-level predictions, credentials, private
 paths and serial numbers out of shareable output; retain private diagnostics locally.
 
-Follow the [repository workflow](../instructions/repo-workflow.instructions.md),
-[benchmark instructions](../instructions/benchmark-experiments.instructions.md),
-[data safety instructions](../instructions/data-handling.instructions.md), and
-[benchmark skill](../skills/benchmark-experiment/SKILL.md). Read applicable Python,
+Follow the [repository workflow](../../instructions/repo-workflow.instructions.md),
+[benchmark instructions](../../instructions/benchmark-experiments.instructions.md),
+[data safety instructions](../../instructions/data-handling.instructions.md), and
+[benchmark skill](../benchmark-experiment/SKILL.md). Read applicable Python,
 SQL and testing instructions before implementing a harness. Rationale:
-[Local pre-release validation](../../docs/adr/0005-local-pre-release-validation.md).
+[Local pre-release validation](../../../docs/adr/0005-local-pre-release-validation.md).
 
 ## Inputs And Defaults
 
@@ -58,7 +58,7 @@ SQL and testing instructions before implementing a harness. Rationale:
    disk bytes and sampled versus continuous peaks. Separate harness/call timing
    and identify input reading, setup, writes, reporting and teardown boundaries.
 4. Use existing hooks or a minimal external harness, not production algorithm
-   changes, for the [preparation stage breakdown](../../docs/site/performance.md#canonical-preparation-runtime):
+   changes, for the [preparation stage breakdown](../../../docs/site/performance.md#canonical-preparation-runtime):
    input coercion; foundational cleaning/IDs; term-frequency aggregation; adjacent
    distinguishing/TF application; inverted index; road catalogue/keys; each Parquet
    write; manifest finalisation; uninstrumented overhead. Record stage time/RSS/spill
@@ -80,7 +80,7 @@ for historical baselines.
 
 ## 3. Matching And Accuracy
 
-Use the [benchmark entrypoint](../../benchmarking/run_benchmarking.py) and existing
+Use the [benchmark entrypoint](../../../benchmarking/run_benchmarking.py) and existing
 runner/persistence/metrics helpers, with `sample_mode=False`, `persist_results=True`
 and a fresh process/connection per dataset. A minimal repo-runnable driver may apply
 constraints/monitoring; do not create another matcher or change production defaults.
@@ -151,7 +151,7 @@ aggregate-only `manifest.json` and `report.md` rendered from its values. Overwri
 that version's pair on reruns, touching no other versions; remove obsolete split
 reports only after validating consolidation.
 
-Start from [manifest.template.json](../../docs/runtime/manifest.template.json).
+Start from [manifest.template.json](../../../docs/runtime/manifest.template.json).
 The shared manifest is a small summary, not a diagnostic log. Include only:
 
 - `target_release`, installed `software_version`, and `status`.
@@ -214,7 +214,7 @@ including baseline IDs, comparability differences and anomalies. If preparation 
 severely slower, matching is anomalous, required evidence is missing or conclusions
 are uncertain, **leave performance.md unchanged** and ask the user to review.
 
-Otherwise update [performance.md](../../docs/site/performance.md) as the final step:
+Otherwise update [performance.md](../../../docs/site/performance.md) as the final step:
 
 - Replace full-country step 4 preparation timing and affected setup totals/footnotes;
   retain unmeasured download/install timings. Match timings to actual cohort sizes,

@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: sql-stage
 description: "Add or change a SQL pipeline stage with explicit stage contracts and targeted stage validation."
+disable-model-invocation: true
 ---
-
 Add or modify the SQL pipeline stage without breaking downstream contracts.
 
 Success means:

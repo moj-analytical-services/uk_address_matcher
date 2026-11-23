@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: record-level-audit
 description: "Use the benchmark-experiment skill for persisted record-level benchmark audits and loser-viewer workflows."
+disable-model-invocation: true
 ---
-
 Use the `benchmark-experiment` skill for persisted benchmark audits.
 
 Goal:

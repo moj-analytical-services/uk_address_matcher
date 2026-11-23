@@ -17,7 +17,7 @@ each release, with reports we can compare over time.
 
 ## Decision
 
-Run the [release E2E prompt](../../.github/prompts/release-e2e.prompt.md) locally
+Run the [release E2E skill](../../.github/skills/release-e2e/SKILL.md) locally
 before releasing, rather than adding a formal continuous deployment step.
 Existing CI checks still apply; this does not automatically publish a release.
 
