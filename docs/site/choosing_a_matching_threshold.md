@@ -2,7 +2,10 @@
 
 Fuzzy matches found by `uk_address_matcher` in the `matcher.match().matches()` table have two scores associated with them: `match_weight` and `distinguishability`.[^splink-only]
 
-By default, all matches are returned, no matter how low these scores.  The user must therefore decide what acceptance threshold to use for these scores.
+By default, `SplinkStage` uses a permissive MW minimum of `-20.0`, a
+distinguishability minimum of `0.1`, and the `balanced` profile. The user
+should tune the acceptance policy to the quality of their input data and the
+cost of a false match.
 
 Once you have decided on a threshold, you can set it in the `SplinkStage` parameters:
 
@@ -16,8 +19,9 @@ matcher = AddressMatcher(
         PeeledAddressStage(),
         UniqueTrigramStage(),
         SplinkStage(
-            final_match_weight_threshold=10.0,
-            final_distinguishability_threshold=1.0,
+            acceptance_profile="balanced",
+            minimum_match_weight=10.0,
+            minimum_distinguishability=1.0,
         ),
     ],
 )
@@ -29,11 +33,11 @@ matcher = AddressMatcher(
 
 `match_weight` is Splink's score for the selected candidate.
 
-Higher values mean stronger evidence that the messy address and canonical address are the same place. Lower values are weaker matches. Negative values are often a sign that the candidate was retained only because the stage is in a very permissive mode. Raising `final_match_weight_threshold` filters out weak matches.
+Higher values mean stronger evidence that the messy address and canonical address are the same place. Lower values are weaker matches. Negative values are often a sign that the candidate was retained only because the stage is in a very permissive mode. Raising `minimum_match_weight` filters out weak matches.
 
 ### Distinguishability
 
-`distinguishability` is the gap in `match_weight` between the best candidate and the next best candidate for the same messy address. Higher values mean the winner is clearly ahead. Low values mean the top two candidates look similar, which is often where false positives come from. Raising `final_distinguishability_threshold` filters out ambiguous matches.
+`distinguishability` is the gap in `match_weight` between the best candidate and the next best candidate for the same messy address. Higher values mean the winner is clearly ahead. Low values mean the top two candidates look similar, which is often where false positives come from. Raising `minimum_distinguishability` filters out ambiguous matches.
 
 [^splink-only]: These scores are only calculated for `SplinkStage` matches and do not apply, for example, to `ExactMatchStage` matches.
 
@@ -79,9 +83,26 @@ As a starting point we recommend trying the following settings:
 
 ```python
 SplinkStage(
-    final_match_weight_threshold=10.0,
-    final_distinguishability_threshold=1.0,
+    minimum_match_weight=10.0,
+    minimum_distinguishability=1.0,
+    acceptance_profile="balanced",
 )
 ```
 
-But to pick optimal thresholds for your use case, it's best to used labelled data, and use a precision recall curve to decide on your threshold.  See the [performance and benchmarking](./performance.md) for more details on how to do this.
+`acceptance_profile` determines how sensitive matching is to false positives:
+
+- `balanced` also requires `MW + 1.7 * distinguishability >= 13.2`.
+- `precision` also requires
+  `distinguishability >= max(0, 8 - 0.2 * MW)`.
+
+The profile does not replace the minimum values. They still need tuning for the
+input data and use case. A sole candidate with `NULL` distinguishability passes
+the profile formula because there is no competing top-two gap.
+
+To pick optimal minimums for your use case, use labelled data and a
+precision-recall curve. See [performance and benchmarking](./performance.md)
+for more details.
+
+The previous `final_match_weight_threshold` and
+`final_distinguishability_threshold` arguments remain as compatibility aliases,
+but new code should use the minimum names.

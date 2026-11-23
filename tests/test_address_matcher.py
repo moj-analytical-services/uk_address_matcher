@@ -1582,7 +1582,7 @@ def test_stage_repr_is_concise_and_informative():
     )  # noqa: E501
     assert "\n  Import:  from uk_address_matcher import PeeledAddressStage" in peeled_repr
 
-    assert splink_repr.startswith("SplinkStage(final_match_weight_threshold=7.0)")
+    assert splink_repr.startswith("SplinkStage(minimum_match_weight=7.0)")
     assert "\n  Purpose:" in splink_repr
     assert "Probabilistic matching stage built on Splink." in splink_repr
     assert "\n  Import:  from uk_address_matcher import SplinkStage" in splink_repr

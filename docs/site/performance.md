@@ -88,7 +88,7 @@ matcher = AddressMatcher(
     stages=[
         ExactMatchStage(),
         SplinkStage(
-            final_distinguishability_threshold=1.0,
+            minimum_distinguishability=1.0,
         ),
     ],
 )
@@ -191,7 +191,7 @@ matcher = AddressMatcher(
     stages=[
         ExactMatchStage(),
         SplinkStage(
-            final_distinguishability_threshold=1.0,
+            minimum_distinguishability=1.0,
         ),
     ],
 )
@@ -343,7 +343,7 @@ matcher = AddressMatcher(
     con=con,
     stages=[
         SplinkStage(
-            final_distinguishability_threshold=1,
+            minimum_distinguishability=1,
         ),
     ],
 )
