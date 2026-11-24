@@ -632,6 +632,156 @@ def test_full_cleaning_queue_preserves_underscore_split_before_expansion(duck_co
     ]
 
 
+def test_subpremise_cleaning_rules_preserve_original_address(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('floor-right', 1, '1FR, 30 SAMPLE STREET', NULL),
+            ('apartment', 2, 'APARTMENT10A 270 EXAMPLE ROAD', NULL),
+            ('phase', 3, '46 WELLFIELD (PHASE 3)', NULL),
+            ('plain-phase', 4, '46 WELLFIELD PHASE 3 HOUSE', NULL),
+            ('compound', 5, 'COTTAGE10A 270 EXAMPLE ROAD', NULL)
+        ) AS t(unique_id, ukam_address_id, address_concat, postcode)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            *QUEUE_CLEAN_FULL_ADDRESS,
+            _parse_out_sub_premise,
+            _parse_out_numbers,
+        ],
+    )
+
+    rows = {
+        row[0]: row[1:]
+        for row in pipeline.run()
+        .project(
+            "unique_id, original_address_concat, clean_full_address, "
+            "sub_premise_identifier, numeric_tokens"
+        )
+        .fetchall()
+    }
+
+    assert {
+        unique_id: (original, cleaned)
+        for unique_id, (original, cleaned, _, _) in rows.items()
+    } == {
+        "floor-right": (
+            "1FR, 30 SAMPLE STREET",
+            "FIRST FLOOR RIGHT 30 SAMPLE STREET",
+        ),
+        "apartment": (
+            "APARTMENT10A 270 EXAMPLE ROAD",
+            "APARTMENT 10A 270 EXAMPLE ROAD",
+        ),
+        "phase": ("46 WELLFIELD (PHASE 3)", "46 WELLFIELD"),
+        "plain-phase": (
+            "46 WELLFIELD PHASE 3 HOUSE",
+            "46 WELLFIELD PHASE 3 HOUSE",
+        ),
+        "compound": (
+            "COTTAGE10A 270 EXAMPLE ROAD",
+            "COTTAGE10A 270 EXAMPLE ROAD",
+        ),
+    }
+    assert rows["apartment"][2] == "10A"
+    assert rows["phase"][3] == ["46"]
+    assert rows["plain-phase"][3] == ["46", "3"]
+
+
+def test_room_identifiers_are_promoted_without_overriding_explicit_flats(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('room-floor', 1, 'SECOND FLOOR ROOM 204 E SAMPLE VIEW', NULL),
+            ('embedded', 2, 'ROOM 201 E 27 EXAMPLE ROAD', NULL),
+            ('trailing', 3, 'SAMPLE HOUSE ROOM 201 E', NULL),
+            ('explicit-flat', 4, 'FLAT B ROOM 201 E 27 EXAMPLE ROAD', NULL),
+            ('multiple-rooms', 5, 'ROOMS 201 E AND 202 F 27 EXAMPLE ROAD', NULL),
+            ('letter-room', 6, 'ROOM E 27 EXAMPLE ROAD', NULL)
+        ) AS t(unique_id, ukam_address_id, address_concat, postcode)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[
+            *QUEUE_CLEAN_FULL_ADDRESS,
+            _parse_out_sub_premise,
+            _parse_out_numbers,
+        ],
+    )
+
+    rows = {
+        row[0]: row[1:]
+        for row in pipeline.run()
+        .project(
+            "unique_id, clean_full_address, premise_keys, sub_premise_role, "
+            "sub_premise_marker_token, sub_premise_explicit_identifier, "
+            "sub_premise_identifier, flat_letter, flat_positional, flat_identity, "
+            "has_flat_indicator, numeric_tokens"
+        )
+        .fetchall()
+    }
+
+    assert rows["room-floor"] == (
+        "SECOND FLOOR ROOM 204E SAMPLE VIEW",
+        {"ROOM": ["204E"]},
+        "ROOM",
+        "ROOM",
+        "204E",
+        "204E",
+        None,
+        "SECOND FLOOR",
+        "__SECOND FLOOR",
+        True,
+        ["204E"],
+    )
+    assert rows["embedded"] == (
+        "ROOM 201E 27 EXAMPLE ROAD",
+        {"ROOM": ["201E"]},
+        "ROOM",
+        "ROOM",
+        "201E",
+        "201E",
+        None,
+        None,
+        None,
+        False,
+        ["201E", "27"],
+    )
+    assert rows["trailing"] == (
+        "SAMPLE HOUSE ROOM 201E",
+        {"ROOM": ["201E"]},
+        "ROOM",
+        "ROOM",
+        "201E",
+        "201E",
+        None,
+        None,
+        None,
+        False,
+        ["201E"],
+    )
+    assert rows["explicit-flat"][1:10] == (
+        {"ROOM": ["201E"]},
+        "FLAT",
+        "FLAT",
+        "B",
+        "B",
+        "B",
+        None,
+        "_B_",
+        True,
+    )
+    assert rows["multiple-rooms"][1] == {"ROOM": ["201E", "202F"]}
+    assert rows["multiple-rooms"][2] != "ROOM"
+    assert rows["letter-room"][1] == {"ROOM": ["E"]}
+    assert rows["letter-room"][2] != "ROOM"
+
+
 def test_parenthetical_name_is_cleaned_before_inverted_indexing(duck_con):
     input_rel = duck_con.sql(
         """

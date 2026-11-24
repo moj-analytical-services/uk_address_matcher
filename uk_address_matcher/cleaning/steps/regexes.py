@@ -25,6 +25,11 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
+def remove_parenthesised_phase(input: str):
+    pattern = r"\s*\(\s*PHASE\s+\d+\s*\)\s*"
+    return f"regexp_replace({input}, '{pattern}', ' ', 'gi')"
+
+
 def replace_en_dash_with_space(input: str):
     return f"regexp_replace({input}, chr(8211), ' ', 'g')"
 
@@ -41,6 +46,11 @@ def merge_split_flat_number(input: str):
     """Merge zero-padded split flat numbers such as ``FLAT 3 02 AT``."""
     pattern = r"\b(F?FLAT)\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
     return f"regexp_replace({input}, '{pattern}', '\\1 \\2\\3 \\4', 'g')"
+
+
+def split_apartment_number(input: str):
+    pattern = r"\b(APARTMENT)(\d+[A-Z]?)\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1 \\2', 'g')"
 
 
 def standarise_num_dash_num(input: str):
@@ -136,6 +146,11 @@ def standarise_num_letter(input: str):
         r"\s"  # Matches a space
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2 ', 'g')"
+
+
+def join_room_identifier_suffix(input: str):
+    pattern = r"\b(ROOMS?\s+[A-Z]?\d{1,5})\s+([A-Z])\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1\\2', 'g')"
 
 
 def move_flat_block_letter_before_number(input: str):
