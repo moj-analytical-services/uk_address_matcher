@@ -656,20 +656,22 @@ def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_
     assert "inferred_road_top_2" not in comparison_columns
 
 
-def test_packaged_model_contains_the_promoted_road_blocking_rule():
+def test_packaged_model_omits_redundant_road_district_blocking_rules():
     settings = _get_model_settings_dict()
     packaged_rules = [
         rule["blocking_rule"]
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 12
+    assert len(packaged_rules) == 10
     assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
-    assert any(
+    assert not any(
         "l.road_1_norm = r.road_1_norm" in rule
         and "split_part(l.postcode, ' ', 1)" in rule
+        and "list_extract(l.unusual_tokens_arr, 1)" not in rule
         for rule in packaged_rules
     )
+    assert not any("left(l.road_1_norm, 4)" in rule for rule in packaged_rules)
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules

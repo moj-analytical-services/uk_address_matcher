@@ -16,7 +16,7 @@ Briefly summarise the changes in this release.
 - [ ] Included `docs/runtime/<target-release>/manifest.json` and `docs/runtime/<target-release>/report.md` in this PR.
 - [ ] Confirmed preparation and matching runtimes look sensible against the comparison baseline.
 - [ ] Reviewed preparation and pooled-council peak RSS, spill usage and cleanup; the figures look sensible.
-- [ ] Confirmed matching precision, recall and F1 at MW 8, 10 and 12 are comparable to the baseline for both supplied-postcode and postcode-less runs.
+- [ ] Confirmed matching precision, recall and F1 at MW 10, 20 and 30 are comparable to the baseline for both supplied-postcode and postcode-less runs.
 - [ ] Explained any regressions, missing measurements or incomplete validation below for release review.
 
 ## Comparison Notes
