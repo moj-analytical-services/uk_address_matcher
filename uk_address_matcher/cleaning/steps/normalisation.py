@@ -4,6 +4,7 @@ from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
+    join_room_identifier_suffix,
     merge_split_flat_number,
     move_flat_block_letter_before_number,
     move_flat_to_front,
@@ -19,6 +20,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
     split_letter_dash_letter,
+    split_subpremise_descriptor_number,
     standarise_num_dash_num,
     standarise_num_letter,
     strip_latin_accents,
@@ -208,6 +210,7 @@ def _clean_address_string_first_pass() -> str:
             strip_latin_accents,
             remove_commas_periods,
             remove_brackets,
+            split_subpremise_descriptor_number,
             remove_apostrophes,
             remove_curly_apostrophes,
             replace_en_dash_with_space,
@@ -219,6 +222,7 @@ def _clean_address_string_first_pass() -> str:
             separate_letter_num,
             move_flat_block_letter_before_number,
             standarise_num_letter,
+            join_room_identifier_suffix,
             move_flat_to_front,
             merge_split_flat_number,
             remove_repeated_tokens,
@@ -391,7 +395,8 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
     floor_codes = ["G"] + [str(i) for i in range(1, len(floor_names))]
     compact_floor_rows: list[tuple[str, str]] = []
     for code, name in zip(floor_codes, floor_names):
-        compact_floor_rows.append((f"{code}FR", f"{name} FLOOR"))
+        compact_floor_rows.append((f"{code}FR", f"{name} FLOOR RIGHT"))
+        compact_floor_rows.append((f"{code}FL", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}F-R", f"{name} FLOOR RIGHT"))
         compact_floor_rows.append((f"{code}F-L", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}R-R", f"{name} FLOOR RIGHT"))

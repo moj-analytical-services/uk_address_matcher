@@ -43,6 +43,15 @@ def merge_split_flat_number(input: str):
     return f"regexp_replace({input}, '{pattern}', '\\1 \\2\\3 \\4', 'g')"
 
 
+def split_subpremise_descriptor_number(input: str):
+    descriptors = (
+        r"F?FLAT|APARTMENT|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
+        r"WORKSHOP|WAREHOUSE|STUDIO|ROOMS?"
+    )
+    pattern = rf"\b({descriptors})(\d+[A-Z]?)\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1 \\2', 'g')"
+
+
 def standarise_num_dash_num(input: str):
     """
     Standardize numeric ranges using dashes or common worded separators.
@@ -138,6 +147,11 @@ def standarise_num_letter(input: str):
     return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2 ', 'g')"
 
 
+def join_room_identifier_suffix(input: str):
+    pattern = r"\b(ROOMS?\s+[A-Z]?\d{1,5})\s+([A-Z])\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1\\2', 'g')"
+
+
 def move_flat_block_letter_before_number(input: str):
     """Canonicalise a separated block letter before generic number-letter merging."""
     regex_pattern = r"\b(F?FLAT)\s+(\d{1,4})\s+([A-Za-z])\s+BLOCK\b"
@@ -145,21 +159,7 @@ def move_flat_block_letter_before_number(input: str):
 
 
 def separate_letter_num(input: str):
-    """
-    Matches a single letter followed by a number (with or without spaces in between),
-    and replaces it with the letter followed by a space and the number.
-
-    Examples:
-        'C230' -> 'C 230'
-        'C 230' -> 'C 230'
-        'C  230' -> 'C 230'
-
-    Args:
-        input (str): The input string to process.
-
-    Returns:
-        str: The processed string with the letter and number separated by a space.
-    """
+    """Separate single-letter prefixes from numeric identifiers."""
     regex_pattern = (
         r"\b"  # Word boundary
         r"([A-Za-z])"  # Matches a single letter (A-Z or a-z)
