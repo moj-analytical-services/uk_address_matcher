@@ -1,0 +1,965 @@
+{
+  "target_release": "v2.0.0.dev3",
+  "software_version": "2.0.0.dev3",
+  "status": "completed",
+  "precleaning": {
+    "software_version": "2.0.0.dev3",
+    "canonical_rows": 73058999,
+    "e2e_seconds": 628.2811009883881,
+    "sampled_peak_rss_bytes": 16455335936,
+    "os_peak_rss_bytes": null,
+    "sampled_peak_spill_bytes": 43827003392,
+    "final_spill_bytes": 0,
+    "stages": []
+  },
+  "datasets": {
+    "pooled_councils_filtered": {
+      "eligible_rows": 347343,
+      "runtime_seconds": 106.40278583299369,
+      "e2e_seconds": 125.60453510284424,
+      "sampled_peak_rss_bytes": 17111040000,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 3436019712,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 347343,
+          "rows_matched_in_stage": 172133,
+          "stage_match_rate": 49.56,
+          "share_of_total_input_matched": 49.56,
+          "elapsed_seconds": 0.8521
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 175210,
+          "rows_matched_in_stage": 60902,
+          "stage_match_rate": 34.76,
+          "share_of_total_input_matched": 17.53,
+          "elapsed_seconds": 0.6818
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 114308,
+          "rows_matched_in_stage": 112109,
+          "stage_match_rate": 98.08,
+          "share_of_total_input_matched": 32.28,
+          "elapsed_seconds": 64.8839
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9947800516774884,
+          "recall": 0.9875857581698781,
+          "f1": 0.9911698503555464,
+          "tp": 343031,
+          "fp": 1800,
+          "unmatched": 2512
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9964424873703881,
+          "recall": 0.9733174412612317,
+          "f1": 0.984744219916257,
+          "tp": 338075,
+          "fp": 1207,
+          "unmatched": 8061
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9979981683395007,
+          "recall": 0.9286411414653527,
+          "f1": 0.962071264206685,
+          "tp": 322557,
+          "fp": 647,
+          "unmatched": 24139
+        }
+      ]
+    },
+    "pooled_councils_unfiltered": {
+      "eligible_rows": 348199,
+      "runtime_seconds": 91.96597370800737,
+      "e2e_seconds": 98.83215403556824,
+      "sampled_peak_rss_bytes": 12684083200,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 348199,
+          "rows_matched_in_stage": 172603,
+          "stage_match_rate": 49.57,
+          "share_of_total_input_matched": 49.57,
+          "elapsed_seconds": 0.8716
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 175596,
+          "rows_matched_in_stage": 61153,
+          "stage_match_rate": 34.83,
+          "share_of_total_input_matched": 17.56,
+          "elapsed_seconds": 0.6884
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 114443,
+          "rows_matched_in_stage": 112508,
+          "stage_match_rate": 98.31,
+          "share_of_total_input_matched": 32.31,
+          "elapsed_seconds": 58.1999
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9904860470696389,
+          "recall": 0.9839832969078027,
+          "f1": 0.9872239638559771,
+          "tp": 342622,
+          "fp": 3291,
+          "unmatched": 2286
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9930880398034586,
+          "recall": 0.9676133475397689,
+          "f1": 0.9801852018863478,
+          "tp": 336922,
+          "fp": 2345,
+          "unmatched": 8932
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9958718246597129,
+          "recall": 0.9207522135330659,
+          "f1": 0.956839910883362,
+          "tp": 320605,
+          "fp": 1329,
+          "unmatched": 26265
+        }
+      ]
+    },
+    "hackney": {
+      "eligible_rows": 113773,
+      "runtime_seconds": 38.04973758399137,
+      "e2e_seconds": 41.05515193939209,
+      "sampled_peak_rss_bytes": 7651590144,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 113773,
+          "rows_matched_in_stage": 54243,
+          "stage_match_rate": 47.68,
+          "share_of_total_input_matched": 47.68,
+          "elapsed_seconds": 0.3826
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 59530,
+          "rows_matched_in_stage": 4280,
+          "stage_match_rate": 7.19,
+          "share_of_total_input_matched": 3.76,
+          "elapsed_seconds": 0.2656
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 55250,
+          "rows_matched_in_stage": 55140,
+          "stage_match_rate": 99.8,
+          "share_of_total_input_matched": 48.46,
+          "elapsed_seconds": 16.3042
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9979850772533699,
+          "recall": 0.9969236989443893,
+          "f1": 0.9974541057491481,
+          "tp": 113423,
+          "fp": 229,
+          "unmatched": 121
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.998649429117242,
+          "recall": 0.9878705844093062,
+          "f1": 0.9932307637925397,
+          "tp": 112393,
+          "fp": 152,
+          "unmatched": 1228
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9993480602430129,
+          "recall": 0.9296493895739762,
+          "f1": 0.9632395462886649,
+          "tp": 105769,
+          "fp": 69,
+          "unmatched": 7935
+        }
+      ]
+    },
+    "rhondda": {
+      "eligible_rows": 111241,
+      "runtime_seconds": 44.68215604199213,
+      "e2e_seconds": 47.75753092765808,
+      "sampled_peak_rss_bytes": 6332448768,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 111241,
+          "rows_matched_in_stage": 17727,
+          "stage_match_rate": 15.94,
+          "share_of_total_input_matched": 15.94,
+          "elapsed_seconds": 0.3206
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 93514,
+          "rows_matched_in_stage": 55901,
+          "stage_match_rate": 59.78,
+          "share_of_total_input_matched": 50.25,
+          "elapsed_seconds": 0.3413
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 37613,
+          "rows_matched_in_stage": 36625,
+          "stage_match_rate": 97.37,
+          "share_of_total_input_matched": 32.92,
+          "elapsed_seconds": 22.5393
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9938318707872313,
+          "recall": 0.9834773150187431,
+          "f1": 0.9886274811022804,
+          "tp": 109403,
+          "fp": 679,
+          "unmatched": 1159
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9959807297806573,
+          "recall": 0.9645544358644744,
+          "f1": 0.9800157097711123,
+          "tp": 107298,
+          "fp": 433,
+          "unmatched": 3510
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9977059538274605,
+          "recall": 0.9226723959691121,
+          "f1": 0.9587233088606176,
+          "tp": 102639,
+          "fp": 236,
+          "unmatched": 8366
+        }
+      ]
+    },
+    "aberdeenshire": {
+      "eligible_rows": 122259,
+      "runtime_seconds": 29.631098041994846,
+      "e2e_seconds": 32.52308177947998,
+      "sampled_peak_rss_bytes": 6107987968,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 122259,
+          "rows_matched_in_stage": 100157,
+          "stage_match_rate": 81.92,
+          "share_of_total_input_matched": 81.92,
+          "elapsed_seconds": 0.2971
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 22102,
+          "rows_matched_in_stage": 708,
+          "stage_match_rate": 3.2,
+          "share_of_total_input_matched": 0.58,
+          "elapsed_seconds": 0.215
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 21394,
+          "rows_matched_in_stage": 20448,
+          "stage_match_rate": 95.58,
+          "share_of_total_input_matched": 16.73,
+          "elapsed_seconds": 8.5208
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9929536791036155,
+          "recall": 0.9843365314618965,
+          "f1": 0.9886263282633073,
+          "tp": 120344,
+          "fp": 854,
+          "unmatched": 1061
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9951101876653232,
+          "recall": 0.9754292117553718,
+          "f1": 0.9851714167699298,
+          "tp": 119255,
+          "fp": 586,
+          "unmatched": 2418
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9972113968996276,
+          "recall": 0.9418365928070735,
+          "f1": 0.9687333055706288,
+          "tp": 115148,
+          "fp": 322,
+          "unmatched": 6789
+        }
+      ]
+    },
+    "mid_sussex": {
+      "eligible_rows": 3701,
+      "runtime_seconds": 8.0115187499905,
+      "e2e_seconds": 10.399246215820312,
+      "sampled_peak_rss_bytes": 5534531584,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 3701,
+          "rows_matched_in_stage": 242,
+          "stage_match_rate": 6.54,
+          "share_of_total_input_matched": 6.54,
+          "elapsed_seconds": 0.1535
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 3459,
+          "rows_matched_in_stage": 28,
+          "stage_match_rate": 0.81,
+          "share_of_total_input_matched": 0.76,
+          "elapsed_seconds": 0.1501
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 3431,
+          "rows_matched_in_stage": 3143,
+          "stage_match_rate": 91.61,
+          "share_of_total_input_matched": 84.92,
+          "elapsed_seconds": 3.8897
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9663220088626292,
+          "recall": 0.8838151850851121,
+          "f1": 0.9232289020604008,
+          "tp": 3271,
+          "fp": 114,
+          "unmatched": 316
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9767666989351403,
+          "recall": 0.817887057552013,
+          "f1": 0.8902941176470588,
+          "tp": 3027,
+          "fp": 72,
+          "unmatched": 602
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9866768176627332,
+          "recall": 0.7003512564171845,
+          "f1": 0.8192161820480405,
+          "tp": 2592,
+          "fp": 35,
+          "unmatched": 1074
+        }
+      ]
+    },
+    "gwynedd": {
+      "eligible_rows": 62408,
+      "runtime_seconds": 22.890829125011805,
+      "e2e_seconds": 25.96660304069519,
+      "sampled_peak_rss_bytes": 6023806976,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 62408,
+          "rows_matched_in_stage": 2697,
+          "stage_match_rate": 4.32,
+          "share_of_total_input_matched": 4.32,
+          "elapsed_seconds": 0.2312
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 59711,
+          "rows_matched_in_stage": 37279,
+          "stage_match_rate": 62.43,
+          "share_of_total_input_matched": 59.73,
+          "elapsed_seconds": 0.2658
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 22432,
+          "rows_matched_in_stage": 20511,
+          "stage_match_rate": 91.44,
+          "share_of_total_input_matched": 32.87,
+          "elapsed_seconds": 9.3148
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9832498590334671,
+          "recall": 0.9500064094346878,
+          "f1": 0.9663423141492673,
+          "tp": 59288,
+          "fp": 1010,
+          "unmatched": 2110
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9875555555555555,
+          "recall": 0.9257146519676964,
+          "f1": 0.9556356899460747,
+          "tp": 57772,
+          "fp": 728,
+          "unmatched": 3908
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.992460324757719,
+          "recall": 0.8647769516728625,
+          "f1": 0.9242295803471277,
+          "tp": 53969,
+          "fp": 410,
+          "unmatched": 8029
+        }
+      ]
+    }
+  },
+  "postcodeless_datasets": {
+    "pooled_councils_filtered": {
+      "eligible_rows": 347343,
+      "runtime_seconds": 108.69441287498921,
+      "e2e_seconds": 125.7989330291748,
+      "sampled_peak_rss_bytes": 17786421248,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 2324692992,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 347343,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.214
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 347343,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2645
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 347343,
+          "rows_matched_in_stage": 292821,
+          "stage_match_rate": 84.3,
+          "share_of_total_input_matched": 84.3,
+          "elapsed_seconds": 69.1066
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9730963673320477,
+          "recall": 0.8062980972698457,
+          "f1": 0.8818794989514255,
+          "tp": 280062,
+          "fp": 7743,
+          "unmatched": 59538
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9921849178046447,
+          "recall": 0.6568233705587848,
+          "f1": 0.7904026274808023,
+          "tp": 228143,
+          "fp": 1797,
+          "unmatched": 117403
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9974958535236919,
+          "recall": 0.2649139323377756,
+          "f1": 0.4186446461475466,
+          "tp": 92016,
+          "fp": 231,
+          "unmatched": 255096
+        }
+      ]
+    },
+    "pooled_councils_unfiltered": {
+      "eligible_rows": 348199,
+      "runtime_seconds": 98.94840254200972,
+      "e2e_seconds": 106.0098831653595,
+      "sampled_peak_rss_bytes": 17558994944,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 4161896448,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 348199,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2507
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 348199,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2566
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 348199,
+          "rows_matched_in_stage": 292754,
+          "stage_match_rate": 84.08,
+          "share_of_total_input_matched": 84.08,
+          "elapsed_seconds": 68.8211
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9718991304347826,
+          "recall": 0.8024750214676091,
+          "f1": 0.8790984412434186,
+          "tp": 279421,
+          "fp": 8079,
+          "unmatched": 60699
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.990748026275075,
+          "recall": 0.6436807687557977,
+          "f1": 0.7803649239843251,
+          "tp": 224129,
+          "fp": 2093,
+          "unmatched": 121977
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9965211381177284,
+          "recall": 0.24844413682980135,
+          "f1": 0.3977297021440936,
+          "tp": 86508,
+          "fp": 302,
+          "unmatched": 261389
+        }
+      ]
+    },
+    "hackney": {
+      "eligible_rows": 113773,
+      "runtime_seconds": 35.42149058300129,
+      "e2e_seconds": 38.428828954696655,
+      "sampled_peak_rss_bytes": 6523207680,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 113773,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2181
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 113773,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2218
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 113773,
+          "rows_matched_in_stage": 101161,
+          "stage_match_rate": 88.91,
+          "share_of_total_input_matched": 88.91,
+          "elapsed_seconds": 16.0384
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9965246206380958,
+          "recall": 0.8669719529238045,
+          "f1": 0.9272449531150855,
+          "tp": 98638,
+          "fp": 344,
+          "unmatched": 14791
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9989498556051457,
+          "recall": 0.6688757438056481,
+          "f1": 0.8012508357330498,
+          "tp": 76100,
+          "fp": 80,
+          "unmatched": 37593
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9995950105297262,
+          "recall": 0.3254111256625034,
+          "f1": 0.490985405573864,
+          "tp": 37023,
+          "fp": 15,
+          "unmatched": 76735
+        }
+      ]
+    },
+    "rhondda": {
+      "eligible_rows": 111241,
+      "runtime_seconds": 33.45232554100221,
+      "e2e_seconds": 35.69223713874817,
+      "sampled_peak_rss_bytes": 6522830848,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 111241,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2112
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 111241,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2263
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 111241,
+          "rows_matched_in_stage": 86277,
+          "stage_match_rate": 77.56,
+          "share_of_total_input_matched": 77.56,
+          "elapsed_seconds": 13.9903
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9561185332575327,
+          "recall": 0.7256946629390243,
+          "f1": 0.8251215037332693,
+          "tp": 80727,
+          "fp": 3705,
+          "unmatched": 26809
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9896660176726074,
+          "recall": 0.5940255840921962,
+          "f1": 0.7424260298520878,
+          "tp": 66080,
+          "fp": 690,
+          "unmatched": 44471
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9959738997639872,
+          "recall": 0.25796244190541257,
+          "f1": 0.4097877232190671,
+          "tp": 28696,
+          "fp": 116,
+          "unmatched": 82429
+        }
+      ]
+    },
+    "aberdeenshire": {
+      "eligible_rows": 122259,
+      "runtime_seconds": 38.17577741701098,
+      "e2e_seconds": 40.73906993865967,
+      "sampled_peak_rss_bytes": 6189678592,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 122259,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.1959
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 122259,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.2162
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 122259,
+          "rows_matched_in_stage": 109088,
+          "stage_match_rate": 89.23,
+          "share_of_total_input_matched": 89.23,
+          "elapsed_seconds": 19.6048
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9937262656034889,
+          "recall": 0.8796898387848747,
+          "f1": 0.9332373051959321,
+          "tp": 107550,
+          "fp": 679,
+          "unmatched": 14030
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9976470102582097,
+          "recall": 0.7906984352890176,
+          "f1": 0.8821986064784606,
+          "tp": 96670,
+          "fp": 228,
+          "unmatched": 25361
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9985631875790782,
+          "recall": 0.38086357650561514,
+          "f1": 0.5514121617620936,
+          "tp": 46564,
+          "fp": 67,
+          "unmatched": 75628
+        }
+      ]
+    },
+    "mid_sussex": {
+      "eligible_rows": 3701,
+      "runtime_seconds": 7.232177583005978,
+      "e2e_seconds": 9.309784173965454,
+      "sampled_peak_rss_bytes": 5368119296,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 3701,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.1249
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 3701,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.1272
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 3701,
+          "rows_matched_in_stage": 2833,
+          "stage_match_rate": 76.55,
+          "share_of_total_input_matched": 76.55,
+          "elapsed_seconds": 3.3787
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9784514243973703,
+          "recall": 0.7238584166441502,
+          "f1": 0.8321167883211679,
+          "tp": 2679,
+          "fp": 59,
+          "unmatched": 963
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.9913617886178862,
+          "recall": 0.5271548230208052,
+          "f1": 0.6883048156641383,
+          "tp": 1951,
+          "fp": 17,
+          "unmatched": 1733
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9968287526427061,
+          "recall": 0.254796001080789,
+          "f1": 0.40585323864859046,
+          "tp": 943,
+          "fp": 3,
+          "unmatched": 2755
+        }
+      ]
+    },
+    "gwynedd": {
+      "eligible_rows": 62408,
+      "runtime_seconds": 23.004968042005203,
+      "e2e_seconds": 25.864044904708862,
+      "sampled_peak_rss_bytes": 6089965568,
+      "os_peak_rss_bytes": null,
+      "sampled_peak_spill_bytes": 0,
+      "final_spill_bytes": 0,
+      "stages": [
+        {
+          "stage": "exact_matches",
+          "stage_order": 0,
+          "rows_entering_stage": 62408,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.1658
+        },
+        {
+          "stage": "peeled_address",
+          "stage_order": 1,
+          "rows_entering_stage": 62408,
+          "rows_matched_in_stage": 0,
+          "stage_match_rate": 0.0,
+          "share_of_total_input_matched": 0.0,
+          "elapsed_seconds": 0.1776
+        },
+        {
+          "stage": "splink",
+          "stage_order": 2,
+          "rows_entering_stage": 62408,
+          "rows_matched_in_stage": 49345,
+          "stage_match_rate": 79.07,
+          "share_of_total_input_matched": 79.07,
+          "elapsed_seconds": 10.7006
+        }
+      ],
+      "operating_points": [
+        {
+          "match_weight": 10,
+          "precision": 0.9787931247681464,
+          "recall": 0.7610082040764005,
+          "f1": 0.8562697196430181,
+          "tp": 47493,
+          "fp": 1029,
+          "unmatched": 13886
+        },
+        {
+          "match_weight": 20,
+          "precision": 0.991069305361059,
+          "recall": 0.6010287142674016,
+          "f1": 0.7482719066380729,
+          "tp": 37509,
+          "fp": 338,
+          "unmatched": 24561
+        },
+        {
+          "match_weight": 30,
+          "precision": 0.9935098458588392,
+          "recall": 0.21585373670042302,
+          "f1": 0.3546539944976108,
+          "tp": 13471,
+          "fp": 88,
+          "unmatched": 48849
+        }
+      ]
+    }
+  },
+  "notes": [
+    "The supplied national input was already in ten prepared UKAM-OS parquet chunks, so raw conversion was not rerun. Full UKAM canonical preparation was rerun for 73,058,999 rows with one globally sorted canonical output file.",
+    "All 14 jobs were run in fresh processes: seven supplied-postcode and seven postcode-less runs, including filtered and unfiltered pooled views.",
+    "Postcode-less inputs clear the postcode field and remove postcode text before cleaning. Eligibility, labels, canonical filters and defaults otherwise stay unchanged.",
+    "Matching runtimes exclude accuracy reporting and persistence. RSS and spill are one-second samples; final spill was zero for every job.",
+    "Performance documentation was left unchanged because this run did not establish a controlled comparable historical baseline.",
+    "Pooled matching is about 20 seconds slower than the earlier local experiment. The new prepared inverted index contains 74,218,816 rows, including 11,478,474 district-singleton trigram rows. Most of the increase falls outside the exact, peeled and Splink stage timers while the national index is loaded and materialised."
+  ]
+}

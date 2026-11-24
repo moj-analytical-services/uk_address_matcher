@@ -31,7 +31,7 @@ The check covers:
 4. Run pooled councils against the full canonical, then Hackney, Rhondda,
    Aberdeenshire, Mid Sussex and Gwynedd against regional filters on that same
    prepared data. Retain national term frequencies and indexes.
-5. Record precision, recall, F1, TP, FP and unmatched at MW 8, 10 and 12, alongside
+5. Record precision, recall, F1, TP, FP and unmatched at MW 10, 20 and 30, alongside
    labelled stage timings and resources. Detailed curves are a separate exercise.
 6. Review the results before updating the existing performance figures. Leave
    those figures unchanged if preparation is severely slow, matching looks wrong
@@ -42,7 +42,7 @@ replacing that version's pair on a rerun: a self-contained `manifest.json` and a
 readable `report.md` generated from its values. Start from
 [manifest.template.json](../runtime/manifest.template.json). The JSON contains only
 the release label, installed software version, status, national precleaning count
-and E2E runtime, eligible counts and matching runtimes, MW 8/10/12 precision,
+and E2E runtime, eligible counts and matching runtimes, MW 10/20/30 precision,
 recall, F1, TP, FP and unmatched for all six datasets, and short limitation notes.
 Keep exact values and consistent units. The Markdown presents these results as
 concise tables, not a diagnostic log.
