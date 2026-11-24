@@ -674,7 +674,8 @@ def test_packaged_model_omits_redundant_road_district_blocking_rules():
     )
     assert not any("left(l.road_1_norm, 4)" in rule for rule in packaged_rules)
     lexical_rule = next(
-        rule for rule in packaged_rules
+        rule
+        for rule in packaged_rules
         if "l.lexical_fallback_token = r.lexical_fallback_token" in rule
     )
     assert "l.postcode = r.postcode" in lexical_rule
@@ -703,8 +704,7 @@ def test_lexical_fallback_comparison_routes_and_weights(duck_con):
     lexical_neutral_level = next(
         level
         for level in primary_levels
-        if level["label_for_charts"]
-        == "Eligible lexical fallback; neutral primary token"
+        if level["label_for_charts"] == "Eligible lexical fallback; neutral primary token"
     )
     primary_exact_index = next(
         index
@@ -738,9 +738,7 @@ def test_lexical_fallback_comparison_routes_and_weights(duck_con):
         if comparison["output_column_name"] == "lexical_fallback_token"
     )
     lexical_levels = lexical_comparison["comparison_levels"]
-    assert [
-        level["label_for_charts"] for level in lexical_levels
-    ] == [
+    assert [level["label_for_charts"] for level in lexical_levels] == [
         "Not eligible for lexical fallback comparison",
         "Exact lexical fallback",
         "One edit, minimum length five",
@@ -760,8 +758,7 @@ def test_lexical_fallback_comparison_routes_and_weights(duck_con):
 
     level_by_label = {level["label_for_charts"]: level for level in lexical_levels}
     assert (
-        "levenshtein("
-        in level_by_label["One edit, minimum length five"]["sql_condition"]
+        "levenshtein(" in level_by_label["One edit, minimum length five"]["sql_condition"]
     )
     assert (
         "levenshtein("
@@ -788,9 +785,7 @@ def test_lexical_fallback_comparison_routes_and_weights(duck_con):
         base_dialect_str="duckdb",
     )
     not_eligible = CustomLevel(
-        level_by_label["Not eligible for lexical fallback comparison"][
-            "sql_condition"
-        ],
+        level_by_label["Not eligible for lexical fallback comparison"]["sql_condition"],
         base_dialect_str="duckdb",
     )
     different = CustomLevel(
@@ -890,12 +885,16 @@ def test_linker_keeps_numberless_fallback_out_of_primary_number_weight(duck_con)
         threshold_match_weight=-100
     ).as_duckdbpyrelation()
 
-    name_pair = predictions.filter(
-        "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
-    ).project("mw_numeric_token_1, mw_lexical_fallback_token").fetchall()[0]
-    numeric_pair = predictions.filter(
-        "unique_id_l = 'c_numbered' AND unique_id_r = 'm_numbered'"
-    ).project("mw_numeric_token_1, mw_lexical_fallback_token").fetchall()[0]
+    name_pair = (
+        predictions.filter("unique_id_l = 'c_name' AND unique_id_r = 'm_name'")
+        .project("mw_numeric_token_1, mw_lexical_fallback_token")
+        .fetchall()[0]
+    )
+    numeric_pair = (
+        predictions.filter("unique_id_l = 'c_numbered' AND unique_id_r = 'm_numbered'")
+        .project("mw_numeric_token_1, mw_lexical_fallback_token")
+        .fetchall()[0]
+    )
 
     assert name_pair == pytest.approx((0.0, 4.0))
     assert numeric_pair[0] < 0
@@ -935,9 +934,7 @@ def test_lexical_fallback_weights_are_stable_with_warm_canonical_cache(tmp_path)
             predictions = linker.inference.predict(
                 threshold_match_weight=-100
             ).as_duckdbpyrelation()
-            pair = predictions.filter(
-                "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
-            )
+            pair = predictions.filter("unique_id_l = 'c_name' AND unique_id_r = 'm_name'")
             return pair.project(
                 "mw_numeric_token_1, mw_lexical_fallback_token"
             ).fetchall()[0]

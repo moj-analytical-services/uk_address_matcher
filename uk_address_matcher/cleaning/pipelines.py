@@ -320,13 +320,9 @@ def _clean_data_using_precomputed_rel_tok_freq(
     if not pre_cleaned_addresses:
         address_table = _ensure_postcode_column(address_table)
     elif "numeric_tokens" not in address_table.columns:
-        address_table = address_table.select(
-            "*, NULL::VARCHAR[] AS numeric_tokens"
-        )
+        address_table = address_table.select("*, NULL::VARCHAR[] AS numeric_tokens")
     if "lexical_fallback_token" in address_table.columns:
-        address_table = address_table.select(
-            "* EXCLUDE (lexical_fallback_token)"
-        )
+        address_table = address_table.select("* EXCLUDE (lexical_fallback_token)")
     pre_queue = (
         QUEUE_PRE_TF_WITH_DISTINGUISHING_WRT_ADJACENT
         if derive_distinguishing_wrt_adjacent_records

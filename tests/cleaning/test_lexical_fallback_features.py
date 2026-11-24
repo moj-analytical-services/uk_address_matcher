@@ -22,8 +22,7 @@ def test_lexical_fallback_feature_is_only_populated_for_empty_numeric_tokens(duc
     result = _add_lexical_fallback_features(result)
 
     fallback_by_id = {
-        row[0]: row[1]
-        for row in result.project("id, lexical_fallback_token").fetchall()
+        row[0]: row[1] for row in result.project("id, lexical_fallback_token").fetchall()
     }
 
     assert fallback_by_id == {
