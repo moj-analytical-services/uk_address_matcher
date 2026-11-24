@@ -685,7 +685,86 @@ def _parse_out_sub_premise():
             """,
         ),
         CTEStep("business_unit", "SELECT * FROM {role_segments}"),
-        CTEStep("final", _premise_key_set_sql(roles, range_separator)),
+        CTEStep(
+            "with_premise_keys",
+            _premise_key_set_sql(roles, range_separator),
+        ),
+        CTEStep(
+            "room_candidate",
+            """
+            SELECT *,
+                CASE
+                    WHEN sub_premise_explicit_identifier IS NULL
+                     AND NOT premise_scope_uncertain
+                     AND coalesce(
+                            len(map_extract(premise_keys, 'ROOM')[1]), 0
+                         ) = 1
+                     AND regexp_matches(
+                            map_extract(premise_keys, 'ROOM')[1][1], '[0-9]'
+                         )
+                    THEN map_extract(premise_keys, 'ROOM')[1][1]
+                END AS __room_identifier
+            FROM {with_premise_keys}
+            """,
+        ),
+        CTEStep(
+            "final",
+            r"""
+            SELECT
+                * EXCLUDE (
+                    __room_identifier,
+                    flat_letter,
+                    flat_identity,
+                    has_flat_indicator,
+                    sub_premise_role,
+                    sub_premise_marker_token,
+                    sub_premise_explicit_identifier,
+                    sub_premise_identifier
+                ),
+                CASE
+                    WHEN __room_identifier IS NOT NULL THEN NULL
+                    ELSE flat_letter
+                END AS flat_letter,
+                CASE
+                    WHEN __room_identifier IS NOT NULL THEN
+                        CASE
+                            WHEN flat_number IS NOT NULL OR flat_positional IS NOT NULL
+                                THEN concat_ws(
+                                    '_', coalesce(flat_number, ''), '',
+                                    coalesce(flat_positional, '')
+                                )
+                        END
+                    ELSE flat_identity
+                END AS flat_identity,
+                CASE
+                    WHEN __room_identifier IS NOT NULL THEN (
+                        flat_number IS NOT NULL
+                        OR flat_positional IS NOT NULL
+                        OR regexp_matches(clean_full_address, '\bF?FLAT\b')
+                    )
+                    ELSE has_flat_indicator
+                END AS has_flat_indicator,
+                CASE
+                    WHEN __room_identifier IS NOT NULL THEN 'ROOM'
+                    ELSE sub_premise_role
+                END AS sub_premise_role,
+                CASE
+                    WHEN __room_identifier IS NOT NULL THEN 'ROOM'
+                    ELSE sub_premise_marker_token
+                END AS sub_premise_marker_token,
+                CASE
+                    WHEN __room_identifier IS NOT NULL
+                        THEN __room_identifier
+                    ELSE sub_premise_explicit_identifier
+                END AS sub_premise_explicit_identifier,
+                CASE
+                    WHEN __room_identifier IS NOT NULL
+                        THEN __room_identifier
+                    ELSE sub_premise_identifier
+                END AS sub_premise_identifier
+            FROM {room_candidate}
+            """,
+        ),
     ]
     return steps
 

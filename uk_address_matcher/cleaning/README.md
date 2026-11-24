@@ -62,9 +62,19 @@ recomputed on load. `sub_premise_building_number` records a unique building
 number in the remaining address, rejecting nested descriptors and multiple
 numbers; older bundles use null for new explicit fields until rebuilt.
 
+A single numeric `ROOM` key is promoted to sub-premise role and identifier when
+no other explicit identifier exists. Split room suffixes such as `ROOM 204 E`
+are joined before parsing; the suffix is not treated as a flat letter, while
+floor evidence remains in `flat_identity`.
+
+Normalisation expands compact floor-side forms such as `1FR` and `1FL`, and
+separates attached sub-premise descriptors from numeric identifiers (for
+example, `FLAT10A` becomes `FLAT 10A`).
+
 | Input | Parsed keys (`premise_keys`) |
 | --- | --- |
 | `BUILDING B UNIT 4` | `BUILDING: B`, `UNIT: 4` |
 | `UNIT 4, BUILDING B, EXAMPLE ROAD` | `BUILDING: B`, `UNIT: 4` |
 | `BUILDING C UNIT 4` | `BUILDING: C`, `UNIT: 4` |
 | `BLOCK B UNIT 4` | `BLOCK: B`, `UNIT: 4` |
+| `ROOM 204 E` | `ROOM: 204E` |
