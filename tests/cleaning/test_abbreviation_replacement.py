@@ -655,16 +655,11 @@ def test_floor_abbreviations_and_attached_identifiers_are_normalised(duck_con):
     rows = {
         row[0]: row[1:]
         for row in pipeline.run()
-        .project(
-            "unique_id, clean_full_address, sub_premise_identifier"
-        )
+        .project("unique_id, clean_full_address, sub_premise_identifier")
         .fetchall()
     }
 
-    assert {
-        unique_id: cleaned
-        for unique_id, (cleaned, _) in rows.items()
-    } == {
+    assert {unique_id: cleaned for unique_id, (cleaned, _) in rows.items()} == {
         "floor-right": "FIRST FLOOR RIGHT 30 SAMPLE STREET",
         "floor-left": "FIRST FLOOR LEFT 30 SAMPLE STREET",
         "apartment": "APARTMENT 10A 270 EXAMPLE ROAD",
@@ -724,8 +719,7 @@ def test_numeric_room_identifiers_are_promoted_safely(duck_con):
     assert rows["multiple-rooms"][1] == {"ROOM": ["201E", "202F"]}
     assert rows["letter-room"][1] == {"ROOM": ["E"]}
     assert all(
-        rows[room_id][2] != "ROOM"
-        for room_id in ("multiple-rooms", "letter-room")
+        rows[room_id][2] != "ROOM" for room_id in ("multiple-rooms", "letter-room")
     )
 
 
