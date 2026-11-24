@@ -189,6 +189,6 @@ All monitored jobs finished with zero spill remaining.
 - Postcode-less inputs clear the postcode field and remove postcode text before cleaning. Eligibility, labels, canonical filters and defaults otherwise stay unchanged.
 - Matching runtimes exclude accuracy reporting and persistence. RSS and spill are one-second samples; final spill was zero for every job.
 - Performance documentation was left unchanged because this run did not establish a controlled comparable historical baseline.
-- Pooled matching is about 20 seconds slower than the earlier local experiment. The new prepared inverted index contains 74,218,816 rows, including 11,478,474 district-singleton trigram rows. Most of the increase falls outside the exact, peeled and Splink stage timers while the national index is loaded and materialised.
+- The earlier local report's pooled timings were not reproduced by commit 629d6db. That commit ran at 107.856s filtered and 96.523s unfiltered on the fresh bundle, and 99.584s / 88.257s on the older bundle. The fresh bundle has 74,218,816 index rows, including 11,478,474 district-singleton trigram rows, but this does not explain the full difference from the earlier report.
 
 Link to [manifest.json](manifest.json).
