@@ -25,11 +25,6 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
-def remove_parenthesised_phase(input: str):
-    pattern = r"\s*\(\s*PHASE\s+\d+\s*\)\s*"
-    return f"regexp_replace({input}, '{pattern}', ' ', 'gi')"
-
-
 def replace_en_dash_with_space(input: str):
     return f"regexp_replace({input}, chr(8211), ' ', 'g')"
 
@@ -48,8 +43,12 @@ def merge_split_flat_number(input: str):
     return f"regexp_replace({input}, '{pattern}', '\\1 \\2\\3 \\4', 'g')"
 
 
-def split_apartment_number(input: str):
-    pattern = r"\b(APARTMENT)(\d+[A-Z]?)\b"
+def split_subpremise_descriptor_number(input: str):
+    descriptors = (
+        r"F?FLAT|APARTMENT|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
+        r"WORKSHOP|WAREHOUSE|STUDIO|ROOMS?"
+    )
+    pattern = rf"\b({descriptors})(\d+[A-Z]?)\b"
     return f"regexp_replace({input}, '{pattern}', '\\1 \\2', 'g')"
 
 
@@ -160,21 +159,7 @@ def move_flat_block_letter_before_number(input: str):
 
 
 def separate_letter_num(input: str):
-    """
-    Matches a single letter followed by a number (with or without spaces in between),
-    and replaces it with the letter followed by a space and the number.
-
-    Examples:
-        'C230' -> 'C 230'
-        'C 230' -> 'C 230'
-        'C  230' -> 'C 230'
-
-    Args:
-        input (str): The input string to process.
-
-    Returns:
-        str: The processed string with the letter and number separated by a space.
-    """
+    """Separate single-letter prefixes from numeric identifiers."""
     regex_pattern = (
         r"\b"  # Word boundary
         r"([A-Za-z])"  # Matches a single letter (A-Z or a-z)

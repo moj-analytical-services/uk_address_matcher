@@ -13,15 +13,14 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_commas_periods,
     remove_curly_apostrophes,
     remove_multiple_spaces,
-    remove_parenthesised_phase,
     remove_repeated_tokens,
     replace_en_dash_with_space,
     replace_fwd_slash_with_dash,
     replace_non_breaking_space_with_space,
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
-    split_apartment_number,
     split_letter_dash_letter,
+    split_subpremise_descriptor_number,
     standarise_num_dash_num,
     standarise_num_letter,
     strip_latin_accents,
@@ -209,10 +208,9 @@ def _clean_address_string_first_pass() -> str:
         "clean_full_address",
         [
             strip_latin_accents,
-            remove_parenthesised_phase,
             remove_commas_periods,
             remove_brackets,
-            split_apartment_number,
+            split_subpremise_descriptor_number,
             remove_apostrophes,
             remove_curly_apostrophes,
             replace_en_dash_with_space,
@@ -398,6 +396,7 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
     compact_floor_rows: list[tuple[str, str]] = []
     for code, name in zip(floor_codes, floor_names):
         compact_floor_rows.append((f"{code}FR", f"{name} FLOOR RIGHT"))
+        compact_floor_rows.append((f"{code}FL", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}F-R", f"{name} FLOOR RIGHT"))
         compact_floor_rows.append((f"{code}F-L", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}R-R", f"{name} FLOOR RIGHT"))

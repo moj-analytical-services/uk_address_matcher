@@ -67,6 +67,10 @@ no other explicit identifier exists. Split room suffixes such as `ROOM 204 E`
 are joined before parsing; the suffix is not treated as a flat letter, while
 floor evidence remains in `flat_identity`.
 
+Normalisation expands compact floor-side forms such as `1FR` and `1FL`, and
+separates attached sub-premise descriptors from numeric identifiers (for
+example, `FLAT10A` becomes `FLAT 10A`).
+
 | Input | Parsed keys (`premise_keys`) |
 | --- | --- |
 | `BUILDING B UNIT 4` | `BUILDING: B`, `UNIT: 4` |
