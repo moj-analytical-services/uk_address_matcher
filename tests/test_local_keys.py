@@ -507,7 +507,7 @@ def test_model_includes_local_key_comparison_and_block():
         comparison["output_column_name"]: comparison
         for comparison in model["comparisons"]
     }
-    comparison = model["comparisons"][-1]
+    comparison = comparisons["postcode_distinguishing_name"]
     assert comparison["output_column_name"] == "postcode_distinguishing_name"
     assert "additional_columns_to_retain" not in model
     assert all(
@@ -516,7 +516,7 @@ def test_model_includes_local_key_comparison_and_block():
     )
     assert (
         "map_contains(r.lk_level_by_alias"
-        in model["blocking_rules_to_generate_predictions"][-1]["blocking_rule"]
+        in model["blocking_rules_to_generate_predictions"][-2]["blocking_rule"]
     )
     assert [
         level["m_probability"] / level["u_probability"]
@@ -1148,7 +1148,8 @@ def test_lexical_fallback_relief_requires_anchored_unnumbered_property(
             $anchors::VARCHAR[] AS lk_anchor_uprns_r,
             '001' AS unique_id_l, 'ZZ1 1ZZ' AS postcode_l,
             $postcode::VARCHAR AS postcode_r,
-            'WING' AS numeric_token_1_l, 'ALDER' AS numeric_token_1_r
+            'WING' AS lexical_fallback_token_l,
+            'ALDER' AS lexical_fallback_token_r
         """,
         params={
             "numbers_l": numbers_l,
@@ -1251,7 +1252,8 @@ def test_spacing_fallback_relief_requires_an_exact_leading_name(
             true AS lk_eligible_r, 'ZZ1 1ZZ' AS postcode_l, 'ZZ1 1ZZ' AS postcode_r,
             MAP(['alias'], [$level::INTEGER]) AS lk_level_by_alias_r,
             'alias' AS ukam_address_id_l,
-            'SUNNYSIDE' AS numeric_token_1_l, 'SUNNY' AS numeric_token_1_r
+            'SUNNYSIDE' AS lexical_fallback_token_l,
+            'SUNNY' AS lexical_fallback_token_r
         """,
         params={
             "tokens_l": tokens_l,

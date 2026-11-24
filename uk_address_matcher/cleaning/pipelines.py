@@ -241,6 +241,7 @@ def _run_narrow_precomputed_tf_pipeline(
     required_columns = [
         "ukam_address_id",
         "address_without_numbers_tokenised",
+        "numeric_tokens",
         "numeric_token_1",
         "numeric_token_2",
         "numeric_token_3",
@@ -269,7 +270,14 @@ def _run_narrow_precomputed_tf_pipeline(
     )
     feature_result = feature_pipeline.run(debug_options)
     feature_columns = set(feature_result.columns)
-    replaced_columns = {"numeric_token_1", "numeric_range"}
+    replaced_columns = {
+        "numeric_token_1",
+        "numeric_range",
+        "tf_numeric_token_1",
+        "token_rel_freq_arr",
+        "unusual_tokens_arr",
+        "extremely_unusual_tokens_arr",
+    }
 
     def qualified_column(alias: str, column: str) -> str:
         escaped_column = column.replace('"', '""')
@@ -314,6 +322,14 @@ def _clean_data_using_precomputed_rel_tok_freq(
     # Ensure postcode column exists before pipeline entry
     if not pre_cleaned_addresses:
         address_table = _ensure_postcode_column(address_table)
+    elif "numeric_tokens" not in address_table.columns:
+        address_table = address_table.select(
+            "*, NULL::VARCHAR[] AS numeric_tokens"
+        )
+    if "lexical_fallback_token" in address_table.columns:
+        address_table = address_table.select(
+            "* EXCLUDE (lexical_fallback_token)"
+        )
     pre_queue = (
         QUEUE_PRE_TF_WITH_DISTINGUISHING_WRT_ADJACENT
         if derive_distinguishing_wrt_adjacent_records

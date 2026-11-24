@@ -13,6 +13,9 @@ from uk_address_matcher.cleaning.rehydration.token_views import (
     _distinguishing_lexical_tokens_expression,
     _distinguishing_token_parts_view_expressions,
 )
+from uk_address_matcher.cleaning.steps.tokenisation import (
+    _add_lexical_fallback_features,
+)
 from uk_address_matcher.post_linkage.distinguishing_features.numeric_range import (
     ensure_numeric_range_struct,
 )
@@ -441,6 +444,10 @@ def _get_linker(
     ) = _align_sub_premise_columns(
         df_addresses_to_match,
         df_addresses_to_search_within,
+    )
+    df_addresses_to_match = _add_lexical_fallback_features(df_addresses_to_match)
+    df_addresses_to_search_within = _add_lexical_fallback_features(
+        df_addresses_to_search_within
     )
     (
         df_addresses_to_match,

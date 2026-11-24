@@ -1,5 +1,6 @@
 import math
 
+import duckdb
 import pytest
 from splink import DuckDBAPI, SettingsCreator
 from splink.comparison_level_library import CustomLevel
@@ -602,8 +603,15 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 10
-    assert "map_contains(r.lk_level_by_alias" in packaged_rules[-1]
+    assert len(packaged_rules) == 11
+    assert "map_contains(r.lk_level_by_alias" in packaged_rules[-2]
+    assert "l.postcode = r.postcode" in packaged_rules[-1]
+    assert "len(l.numeric_tokens) = 0" in packaged_rules[-1]
+    assert "len(r.numeric_tokens) = 0" in packaged_rules[-1]
+    assert "l.lexical_fallback_token = r.lexical_fallback_token" in packaged_rules[
+        -1
+    ]
+    assert "lexical_postcode_key" not in packaged_rules[-1]
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules
@@ -613,6 +621,264 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
         and "list_extract(l.unusual_tokens_arr, 1)" in rule
         for rule in packaged_rules
     )
+
+
+def test_lexical_fallback_comparison_routes_and_weights(duck_con):
+    settings = _get_model_settings_dict()
+    numeric_primary = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "numeric_token_1"
+    )
+    primary_levels = numeric_primary["comparison_levels"]
+    lexical_neutral_level = next(
+        level
+        for level in primary_levels
+        if level["label_for_charts"]
+        == "Eligible lexical fallback; neutral primary token"
+    )
+    primary_exact_index = next(
+        index
+        for index, level in enumerate(primary_levels)
+        if level["label_for_charts"] == "Exact primary token or matching numeric part"
+    )
+    primary_mismatch_index = next(
+        index
+        for index, level in enumerate(primary_levels)
+        if level["label_for_charts"] == "Primary numbers both present but differ"
+    )
+    lexical_neutral_index = primary_levels.index(lexical_neutral_level)
+    assert lexical_neutral_index == 2
+    assert lexical_neutral_index < primary_exact_index
+    assert lexical_neutral_index < primary_mismatch_index
+    assert lexical_neutral_level == {
+        "sql_condition": (
+            "lexical_fallback_token_l IS NOT NULL AND "
+            "lexical_fallback_token_r IS NOT NULL AND "
+            "numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) = 0 AND "
+            "numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) = 0 AND "
+            "postcode_l = postcode_r"
+        ),
+        "label_for_charts": "Eligible lexical fallback; neutral primary token",
+        "is_null_level": True,
+    }
+
+    lexical_comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "lexical_fallback_token"
+    )
+    lexical_levels = lexical_comparison["comparison_levels"]
+    assert [
+        level["label_for_charts"] for level in lexical_levels
+    ] == [
+        "Not eligible for lexical fallback comparison",
+        "Exact lexical fallback",
+        "One edit, minimum length five",
+        "Two edits, minimum length seven",
+        "Different lexical fallback",
+    ]
+    assert [
+        math.log2(level["m_probability"] / level["u_probability"])
+        for level in lexical_levels[1:]
+    ] == [6.0, 4.0, 2.0, -4.0]
+    assert all(
+        level["fix_m_probability"] and level["fix_u_probability"]
+        for level in lexical_levels[1:]
+    )
+    assert "damerau_levenshtein" not in str(lexical_levels)
+    assert "jaro_winkler_similarity" not in str(lexical_levels)
+
+    level_by_label = {level["label_for_charts"]: level for level in lexical_levels}
+    assert (
+        "levenshtein("
+        in level_by_label["One edit, minimum length five"]["sql_condition"]
+    )
+    assert (
+        "levenshtein("
+        in level_by_label["Two edits, minimum length seven"]["sql_condition"]
+    )
+    eligible_pair = {
+        "lexical_fallback_token_l": "POLLINICK",
+        "lexical_fallback_token_r": "POLLINNICK",
+        "numeric_tokens_l": [],
+        "numeric_tokens_r": [],
+        "postcode_l": "CF72 9QJ",
+        "postcode_r": "CF72 9QJ",
+    }
+    exact = CustomLevel(
+        level_by_label["Exact lexical fallback"]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+    one_edit = CustomLevel(
+        level_by_label["One edit, minimum length five"]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+    two_edits = CustomLevel(
+        level_by_label["Two edits, minimum length seven"]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+    not_eligible = CustomLevel(
+        level_by_label["Not eligible for lexical fallback comparison"][
+            "sql_condition"
+        ],
+        base_dialect_str="duckdb",
+    )
+    different = CustomLevel(
+        level_by_label["Different lexical fallback"]["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+    primary_neutral = CustomLevel(
+        lexical_neutral_level["sql_condition"],
+        base_dialect_str="duckdb",
+    )
+    db_api = DuckDBAPI(connection=duck_con)
+    assert is_in_level(
+        exact,
+        {**eligible_pair, "lexical_fallback_token_r": "POLLINICK"},
+        db_api,
+    )
+    assert is_in_level(one_edit, eligible_pair, db_api)
+    assert not is_in_level(not_eligible, eligible_pair, db_api)
+    assert is_in_level(primary_neutral, eligible_pair, db_api)
+    numbered_pair = {**eligible_pair, "numeric_tokens_l": ["31"]}
+    assert is_in_level(not_eligible, numbered_pair, db_api)
+    assert not is_in_level(primary_neutral, numbered_pair, db_api)
+
+    transposition_pair = {
+        **eligible_pair,
+        "lexical_fallback_token_l": "CHRUCH",
+        "lexical_fallback_token_r": "CHURCH",
+    }
+    assert not is_in_level(one_edit, transposition_pair, db_api)
+    assert not is_in_level(two_edits, transposition_pair, db_api)
+    assert is_in_level(different, transposition_pair, db_api)
+
+    two_edit_pair = {
+        **eligible_pair,
+        "lexical_fallback_token_l": "TREWOODLOE",
+        "lexical_fallback_token_r": "TRAWOODLAE",
+    }
+    assert is_in_level(two_edits, two_edit_pair, db_api)
+
+    short_pair = {
+        **eligible_pair,
+        "lexical_fallback_token_l": "PARK",
+        "lexical_fallback_token_r": "PARKS",
+    }
+    assert not is_in_level(one_edit, short_pair, db_api)
+    assert not is_in_level(two_edits, short_pair, db_api)
+    assert not is_in_level(not_eligible, short_pair, db_api)
+    assert is_in_level(different, short_pair, db_api)
+
+    different_pair = {
+        **eligible_pair,
+        "lexical_fallback_token_l": "CHRUCH",
+        "lexical_fallback_token_r": "JOHN",
+    }
+    assert not is_in_level(exact, different_pair, db_api)
+    assert not is_in_level(one_edit, different_pair, db_api)
+    assert not is_in_level(two_edits, different_pair, db_api)
+    assert is_in_level(different, different_pair, db_api)
+    assert not is_in_level(not_eligible, different_pair, db_api)
+
+    assert is_in_level(
+        not_eligible,
+        {**eligible_pair, "postcode_r": "CF73 1AA"},
+        db_api,
+    )
+
+
+def test_linker_keeps_numberless_fallback_out_of_primary_number_weight(duck_con):
+    canonical = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('c_name', 'POLLINNICK HOUSE', 'CF72 9QJ'),
+            ('c_numbered', '33 HIGH STREET', 'CF72 9QJ')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    messy = duck_con.sql("""
+        SELECT * FROM (VALUES
+            ('m_name', 'POLLINICK HOUSE', 'CF72 9QJ'),
+            ('m_numbered', '31 HIGH STREET', 'CF72 9QJ')
+        ) AS rows(unique_id, address_concat, postcode)
+    """)
+    canonical_clean = prepare_data_for_matching(
+        canonical, con=duck_con, num_of_chunks=1, dataset_role="canonical"
+    )
+    messy_clean = prepare_data_for_matching(
+        messy, con=duck_con, num_of_chunks=1, dataset_role="messy"
+    )
+
+    linker = _get_linker(
+        messy_clean,
+        canonical_clean,
+        con=duck_con,
+        include_full_postcode_block=True,
+        include_outside_postcode_block=False,
+        retain_intermediate_calculation_columns=True,
+    )
+    predictions = linker.inference.predict(
+        threshold_match_weight=-100
+    ).as_duckdbpyrelation()
+
+    name_pair = predictions.filter(
+        "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
+    ).project("bf_numeric_token_1, bf_lexical_fallback_token").fetchone()
+    numeric_pair = predictions.filter(
+        "unique_id_l = 'c_numbered' AND unique_id_r = 'm_numbered'"
+    ).project("bf_numeric_token_1, bf_lexical_fallback_token").fetchone()
+
+    assert name_pair == pytest.approx((1.0, 16.0))
+    assert numeric_pair == pytest.approx((0.0001, 1.0))
+
+
+def test_lexical_fallback_weights_are_stable_with_warm_canonical_cache(tmp_path):
+    cache_path = str(tmp_path / "canonical.parquet")
+
+    def lexical_weights():
+        con = duckdb.connect()
+        try:
+            canonical = con.sql("""
+                SELECT * FROM (VALUES
+                    ('c_name', 'POLLINNICK HOUSE', 'CF72 9QJ')
+                ) AS rows(unique_id, address_concat, postcode)
+            """)
+            messy = con.sql("""
+                SELECT * FROM (VALUES
+                    ('m_name', 'POLLINNICK HOUSE', 'CF72 9QJ')
+                ) AS rows(unique_id, address_concat, postcode)
+            """)
+            canonical_clean = prepare_data_for_matching(
+                canonical, con=con, num_of_chunks=1, dataset_role="canonical"
+            )
+            messy_clean = prepare_data_for_matching(
+                messy, con=con, num_of_chunks=1, dataset_role="messy"
+            )
+            linker = _get_linker(
+                messy_clean,
+                canonical_clean,
+                con=con,
+                additional_blocking_rules=["l.postcode = r.postcode"],
+                canonical_cache_path=cache_path,
+                retain_intermediate_calculation_columns=True,
+            )
+            predictions = linker.inference.predict(
+                threshold_match_weight=-100
+            ).as_duckdbpyrelation()
+            pair = predictions.filter(
+                "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
+            )
+            return pair.project(
+                "bf_numeric_token_1, bf_lexical_fallback_token"
+            ).fetchone()
+        finally:
+            con.close()
+
+    cold_cache_weights = lexical_weights()
+    warm_cache_weights = lexical_weights()
+
+    assert cold_cache_weights == pytest.approx((1.0, 64.0))
+    assert warm_cache_weights == cold_cache_weights
 
 
 def test_distinguishing_token_comparison_contributes_expected_match_weights(duck_con):

@@ -308,30 +308,63 @@ def _first_unusual_token():
 
 @pipeline_stage(
     name="use_first_unusual_token_if_no_numeric_token",
-    description="Fallback to the unusual token when numeric_token_1 is missing",
+    description=(
+        "Keep numeric tokens numeric-only and store an unusual token separately "
+        "when no numeric tokens are present"
+    ),
     tags="term_frequency_analysis",
 )
 def _use_first_unusual_token_if_no_numeric_token():
-    """Fallback to the unusual token when numeric_token_1 is missing."""
+    """Keep numberless lexical evidence separate from numeric token columns."""
 
-    sql = """
-    SELECT
-        * EXCLUDE (numeric_token_1, token_rel_freq_arr, first_unusual_token),
-        CASE
-            WHEN {input}.numeric_token_1 IS NULL THEN first_unusual_token.tok
-            ELSE {input}.numeric_token_1
-        END AS numeric_token_1,
-        CASE
-            WHEN {input}.numeric_token_1 IS NULL THEN
-                list_filter(
+    numberless = "numeric_tokens IS NOT NULL AND len(numeric_tokens) = 0"
+    return [
+        CTEStep(
+            "with_lexical_fallback",
+            f"""
+            SELECT
+                *,
+                CASE
+                    WHEN {numberless} THEN
+                        CASE
+                            WHEN regexp_full_match(numeric_token_1, '[A-Z]+')
+                                THEN numeric_token_1
+                            ELSE first_unusual_token.tok
+                        END
+                END AS lexical_fallback_token
+            FROM {{input}}
+            """,
+        ),
+        CTEStep(
+            "final",
+            f"""
+            SELECT
+                * EXCLUDE (
+                    numeric_token_1,
+                    tf_numeric_token_1,
                     token_rel_freq_arr,
-                    x -> coalesce(x.tok != first_unusual_token.tok, TRUE)
-                )
-            ELSE token_rel_freq_arr
-        END AS token_rel_freq_arr
-    FROM {input}
-    """
-    return sql
+                    first_unusual_token
+                ),
+                CASE
+                    WHEN {numberless} THEN NULL
+                    ELSE numeric_token_1
+                END AS numeric_token_1,
+                CASE
+                    WHEN {numberless} THEN NULL
+                    ELSE tf_numeric_token_1
+                END AS tf_numeric_token_1,
+                CASE
+                    WHEN {numberless} THEN
+                        list_filter(
+                            token_rel_freq_arr,
+                            x -> coalesce(x.tok != lexical_fallback_token, TRUE)
+                        )
+                    ELSE token_rel_freq_arr
+                END AS token_rel_freq_arr
+            FROM {{with_lexical_fallback}}
+            """,
+        ),
+    ]
 
 
 @pipeline_stage(

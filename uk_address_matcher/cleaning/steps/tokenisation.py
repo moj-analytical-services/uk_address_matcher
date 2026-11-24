@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from duckdb import DuckDBPyRelation
+
 from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
@@ -52,6 +54,36 @@ def _split_numeric_tokens_to_cols():
             """,
         ),
     ]
+
+
+def _add_lexical_fallback_features(addresses: DuckDBPyRelation) -> DuckDBPyRelation:
+    """Keep a lexical fallback token separate from numeric token features."""
+    columns = set(addresses.columns)
+    existing_lexical_token = "lexical_fallback_token" in columns
+    input_projection = (
+        "* EXCLUDE (lexical_fallback_token)" if existing_lexical_token else "*"
+    )
+
+    if "numeric_tokens" in columns:
+        numberless = "numeric_tokens IS NOT NULL AND len(numeric_tokens) = 0"
+    else:
+        numberless = "FALSE"
+
+    if existing_lexical_token:
+        fallback_source = "lexical_fallback_token"
+    elif "numeric_token_1" in columns:
+        fallback_source = (
+            "CASE WHEN regexp_full_match(numeric_token_1, '[A-Z]+') "
+            "THEN numeric_token_1 END"
+        )
+    else:
+        fallback_source = "CAST(NULL AS VARCHAR)"
+
+    lexical_token = f"""
+        CASE WHEN {numberless} THEN {fallback_source} END
+            AS lexical_fallback_token
+    """
+    return addresses.select(f"{input_projection}, {lexical_token}")
 
 
 @pipeline_stage(

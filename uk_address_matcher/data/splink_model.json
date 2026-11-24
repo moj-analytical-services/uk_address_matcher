@@ -54,6 +54,10 @@
     {
       "blocking_rule": "l.postcode = r.postcode AND r.lk_eligible AND map_contains(r.lk_level_by_alias, l.ukam_address_id::VARCHAR)",
       "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.postcode = r.postcode AND l.numeric_tokens IS NOT NULL AND len(l.numeric_tokens) = 0 AND r.numeric_tokens IS NOT NULL AND len(r.numeric_tokens) = 0 AND l.lexical_fallback_token IS NOT NULL AND r.lexical_fallback_token IS NOT NULL AND l.lexical_fallback_token = r.lexical_fallback_token",
+      "sql_dialect": "duckdb"
     }
   ],
   "comparisons": [
@@ -410,7 +414,7 @@
       "output_column_name": "numeric_token_1",
       "comparison_levels": [
         {
-          "sql_condition": "COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\nAND LENGTH(numeric_tokens_r) = 0\nAND NOT (\n  LENGTH(lk_anchor_uprns_r) = 1\n  AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n) IS TRUE\nAND NOT REGEXP_MATCHES(numeric_token_1_r, '[0-9]')\nAND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\nAND REGEXP_MATCHES(numeric_token_1_r, '[A-Z]')\nAND lk_eligible_r IS TRUE\nAND postcode_l = postcode_r",
+          "sql_condition": "COALESCE(MAP_EXTRACT_VALUE(lk_level_by_alias_r, CAST(ukam_address_id_l AS TEXT)), 0) IN (4, 5, 6)\nAND LENGTH(numeric_tokens_r) = 0\nAND NOT (\n  LENGTH(lk_anchor_uprns_r) = 1\n  AND NOT ARRAY_CONTAINS(lk_anchor_uprns_r, CAST(unique_id_l AS TEXT))\n) IS TRUE\nAND NOT REGEXP_MATCHES(lexical_fallback_token_r, '[0-9]')\nAND REGEXP_FULL_MATCH(LIST_EXTRACT(numeric_tokens_l, 1), '[ABCU][0-9]+[A-Z]?')\nAND REGEXP_MATCHES(lexical_fallback_token_r, '[A-Z]')\nAND lk_eligible_r IS TRUE\nAND postcode_l = postcode_r",
           "label_for_charts": "Lexical fallback versus coded road; supporting postcode-local name (at least 2 bits)",
           "m_probability": 0.01,
           "u_probability": 0.01
@@ -420,6 +424,11 @@
           "label_for_charts": "Unnumbered source; canonical coded road reference; strong named-property evidence",
           "m_probability": 0.5,
           "u_probability": 0.5
+        },
+        {
+          "sql_condition": "lexical_fallback_token_l IS NOT NULL AND lexical_fallback_token_r IS NOT NULL AND numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) = 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) = 0 AND postcode_l = postcode_r",
+          "label_for_charts": "Eligible lexical fallback; neutral primary token",
+          "is_null_level": true
         },
         {
           "sql_condition": "\"numeric_token_1_l\" IS NULL AND \"numeric_token_1_r\" IS NULL",
@@ -456,7 +465,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND len(lk_anchor_uprns_r) = 1 AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR) AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r",
+          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND len(lk_anchor_uprns_r) = 1 AND list_contains(lk_anchor_uprns_r, unique_id_l::VARCHAR) AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND lexical_fallback_token_l IS NOT NULL AND lexical_fallback_token_r IS NOT NULL AND lexical_fallback_token_l != lexical_fallback_token_r",
           "label_for_charts": "Strong postcode name with different lexical fallback words",
           "m_probability": 0.0625,
           "u_probability": 1.0,
@@ -464,7 +473,7 @@
           "fix_u_probability": true
         },
         {
-          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2 AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND numeric_token_1_l IS NOT NULL AND numeric_token_1_r IS NOT NULL AND numeric_token_1_l != numeric_token_1_r AND (clean_full_address_tokens_l[1] = array_to_string(list_slice(clean_full_address_tokens_r, 1, 2), '') OR clean_full_address_tokens_r[1] = array_to_string(list_slice(clean_full_address_tokens_l, 1, 2), ''))",
+          "sql_condition": "postcode_l = postcode_r AND lk_eligible_r AND map_extract_value(lk_level_by_alias_r, ukam_address_id_l::VARCHAR) = 2 AND len(numeric_tokens_l) = 0 AND len(numeric_tokens_r) = 0 AND lexical_fallback_token_l IS NOT NULL AND lexical_fallback_token_r IS NOT NULL AND lexical_fallback_token_l != lexical_fallback_token_r AND (clean_full_address_tokens_l[1] = array_to_string(list_slice(clean_full_address_tokens_r, 1, 2), '') OR clean_full_address_tokens_r[1] = array_to_string(list_slice(clean_full_address_tokens_l, 1, 2), ''))",
           "label_for_charts": "Unique leading spacing name with different lexical fallback words",
           "m_probability": 0.0625,
           "u_probability": 1.0,
@@ -489,6 +498,49 @@
         }
       ],
       "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "lexical_fallback_token",
+      "comparison_levels": [
+        {
+          "sql_condition": "NOT COALESCE((lexical_fallback_token_l IS NOT NULL AND lexical_fallback_token_r IS NOT NULL AND numeric_tokens_l IS NOT NULL AND len(numeric_tokens_l) = 0 AND numeric_tokens_r IS NOT NULL AND len(numeric_tokens_r) = 0 AND postcode_l = postcode_r), FALSE)",
+          "label_for_charts": "Not eligible for lexical fallback comparison",
+          "is_null_level": true
+        },
+        {
+          "sql_condition": "lexical_fallback_token_l = lexical_fallback_token_r",
+          "label_for_charts": "Exact lexical fallback",
+          "m_probability": 1.0,
+          "u_probability": 0.015625,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "least(length(lexical_fallback_token_l), length(lexical_fallback_token_r)) >= 5 AND levenshtein(lexical_fallback_token_l, lexical_fallback_token_r) = 1",
+          "label_for_charts": "One edit, minimum length five",
+          "m_probability": 1.0,
+          "u_probability": 0.0625,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "least(length(lexical_fallback_token_l), length(lexical_fallback_token_r)) >= 7 AND levenshtein(lexical_fallback_token_l, lexical_fallback_token_r) = 2",
+          "label_for_charts": "Two edits, minimum length seven",
+          "m_probability": 1.0,
+          "u_probability": 0.25,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "Different lexical fallback",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        }
+      ],
+      "comparison_description": "One-word lexical fallback"
     },
     {
       "output_column_name": "numeric_token_2",
