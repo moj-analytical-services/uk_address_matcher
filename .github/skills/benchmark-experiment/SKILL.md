@@ -21,7 +21,7 @@ Use this skill for recurring benchmark workflows in `uk_address_matcher`.
 ## Start Here
 
 - Read `.github/instructions/benchmark-experiments.instructions.md` first.
-- Then use the bundled assets in this skill instead of rediscovering commands across `benchmarking/`, `.github/prompts/`, and `docs/findings/`.
+- Then use the bundled assets in this skill instead of rediscovering commands across `benchmarking/`, `.github/skills/`, and `docs/findings/`.
 
 ## What This Skill Covers
 

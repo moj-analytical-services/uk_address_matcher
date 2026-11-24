@@ -75,10 +75,11 @@ def _splink_configuration(match_result: MatchResult) -> dict[str, object]:
         "improve_threshold_match_weight": float(stage.improve_threshold_match_weight),
         "improve_top_n_matches": int(stage.improve_top_n_matches),
         "use_relation_marker_reranker": bool(stage.use_relation_marker_reranker),
-        "final_match_weight_threshold": float(stage.final_match_weight_threshold),
-        "final_distinguishability_threshold": (
+        "acceptance_profile": stage.acceptance_profile,
+        "minimum_match_weight": float(stage.minimum_match_weight),
+        "minimum_distinguishability": (
             None
-            if stage.final_distinguishability_threshold is None
-            else float(stage.final_distinguishability_threshold)
+            if stage.minimum_distinguishability is None
+            else float(stage.minimum_distinguishability)
         ),
     }

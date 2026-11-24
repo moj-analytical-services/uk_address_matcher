@@ -62,7 +62,7 @@ def _create_results_table(
 
     enum_values = str(MatchReason.enum_values())
 
-    con.execute(f'DROP TABLE IF EXISTS "{results_table}"')
+    con.execute(f'DROP TABLE IF EXISTS "{results_table}"').fetchall()
     con.execute(
         f"""
         CREATE TABLE \"{results_table}\" AS
@@ -75,7 +75,7 @@ def _create_results_table(
             NULL::ENUM {enum_values} AS match_reason
         FROM {relation_sql(df_messy_clean)} AS messy
         """
-    )
+    ).fetchall()
 
 
 def _get_unmatched(
@@ -201,7 +201,7 @@ def _run_matching(
         results_table=results_table,
     )
 
-    total_input_rows = df_messy_clean.count("*").fetchone()[0]
+    total_input_rows = df_messy_clean.count("*").fetchall()[0][0]
     stage_diagnostics: StageDiagnostics = []
 
     for stage in stages:
@@ -209,7 +209,7 @@ def _run_matching(
 
         unmatched_count = con.execute(
             f'SELECT COUNT(*) FROM "{results_table}" WHERE resolved_canonical_id IS NULL'
-        ).fetchone()[0]
+        ).fetchall()[0][0]
 
         if unmatched_count == 0:
             logger.debug(
@@ -251,7 +251,7 @@ def _run_matching(
 
         remaining = con.execute(
             f'SELECT COUNT(*) FROM "{results_table}" WHERE resolved_canonical_id IS NULL'
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         matched_this_stage = unmatched_count - remaining
         stage_diagnostics.append(
             {
@@ -291,7 +291,7 @@ def _run_matching(
             )
 
     if explain:
-        con.execute(f'DROP TABLE IF EXISTS "{results_table}"')
+        con.execute(f'DROP TABLE IF EXISTS "{results_table}"').fetchall()
         return None, stage_diagnostics
 
     result = _build_final_output(
@@ -302,11 +302,11 @@ def _run_matching(
     )
 
     final_table = f"__ukam_final_matches_{run_id}"
-    con.execute(f'DROP TABLE IF EXISTS "{final_table}"')
+    con.execute(f'DROP TABLE IF EXISTS "{final_table}"').fetchall()
     result.to_table(f'"{final_table}"')
     final_result = con.table(f'"{final_table}"')
 
-    con.execute(f'DROP TABLE IF EXISTS "{results_table}"')
+    con.execute(f'DROP TABLE IF EXISTS "{results_table}"').fetchall()
 
     return final_result, stage_diagnostics
 

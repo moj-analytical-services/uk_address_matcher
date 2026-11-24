@@ -4,16 +4,26 @@ from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
+    join_room_identifier_suffix,
     merge_split_flat_number,
+    move_flat_block_letter_before_number,
     move_flat_to_front,
     remove_apostrophes,
+    remove_brackets,
     remove_commas_periods,
+    remove_curly_apostrophes,
     remove_multiple_spaces,
+    remove_repeated_tokens,
+    replace_en_dash_with_space,
     replace_fwd_slash_with_dash,
+    replace_non_breaking_space_with_space,
     replace_non_numeric_adjacent_underscores,
     separate_letter_num,
     split_letter_dash_letter,
+    split_subpremise_descriptor_number,
+    standarise_num_dash_num,
     standarise_num_letter,
+    strip_latin_accents,
     trim,
 )
 from uk_address_matcher.sql_pipeline.helpers import package_resource_read_sql
@@ -197,17 +207,25 @@ def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "clean_full_address",
         [
+            strip_latin_accents,
             remove_commas_periods,
+            remove_brackets,
+            split_subpremise_descriptor_number,
             remove_apostrophes,
+            remove_curly_apostrophes,
+            replace_en_dash_with_space,
+            replace_non_breaking_space_with_space,
             replace_non_numeric_adjacent_underscores,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
-            # standarise_num_dash_num,  # left commented as in original
+            standarise_num_dash_num,
             separate_letter_num,
+            move_flat_block_letter_before_number,
             standarise_num_letter,
+            join_room_identifier_suffix,
             move_flat_to_front,
             merge_split_flat_number,
-            # remove_repeated_tokens,   # left commented as in original
+            remove_repeated_tokens,
             trim,
         ],
     )
@@ -377,7 +395,8 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
     floor_codes = ["G"] + [str(i) for i in range(1, len(floor_names))]
     compact_floor_rows: list[tuple[str, str]] = []
     for code, name in zip(floor_codes, floor_names):
-        compact_floor_rows.append((f"{code}FR", f"{name} FLOOR"))
+        compact_floor_rows.append((f"{code}FR", f"{name} FLOOR RIGHT"))
+        compact_floor_rows.append((f"{code}FL", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}F-R", f"{name} FLOOR RIGHT"))
         compact_floor_rows.append((f"{code}F-L", f"{name} FLOOR LEFT"))
         compact_floor_rows.append((f"{code}R-R", f"{name} FLOOR RIGHT"))
@@ -411,7 +430,7 @@ def _normalise_abbreviations_and_units() -> list[CTEStep]:
       array_to_string(
         list_transform(
         string_split(COALESCE(address.clean_full_address, ''), ' '),
-        x -> COALESCE(map_extract(m.abbr_map, x)[1], x)
+        lambda x: COALESCE(map_extract(m.abbr_map, x)[1], x)
         ),
         ' '
       ) AS clean_full_address

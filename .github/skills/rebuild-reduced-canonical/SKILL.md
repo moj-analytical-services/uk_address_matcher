@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: rebuild-reduced-canonical
 description: "Use the benchmark-experiment skill to rebuild the reduced canonical dataset with the standard workflow and report readiness for benchmarking."
+disable-model-invocation: true
 ---
-
 Use the `benchmark-experiment` skill for this workflow.
 
 Goal:

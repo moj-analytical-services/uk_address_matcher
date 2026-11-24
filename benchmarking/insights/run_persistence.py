@@ -334,6 +334,16 @@ def _serialisable_stage(stage: Any) -> dict[str, Any]:
         for field in fields(stage):
             if not field.init:
                 continue
+            if (
+                stage.__class__.__module__
+                == "uk_address_matcher.linking_model.matching.stages.splink"
+                and field.name
+                in {
+                    "final_match_weight_threshold",
+                    "final_distinguishability_threshold",
+                }
+            ):
+                continue
             value = getattr(stage, field.name)
             if callable(value):
                 continue

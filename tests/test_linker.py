@@ -16,6 +16,7 @@ from uk_address_matcher.linking_model.splink_model import (
     _align_address_structure_feature_columns,
     _align_clean_address_token_columns,
     _align_distinguishing_token_columns,
+    _align_name_words_columns,
     _align_numeric_range_columns,
     _get_linker,
     _get_model_settings_dict,
@@ -27,9 +28,9 @@ from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
 @pytest.mark.parametrize(
     "removed_level, expected",
     [
-        (None, [35, -1, -1, 34, 33, 33, 34]),
-        (0, [-1, -1, -1, 34, 33, 33, 34]),
-        (2, [34, -1, -1, 33, 33, 33, 33]),
+        (None, [32, -1, -1, 31, 30, 30, 31]),
+        (0, [-1, -1, -1, 31, 30, 30, 31]),
+        (2, [31, -1, -1, 30, 30, 30, 30]),
     ],
 )
 def test_inline_histogram_keeps_guards_and_strict_thresholds(
@@ -69,7 +70,7 @@ def test_inline_histogram_keeps_guards_and_strict_thresholds(
     assert [
         gamma for _, gamma in duck_con.sql(vectors + " ORDER BY id").fetchall()
     ] == expected
-    plan = duck_con.sql("EXPLAIN (FORMAT JSON) " + vectors).fetchone()[1]
+    plan = duck_con.sql("EXPLAIN (FORMAT JSON) " + vectors).fetchall()[0][1]
     assert plan.lower().count("list_reduce(") == 1
 
 
@@ -217,11 +218,13 @@ def test_align_distinguishing_tokens_adds_typed_empty_and_preserves_values(duck_
         canonical,
     )
 
-    assert aligned_messy.project("distinguishing_adj_start_tokens").fetchone() == ([],)
+    assert (aligned_messy.project("distinguishing_adj_start_tokens").limit(1).fetchall())[
+        0
+    ] == ([],)
     assert str(aligned_messy.types[-1]) == "VARCHAR[]"
-    assert aligned_canonical.project("distinguishing_adj_start_tokens").fetchone() == (
-        ["FLAT", "A"],
-    )
+    assert (
+        aligned_canonical.project("distinguishing_adj_start_tokens").limit(1).fetchall()
+    )[0] == (["FLAT", "A"],)
 
 
 def test_align_clean_address_tokens_rejects_string_only_inputs(duck_con):
@@ -245,6 +248,26 @@ def test_align_clean_address_tokens_rejects_token_only_inputs(duck_con):
         _align_clean_address_token_columns(messy, canonical)
 
 
+def test_align_name_words_uses_first_six_cleaned_tokens_and_preserves_values(
+    duck_con,
+):
+    messy = duck_con.sql(
+        "SELECT ['WEST', 'ALPHA', 'HOUSE', '1', 'HIGH', 'STREET', 'CAMDEN']::VARCHAR[] "
+        "AS clean_full_address_tokens"
+    )
+    canonical = duck_con.sql(
+        "SELECT ['ALPHA', 'HOUSE', '2', 'HIGH', 'STREET', 'LONDON', 'EXTRA']::VARCHAR[] "
+        "AS clean_full_address_tokens, ['PRECOMPUTED']::VARCHAR[] AS name_words"
+    )
+
+    aligned_messy, aligned_canonical = _align_name_words_columns(messy, canonical)
+
+    assert aligned_messy.project("name_words").fetchall() == [
+        (["WEST", "ALPHA", "HOUSE", "1", "HIGH", "STREET"],)
+    ]
+    assert aligned_canonical.project("name_words").fetchall() == [(["PRECOMPUTED"],)]
+
+
 def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
     parts = "[struct_pack(token := 'FLAT', is_lexical := false)]"
     messy = duck_con.sql(f"SELECT 1 AS unique_id, {parts} AS distinguishing_token_parts")
@@ -257,12 +280,20 @@ def test_align_address_structure_features_unpacks_compact_token_parts(duck_con):
         canonical,
     )
 
-    assert aligned_messy.project(
-        "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
-    ).fetchone() == (["FLAT"], [])
-    assert aligned_canonical.project(
-        "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
-    ).fetchone() == (["FLAT"], [])
+    assert (
+        aligned_messy.project(
+            "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
+        )
+        .limit(1)
+        .fetchall()
+    )[0] == (["FLAT"], [])
+    assert (
+        aligned_canonical.project(
+            "distinguishing_adj_start_tokens, distinguishing_lexical_tokens"
+        )
+        .limit(1)
+        .fetchall()
+    )[0] == (["FLAT"], [])
     assert "distinguishing_token_parts" not in aligned_messy.columns
 
 
@@ -291,22 +322,28 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
         canonical,
     )
 
-    assert aligned_messy.project("numeric_range").fetchone() == (None,)
-    assert aligned_messy.project(
-        "numeric_range_lower, numeric_range_upper"
-    ).fetchone() == (
+    assert (aligned_messy.project("numeric_range").limit(1).fetchall())[0] == (None,)
+    assert (
+        aligned_messy.project("numeric_range_lower, numeric_range_upper")
+        .limit(1)
+        .fetchall()
+    )[0] == (
         None,
         None,
     )
-    assert aligned_canonical.project(
-        "numeric_range.lower, numeric_range.upper"
-    ).fetchone() == (
+    assert (
+        aligned_canonical.project("numeric_range.lower, numeric_range.upper")
+        .limit(1)
+        .fetchall()
+    )[0] == (
         20,
         23,
     )
-    assert aligned_canonical.project(
-        "numeric_range_lower, numeric_range_upper"
-    ).fetchone() == (
+    assert (
+        aligned_canonical.project("numeric_range_lower, numeric_range_upper")
+        .limit(1)
+        .fetchall()
+    )[0] == (
         20,
         23,
     )
@@ -352,6 +389,28 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     )
 
 
+def test_packaged_name_agreement_comparison_has_merged_levels():
+    settings = _get_model_settings_dict()
+    comparison = next(
+        comparison
+        for comparison in settings["comparisons"]
+        if comparison["output_column_name"] == "name_agreement"
+    )
+
+    assert [level["label_for_charts"] for level in comparison["comparison_levels"]] == [
+        "No usable name words",
+        "Strong agreement; local name support",
+        "Strong agreement; same postcode without local name support",
+        "Strong agreement; different or missing postcode",
+        "Shifted prefix or partial agreement; local name support",
+        "Shifted prefix or partial agreement; same postcode without local name support",
+        "Shifted prefix or partial agreement; different or missing postcode",
+        "Weak name agreement; local name support",
+        "Weak name agreement; same postcode without local name support",
+        "Weak name agreement; different or missing postcode",
+    ]
+
+
 def test_packaged_inferred_road_comparison_is_positive_only():
     settings = _get_model_settings_dict()
     comparison = next(
@@ -380,8 +439,8 @@ def test_legacy_canonical_gets_neutral_inferred_road_columns(duck_con):
         canonical,
     )
 
-    assert aligned_messy.project("road_1_norm").fetchone() == (None,)
-    assert aligned_canonical.project("road_1_norm").fetchone() == (None,)
+    assert (aligned_messy.project("road_1_norm").limit(1).fetchall())[0] == (None,)
+    assert (aligned_canonical.project("road_1_norm").limit(1).fetchall())[0] == (None,)
     assert str(aligned_messy.types[-1]) == "VARCHAR"
     assert str(aligned_canonical.types[-1]) == "VARCHAR"
 
@@ -392,7 +451,7 @@ def test_inferred_road_artifact_loads_canonical_road_key(duck_con, tmp_path):
         "COPY (SELECT 20 AS ukam_address_id, 'HIGH STREET' AS road_1_norm, "
         "'E8' AS unused_outward_postcode) "
         f"TO '{road_keys_path}' (FORMAT PARQUET)"
-    )
+    ).fetchall()
     messy = duck_con.sql("SELECT 1 AS unique_id, 'HIGH STREET'::VARCHAR AS road_1_norm")
     canonical = duck_con.sql("SELECT 2 AS unique_id, 20 AS ukam_address_id")
 
@@ -403,7 +462,9 @@ def test_inferred_road_artifact_loads_canonical_road_key(duck_con, tmp_path):
         canonical_road_keys_path=str(road_keys_path),
     )
 
-    assert aligned_canonical.project("road_1_norm").fetchone() == ("HIGH STREET",)
+    assert (aligned_canonical.project("road_1_norm").limit(1).fetchall())[0] == (
+        "HIGH STREET",
+    )
     assert "outward_postcode" not in aligned_canonical.columns
 
 
@@ -457,7 +518,7 @@ def test_packaged_address_model_uses_inline_address_signatures():
         for level in numberless["comparison_levels"]
         if level["sql_condition"] != "ELSE"
     ]
-    assert len(numberless_conditions) == 6
+    assert len(numberless_conditions) == 5
     assert all("regexp_replace" in condition for condition in numberless_conditions)
     assert all(
         "clean_full_address_without_numbers" not in condition
@@ -596,7 +657,7 @@ def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_
     assert "inferred_road_top_2" not in comparison_columns
 
 
-def test_packaged_model_contains_the_promoted_road_blocking_rule():
+def test_packaged_model_omits_redundant_road_district_blocking_rules():
     settings = _get_model_settings_dict()
     packaged_rules = [
         rule["blocking_rule"]
@@ -604,14 +665,22 @@ def test_packaged_model_contains_the_promoted_road_blocking_rule():
     ]
 
     assert len(packaged_rules) == 11
-    assert "map_contains(r.lk_level_by_alias" in packaged_rules[-2]
-    assert "l.postcode = r.postcode" in packaged_rules[-1]
-    assert "len(l.numeric_tokens) = 0" in packaged_rules[-1]
-    assert "len(r.numeric_tokens) = 0" in packaged_rules[-1]
-    assert "l.lexical_fallback_token = r.lexical_fallback_token" in packaged_rules[
-        -1
-    ]
-    assert "lexical_postcode_key" not in packaged_rules[-1]
+    assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
+    assert not any(
+        "l.road_1_norm = r.road_1_norm" in rule
+        and "split_part(l.postcode, ' ', 1)" in rule
+        and "list_extract(l.unusual_tokens_arr, 1)" not in rule
+        for rule in packaged_rules
+    )
+    assert not any("left(l.road_1_norm, 4)" in rule for rule in packaged_rules)
+    lexical_rule = next(
+        rule for rule in packaged_rules
+        if "l.lexical_fallback_token = r.lexical_fallback_token" in rule
+    )
+    assert "l.postcode = r.postcode" in lexical_rule
+    assert "len(l.numeric_tokens) = 0" in lexical_rule
+    assert "len(r.numeric_tokens) = 0" in lexical_rule
+    assert "lexical_postcode_key" not in lexical_rule
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules
@@ -823,13 +892,14 @@ def test_linker_keeps_numberless_fallback_out_of_primary_number_weight(duck_con)
 
     name_pair = predictions.filter(
         "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
-    ).project("bf_numeric_token_1, bf_lexical_fallback_token").fetchone()
+    ).project("mw_numeric_token_1, mw_lexical_fallback_token").fetchall()[0]
     numeric_pair = predictions.filter(
         "unique_id_l = 'c_numbered' AND unique_id_r = 'm_numbered'"
-    ).project("bf_numeric_token_1, bf_lexical_fallback_token").fetchone()
+    ).project("mw_numeric_token_1, mw_lexical_fallback_token").fetchall()[0]
 
-    assert name_pair == pytest.approx((1.0, 16.0))
-    assert numeric_pair == pytest.approx((0.0001, 1.0))
+    assert name_pair == pytest.approx((0.0, 4.0))
+    assert numeric_pair[0] < 0
+    assert numeric_pair[1] == pytest.approx(0.0)
 
 
 def test_lexical_fallback_weights_are_stable_with_warm_canonical_cache(tmp_path):
@@ -869,15 +939,15 @@ def test_lexical_fallback_weights_are_stable_with_warm_canonical_cache(tmp_path)
                 "unique_id_l = 'c_name' AND unique_id_r = 'm_name'"
             )
             return pair.project(
-                "bf_numeric_token_1, bf_lexical_fallback_token"
-            ).fetchone()
+                "mw_numeric_token_1, mw_lexical_fallback_token"
+            ).fetchall()[0]
         finally:
             con.close()
 
     cold_cache_weights = lexical_weights()
     warm_cache_weights = lexical_weights()
 
-    assert cold_cache_weights == pytest.approx((1.0, 64.0))
+    assert cold_cache_weights == pytest.approx((0.0, 6.0))
     assert warm_cache_weights == cold_cache_weights
 
 
@@ -923,9 +993,12 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
 
     assert "clean_full_address_tokens" in canonical_clean.columns
     assert "clean_full_address_tokens" in messy_clean.columns
-    assert canonical_clean.filter("unique_id = 'c_some'").project(
-        "distinguishing_adj_start_tokens"
-    ).fetchone() == (["OLD", "STATION", "HOUSE"],)
+    assert (
+        canonical_clean.filter("unique_id = 'c_some'")
+        .project("distinguishing_adj_start_tokens")
+        .limit(1)
+        .fetchall()
+    )[0] == (["OLD", "STATION", "HOUSE"],)
 
     linker = _get_linker(
         messy_clean,
@@ -948,9 +1021,7 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
     for _, row in prediction_rows.iterrows():
         pair = frozenset((row["unique_id_l"], row["unique_id_r"]))
         if pair in expected_pairs:
-            actual_weights[pair] = math.log2(
-                float(row["bf_distinguishing_ordered_signature"])
-            )
+            actual_weights[pair] = float(row["mw_distinguishing_ordered_signature"])
 
     assert actual_weights == pytest.approx(
         {
@@ -988,9 +1059,12 @@ def test_address_matcher_derives_distinguishing_tokens_only_for_canonical(duck_c
     matcher._resolve_messy_data()
 
     assert "distinguishing_adj_start_tokens" in matcher._canonical_clean.columns
-    assert matcher._canonical_clean.filter("unique_id = 'c_flat'").project(
-        "distinguishing_adj_start_tokens"
-    ).fetchone() == (["FLAT", "A"],)
+    assert (
+        matcher._canonical_clean.filter("unique_id = 'c_flat'")
+        .project("distinguishing_adj_start_tokens")
+        .limit(1)
+        .fetchall()
+    )[0] == (["FLAT", "A"],)
     assert "distinguishing_adj_start_tokens" not in matcher._messy_clean.columns
 
 
@@ -1007,8 +1081,8 @@ def test_get_linker_accepts_canonical_without_raw_address(
 
     retained_columns = linker._settings_obj.as_dict()["additional_columns_to_retain"]
     assert "original_address_concat" not in retained_columns
-    for input_name in ("m_", "c_"):
-        assert duck_con.table(input_name).select(
+    for frame in linker._input_tables_dict.values():
+        assert duck_con.table(frame.physical_name).select(
             "lk_level_by_alias, lk_anchor_uprns, lk_eligible"
         ).distinct().fetchall() == [({}, [], False)]
     assert (
@@ -1019,3 +1093,59 @@ def test_get_linker_accepts_canonical_without_raw_address(
     """).fetchall()
         == []
     )
+
+
+@pytest.mark.parametrize(
+    ("retain_intermediate", "additional_columns", "custom_settings", "expected"),
+    [
+        (False, None, False, False),
+        (True, None, False, True),
+        (
+            False,
+            ["signature_score_map", "signature_unique_hits_map"],
+            False,
+            True,
+        ),
+        (False, None, True, True),
+    ],
+)
+def test_bundled_linker_only_retains_signature_maps_when_requested(
+    duck_con,
+    unresolved_matches,
+    canonical_without_raw_address,
+    retain_intermediate,
+    additional_columns,
+    custom_settings,
+    expected,
+):
+    messy = unresolved_matches.select(
+        "*, map(['100'], [40.0::DOUBLE]) AS signature_score_map, "
+        "map(['100'], [1::BIGINT]) AS signature_unique_hits_map, "
+        "'unused' AS unused_runtime_payload"
+    )
+    canonical = canonical_without_raw_address.select(
+        "*, 'unused' AS unused_runtime_payload"
+    )
+    settings = (
+        SettingsCreator.from_path_or_dict(_get_model_settings_dict())
+        if custom_settings
+        else None
+    )
+
+    linker = _get_linker(
+        messy,
+        canonical,
+        con=duck_con,
+        additional_columns_to_retain=additional_columns,
+        retain_intermediate_calculation_columns=retain_intermediate,
+        settings=settings,
+        project_input_columns=True,
+    )
+
+    retained = linker._settings_obj.as_dict()["additional_columns_to_retain"]
+    signature_maps = {"signature_score_map", "signature_unique_hits_map"}
+    assert signature_maps.issubset(retained) is expected
+    for frame in linker._input_tables_dict.values():
+        input_relation = duck_con.table(frame.physical_name)
+        assert signature_maps.issubset(input_relation.columns)
+        assert "unused_runtime_payload" not in input_relation.columns

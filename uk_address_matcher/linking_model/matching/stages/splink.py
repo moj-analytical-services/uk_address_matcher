@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from duckdb import InvalidInputException
 
@@ -87,17 +87,23 @@ def _preserve_anchored_name_aliases(
     predictions: duckdb.DuckDBPyRelation,
     source: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    if "bf_postcode_distinguishing_name" not in predictions.columns:
+    if "mw_postcode_distinguishing_name" not in predictions.columns:
         return predictions
-    factor = "bf_postcode_distinguishing_name"
-    if "bf_tf_postcode_distinguishing_name" in predictions.columns:
-        factor += " * coalesce(bf_tf_postcode_distinguishing_name, 1.0)"
+    contribution = "mw_postcode_distinguishing_name"
+    if "mw_tf_adj_postcode_distinguishing_name" in predictions.columns:
+        contribution += " + coalesce(mw_tf_adj_postcode_distinguishing_name, 0.0)"
+    factor = f"pow(2.0, ({contribution}))"
     if (
-        source.filter("""
+        next(
+            iter(
+                source.filter("""
         len(lk_anchor_uprns) = 1 AND list_contains(map_values(lk_level_by_alias), 2)
     """)
-        .limit(1)
-        .fetchone()
+                .limit(1)
+                .fetchall()
+            ),
+            None,
+        )
         is None
     ):
         return predictions
@@ -123,7 +129,9 @@ def _preserve_anchored_name_aliases(
         pipeline_name="Preserve exact anchored name aliases",
     ).run()
     excluded_name = f"__ukam__name_alias_exclusions_{_uid()}"
-    con.execute(f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}')
+    con.execute(
+        f'CREATE TEMP TABLE "{excluded_name}" AS {excluded.sql_query()}'
+    ).fetchall()
     excluded = con.table(excluded_name)
     prediction_alias = f"local_key_source_unfiltered_predictions_{_uid()}"
     return predictions.query(
@@ -198,11 +206,9 @@ class SplinkStage(MatchingStage):
       means the winner is clearer. ``NULL`` usually means there was only one
       candidate left after blocking.
 
-    Setting ``final_match_weight_threshold=-20`` and
-    ``final_distinguishability_threshold=0.0`` is a permissive configuration
-    that keeps almost all top-ranked Splink candidates. Raising either
-    threshold filters out more weak or ambiguous matches, typically improving
-    precision at the cost of recall.
+    ``acceptance_profile`` controls how sensitive the final decision is to
+    false positives. ``"balanced"`` targets the pooled F1 optimum, while
+    ``"precision"`` applies a stricter post-reranking boundary.
 
     Args:
         predict_threshold_match_weight: Initial minimum score passed to
@@ -220,11 +226,17 @@ class SplinkStage(MatchingStage):
             agreement in the local reranker.
         reranker_bigram_reward_multiplier: Multiplier for distinctive bigram
             agreement in the local reranker.
-        final_match_weight_threshold: Minimum ``match_weight`` required for a
-            Splink match to be emitted in the final results.
-        final_distinguishability_threshold: Minimum distinguishability required
-            for a Splink match to be emitted. Set to ``None`` to disable this
-            filter.
+        acceptance_profile: Final acceptance formula. ``"balanced"`` requires
+            ``MW + 2.5 * gap >= 11.35``. ``"precision"`` requires
+            ``gap >= max(0, 12.85 - 0.12 * MW)``.
+        minimum_match_weight: Minimum ``match_weight`` required after reranking.
+        minimum_distinguishability: Minimum distinguishability required after
+            reranking. ``NULL`` distinguishability is accepted as a
+            single-candidate result.
+        final_match_weight_threshold: Deprecated alias for
+            ``minimum_match_weight``.
+        final_distinguishability_threshold: Deprecated alias for
+            ``minimum_distinguishability``. ``None`` disables that minimum.
         include_full_postcode_block: Whether to include a strict full-postcode
             blocking rule when generating Splink candidate pairs.
         include_outside_postcode_block: Whether to include broader blocking
@@ -248,9 +260,13 @@ class SplinkStage(MatchingStage):
     reranker_token_reward_multiplier: float = 3.0
     reranker_bigram_reward_multiplier: float = 2.2
 
-    # Thresholds for final candidate selection
-    final_match_weight_threshold: float = -20.0
-    final_distinguishability_threshold: float | None = 0.0
+    acceptance_profile: Literal["balanced", "precision"] = "balanced"
+    minimum_match_weight: float = -20.0
+    minimum_distinguishability: float | None = 0.1
+
+    # Deprecated aliases retained for compatibility during the API transition.
+    final_match_weight_threshold: float = field(default=-20.0, repr=False)
+    final_distinguishability_threshold: float | None = field(default=0.1, repr=False)
 
     # Blocking configuration
     include_full_postcode_block: bool = False
@@ -283,6 +299,55 @@ class SplinkStage(MatchingStage):
     _canonical_cache_path: str | None = field(
         default=None, init=False, repr=False, compare=False
     )
+
+    def __post_init__(self) -> None:
+        if self.acceptance_profile not in {"balanced", "precision"}:
+            raise ValueError("acceptance_profile must be 'balanced' or 'precision'.")
+
+        if self.final_match_weight_threshold != -20.0:
+            if (
+                self.minimum_match_weight != -20.0
+                and self.minimum_match_weight != self.final_match_weight_threshold
+            ):
+                raise ValueError(
+                    "Set minimum_match_weight or final_match_weight_threshold, not both."
+                )
+            self.minimum_match_weight = self.final_match_weight_threshold
+        self.final_match_weight_threshold = self.minimum_match_weight
+
+        if self.final_distinguishability_threshold != 0.1:
+            if (
+                self.minimum_distinguishability != 0.1
+                and self.minimum_distinguishability
+                != self.final_distinguishability_threshold
+            ):
+                raise ValueError(
+                    "Set minimum_distinguishability or "
+                    "final_distinguishability_threshold, not both."
+                )
+            self.minimum_distinguishability = self.final_distinguishability_threshold
+        self.final_distinguishability_threshold = self.minimum_distinguishability
+
+    def _final_acceptance_filter_sql(self) -> str:
+        """Build the post-reranking acceptance filter."""
+        filters = [f"match_weight >= {self.minimum_match_weight}"]
+        if self.minimum_distinguishability is not None:
+            filters.append(
+                "(distinguishability IS NULL "
+                f"OR distinguishability >= {self.minimum_distinguishability})"
+            )
+        if self.acceptance_profile == "balanced":
+            filters.append(
+                "(distinguishability IS NULL "
+                "OR match_weight + 2.5 * distinguishability >= 11.35)"
+            )
+        elif self.acceptance_profile == "precision":
+            filters.append(
+                "(distinguishability IS NULL "
+                "OR distinguishability >= "
+                "GREATEST(0.0, 12.85 - 0.12 * match_weight))"
+            )
+        return " AND ".join(filters)
 
     def _release_splink_tables(self) -> None:
         """Drop this run's Splink tables via Splink's public API."""
@@ -320,7 +385,7 @@ class SplinkStage(MatchingStage):
         if explain:
             return None
 
-        unmatched_count = df_unmatched.count("*").fetchone()[0]
+        unmatched_count = df_unmatched.count("*").fetchall()[0][0]
         if unmatched_count == 0:
             return None
 
@@ -371,6 +436,11 @@ class SplinkStage(MatchingStage):
                 "clean_full_address",
                 "postcode",
             ]
+            if (
+                "road_1_norm" in df_canonical.columns
+                and "road_1_norm" in df_unmatched.columns
+            ):
+                linker_columns.append("road_1_norm")
             linker_columns.extend(self.additional_columns_to_retain or [])
             linker_columns.extend(range_input_columns)
             linker_columns = list(dict.fromkeys(linker_columns))
@@ -384,15 +454,22 @@ class SplinkStage(MatchingStage):
                 include_outside_postcode_block=self.include_outside_postcode_block,
                 additional_columns_to_retain=linker_columns or None,
                 retain_intermediate_calculation_columns=True,
+                retain_signature_map_columns=(
+                    self.retain_intermediate_calculation_columns
+                ),
                 settings=self.settings,
                 owned_splink_frames=owned_frames,
                 retain_matching_columns=False,
                 canonical_cache_path=self._canonical_cache_path,
+                project_input_columns=True,
             )
 
             self.linker = linker
 
             # Step 2: Predict
+            blocked_pairs = linker.inference.compute_blocked_pairs_for_predict_chunk()
+            owned_frames.append(blocked_pairs)
+            linker.table_management.register_blocked_pairs_for_predict(blocked_pairs)
             df_predict = linker.inference.predict(
                 threshold_match_weight=self.predict_threshold_match_weight
             )
@@ -413,7 +490,7 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + prediction_output.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.predictions_table = table_name
             df_predict_ddb = con.table(table_name)
             df_predict_for_improvement = _preserve_anchored_name_aliases(
@@ -460,7 +537,7 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + df_improved.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.improved_predictions_table = improved_table_name
             df_improved = con.table(improved_table_name)
 
@@ -480,18 +557,13 @@ class SplinkStage(MatchingStage):
                 + " AS SELECT * FROM ("
                 + df_best.sql_query()
                 + ")"
-            )
+            ).fetchall()
             self.best_matches_table = df_best_name
 
             # Step 5: Apply thresholds and project to standard columns
             splink_label = MatchReason.SPLINK.value
 
-            dist_filter = ""
-            if self.final_distinguishability_threshold is not None:
-                dist_filter = (
-                    "AND (distinguishability IS NULL "
-                    f"OR distinguishability >= {self.final_distinguishability_threshold})"
-                )
+            acceptance_filter = self._final_acceptance_filter_sql()
 
             range_audit_projection = ""
             range_audit_projection = "".join(
@@ -522,20 +594,15 @@ class SplinkStage(MatchingStage):
                     FROM {df_best_name}
                     WHERE candidate_rank = 1
                 ) AS best_match
-                WHERE best_match.match_weight >= {self.final_match_weight_threshold}
-                {dist_filter}
+                WHERE {acceptance_filter}
                 AND best_match.unique_id_l IS NOT NULL
             """)
             completed = True
             return result
         finally:
-            # Unregister both aliases even if linker setup failed before registration.
-            for input_name in ("m_", "c_"):
-                with suppress(InvalidInputException):
-                    con.unregister(input_name)
             for input_name in _local_key_input_aliases(con) - local_key_aliases_before:
                 if input_name.startswith("__ukam__name_"):
-                    con.execute(f'DROP TABLE "{input_name}"')
+                    con.execute(f'DROP TABLE "{input_name}"').fetchall()
                     continue
                 with suppress(InvalidInputException):
                     con.unregister(input_name)

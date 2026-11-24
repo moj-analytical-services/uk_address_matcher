@@ -108,7 +108,7 @@ def run_single_dataset(
     source_rows_before_canonical_filter: int | None = None
     if filter_out_missing_uprns:
         source_rows_before_canonical_filter = int(
-            df_messy.aggregate("COUNT(*) AS row_count").fetchone()[0]
+            df_messy.aggregate("COUNT(*) AS row_count").fetchall()[0][0]
         )
         prepared_canonical = load_prepared_canonical_data(
             canonical_path,
@@ -121,7 +121,7 @@ def run_single_dataset(
             prepared_canonical.addresses,
         )
     timings["data_load"] = perf_counter() - data_load_start
-    total_input_rows = int(df_messy.aggregate("COUNT(*) AS row_count").fetchone()[0])
+    total_input_rows = int(df_messy.aggregate("COUNT(*) AS row_count").fetchall()[0][0])
     if source_rows_before_canonical_filter is not None:
         print(
             "Canonical-label filter: retained "
@@ -140,7 +140,10 @@ def run_single_dataset(
         matching_num_chunks=matching_num_chunks,
     )
     match_result = matcher.match()
-    matches = match_result.matches(all_columns=True)
+    matches = match_result.matches(all_columns=True).project(
+        "* RENAME (address_id AS unique_id, "
+        "canonical_address_id AS resolved_canonical_id)"
+    )
     table_name = f"simple_bench_matches_{dataset_key}"
     con.sql(f"DROP TABLE IF EXISTS {table_name}")
     matches.to_table(table_name)

@@ -107,7 +107,7 @@ def test_unusual_token_moves_to_lexical_column_without_changing_numeric_tokens(
             numeric_token_1,
             tf_numeric_token_1,
             lexical_fallback_token,
-            list_transform(token_rel_freq_arr, x -> x.tok)
+            list_transform(token_rel_freq_arr, lambda x: x.tok)
         """).fetchall()
     }
 

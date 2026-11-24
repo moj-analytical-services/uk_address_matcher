@@ -1,8 +1,8 @@
 ---
-mode: ask
+name: new-feature
 description: "Implement a focused feature in uk_address_matcher with clear success criteria and targeted validation."
+disable-model-invocation: true
 ---
-
 Implement the feature with the smallest design that satisfies the request.
 
 Success means:

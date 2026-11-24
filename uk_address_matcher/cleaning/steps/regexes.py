@@ -5,8 +5,16 @@ def remove_commas_periods(input: str):
     return f"regexp_replace({input}, '[,.]', ' ', 'g')"
 
 
+def remove_brackets(input: str):
+    return f"regexp_replace({input}, '[][()]', ' ', 'g')"
+
+
 def remove_apostrophes(input: str):
     return f"regexp_replace({input}, e'\\'', '', 'g')"
+
+
+def remove_curly_apostrophes(input: str):
+    return f"regexp_replace({input}, chr(8217), '', 'g')"
 
 
 def replace_non_numeric_adjacent_underscores(input: str):
@@ -17,18 +25,41 @@ def remove_multiple_spaces(input: str):
     return f"regexp_replace({input}, '\\s+', ' ', 'g')"
 
 
+def replace_en_dash_with_space(input: str):
+    return f"regexp_replace({input}, chr(8211), ' ', 'g')"
+
+
+def replace_non_breaking_space_with_space(input: str):
+    return f"regexp_replace({input}, chr(160), ' ', 'g')"
+
+
+def strip_latin_accents(input: str):
+    return f"strip_accents({input})"
+
+
 def merge_split_flat_number(input: str):
     """Merge zero-padded split flat numbers such as ``FLAT 3 02 AT``."""
     pattern = r"\b(F?FLAT)\s+(\d{1,2})\s+(0\d{1,3})\s+(AT\b)"
     return f"regexp_replace({input}, '{pattern}', '\\1 \\2\\3 \\4', 'g')"
 
 
+def split_subpremise_descriptor_number(input: str):
+    descriptors = (
+        r"F?FLAT|APARTMENT|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
+        r"WORKSHOP|WAREHOUSE|STUDIO|ROOMS?"
+    )
+    pattern = rf"\b({descriptors})(\d+[A-Z]?)\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1 \\2', 'g')"
+
+
 def standarise_num_dash_num(input: str):
     """
-    Standardizes numeric ranges with dashes by removing spaces around the dash.
+    Standardize numeric ranges using dashes or common worded separators.
 
     Examples:
         '23A - 24' -> '23A-24'
+        '23 TO 24' -> '23-24'
+        '23 THROUGH 24B' -> '23-24B'
         '230-234' -> '230-234'
         '1 - 123' -> '1-123'
         'WELLS-NEXT-THE-SEA' -> 'WELLS-NEXT-THE-SEA' (unchanged)
@@ -40,11 +71,9 @@ def standarise_num_dash_num(input: str):
         str: The standardized string with numeric ranges formatted correctly.
     """
     regex_pattern = (
-        r"(?<![A-Za-z])"  # Ensure preceding character is not a letter.
-        r"(\d+[A-Za-z]?)"  # Matches a number with an optional single letter
-        r"\s*-\s*"  # Matches spaces around a dash
-        r"(\d+[A-Za-z]?)"  # Another number with an optional single letter.
-        r"(?![A-Za-z])"  # Ensure following character is not a letter.
+        r"\b(\d{1,5}[A-Za-z]?)"  # Match a number with an optional single letter
+        r"(?:\s*-\s*|(?i:\s*(?:UP\s*)?(?:TO|THRU|THROUGH)\s*))"
+        r"(\d{1,5}[A-Za-z]?)\b"
     )
     return f"regexp_replace({input}, '{regex_pattern}', '\\1-\\2', 'g')"
 
@@ -63,32 +92,27 @@ def split_letter_dash_letter(input: str):
     return f"regexp_replace({first_pass}, '{pattern}', '{replacement}', 'g')"
 
 
-# TODO:  PROBABLY NO LONGER NEEDED
 def remove_repeated_tokens(input: str):
-    """
-    If a token that's at least four characters long is repeated,
-    remove the second instance.
-
-    Examples:
-        'word word' -> 'word'
-        'test test' -> 'test'
-        'hello hello world' -> 'hello world'
-        'this this is is a a test test' -> 'this is a test'
-
-    Args:
-        input (str): The input string to process.
-
-    Returns:
-        str: The string with repeated tokens removed.
-    """
-    regex_pattern = (
-        r"\b"  # Word boundary
-        r"(\w{4,})"  # Matches a word that is at least four characters long
-        r"\s+"  # Matches one or more whitespace characters
-        r"\1"  # Matches the same word captured in the first group
-        r"\b"  # Word boundary
+    """Collapse adjacent duplicate tokens of at least four characters."""
+    tokens = f"string_split({input}, ' ')"
+    previous_tokens = (
+        "list_concat("
+        f"list_value(chr(32))::VARCHAR[], list_slice({tokens}, 1, len({tokens}) - 1)"
+        ")"
     )
-    return f"regexp_replace({input}, '{regex_pattern}', '\\1', 'g')"
+    token_pairs = f"list_zip({tokens}, {previous_tokens})"
+    unique_token_pairs = (
+        f"list_filter({token_pairs}, lambda pair: len(pair[1]) < 4 OR pair[1] <> pair[2])"
+    )
+    return f"""
+    CASE
+        WHEN {input} IS NULL THEN NULL
+        ELSE array_to_string(
+            list_transform({unique_token_pairs}, lambda pair: pair[1]),
+            ' '
+        )
+    END
+    """
 
 
 def trim(input: str):
@@ -123,22 +147,19 @@ def standarise_num_letter(input: str):
     return f"regexp_replace({input}, '{regex_pattern}', '\\1\\2 ', 'g')"
 
 
+def join_room_identifier_suffix(input: str):
+    pattern = r"\b(ROOMS?\s+[A-Z]?\d{1,5})\s+([A-Z])\b"
+    return f"regexp_replace({input}, '{pattern}', '\\1\\2', 'g')"
+
+
+def move_flat_block_letter_before_number(input: str):
+    """Canonicalise a separated block letter before generic number-letter merging."""
+    regex_pattern = r"\b(F?FLAT)\s+(\d{1,4})\s+([A-Za-z])\s+BLOCK\b"
+    return f"regexp_replace({input}, '{regex_pattern}', 'BLOCK \\3 \\1 \\2', 'g')"
+
+
 def separate_letter_num(input: str):
-    """
-    Matches a single letter followed by a number (with or without spaces in between),
-    and replaces it with the letter followed by a space and the number.
-
-    Examples:
-        'C230' -> 'C 230'
-        'C 230' -> 'C 230'
-        'C  230' -> 'C 230'
-
-    Args:
-        input (str): The input string to process.
-
-    Returns:
-        str: The processed string with the letter and number separated by a space.
-    """
+    """Separate single-letter prefixes from numeric identifiers."""
     regex_pattern = (
         r"\b"  # Word boundary
         r"([A-Za-z])"  # Matches a single letter (A-Z or a-z)

@@ -1,6 +1,7 @@
 import duckdb
+import pytest
 
-from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
@@ -229,19 +230,19 @@ EQUIVALENCE_TEST_CASES = [
         "c_flat_number_mismatch",
     ),
     (
-        "m_ground_floor",
-        "GROUND FLOOR FLAT 20 HIGH STREET LONDON",
+        "m_lower_ground",
+        "FLAT LOWER GROUND FLOOR 20 HIGH STREET LONDON",
         "E1 6AA",
-        "c_lower_ground_equiv",
-        "c_first_floor_mismatch",
+        "c_basement_equiv",
+        "c_ground_floor_mismatch",
     ),
 ]
 
 EQUIVALENCE_CANONICAL_ADDRESSES = [
     ("c_flat_number_equiv", "FLAT 2 10 KINGS ROAD LONDON", "SW3 4ND"),
     ("c_flat_number_mismatch", "FLAT D 10 KINGS ROAD LONDON", "SW3 4ND"),
-    ("c_lower_ground_equiv", "LOWER GROUND FLAT 20 HIGH STREET LONDON", "E1 6AA"),
-    ("c_first_floor_mismatch", "FIRST FLOOR FLAT 20 HIGH STREET LONDON", "E1 6AA"),
+    ("c_basement_equiv", "BASEMENT FLAT 20 HIGH STREET LONDON", "E1 6AA"),
+    ("c_ground_floor_mismatch", "GROUND FLOOR FLAT 20 HIGH STREET LONDON", "E1 6AA"),
 ]
 
 ONE_SIDED_NUMBER_LETTER_MESSY = [
@@ -426,14 +427,14 @@ def test_flat_number_letter_one_sided_penalty_not_fuzzy_equivalence():
     assert not one_sided_row.empty, "Missing one-sided comparison row"
     assert not fuzzy_reference_row.empty, "Missing fuzzy reference comparison row"
 
-    one_sided_bf = float(one_sided_row.iloc[0]["bf_flat_identity"])
-    fuzzy_reference_bf = float(fuzzy_reference_row.iloc[0]["bf_flat_identity"])
+    one_sided_bf = 2 ** float(one_sided_row.iloc[0]["mw_flat_identity"])
+    fuzzy_reference_bf = 2 ** float(fuzzy_reference_row.iloc[0]["mw_flat_identity"])
 
-    assert one_sided_bf == 5.17, (
+    assert one_sided_bf == pytest.approx(5.17), (
         "Expected FLAT 2B vs FLAT 2 to hit 'Same number, letter one-sided' "
         f"(bf=5.17), got bf_flat_identity={one_sided_bf:.6f}."
     )
-    assert fuzzy_reference_bf == 13.0, (
+    assert fuzzy_reference_bf == pytest.approx(13.0), (
         "Expected FLAT B vs FLAT 2 to hit fuzzy letter-number equivalence "
         f"(bf=13), got bf_flat_identity={fuzzy_reference_bf:.6f}."
     )
@@ -553,7 +554,7 @@ def test_sub_premise_location_discrimination_in_reranker():
             ukam_address_id_r INTEGER
         )
         """
-    )
+    ).fetchall()
     con.executemany(
         "INSERT INTO df VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -611,3 +612,39 @@ def test_sub_premise_location_discrimination_in_reranker():
         "Expected the positional conflict to demote the LEFT sibling by ~one penalty; "
         f"got gap={mw_missing - mw_left:.3f}."
     )
+
+
+def test_reranker_uses_sibling_locations_from_other_aliases():
+    con = duckdb.connect()
+    canonical = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'front', 10, NULL), (2, 'front', 10, 'FRONT'),
+            (3, 'rear', 10, NULL), (4, 'rear', 10, 'REAR'),
+            (5, 'other_parent', 20, 'REAR'),
+            (6, 'ambiguous', 10, 'FRONT'), (7, 'ambiguous', 10, 'REAR')
+        ) AS t(ukam_address_id, unique_id, parentuprn, sub_premise_location)
+    """)
+    messy = con.sql("SELECT 100 AS ukam_address_id, 'FRONT' AS sub_premise_location")
+    predictions = con.sql("""
+        SELECT *, 100 AS ukam_address_id_r, 'input' AS unique_id_r,
+            0.5 AS match_probability, 'FLAT 20 HIGH STREET' AS clean_full_address_l,
+            'FLAT FRONT 20 HIGH STREET' AS clean_full_address_r,
+            'E1 6AA' AS postcode_l, 'E1 6AA' AS postcode_r
+        FROM (VALUES (1, 'front', 10.0), (3, 'rear', 13.0),
+            (5, 'other_parent', 8.0), (6, 'ambiguous', 7.5))
+        AS t(ukam_address_id_l, unique_id_l, match_weight)
+    """)
+    result = improve_predictions_using_distinguishing_tokens(
+        con=con,
+        df_predict=predictions,
+        df_addresses_to_match=messy,
+        df_addresses_to_search_within=canonical,
+    )
+    assert result.order("match_weight DESC").project(
+        "unique_id_l, positional_conflict_penalty"
+    ).fetchall() == [
+        ("front", 0),
+        ("other_parent", 0),
+        ("ambiguous", 0),
+        ("rear", 6),
+    ]
