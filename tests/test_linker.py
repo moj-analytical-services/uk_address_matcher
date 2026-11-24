@@ -738,6 +738,7 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
         include_outside_postcode_block=False,
         additional_columns_to_retain=["missing_optional_diagnostic"],
         retain_intermediate_calculation_columns=True,
+        include_splink_salt=True,
     )
     predictions = linker.inference.predict(threshold_match_weight=-100)
     prediction_rows = predictions.as_pandas_dataframe()
@@ -759,6 +760,11 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
             frozenset(("c_some", "m_some")): 0.0,
             frozenset(("c_some", "m_none")): 0.0,
         }
+    )
+
+    linker.training.estimate_u_using_random_sampling(
+        max_pairs=100_001,
+        seed=42,
     )
 
 

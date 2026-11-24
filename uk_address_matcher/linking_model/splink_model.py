@@ -425,6 +425,7 @@ def _get_linker(
     retain_intermediate_calculation_columns=False,
     retain_signature_map_columns: bool | None = None,
     retain_matching_columns=True,
+    include_splink_salt: bool = False,
     settings: SettingsCreator | None = None,
     owned_splink_frames: list | None = None,
     additional_blocking_rules: list[str] | None = None,
@@ -852,11 +853,34 @@ def _get_linker(
             ColumnExpression("numeric_token").alias(f"numeric_token_{i}"),
             ColumnExpression("tf_numeric_token").alias(f"tf_numeric_token_{i}"),
         )
-        tf_frame = linker.table_management.register_term_frequency_lookup(
-            db_api.register(df, table_name=f"__splink__numeric_tf_{i}_{_uid()}"),
-            f"numeric_token_{i}",
-        )
-        if owned_splink_frames is not None:
-            owned_splink_frames.append(tf_frame)
+
+    cols_to_select = [
+        column
+        for column in df_addresses_to_match.columns
+        if column != "original_address_concat"
+    ]
+    select_expr = ", ".join(cols_to_select)
+    salt_column_sql = ", random() AS __splink_salt" if include_splink_salt else ""
+    messy_subquery = df_addresses_to_match_fix.sql_query()
+    canonical_subquery = df_addresses_to_search_within_fix.sql_query()
+
+    sql = f"""
+    select {select_expr}, 'm_' as source_dataset{salt_column_sql}
+    from ({messy_subquery}) as df_addresses_to_match_fix
+    UNION ALL
+    select {select_expr}, 'c_' as source_dataset{salt_column_sql}
+    from ({canonical_subquery}) as df_addresses_to_search_within_fix
+
+    """
+
+    concat_with_tf = con.sql(sql)
+    linker.table_management.register_table_input_nodes_concat_with_tf(concat_with_tf)
+
+    tf_frame = linker.table_management.register_term_frequency_lookup(
+        db_api.register(df, table_name=f"__splink__numeric_tf_{i}_{_uid()}"),
+        f"numeric_token_{i}",
+    )
+    if owned_splink_frames is not None:
+        owned_splink_frames.append(tf_frame)
 
     return linker
