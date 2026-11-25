@@ -1429,6 +1429,7 @@ def _attach_canonical_features(
     table_name: str,
     *,
     road_features: DuckDBPyRelation | None = None,
+    num_of_chunks: int | None = None,
     _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
     clustered_table = f"__ukam_local_key_clustered_{_uid()}"
@@ -1466,6 +1467,20 @@ def _attach_canonical_features(
         canonical = con.sql(f"""
             SELECT {source_columns} FROM ({source.sql_query()}) canonical
         """)
+        if num_of_chunks == 1:
+            joined = con.sql(f"""
+                SELECT canonical.*, features.* EXCLUDE (ukam_address_id)
+                FROM ({canonical.sql_query()}) AS canonical
+                LEFT JOIN {table_name} AS features USING (ukam_address_id)
+            """)
+            _materialise_relation(
+                con,
+                joined,
+                enriched_table,
+                _storage=_storage,
+                order_by="ukam_address_id",
+            )
+            return con.table(enriched_table)
         first_id, last_id = next(
             iter(
                 con.sql(f"""

@@ -5,7 +5,7 @@ import json
 import logging
 import shutil
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -154,6 +154,32 @@ class _PreparedFolderLayout:
 
     folder: Path
     canonical_paths: list[Path]
+
+
+_GIB = 1024**3
+_DEFAULT_CANONICAL_EXPORT_MAX_THREADS = 4
+_MEDIUM_MEMORY_CANONICAL_EXPORT_MAX_THREADS = 12
+
+
+def _canonical_export_max_threads(con: duckdb.DuckDBPyConnection) -> int | None:
+    """Choose the sorted canonical export thread cap from DuckDB's memory limit."""
+    try:
+        raw_limit = con.execute("SELECT current_setting('memory_limit')").fetchall()[0][
+            0
+        ]
+        if isinstance(raw_limit, str) and raw_limit.endswith("PiB"):
+            return None
+        limit_bytes = con.execute(
+            "SELECT parse_formatted_bytes(?)", [raw_limit]
+        ).fetchall()[0][0]
+    except Exception:
+        return _DEFAULT_CANONICAL_EXPORT_MAX_THREADS
+
+    if not isinstance(limit_bytes, int) or limit_bytes <= 16 * _GIB:
+        return _DEFAULT_CANONICAL_EXPORT_MAX_THREADS
+    if limit_bytes <= 32 * _GIB:
+        return _MEDIUM_MEMORY_CANONICAL_EXPORT_MAX_THREADS
+    return None
 
 
 def _escape_sql_string(value: str) -> str:
@@ -780,6 +806,7 @@ def _prepare_canonical_folder(
         con,
         local_features.alias,
         road_features=road_features,
+        num_of_chunks=num_of_chunks,
         _storage=_storage,
     )
     canonical_output_relation = df_clean
@@ -818,6 +845,11 @@ def _prepare_canonical_folder(
     if roadlike_places is not None:
         _write_parquet_artefact(con, roadlike_places, roadlike_places_path)
 
+    canonical_parquet_settings = replace(
+        _CANONICAL_PARQUET_SETTINGS,
+        max_threads=_canonical_export_max_threads(con),
+    )
+
     canonical_paths: list[str | Path]
     chunk_output_location: str | Path | None = None
     if output_chunk_count == 1:
@@ -830,7 +862,7 @@ def _prepare_canonical_folder(
             con,
             canonical_storage_relation,
             addr_path,
-            settings=_CANONICAL_PARQUET_SETTINGS,
+            settings=canonical_parquet_settings,
             drop_columns=canonical_drop_columns,
         )
         canonical_paths = [addr_path]
@@ -869,7 +901,7 @@ def _prepare_canonical_folder(
                 con,
                 chunk_query,
                 chunk_path,
-                settings=_CANONICAL_PARQUET_SETTINGS,
+                settings=canonical_parquet_settings,
                 drop_columns=canonical_drop_columns,
             )
             chunk_count = last_id - first_id + 1

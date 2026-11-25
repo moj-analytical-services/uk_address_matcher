@@ -28,6 +28,7 @@ from uk_address_matcher.logging import progress as progress_helpers
 from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
+    _canonical_export_max_threads,
     _coerce_prepare_input_to_relation,
     _PreparedCanonical,
     _rehydrate_canonical_addresses,
@@ -2260,3 +2261,144 @@ def test_collated_folder_input_uses_native_storage(
     monkeypatch.setattr(_CanonicalIntermediates, "write", unexpected_parquet)
     prepare_canonical_folder(source, tmp_path, con=con, show_progress="off")
     assert (tmp_path / "ukam_manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("memory_limit", "expected_max_threads"),
+    [
+        ("512MB", 4),
+        ("16GiB", 4),
+        ("24GiB", 12),
+        ("32GiB", 12),
+        ("64GiB", None),
+        ("1TiB", None),
+        ("none", None),
+    ],
+)
+def test_canonical_export_max_threads_scales_with_memory_limit(
+    memory_limit, expected_max_threads
+):
+    local_con = duckdb.connect()
+    try:
+        local_con.execute(f"SET memory_limit = '{memory_limit}'").fetchall()
+        assert _canonical_export_max_threads(local_con) == expected_max_threads
+    finally:
+        local_con.close()
+
+
+def test_canonical_export_max_threads_defaults_to_four_when_unparseable():
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("unsupported")
+    assert _canonical_export_max_threads(mock_con) == 4
+
+
+@pytest.mark.parametrize(
+    ("memory_limit", "expected_max_threads"),
+    [
+        ("16GiB", 4),
+        ("32GiB", 12),
+        ("64GiB", None),
+    ],
+)
+def test_prepare_canonical_export_applies_memory_limit_thread_cap(
+    con, canonical_data, tmp_path, monkeypatch, memory_limit, expected_max_threads
+):
+    import importlib
+
+    module = importlib.import_module("uk_address_matcher.prepare_canonical")
+    recorded_max_threads: list[int | None] = []
+    original_write = module._write_parquet_artefact
+
+    def capture_write(connection, relation, path, **kwargs):
+        if Path(path).name == "ukam_canonical_addresses.parquet":
+            recorded_max_threads.append(kwargs["settings"].max_threads)
+        return original_write(connection, relation, path, **kwargs)
+
+    monkeypatch.setattr(module, "_write_parquet_artefact", capture_write)
+
+    con.execute("SET threads = 8").fetchall()
+    con.execute(f"SET memory_limit = '{memory_limit}'").fetchall()
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        overwrite=True,
+        show_progress="off",
+    )
+    assert recorded_max_threads == [expected_max_threads]
+    assert con.execute("SELECT current_setting('threads')").fetchall()[0][0] == 8
+
+
+def test_attach_canonical_features_single_pass_matches_batched(con, monkeypatch):
+    source = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'U1', '1 HIGH ST', 'SW1A 1AA', ['HIGH']),
+            (2, 'U2', '2 HIGH ST', 'SW1A 1AA', ['HIGH']),
+            (3, 'U3', '3 LOW RD', 'M1 1AA', ['LOW']),
+            (4, 'U4', '4 LOW RD', 'M1 1AA', ['LOW']),
+            (5, 'U5', '5 PARK LN', 'B1 1AA', ['PARK'])
+        ) AS t(ukam_address_id, unique_id, clean_full_address, postcode, local_key_tokens)
+    """)
+    road_features = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'HIGH STREET'),
+            (3, 'LOW ROAD'),
+            (5, 'PARK LANE')
+        ) AS r(ukam_address_id, road_1_norm)
+    """)
+    local_features_sql = """
+        SELECT * FROM (VALUES
+            (1, ['K1']),
+            (2, ['K2']),
+            (3, ['K3']),
+            (4, ['K4']),
+            (5, ['K5'])
+        ) AS f(ukam_address_id, local_key_index)
+    """
+
+    monkeypatch.setattr(chunking_strategies, "_CANONICAL_LOCAL_KEY_BATCH_ROWS", 2)
+
+    append_calls: list[bool] = []
+    original_materialise = chunking_strategies._materialise_relation
+
+    def spy_materialise(*args, **kwargs):
+        if len(args) >= 3 and str(args[2]).startswith(
+            "__ukam_canonical_with_local_keys_"
+        ):
+            append_calls.append(bool(kwargs.get("append", False)))
+        return original_materialise(*args, **kwargs)
+
+    monkeypatch.setattr(chunking_strategies, "_materialise_relation", spy_materialise)
+
+    with _CanonicalIntermediates(con) as storage:
+        con.sql(local_features_sql).create("test_local_batched")
+        batched = chunking_strategies._attach_canonical_features(
+            source,
+            con,
+            "test_local_batched",
+            road_features=road_features,
+            num_of_chunks=10,
+            _storage=storage,
+        )
+        batched_columns = batched.columns
+        batched_rows = batched.fetchall()
+        batched_appends = list(append_calls)
+
+        append_calls.clear()
+        con.sql(local_features_sql).create("test_local_single")
+        single = chunking_strategies._attach_canonical_features(
+            source,
+            con,
+            "test_local_single",
+            road_features=road_features,
+            num_of_chunks=1,
+            _storage=storage,
+        )
+        single_columns = single.columns
+        single_rows = single.fetchall()
+        single_appends = list(append_calls)
+
+    assert single_columns == batched_columns
+    assert single_rows == batched_rows
+    assert batched_appends == [False, True, True]
+    assert single_appends == [False]
