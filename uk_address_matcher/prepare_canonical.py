@@ -164,9 +164,7 @@ _MEDIUM_MEMORY_CANONICAL_EXPORT_MAX_THREADS = 12
 def _canonical_export_max_threads(con: duckdb.DuckDBPyConnection) -> int | None:
     """Choose the sorted canonical export thread cap from DuckDB's memory limit."""
     try:
-        raw_limit = con.execute("SELECT current_setting('memory_limit')").fetchall()[0][
-            0
-        ]
+        raw_limit = con.execute("SELECT current_setting('memory_limit')").fetchall()[0][0]
         if isinstance(raw_limit, str) and raw_limit.endswith("PiB"):
             return None
         limit_bytes = con.execute(
