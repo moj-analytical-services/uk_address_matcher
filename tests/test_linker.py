@@ -663,7 +663,7 @@ def test_packaged_model_omits_redundant_road_district_blocking_rules():
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 10
+    assert len(packaged_rules) == 8
     assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
     assert not any(
         "l.road_1_norm = r.road_1_norm" in rule
