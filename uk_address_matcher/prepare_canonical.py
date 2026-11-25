@@ -8,7 +8,7 @@ import warnings
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from uk_address_matcher._typing import PrepareCanonicalInput
@@ -156,28 +156,77 @@ class _PreparedFolderLayout:
     canonical_paths: list[Path]
 
 
+MemoryProfile = Literal["auto", "16gb", "32gb", "64gb", "uncapped"]
+
+
+@dataclass(frozen=True)
+class _MemoryProfileSettings:
+    """Resolved execution settings for one canonical preparation memory profile."""
+
+    name: str
+    cleaning_num_chunks: int
+    export_max_threads: int | None
+    attach_batch_rows: int | None
+
+
 _GIB = 1024**3
-_DEFAULT_CANONICAL_EXPORT_MAX_THREADS = 4
-_MEDIUM_MEMORY_CANONICAL_EXPORT_MAX_THREADS = 12
+_MEMORY_PROFILES: dict[str, _MemoryProfileSettings] = {
+    "16gb": _MemoryProfileSettings(
+        name="16gb",
+        cleaning_num_chunks=10,
+        export_max_threads=4,
+        attach_batch_rows=1_000_000,
+    ),
+    "32gb": _MemoryProfileSettings(
+        name="32gb",
+        cleaning_num_chunks=10,
+        export_max_threads=8,
+        attach_batch_rows=5_000_000,
+    ),
+    "64gb": _MemoryProfileSettings(
+        name="64gb",
+        cleaning_num_chunks=10,
+        export_max_threads=12,
+        attach_batch_rows=5_000_000,
+    ),
+    "uncapped": _MemoryProfileSettings(
+        name="uncapped",
+        cleaning_num_chunks=1,
+        export_max_threads=None,
+        attach_batch_rows=None,
+    ),
+}
 
 
-def _canonical_export_max_threads(con: duckdb.DuckDBPyConnection) -> int | None:
-    """Choose the sorted canonical export thread cap from DuckDB's memory limit."""
+def _resolve_memory_profile(
+    con: duckdb.DuckDBPyConnection,
+    memory_profile: MemoryProfile,
+) -> _MemoryProfileSettings:
+    """Resolve an explicit or auto-detected canonical preparation memory profile."""
+    if memory_profile != "auto":
+        profile = _MEMORY_PROFILES.get(memory_profile)
+        if profile is None:
+            valid = ", ".join(repr(p) for p in ("auto", *_MEMORY_PROFILES))
+            raise ValueError(f"memory_profile must be one of {valid}")
+        return profile
+
     try:
         raw_limit = con.execute("SELECT current_setting('memory_limit')").fetchall()[0][0]
-        if isinstance(raw_limit, str) and raw_limit.endswith("PiB"):
-            return None
+        if not isinstance(raw_limit, str) or raw_limit.endswith("PiB"):
+            return _MEMORY_PROFILES["16gb"]
         limit_bytes = con.execute(
             "SELECT parse_formatted_bytes(?)", [raw_limit]
         ).fetchall()[0][0]
     except Exception:
-        return _DEFAULT_CANONICAL_EXPORT_MAX_THREADS
+        return _MEMORY_PROFILES["16gb"]
 
-    if not isinstance(limit_bytes, int) or limit_bytes <= 16 * _GIB:
-        return _DEFAULT_CANONICAL_EXPORT_MAX_THREADS
-    if limit_bytes <= 32 * _GIB:
-        return _MEDIUM_MEMORY_CANONICAL_EXPORT_MAX_THREADS
-    return None
+    if not isinstance(limit_bytes, int) or limit_bytes <= 20 * _GIB:
+        return _MEMORY_PROFILES["16gb"]
+    if limit_bytes <= 40 * _GIB:
+        return _MEMORY_PROFILES["32gb"]
+    if limit_bytes <= 90 * _GIB:
+        return _MEMORY_PROFILES["64gb"]
+    return _MEMORY_PROFILES["uncapped"]
 
 
 def _escape_sql_string(value: str) -> str:
@@ -582,7 +631,8 @@ def prepare_canonical_folder(
     output_folder: str | Path,
     *,
     con: duckdb.DuckDBPyConnection,
-    cleaning_num_chunks: int = 10,
+    cleaning_num_chunks: int | None = None,
+    memory_profile: MemoryProfile = "auto",
     output_chunk_count: int = 1,
     derive_distinguishing_wrt_adjacent_records: bool = True,
     overwrite: bool = False,
@@ -610,10 +660,18 @@ def prepare_canonical_folder(
             path, or a non-empty list of CSV/Parquet paths.
         output_folder: Folder to write prepared artefacts to.
         con: DuckDB connection.
-        cleaning_num_chunks: Number of processing chunks for cleaning and term
-            frequency derivation, also used to batch postcode-local keys and road
-            parsing. Postcode batches retain whole districts and road fallback
-            groups, so small inputs can use fewer batches. Set to 1 for no chunking.
+        cleaning_num_chunks: Optional override for the number of processing
+            chunks used for cleaning, term frequency derivation, postcode-local
+            keys, and road parsing. When ``None`` (the default), uses the chunk
+            count from ``memory_profile`` (10 for ``"16gb"``/``"32gb"``/``"64gb"``,
+            1 for ``"uncapped"``). Set to 1 for no chunking.
+        memory_profile: Resource profile controlling cleaning chunk count,
+            feature-attachment batch size, and sorted canonical Parquet export
+            thread cap. ``"auto"`` (the default) selects a profile from DuckDB's
+            ``memory_limit`` (``<= 20 GiB`` → ``"16gb"``, ``<= 40 GiB`` → ``"32gb"``,
+            ``<= 90 GiB`` → ``"64gb"``, ``> 90 GiB`` → ``"uncapped"``; falls back to
+            ``"16gb"`` if unlimited/unrecognised). Pass ``"16gb"``, ``"32gb"``,
+            ``"64gb"``, or ``"uncapped"`` to choose a profile explicitly.
         output_chunk_count: Number of output chunks to write for canonical
             addresses. Set to 1 to write `ukam_canonical_addresses.parquet`.
             Set above 1 to write contiguous globally ordered chunks under
@@ -638,13 +696,20 @@ def prepare_canonical_folder(
         FileExistsError: If the output folder already contains prepared files
             and `overwrite` is `False`.
     """
-    _validate_chunk_count(cleaning_num_chunks, name="cleaning_num_chunks")
+    resolved_profile = _resolve_memory_profile(con, memory_profile)
+    resolved_chunks = (
+        resolved_profile.cleaning_num_chunks
+        if cleaning_num_chunks is None
+        else cleaning_num_chunks
+    )
+    _validate_chunk_count(resolved_chunks, name="cleaning_num_chunks")
     with _CanonicalIntermediates(con) as storage:
         _prepare_canonical_folder(
             data,
             output_folder,
             con=con,
-            num_of_chunks=cleaning_num_chunks,
+            num_of_chunks=resolved_chunks,
+            memory_profile_settings=resolved_profile,
             output_chunk_count=output_chunk_count,
             derive_distinguishing_wrt_adjacent_records=(
                 derive_distinguishing_wrt_adjacent_records
@@ -662,6 +727,7 @@ def _prepare_canonical_folder(
     *,
     con: duckdb.DuckDBPyConnection,
     num_of_chunks: int,
+    memory_profile_settings: _MemoryProfileSettings,
     output_chunk_count: int,
     derive_distinguishing_wrt_adjacent_records: bool,
     overwrite: bool,
@@ -689,6 +755,14 @@ def _prepare_canonical_folder(
 
     logger.info("Preparing canonical data from '%s'", _describe_prepare_input(data))
     logger.info("Writing prepared canonical artefacts to '%s'", output_folder)
+    logger.info(
+        "Using memory profile '%s' "
+        "(cleaning_num_chunks=%d, export_max_threads=%s, attach_batch_rows=%s)",
+        memory_profile_settings.name,
+        num_of_chunks,
+        memory_profile_settings.export_max_threads,
+        memory_profile_settings.attach_batch_rows,
+    )
 
     _validate_chunk_count(num_of_chunks, name="num_of_chunks")
     _validate_chunk_count(output_chunk_count, name="output_chunk_count")
@@ -804,7 +878,7 @@ def _prepare_canonical_folder(
         con,
         local_features.alias,
         road_features=road_features,
-        num_of_chunks=num_of_chunks,
+        batch_rows=memory_profile_settings.attach_batch_rows,
         _storage=_storage,
     )
     canonical_output_relation = df_clean
@@ -845,7 +919,7 @@ def _prepare_canonical_folder(
 
     canonical_parquet_settings = replace(
         _CANONICAL_PARQUET_SETTINGS,
-        max_threads=_canonical_export_max_threads(con),
+        max_threads=memory_profile_settings.export_max_threads,
     )
 
     canonical_paths: list[str | Path]

@@ -28,10 +28,10 @@ from uk_address_matcher.logging import progress as progress_helpers
 from uk_address_matcher.logging.progress import _ProgressBar
 from uk_address_matcher.prepare_canonical import (
     MAX_CHUNK_COUNT,
-    _canonical_export_max_threads,
     _coerce_prepare_input_to_relation,
     _PreparedCanonical,
     _rehydrate_canonical_addresses,
+    _resolve_memory_profile,
     load_prepared_canonical_data,
 )
 
@@ -2264,68 +2264,116 @@ def test_collated_folder_input_uses_native_storage(
 
 
 @pytest.mark.parametrize(
-    ("memory_limit", "expected_max_threads"),
+    ("memory_limit", "expected_profile"),
     [
-        ("512MB", 4),
-        ("16GiB", 4),
-        ("24GiB", 12),
-        ("32GiB", 12),
-        ("64GiB", None),
-        ("1TiB", None),
-        ("none", None),
+        ("512MB", "16gb"),
+        ("12GiB", "16gb"),
+        ("20GiB", "16gb"),
+        ("24GiB", "32gb"),
+        ("40GiB", "32gb"),
+        ("49GiB", "64gb"),
+        ("90GiB", "64gb"),
+        ("99GiB", "uncapped"),
+        ("198GiB", "uncapped"),
+        ("1TiB", "uncapped"),
+        ("none", "16gb"),
     ],
 )
-def test_canonical_export_max_threads_scales_with_memory_limit(
-    memory_limit, expected_max_threads
-):
+def test_resolve_memory_profile_auto_from_memory_limit(memory_limit, expected_profile):
     local_con = duckdb.connect()
     try:
         local_con.execute(f"SET memory_limit = '{memory_limit}'").fetchall()
-        assert _canonical_export_max_threads(local_con) == expected_max_threads
+        assert _resolve_memory_profile(local_con, "auto").name == expected_profile
     finally:
         local_con.close()
 
 
-def test_canonical_export_max_threads_defaults_to_four_when_unparseable():
+def test_resolve_memory_profile_auto_falls_back_to_16gb_on_error():
     mock_con = MagicMock()
     mock_con.execute.side_effect = RuntimeError("unsupported")
-    assert _canonical_export_max_threads(mock_con) == 4
+    profile = _resolve_memory_profile(mock_con, "auto")
+    assert profile.name == "16gb"
+    assert profile.cleaning_num_chunks == 10
+    assert profile.export_max_threads == 4
+    assert profile.attach_batch_rows == 1_000_000
+
+
+def test_resolve_memory_profile_rejects_unknown_value(con):
+    with pytest.raises(ValueError, match="memory_profile must be one of"):
+        _resolve_memory_profile(con, "invalid")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
-    ("memory_limit", "expected_max_threads"),
+    (
+        "memory_profile",
+        "cleaning_num_chunks",
+        "expected_chunks",
+        "expected_threads",
+        "expected_batch_rows",
+    ),
     [
-        ("16GiB", 4),
-        ("32GiB", 12),
-        ("64GiB", None),
+        ("16gb", None, 10, 4, 1_000_000),
+        ("32gb", None, 10, 8, 5_000_000),
+        ("64gb", None, 10, 12, 5_000_000),
+        ("uncapped", None, 1, None, None),
+        ("64gb", 4, 4, 12, 5_000_000),
+        ("16gb", 1, 1, 4, 1_000_000),
     ],
 )
-def test_prepare_canonical_export_applies_memory_limit_thread_cap(
-    con, canonical_data, tmp_path, monkeypatch, memory_limit, expected_max_threads
+def test_prepare_canonical_applies_memory_profile_and_chunk_override(
+    con,
+    canonical_data,
+    tmp_path,
+    monkeypatch,
+    memory_profile,
+    cleaning_num_chunks,
+    expected_chunks,
+    expected_threads,
+    expected_batch_rows,
 ):
     import importlib
 
     module = importlib.import_module("uk_address_matcher.prepare_canonical")
-    recorded_max_threads: list[int | None] = []
+    recorded_threads: list[int | None] = []
+    recorded_attach_batch: list[int | None] = []
+    recorded_chunks: list[int] = []
+
     original_write = module._write_parquet_artefact
+    original_attach = chunking_strategies._attach_canonical_features
+    original_clean = chunking_strategies.clean_data_pre_term_frequencies
 
     def capture_write(connection, relation, path, **kwargs):
         if Path(path).name == "ukam_canonical_addresses.parquet":
-            recorded_max_threads.append(kwargs["settings"].max_threads)
+            recorded_threads.append(kwargs["settings"].max_threads)
         return original_write(connection, relation, path, **kwargs)
 
+    def capture_attach(*args, **kwargs):
+        recorded_attach_batch.append(kwargs.get("batch_rows"))
+        return original_attach(*args, **kwargs)
+
+    def capture_clean(*args, **kwargs):
+        recorded_chunks.append(kwargs["num_of_chunks"])
+        return original_clean(*args, **kwargs)
+
     monkeypatch.setattr(module, "_write_parquet_artefact", capture_write)
+    monkeypatch.setattr(chunking_strategies, "_attach_canonical_features", capture_attach)
+    monkeypatch.setattr(
+        chunking_strategies, "clean_data_pre_term_frequencies", capture_clean
+    )
 
     con.execute("SET threads = 8").fetchall()
-    con.execute(f"SET memory_limit = '{memory_limit}'").fetchall()
     prepare_canonical_folder(
         canonical_data,
         output_folder=tmp_path,
         con=con,
+        cleaning_num_chunks=cleaning_num_chunks,
+        memory_profile=memory_profile,
         overwrite=True,
         show_progress="off",
     )
-    assert recorded_max_threads == [expected_max_threads]
+    assert recorded_chunks == [expected_chunks]
+    assert recorded_threads == [expected_threads]
+    assert recorded_attach_batch == [expected_batch_rows]
     assert con.execute("SELECT current_setting('threads')").fetchall()[0][0] == 8
 
 
@@ -2356,8 +2404,6 @@ def test_attach_canonical_features_single_pass_matches_batched(con, monkeypatch)
         ) AS f(ukam_address_id, local_key_index)
     """
 
-    monkeypatch.setattr(chunking_strategies, "_CANONICAL_LOCAL_KEY_BATCH_ROWS", 2)
-
     append_calls: list[bool] = []
     original_materialise = chunking_strategies._materialise_relation
 
@@ -2377,7 +2423,7 @@ def test_attach_canonical_features_single_pass_matches_batched(con, monkeypatch)
             con,
             "test_local_batched",
             road_features=road_features,
-            num_of_chunks=10,
+            batch_rows=2,
             _storage=storage,
         )
         batched_columns = batched.columns
@@ -2391,7 +2437,7 @@ def test_attach_canonical_features_single_pass_matches_batched(con, monkeypatch)
             con,
             "test_local_single",
             road_features=road_features,
-            num_of_chunks=1,
+            batch_rows=None,
             _storage=storage,
         )
         single_columns = single.columns
