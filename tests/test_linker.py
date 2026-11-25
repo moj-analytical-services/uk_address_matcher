@@ -708,8 +708,10 @@ def test_packaged_r28_rule_matches_synthetic_road_variants(duck_con):
             FROM (VALUES
                 (1, 'ZZ1 1AA', '88', 'example road', 'ZZ1 9ZZ', '88', 'examply road'),
                 (2, 'ZZ1 1AA', '88', 'river view', 'ZZ1 9ZZ', '88', 'river view north'),
-                (3, 'ZZ1 1AA', '88', 'example road', 'YY1 9ZZ', '88', 'examply road'),
-                (4, 'ZZ1 1AA', '88', 'example road', 'ZZ1 9ZZ', '89', 'examply road')
+                (3, 'ZZ1 1AA', '88', 'river view', 'ZZ1 9ZZ', '88', 'river xview'),
+                (4, 'ZZ1 1AA', '88', 'river xview', 'ZZ1 9ZZ', '88', 'river view'),
+                (5, 'ZZ1 1AA', '88', 'example road', 'YY1 9ZZ', '88', 'examply road'),
+                (6, 'ZZ1 1AA', '88', 'example road', 'ZZ1 9ZZ', '89', 'examply road')
             ) AS values_table(
                 test_id,
                 postcode_l,
@@ -743,7 +745,14 @@ def test_packaged_r28_rule_matches_synthetic_road_variants(duck_con):
         """
     ).fetchall()
 
-    assert matches == [(1, True), (2, True), (3, False), (4, False)]
+    assert matches == [
+        (1, True),
+        (2, True),
+        (3, True),
+        (4, True),
+        (5, False),
+        (6, False),
+    ]
 
 
 def test_distinguishing_token_comparison_contributes_expected_match_weights(duck_con):
