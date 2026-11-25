@@ -656,14 +656,14 @@ def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_
     assert "inferred_road_top_2" not in comparison_columns
 
 
-def test_packaged_model_omits_redundant_road_district_blocking_rules():
+def test_packaged_model_includes_r28_without_redundant_road_district_rules():
     settings = _get_model_settings_dict()
     packaged_rules = [
         rule["blocking_rule"]
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 7
+    assert len(packaged_rules) == 8
     assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
     assert not any(
         "l.road_1_norm = r.road_1_norm" in rule
@@ -671,7 +671,9 @@ def test_packaged_model_omits_redundant_road_district_blocking_rules():
         and "list_extract(l.unusual_tokens_arr, 1)" not in rule
         for rule in packaged_rules
     )
-    assert not any("left(l.road_1_norm, 4)" in rule for rule in packaged_rules)
+    assert sum(
+        "left(l.road_1_norm, 4)" in rule for rule in packaged_rules
+    ) == 1
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules
@@ -681,6 +683,67 @@ def test_packaged_model_omits_redundant_road_district_blocking_rules():
         and "list_extract(l.unusual_tokens_arr, 1)" in rule
         for rule in packaged_rules
     )
+
+
+def test_packaged_r28_rule_matches_synthetic_road_variants(duck_con):
+    settings = _get_model_settings_dict()
+    r28_rules = [
+        rule["blocking_rule"]
+        for rule in settings["blocking_rules_to_generate_predictions"]
+        if "left(l.road_1_norm, 4)" in rule["blocking_rule"]
+    ]
+    assert len(r28_rules) == 1
+
+    matches = duck_con.sql(
+        f"""
+        WITH cases AS (
+            SELECT
+                test_id,
+                postcode_l,
+                numeric_token_l,
+                road_l,
+                postcode_r,
+                numeric_token_r,
+                road_r
+            FROM (VALUES
+                (1, 'ZZ1 1AA', '88', 'example road', 'ZZ1 9ZZ', '88', 'examply road'),
+                (2, 'ZZ1 1AA', '88', 'river view', 'ZZ1 9ZZ', '88', 'river view north'),
+                (3, 'ZZ1 1AA', '88', 'example road', 'YY1 9ZZ', '88', 'examply road'),
+                (4, 'ZZ1 1AA', '88', 'example road', 'ZZ1 9ZZ', '89', 'examply road')
+            ) AS values_table(
+                test_id,
+                postcode_l,
+                numeric_token_l,
+                road_l,
+                postcode_r,
+                numeric_token_r,
+                road_r
+            )
+        ),
+        left_rows AS (
+            SELECT
+                test_id,
+                postcode_l AS postcode,
+                numeric_token_l AS numeric_token_1,
+                road_l AS road_1_norm
+            FROM cases
+        ),
+        right_rows AS (
+            SELECT
+                test_id,
+                postcode_r AS postcode,
+                numeric_token_r AS numeric_token_1,
+                road_r AS road_1_norm
+            FROM cases
+        )
+        SELECT l.test_id, ({r28_rules[0]}) AS is_match
+        FROM left_rows AS l
+        JOIN right_rows AS r USING (test_id)
+        ORDER BY l.test_id
+        """
+    ).fetchall()
+
+    assert matches == [(1, True), (2, True), (3, False), (4, False)]
 
 
 def test_distinguishing_token_comparison_contributes_expected_match_weights(duck_con):
