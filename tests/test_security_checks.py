@@ -628,23 +628,31 @@ def test_private_labels_workflow_does_not_run_pr_code() -> None:
     assert job["environment"] == "private-labels"
 
 
-def test_publisher_only_publishes_verified_artefacts() -> None:
+def test_publisher_uses_exact_commit_package_build() -> None:
     workflow_path = (
         Path(__file__).parents[1] / ".github" / "workflows" / "pypi-release.yaml"
     )
     workflow = yaml.load(
         workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
-    assert workflow["on"] == {
-        "push": {"tags": ["v*.*.*"]},
-        "release": {"types": ["published"]},
-    }
+    assert set(workflow["on"]) == {"release", "workflow_dispatch"}
+    assert workflow["on"]["release"] == {"types": ["published"]}
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["release_tag"]["required"] == "true"
     job = workflow["jobs"]["publish"]
     assert set(workflow["jobs"]) == {"publish"}
     assert job["permissions"]["id-token"] == "write"
     steps = job["steps"]
-    assert "head_sha: context.sha" in steps[0]["with"]["script"]
-    assert steps[1]["with"]["run-id"] == "${{ steps.validation.outputs.run_id }}"
+    package_build_check = steps[0]["with"]["script"]
+    assert "context.eventName === 'workflow_dispatch'" in package_build_check
+    assert "getReleaseByTag" in package_build_check
+    assert "ref: `tags/${releaseTag}`" in package_build_check
+    assert "workflow_id: 'test-build-package.yaml'" in package_build_check
+    assert "event: 'push'" in package_build_check
+    assert "head_sha: targetSha" in package_build_check
+    assert "run.conclusion !== 'success'" in package_build_check
+    assert "run.head_branch.startsWith('build/')" in package_build_check
+    assert "core.setOutput('run_id', run.id)" in package_build_check
+    assert steps[1]["with"]["run-id"] == "${{ steps.package.outputs.run_id }}"
     assert all("actions/checkout@" not in step.get("uses", "") for step in steps)
     assert [step["run"] for step in steps if "run" in step] == [
         "uv publish --trusted-publishing always "
@@ -652,6 +660,6 @@ def test_publisher_only_publishes_verified_artefacts() -> None:
     ]
     assert any(
         "actions/download-artifact@" in step.get("uses", "")
-        and step["with"]["name"] == "${{ steps.validation.outputs.artifact_name }}"
+        and step["with"]["name"] == "dist"
         for step in steps
     )
