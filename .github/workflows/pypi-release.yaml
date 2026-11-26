@@ -35,7 +35,10 @@ jobs:
           script: |
             let targetSha = context.sha;
             if (context.eventName === 'workflow_dispatch') {
-              const releaseTag = core.getInput('release_tag', { required: true }).trim();
+              const releaseTag = context.payload.inputs?.release_tag?.trim();
+              if (!releaseTag) {
+                throw new Error('The release_tag workflow input is required for manual publishing.');
+              }
               const { data: release } = await github.rest.repos.getReleaseByTag({
                 ...context.repo,
                 tag: releaseTag

@@ -644,6 +644,7 @@ def test_publisher_uses_exact_commit_package_build() -> None:
     steps = job["steps"]
     package_build_check = steps[0]["with"]["script"]
     assert "context.eventName === 'workflow_dispatch'" in package_build_check
+    assert "context.payload.inputs?.release_tag?.trim()" in package_build_check
     assert "getReleaseByTag" in package_build_check
     assert "ref: `tags/${releaseTag}`" in package_build_check
     assert "workflow_id: 'test-build-package.yaml'" in package_build_check
