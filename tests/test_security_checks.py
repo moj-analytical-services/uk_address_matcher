@@ -637,7 +637,9 @@ def test_publisher_uses_exact_commit_package_build() -> None:
     )
     assert set(workflow["on"]) == {"release", "workflow_dispatch"}
     assert workflow["on"]["release"] == {"types": ["published"]}
-    assert workflow["on"]["workflow_dispatch"]["inputs"]["release_tag"]["required"] == "true"
+    assert (
+        workflow["on"]["workflow_dispatch"]["inputs"]["release_tag"]["required"] == "true"
+    )
     job = workflow["jobs"]["publish"]
     assert set(workflow["jobs"]) == {"publish"}
     assert job["permissions"]["id-token"] == "write"
