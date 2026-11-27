@@ -45,7 +45,7 @@ def merge_split_flat_number(input: str):
 
 def split_subpremise_descriptor_number(input: str):
     descriptors = (
-        r"F?FLAT|APARTMENT|NO|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
+        r"F?FLAT|APARTMENT|NO|NUMBER|MAISONETTE|PENTHOUSE|UNIT|SUITE|OFFICE|"
         r"WORKSHOP|WAREHOUSE|STUDIO|ROOMS?"
     )
     pattern = rf"\b({descriptors})(\d+[A-Z]?)\b"

@@ -674,7 +674,10 @@ def test_full_cleaning_queue_splits_compact_number_markers(duck_con):
             ('no2', 'NO2 FABLE ROAD', 'ZZ1 1ZZ'),
             ('no12a', 'NO12A FABLE ROAD', 'ZZ1 1ZZ'),
             ('dotted', 'NO.2 FABLE ROAD', 'ZZ1 1ZZ'),
-            ('embedded', 'ANNO2 FABLE ROAD', 'ZZ1 1ZZ')
+            ('embedded', 'ANNO2 FABLE ROAD', 'ZZ1 1ZZ'),
+            ('number2', 'NUMBER2 FABLE ROAD', 'ZZ1 1ZZ'),
+            ('number12a', 'NUMBER12A FABLE ROAD', 'ZZ1 1ZZ'),
+            ('embedded_number', 'ANUMBER2 FABLE ROAD', 'ZZ1 1ZZ')
         ) AS rows(unique_id, address_concat, postcode)
     """)
     pipeline = create_sql_pipeline(
@@ -685,9 +688,7 @@ def test_full_cleaning_queue_splits_compact_number_markers(duck_con):
 
     rows = (
         pipeline.run()
-        .project(
-            "unique_id, clean_full_address, clean_full_address_tokens"
-        )
+        .project("unique_id, clean_full_address, clean_full_address_tokens")
         .order("unique_id")
         .fetchall()
     )
@@ -695,8 +696,11 @@ def test_full_cleaning_queue_splits_compact_number_markers(duck_con):
     assert rows == [
         ("dotted", "NO 2 FABLE ROAD", ["NO", "2", "FABLE", "ROAD"]),
         ("embedded", "ANNO2 FABLE ROAD", ["ANNO2", "FABLE", "ROAD"]),
+        ("embedded_number", "ANUMBER2 FABLE ROAD", ["ANUMBER2", "FABLE", "ROAD"]),
         ("no12a", "NO 12A FABLE ROAD", ["NO", "12A", "FABLE", "ROAD"]),
         ("no2", "NO 2 FABLE ROAD", ["NO", "2", "FABLE", "ROAD"]),
+        ("number12a", "NUMBER 12A FABLE ROAD", ["NUMBER", "12A", "FABLE", "ROAD"]),
+        ("number2", "NUMBER 2 FABLE ROAD", ["NUMBER", "2", "FABLE", "ROAD"]),
     ]
 
 
