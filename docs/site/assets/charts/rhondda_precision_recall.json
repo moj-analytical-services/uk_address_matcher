@@ -1,0 +1,82 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "description": "Release-validation precision-recall operating points at MW 10, 20 and 30.",
+  "title": "Rhondda Cynon Taf: MW 10, 20 and 30",
+  "width": 620,
+  "height": 360,
+  "data": {
+    "values": [
+      {
+        "match_weight": 10,
+        "precision": 0.9938318707872313,
+        "recall": 0.9834773150187431
+      },
+      {
+        "match_weight": 20,
+        "precision": 0.9959807297806573,
+        "recall": 0.9645544358644744
+      },
+      {
+        "match_weight": 30,
+        "precision": 0.9977059538274605,
+        "recall": 0.9226723959691121
+      }
+    ]
+  },
+  "mark": {
+    "type": "line",
+    "point": {
+      "filled": true,
+      "size": 70
+    }
+  },
+  "encoding": {
+    "x": {
+      "field": "recall",
+      "type": "quantitative",
+      "title": "Recall",
+      "axis": {
+        "format": ".0%"
+      },
+      "scale": {
+        "domain": [
+          0,
+          1
+        ]
+      }
+    },
+    "y": {
+      "field": "precision",
+      "type": "quantitative",
+      "title": "Precision",
+      "axis": {
+        "format": ".0%"
+      },
+      "scale": {
+        "domain": [
+          0.9,
+          1
+        ]
+      }
+    },
+    "tooltip": [
+      {
+        "field": "match_weight",
+        "type": "quantitative",
+        "title": "Minimum match weight"
+      },
+      {
+        "field": "precision",
+        "type": "quantitative",
+        "title": "Precision",
+        "format": ".2%"
+      },
+      {
+        "field": "recall",
+        "type": "quantitative",
+        "title": "Recall",
+        "format": ".2%"
+      }
+    ]
+  }
+}

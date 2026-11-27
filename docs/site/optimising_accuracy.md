@@ -163,6 +163,7 @@ The available stages are as follows:
 |---|---|---|---|
 | `ExactMatchStage` | Deterministic | Cleaned address text is already the same on both sides | Very high precision, should usually run first |
 | `PeeledAddressStage` | Deterministic | One side has extra trailing locality words such as `LONDON` or `HACKNEY` | High precision, useful before probabilistic matching |
+| `PostcodeFreeMatchStage` | Deterministic, opt-in | An unresolved address without a usable postcode has an unambiguous exact cleaned-address key | Fast full-address route by default; the short street/number/locality route is optional |
 | `UniqueTrigramStage` | Deterministic | A distinctive phrase identifies one canonical address within the postcode | High precision, removes clear fuzzy cases before Splink |
 | `SplinkStage` | Scored | Typos, abbreviations, partial matches, and other fuzzy cases | Precision and recall depend on threshold choice |
 
@@ -201,9 +202,54 @@ matcher = AddressMatcher(
 )
 ```
 
+### Matching without a postcode
+
+To try postcode-free exact matching, add `PostcodeFreeMatchStage()` after your
+usual exact stages and before `SplinkStage()`. It only considers rows whose
+postcode is still blank after cleaning, which can recover a postcode embedded
+in the address text. It creates no lookup file, but each chunk with eligible
+rows can scan the reference again to check key uniqueness. The default
+exact-address route does not require pre-parsed road or locality-support
+fields.
+
+The optional short route is enabled with
+`PostcodeFreeMatchStage(include_short_addresses=True)`. It uses parsed roads
+and locality support from the filtered reference, so older snapshots without
+`road_1_norm` skip this route. On the Conwy all-postcodes-removed replay it
+selected 129 short-key rows, but the later Splink output gained only two
+correct links versus the full route alone, making the extra scan a poor
+runtime trade-off. The short-route terminal list is shared with the
+production road parser; `ST` is retained as written because it can mean
+"Saint" rather than "Street".
+Prefer a single matching chunk when benchmarking either route, then test your
+intended chunk layout separately.
+
 ## Tuning the Splink stage
 
 For guidance on choosing Splink thresholds, see [here](choosing_a_matching_threshold.md).
+
+### High precision mode
+
+`SplinkStage(acceptance_profile="precision")` makes the
+distinguishability requirement more demanding relative to match weight. The
+balanced profile requires `MW + 2.5 × distinguishability >= 11.35`; the
+precision profile requires
+`distinguishability >= max(0, 12.85 - 0.12 × MW)`. This rejects more weak or
+ambiguous candidates, increasing precision at the cost of recall. The effect
+becomes small at higher match weights.
+
+Results for the combined 695,556-row Hackney, Rhondda Cynon Taf,
+Aberdeenshire, Cornwall, and Gwynedd local-authority test set were:
+
+| MW | Balanced precision / recall | Precision mode precision / recall |
+|---:|---:|---:|
+| 10 | 99.20% / 98.03% | 99.51% / 97.17% |
+| 20 | 99.45% / 96.78% | 99.60% / 96.31% |
+| 30 | 99.70% / 92.64% | 99.73% / 92.54% |
+
+This table comes from the separate balanced-versus-precision experiment. The
+individual council figures on the performance page are the later
+v2.0.0.dev3 balanced release-validation results.
 
 
 ## Stage API docs
@@ -215,6 +261,10 @@ For guidance on choosing Splink thresholds, see [here](choosing_a_matching_thres
 ### PeeledAddressStage
 
 ::: uk_address_matcher.PeeledAddressStage
+
+### PostcodeFreeMatchStage
+
+::: uk_address_matcher.PostcodeFreeMatchStage
 
 ### UniqueTrigramStage
 
