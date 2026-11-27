@@ -671,9 +671,7 @@ def test_packaged_model_includes_r28_without_redundant_road_district_rules():
         and "list_extract(l.unusual_tokens_arr, 1)" not in rule
         for rule in packaged_rules
     )
-    assert sum(
-        "left(l.road_1_norm, 4)" in rule for rule in packaged_rules
-    ) == 1
+    assert sum("left(l.road_1_norm, 4)" in rule for rule in packaged_rules) == 1
     assert not any("split_part(l.postcode, ' ', 2)" in rule for rule in packaged_rules)
     assert "l.numeric_token_1 = r.numeric_token_1 and l.postcode = r.postcode" not in (
         packaged_rules
