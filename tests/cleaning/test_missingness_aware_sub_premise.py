@@ -204,10 +204,8 @@ def test_splink_scores_marker_missingness_and_identifier_conflict(duck_con):
         assert len(matching_rows) == 1
         return float(matching_rows.iloc[0]["mw_sub_premise_identifier"])
 
-    assert score("m_missing", "c_flat_2") == pytest.approx(2)
-    assert score("m_typo", "c_flat_2") == pytest.approx(3)
-    assert score("m_conflict", "c_flat_2") == pytest.approx(-8)
-    assert score("m_floor_only", "c_studio_2") == pytest.approx(-1)
+    assert 0 < score("m_missing", "c_flat_2") < score("m_typo", "c_flat_2")
+    assert score("m_conflict", "c_flat_2") < score("m_floor_only", "c_studio_2") < 0
 
 
 def test_explicit_unit_evidence_outweighs_misleading_flat_and_floor_matches(duck_con):

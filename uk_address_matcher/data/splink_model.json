@@ -41,7 +41,7 @@
       "sql_dialect": "duckdb"
     },
     {
-      "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids",
+      "blocking_rule": "l.exploding_unique_ids = r.exploding_unique_ids AND NOT coalesce(l.postcode <> r.postcode AND len(l.numeric_tokens) = 1 AND len(r.numeric_tokens) = 1 AND try_cast(l.numeric_tokens[1] AS INTEGER) <> try_cast(r.numeric_tokens[1] AS INTEGER) AND regexp_replace(l.clean_full_address, '[0-9]+', '#', 'g') = regexp_replace(r.clean_full_address, '[0-9]+', '#', 'g'), false)",
       "sql_dialect": "duckdb",
       "arrays_to_explode": [
         "exploding_unique_ids"
@@ -358,6 +358,38 @@
     {
       "output_column_name": "sub_premise_identifier",
       "comparison_levels": [
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), lambda role: map_contains(premise_keys_r, role) AND NOT list_has_any(map_extract_value(premise_keys_l, role), map_extract_value(premise_keys_r, role)))) > 0",
+          "label_for_charts": "Explicit premise role identifiers conflict",
+          "m_probability": 0.00390625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND len(list_filter(map_keys(premise_keys_l), lambda role: map_contains(premise_keys_r, role) AND NOT list_has_all(map_extract_value(premise_keys_r, role), map_extract_value(premise_keys_l, role)))) > 0",
+          "label_for_charts": "Canonical premise identifiers over-cover source",
+          "m_probability": 0.0625,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "(len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0) AND NOT coalesce(premise_scope_uncertain_l, false) AND NOT coalesce(premise_scope_uncertain_r, false) AND list_sort(map_keys(premise_keys_l)) = list_sort(map_keys(premise_keys_r)) AND len(list_filter(map_keys(premise_keys_l), lambda role: list_sort(map_extract_value(premise_keys_l, role)) != list_sort(map_extract_value(premise_keys_r, role)))) = 0",
+          "label_for_charts": "Complete premise role sets agree",
+          "m_probability": 1.0,
+          "u_probability": 0.00390625,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
+        {
+          "sql_condition": "len(map_keys(premise_keys_l)) >= 2 OR len(map_keys(premise_keys_r)) >= 2 OR len(list_filter(map_values(premise_keys_l), lambda ids: len(ids) > 1)) > 0 OR len(list_filter(map_values(premise_keys_r), lambda ids: len(ids) > 1)) > 0",
+          "label_for_charts": "Eligible premise role evidence is incomplete or uncertain",
+          "m_probability": 1.0,
+          "u_probability": 1.0,
+          "fix_m_probability": true,
+          "fix_u_probability": true
+        },
         {
           "sql_condition": "(CASE WHEN business_unit_type_l = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_l, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_l, '') ELSE sub_premise_identifier_l END) IS NULL AND (CASE WHEN business_unit_type_r = 'UNIT' AND NOT list_has_any(clean_full_address_tokens_r, ['FLAT', 'FFLAT']) THEN nullif(business_unit_id_r, '') ELSE sub_premise_identifier_r END) IS NULL",
           "label_for_charts": "Both sub-premise identifiers absent",
