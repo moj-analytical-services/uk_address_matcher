@@ -19,10 +19,10 @@ description: "Required before pushing any branch or opening or updating a PR. Ve
    ```sh
    uv run --locked --group linting ruff check uk_address_matcher tests benchmarking
    uv run --locked --group linting ruff format --check uk_address_matcher tests benchmarking
-   uv run --locked --group model-training pytest
+   RUN_LABELLING_BROWSER_TESTS=1 uv run --locked --group model-training --group security pytest
    ```
 
-4. Push only if all three commands pass. Do not substitute targeted tests or
-   exclude tests to get a pass. Report the commands and outcomes; if any check
-   is blocked or fails, report why and do not push. Re-run checks if the revision
-   changes.
+4. Push only if all three commands pass. The full suite needs Node.js and
+   Playwright Chromium; missing prerequisites are blockers, not a reason to
+   skip tests. Report the commands and outcomes; if any check is blocked or
+   fails, report why and do not push. Re-run checks if the revision changes.
