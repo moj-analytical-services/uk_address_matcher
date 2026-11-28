@@ -1,5 +1,4 @@
 import duckdb
-import pytest
 
 from uk_address_matcher.cleaning.chunking_strategies import prepare_data_for_matching
 from uk_address_matcher.linking_model.splink_model import _get_linker
@@ -431,7 +430,7 @@ def test_flat_number_letter_one_sided_penalty_not_fuzzy_equivalence():
     fuzzy_reference_bf = 2 ** float(fuzzy_reference_row.iloc[0]["mw_flat_identity"])
 
     assert 1 < one_sided_bf < fuzzy_reference_bf, (
-        "Expected one-sided letter agreement to score positively but below fuzzy equivalence; "
+        "Expected a positive one-sided letter score below fuzzy equivalence; "
         f"got one_sided={one_sided_bf:.6f}, "
         f"fuzzy_reference={fuzzy_reference_bf:.6f}."
     )
