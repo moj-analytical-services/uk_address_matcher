@@ -31,6 +31,7 @@ from uk_address_matcher.prepare_canonical import (
     _coerce_prepare_input_to_relation,
     _PreparedCanonical,
     _rehydrate_canonical_addresses,
+    _resolve_memory_profile,
     load_prepared_canonical_data,
 )
 
@@ -2260,3 +2261,190 @@ def test_collated_folder_input_uses_native_storage(
     monkeypatch.setattr(_CanonicalIntermediates, "write", unexpected_parquet)
     prepare_canonical_folder(source, tmp_path, con=con, show_progress="off")
     assert (tmp_path / "ukam_manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("memory_limit", "expected_profile"),
+    [
+        ("512MB", "16gb"),
+        ("12GiB", "16gb"),
+        ("20GiB", "16gb"),
+        ("24GiB", "32gb"),
+        ("40GiB", "32gb"),
+        ("49GiB", "64gb"),
+        ("90GiB", "64gb"),
+        ("99GiB", "uncapped"),
+        ("198GiB", "uncapped"),
+        ("1TiB", "uncapped"),
+        ("none", "16gb"),
+    ],
+)
+def test_resolve_memory_profile_auto_from_memory_limit(memory_limit, expected_profile):
+    local_con = duckdb.connect()
+    try:
+        local_con.execute(f"SET memory_limit = '{memory_limit}'").fetchall()
+        assert _resolve_memory_profile(local_con, "auto").name == expected_profile
+    finally:
+        local_con.close()
+
+
+def test_resolve_memory_profile_auto_falls_back_to_16gb_on_error():
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("unsupported")
+    profile = _resolve_memory_profile(mock_con, "auto")
+    assert profile.name == "16gb"
+    assert profile.cleaning_num_chunks == 10
+    assert profile.export_max_threads == 4
+    assert profile.attach_batch_rows == 1_000_000
+
+
+def test_resolve_memory_profile_rejects_unknown_value(con):
+    with pytest.raises(ValueError, match="memory_profile must be one of"):
+        _resolve_memory_profile(con, "invalid")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    (
+        "memory_profile",
+        "cleaning_num_chunks",
+        "expected_chunks",
+        "expected_threads",
+        "expected_batch_rows",
+    ),
+    [
+        ("16gb", None, 10, 4, 1_000_000),
+        ("32gb", None, 10, 8, 5_000_000),
+        ("64gb", None, 10, 12, 5_000_000),
+        ("uncapped", None, 1, None, None),
+        ("64gb", 4, 4, 12, 5_000_000),
+        ("16gb", 1, 1, 4, 1_000_000),
+    ],
+)
+def test_prepare_canonical_applies_memory_profile_and_chunk_override(
+    con,
+    canonical_data,
+    tmp_path,
+    monkeypatch,
+    memory_profile,
+    cleaning_num_chunks,
+    expected_chunks,
+    expected_threads,
+    expected_batch_rows,
+):
+    import importlib
+
+    module = importlib.import_module("uk_address_matcher.prepare_canonical")
+    recorded_threads: list[int | None] = []
+    recorded_attach_batch: list[int | None] = []
+    recorded_chunks: list[int] = []
+
+    original_write = module._write_parquet_artefact
+    original_attach = chunking_strategies._attach_canonical_features
+    original_clean = chunking_strategies.clean_data_pre_term_frequencies
+
+    def capture_write(connection, relation, path, **kwargs):
+        if Path(path).name == "ukam_canonical_addresses.parquet":
+            recorded_threads.append(kwargs["settings"].max_threads)
+        return original_write(connection, relation, path, **kwargs)
+
+    def capture_attach(*args, **kwargs):
+        recorded_attach_batch.append(kwargs.get("batch_rows"))
+        return original_attach(*args, **kwargs)
+
+    def capture_clean(*args, **kwargs):
+        recorded_chunks.append(kwargs["num_of_chunks"])
+        return original_clean(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_write_parquet_artefact", capture_write)
+    monkeypatch.setattr(chunking_strategies, "_attach_canonical_features", capture_attach)
+    monkeypatch.setattr(
+        chunking_strategies, "clean_data_pre_term_frequencies", capture_clean
+    )
+
+    con.execute("SET threads = 8").fetchall()
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        cleaning_num_chunks=cleaning_num_chunks,
+        memory_profile=memory_profile,
+        overwrite=True,
+        show_progress="off",
+    )
+    assert recorded_chunks == [expected_chunks]
+    assert recorded_threads == [expected_threads]
+    assert recorded_attach_batch == [expected_batch_rows]
+    assert con.execute("SELECT current_setting('threads')").fetchall()[0][0] == 8
+
+
+def test_attach_canonical_features_single_pass_matches_batched(con, monkeypatch):
+    source = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'U1', '1 HIGH ST', 'SW1A 1AA', ['HIGH']),
+            (2, 'U2', '2 HIGH ST', 'SW1A 1AA', ['HIGH']),
+            (3, 'U3', '3 LOW RD', 'M1 1AA', ['LOW']),
+            (4, 'U4', '4 LOW RD', 'M1 1AA', ['LOW']),
+            (5, 'U5', '5 PARK LN', 'B1 1AA', ['PARK'])
+        ) AS t(ukam_address_id, unique_id, clean_full_address, postcode, local_key_tokens)
+    """)
+    road_features = con.sql("""
+        SELECT * FROM (VALUES
+            (1, 'HIGH STREET'),
+            (3, 'LOW ROAD'),
+            (5, 'PARK LANE')
+        ) AS r(ukam_address_id, road_1_norm)
+    """)
+    local_features_sql = """
+        SELECT * FROM (VALUES
+            (1, ['K1']),
+            (2, ['K2']),
+            (3, ['K3']),
+            (4, ['K4']),
+            (5, ['K5'])
+        ) AS f(ukam_address_id, local_key_index)
+    """
+
+    append_calls: list[bool] = []
+    original_materialise = chunking_strategies._materialise_relation
+
+    def spy_materialise(*args, **kwargs):
+        if len(args) >= 3 and str(args[2]).startswith(
+            "__ukam_canonical_with_local_keys_"
+        ):
+            append_calls.append(bool(kwargs.get("append", False)))
+        return original_materialise(*args, **kwargs)
+
+    monkeypatch.setattr(chunking_strategies, "_materialise_relation", spy_materialise)
+
+    with _CanonicalIntermediates(con) as storage:
+        con.sql(local_features_sql).create("test_local_batched")
+        batched = chunking_strategies._attach_canonical_features(
+            source,
+            con,
+            "test_local_batched",
+            road_features=road_features,
+            batch_rows=2,
+            _storage=storage,
+        )
+        batched_columns = batched.columns
+        batched_rows = batched.fetchall()
+        batched_appends = list(append_calls)
+
+        append_calls.clear()
+        con.sql(local_features_sql).create("test_local_single")
+        single = chunking_strategies._attach_canonical_features(
+            source,
+            con,
+            "test_local_single",
+            road_features=road_features,
+            batch_rows=None,
+            _storage=storage,
+        )
+        single_columns = single.columns
+        single_rows = single.fetchall()
+        single_appends = list(append_calls)
+
+    assert single_columns == batched_columns
+    assert single_rows == batched_rows
+    assert batched_appends == [False, True, True]
+    assert single_appends == [False]

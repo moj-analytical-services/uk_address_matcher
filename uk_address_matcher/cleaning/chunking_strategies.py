@@ -1429,8 +1429,11 @@ def _attach_canonical_features(
     table_name: str,
     *,
     road_features: DuckDBPyRelation | None = None,
+    batch_rows: int | None = _CANONICAL_LOCAL_KEY_BATCH_ROWS,
     _storage: _CanonicalIntermediates | None = None,
 ) -> DuckDBPyRelation:
+    if batch_rows is not None and batch_rows < 1:
+        raise ValueError("batch_rows must be at least 1")
     clustered_table = f"__ukam_local_key_clustered_{_uid()}"
     enriched_table = f"__ukam_canonical_with_local_keys_{_uid()}"
     original_table = table_name
@@ -1443,9 +1446,8 @@ def _attach_canonical_features(
                 FROM {table_name} local
                 LEFT JOIN ({road_features.sql_query()}) road USING (ukam_address_id)
             """)
-        if (
-            road_features is not None
-            or features.count("*").fetchall()[0][0] > _CANONICAL_LOCAL_KEY_BATCH_ROWS
+        if road_features is not None or (
+            batch_rows is not None and features.count("*").fetchall()[0][0] > batch_rows
         ):
             _materialise_relation(
                 con,
@@ -1466,6 +1468,20 @@ def _attach_canonical_features(
         canonical = con.sql(f"""
             SELECT {source_columns} FROM ({source.sql_query()}) canonical
         """)
+        if batch_rows is None:
+            joined = con.sql(f"""
+                SELECT canonical.*, features.* EXCLUDE (ukam_address_id)
+                FROM ({canonical.sql_query()}) AS canonical
+                LEFT JOIN {table_name} AS features USING (ukam_address_id)
+            """)
+            _materialise_relation(
+                con,
+                joined,
+                enriched_table,
+                _storage=_storage,
+                order_by="ukam_address_id",
+            )
+            return con.table(enriched_table)
         first_id, last_id = next(
             iter(
                 con.sql(f"""
@@ -1479,10 +1495,8 @@ def _attach_canonical_features(
         )
         if first_id is None:
             first_id = last_id = 0
-        for index, start in enumerate(
-            range(first_id, last_id + 1, _CANONICAL_LOCAL_KEY_BATCH_ROWS)
-        ):
-            end = start + _CANONICAL_LOCAL_KEY_BATCH_ROWS - 1
+        for index, start in enumerate(range(first_id, last_id + 1, batch_rows)):
+            end = start + batch_rows - 1
             chunk = con.sql(f"""
                 SELECT canonical.*, features.* EXCLUDE (ukam_address_id)
                 FROM ({canonical.sql_query()}) AS canonical
