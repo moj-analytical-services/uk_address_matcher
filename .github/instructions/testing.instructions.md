@@ -15,7 +15,7 @@ applyTo:
 - Keep tests deterministic and readable; use fixtures in `example_data/` where possible.
 - For SQL/pipeline changes, add assertions that catch lazy DuckDB/Splink failures.
 - For SQL/pipeline changes, run tests that exercise the touched stages directly.
-- Do not push changes without passing relevant local tests.
+- Before pushing, run the full suite and follow the [pre-push gate](../skills/pre-push/SKILL.md).
 - Do not ship changes without reporting what tests were run and their outcome.
 
 - Definition of done (testing):
