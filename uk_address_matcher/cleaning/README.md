@@ -20,6 +20,8 @@ The package supports four distinct but complementary stages. Each stage has a cl
    - Goal: produce a consistent, comparable text form before token handling.
    - Operations:
      - Normalise case (project standard is upper case).
+     - Expand leading `G/F` or `GFL`, flat-adjacent forms, and `(GFL)` before separator and bracket cleanup.
+     - Convert spelled `ONE` or `TWO` after `FLAT` or `APARTMENT` only when a separate numeric building identifier follows.
      - Trim and collapse whitespace; control punctuation consistently.
      - Apply postcode hygiene (upper case and trimmed). For matching, prefer removing the postcode from addresses using a literal, case‑insensitive replace to avoid regex pitfalls.
      - Optionally expand abbreviations (e.g., RD → ROAD) using project dictionaries.

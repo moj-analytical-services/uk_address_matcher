@@ -4,10 +4,12 @@ from typing import Final
 
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
+    expand_ground_floor_shorthand,
     join_room_identifier_suffix,
     merge_split_flat_number,
     move_flat_block_letter_before_number,
     move_flat_to_front,
+    normalise_spelled_flat_numbers,
     remove_apostrophes,
     remove_brackets,
     remove_commas_periods,
@@ -208,6 +210,8 @@ def _clean_address_string_first_pass() -> str:
         "clean_full_address",
         [
             strip_latin_accents,
+            expand_ground_floor_shorthand,
+            normalise_spelled_flat_numbers,
             remove_commas_periods,
             remove_brackets,
             split_subpremise_descriptor_number,
