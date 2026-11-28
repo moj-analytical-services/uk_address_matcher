@@ -40,6 +40,9 @@ applyTo:
   avoid speculative handling for hypothetical requirements.
 - Do not modify generated files, vendored code, lockfiles, migrations, or build output unless the
   request requires it.
+- Do not commit or push generated charts (including HTML) or experiment-specific documentation
+  with a feature PR unless the author explicitly asks for those files. A request to show or link an
+  artefact in PR text does not authorise adding it to the branch; ask if intent is unclear.
 - Add or update only focused tests for the requested behaviour; do not rewrite tests to accommodate
   an unintended behaviour change.
 

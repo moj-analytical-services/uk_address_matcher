@@ -371,10 +371,11 @@ class SplinkStage(MatchingStage):
             best_matches_with_distinguishability,
         )
         from uk_address_matcher.post_linkage.distinguishing_features import (
+            learned_reranking,
             relation_markers,
         )
         from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
-            improve_predictions_using_distinguishing_tokens,
+            _improve_predictions_using_distinguishing_tokens,
         )
         from uk_address_matcher.sql_pipeline.helpers import (
             _drop_table_and_registered_aliases,
@@ -504,7 +505,7 @@ class SplinkStage(MatchingStage):
                         self.retain_intermediate_calculation_columns
                     ),
                 )
-            df_improved = improve_predictions_using_distinguishing_tokens(
+            df_improved = _improve_predictions_using_distinguishing_tokens(
                 df_predict=df_predict_for_improvement,
                 con=con,
                 match_weight_threshold=self.improve_threshold_match_weight,
@@ -523,8 +524,12 @@ class SplinkStage(MatchingStage):
                 numeric_range_reranker=numeric_range_reranker,
                 df_addresses_to_match=df_unmatched,
                 df_addresses_to_search_within=df_canonical,
+                _projection=(
+                    "full" if self.retain_intermediate_calculation_columns else "lean"
+                ),
             )
             reranker_matches_table = df_improved.alias
+            df_improved = learned_reranking.learned_reranker_relation(con, df_improved)
             if self.use_relation_marker_reranker:
                 df_improved = relation_markers.improve_predictions_using_relation_markers(
                     df_predict=df_improved,
