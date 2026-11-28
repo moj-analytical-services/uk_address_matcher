@@ -6,6 +6,7 @@
 - Re-check relevant instruction files before major edits, SQL pipeline changes, or PR-ready summaries.
 
 ## Task routing
+- Before any push, read and follow the mandatory [pre-push skill](skills/pre-push/SKILL.md), including for direct branch updates and documentation-only changes.
 - For SQL stage and linking-model changes, read `.github/instructions/sql-duckdb-pipeline.instructions.md` first.
 - For Python implementation details, read `.github/instructions/python-style.instructions.md` first.
 - For test changes and validation evidence, read `.github/instructions/testing.instructions.md` first.
