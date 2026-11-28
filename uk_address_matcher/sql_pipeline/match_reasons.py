@@ -24,6 +24,7 @@ class MatchReason(Enum):
     )
     SPLINK = "splink: probabilistic match"
     UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
+    POSTCODE_FREE_FULL = "postcode_free_full: unique cleaned address"
 
     def __str__(self) -> str:  # pragma: no cover - for convenience only
         return self.value
