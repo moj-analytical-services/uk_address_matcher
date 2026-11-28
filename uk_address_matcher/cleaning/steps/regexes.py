@@ -9,6 +9,25 @@ def remove_brackets(input: str):
     return f"regexp_replace({input}, '[][()]', ' ', 'g')"
 
 
+def expand_ground_floor_shorthand(input: str):
+    leading_pattern = r"^(\s*)(G/F|GFL)(\s|,|$)"
+    after_flat_pattern = r"(\bFLAT\s+)(G/F|GFL)(\s|,|$)"
+    leading = rf"regexp_replace({input}, '{leading_pattern}', '\1GROUND FLOOR\3', 'g')"
+    after_flat = (
+        rf"regexp_replace({leading}, '{after_flat_pattern}', "
+        r"'\1GROUND FLOOR\3', 'g')"
+    )
+    return rf"regexp_replace({after_flat}, '\(GFL\)', 'GROUND FLOOR', 'g')"
+
+
+def normalise_spelled_flat_numbers(input: str):
+    building_number = r"(?:AT\s+)?\d{1,5}[A-Z]?(?:-\d{1,5}[A-Z]?)?"
+    one_pattern = rf"\b(F?FLAT|APARTMENT)\s+ONE\s+({building_number})\b"
+    two_pattern = rf"\b(F?FLAT|APARTMENT)\s+TWO\s+({building_number})\b"
+    one = rf"regexp_replace({input}, '{one_pattern}', '\1 1 \2', 'g')"
+    return rf"regexp_replace({one}, '{two_pattern}', '\1 2 \2', 'g')"
+
+
 def remove_apostrophes(input: str):
     return f"regexp_replace({input}, e'\\'', '', 'g')"
 

@@ -265,6 +265,50 @@ def test_first_pass_normalises_unicode_punctuation_and_spacing(duck_con):
     ]
 
 
+def test_first_pass_expands_ground_floor_and_guarded_spelled_flat_numbers(duck_con):
+    input_rel = duck_con.sql(
+        """
+        SELECT * FROM (VALUES
+            ('G/F 18 SAMPLE STREET', 'GROUND FLOOR 18 SAMPLE STREET'),
+            ('GFL 18 SAMPLE STREET', 'GROUND FLOOR 18 SAMPLE STREET'),
+            ('FLAT G/F 18 SAMPLE STREET',
+             'FLAT GROUND FLOOR 18 SAMPLE STREET'),
+            ('FLAT (GFL) 18 SAMPLE STREET',
+             'FLAT GROUND FLOOR 18 SAMPLE STREET'),
+            ('FLAT ONE 18 SAMPLE STREET', 'FLAT 1 18 SAMPLE STREET'),
+            ('APARTMENT TWO AT 18 SAMPLE STREET',
+             'APARTMENT 2 AT 18 SAMPLE STREET'),
+            ('FLAT ONE THE OAK HOUSE 18 SAMPLE STREET',
+             'FLAT ONE THE OAK HOUSE 18 SAMPLE STREET')
+        ) AS t(clean_full_address, expected)
+        """
+    )
+    pipeline = create_sql_pipeline(
+        con=duck_con,
+        input_rel=input_rel,
+        stage_specs=[_clean_address_string_first_pass],
+    )
+
+    assert pipeline.run().project("clean_full_address, expected").fetchall() == [
+        ("GROUND FLOOR 18 SAMPLE STREET", "GROUND FLOOR 18 SAMPLE STREET"),
+        ("GROUND FLOOR 18 SAMPLE STREET", "GROUND FLOOR 18 SAMPLE STREET"),
+        (
+            "FLAT GROUND FLOOR 18 SAMPLE STREET",
+            "FLAT GROUND FLOOR 18 SAMPLE STREET",
+        ),
+        (
+            "FLAT GROUND FLOOR 18 SAMPLE STREET",
+            "FLAT GROUND FLOOR 18 SAMPLE STREET",
+        ),
+        ("FLAT 1 18 SAMPLE STREET", "FLAT 1 18 SAMPLE STREET"),
+        ("APARTMENT 2 AT 18 SAMPLE STREET", "APARTMENT 2 AT 18 SAMPLE STREET"),
+        (
+            "FLAT ONE THE OAK HOUSE 18 SAMPLE STREET",
+            "FLAT ONE THE OAK HOUSE 18 SAMPLE STREET",
+        ),
+    ]
+
+
 def test_first_pass_strips_latin_accents(duck_con):
     input_rel = duck_con.sql(
         """
