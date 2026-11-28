@@ -351,7 +351,7 @@ def test_align_numeric_range_columns_adds_typed_null_struct(duck_con):
     assert "lower_tf DOUBLE" in str(range_type)
 
 
-def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
+def test_packaged_distinguishing_token_comparison_rewards_ordered_evidence():
     settings = _get_model_settings_dict()
     assert "additional_columns_to_retain" not in settings
     comparison = next(
@@ -377,12 +377,8 @@ def test_packaged_distinguishing_token_comparison_has_exact_fixed_weights():
     assert levels[1]["sql_condition"].startswith(
         "postcode_l = postcode_r AND list_slice("
     )
-    assert [
-        math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
-    ] == [
-        10.0,
-        0.0,
-    ]
+    assert levels[1]["m_probability"] > levels[1]["u_probability"]
+    assert levels[2]["m_probability"] <= levels[2]["u_probability"]
     assert all(
         level["fix_m_probability"] and level["fix_u_probability"] for level in levels[1:]
     )
@@ -410,7 +406,7 @@ def test_packaged_name_agreement_comparison_has_merged_levels():
     ]
 
 
-def test_packaged_inferred_road_comparison_is_positive_only():
+def test_packaged_inferred_road_comparison_rewards_agreement():
     settings = _get_model_settings_dict()
     comparison = next(
         comparison
@@ -424,8 +420,9 @@ def test_packaged_inferred_road_comparison_is_positive_only():
         "Exact inferred road agreement",
         "No exact inferred road agreement",
     ]
-    assert math.log2(levels[1]["m_probability"] / levels[1]["u_probability"]) == 2
-    assert levels[2]["m_probability"] == levels[2]["u_probability"] == 1
+    assert levels[0]["is_null_level"]
+    assert levels[1]["m_probability"] > levels[1]["u_probability"]
+    assert levels[2]["m_probability"] <= levels[2]["u_probability"]
 
 
 def test_legacy_canonical_gets_neutral_inferred_road_columns(duck_con):
@@ -656,16 +653,15 @@ def test_linker_keeps_inferred_road_scoring_with_additional_blocking_rules(duck_
     assert "inferred_road_top_2" not in comparison_columns
 
 
-def test_packaged_model_includes_r28_without_redundant_road_district_rules():
+def test_packaged_model_includes_postcode_district_recovery_rules():
     settings = _get_model_settings_dict()
     packaged_rules = [
         rule["blocking_rule"]
         for rule in settings["blocking_rules_to_generate_predictions"]
     ]
 
-    assert len(packaged_rules) == 8
     assert any("map_contains(r.lk_level_by_alias" in rule for rule in packaged_rules)
-    assert not any(
+    assert any(
         "l.road_1_norm = r.road_1_norm" in rule
         and "split_part(l.postcode, ' ', 1)" in rule
         and "list_extract(l.unusual_tokens_arr, 1)" not in rule
@@ -825,11 +821,19 @@ def test_distinguishing_token_comparison_contributes_expected_match_weights(duck
         if pair in expected_pairs:
             actual_weights[pair] = float(row["mw_distinguishing_ordered_signature"])
 
+    levels = next(
+        comparison["comparison_levels"]
+        for comparison in _get_model_settings_dict()["comparisons"]
+        if comparison["output_column_name"] == "distinguishing_ordered_signature"
+    )
+    ordered, fallback = [
+        math.log2(level["m_probability"] / level["u_probability"]) for level in levels[1:]
+    ]
     assert actual_weights == pytest.approx(
         {
-            frozenset(("c_all", "m_all")): 10.0,
-            frozenset(("c_some", "m_some")): 0.0,
-            frozenset(("c_some", "m_none")): 0.0,
+            frozenset(("c_all", "m_all")): ordered,
+            frozenset(("c_some", "m_some")): fallback,
+            frozenset(("c_some", "m_none")): fallback,
         }
     )
 

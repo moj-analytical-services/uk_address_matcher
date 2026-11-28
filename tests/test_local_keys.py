@@ -551,10 +551,12 @@ def test_model_includes_local_key_comparison_and_block():
         "map_contains(r.lk_level_by_alias" in rule["blocking_rule"]
         for rule in model["blocking_rules_to_generate_predictions"]
     )
-    assert [
+    other_property, leading_phrase, leading_word, rare_phrase, rare_word, spacing, *_ = [
         level["m_probability"] / level["u_probability"]
         for level in comparison["comparison_levels"][1:]
-    ] == ([0.25, 16, 8, 4, 2, 2, 1, 1])
+    ]
+    assert other_property < 1 < rare_word < rare_phrase < leading_word < leading_phrase
+    assert 1 < spacing < leading_word
     joint = comparisons["joint_local_evidence"]
     assert any(
         "lk_word_support_by_uprn_r" in level["sql_condition"]
@@ -572,12 +574,15 @@ def test_model_includes_local_key_comparison_and_block():
 
 
 @pytest.mark.parametrize(
-    "source_name,target_name,expected_bf",
-    [("MEADOW COTTAGE", "MEADOW COTTAGE", 16.0), ("ROSE BANK", "ROSEBANK", 2.0)],
+    "source_name,target_name,expected_level",
+    [
+        ("MEADOW COTTAGE", "MEADOW COTTAGE", "Unique leading property-name phrase"),
+        ("ROSE BANK", "ROSEBANK", "Unique joined split property name in postcode"),
+    ],
 )
 @pytest.mark.parametrize("prepared_index", [False, True])
 def test_stage_executes_local_key_comparison(
-    duck_con, tmp_path, source_name, target_name, expected_bf, prepared_index
+    duck_con, tmp_path, source_name, target_name, expected_level, prepared_index
 ):
     source = duck_con.sql(
         """
@@ -617,9 +622,21 @@ def test_stage_executes_local_key_comparison(
     target = raw.filter(
         "unique_id_l = '001' AND clean_full_address_l LIKE '% 54 TEST ROAD'"
     )
-    assert target.select("pow(2, mw_postcode_distinguishing_name)").limit(1).fetchall()[
-        0
-    ] == (expected_bf if prepared_index else 1.0,)
+    comparison = next(
+        comparison
+        for comparison in _get_model_settings_dict()["comparisons"]
+        if comparison["output_column_name"] == "postcode_distinguishing_name"
+    )
+    level = next(
+        level
+        for level in comparison["comparison_levels"]
+        if level["label_for_charts"] == expected_level
+    )
+    expected_bf = level["m_probability"] / level["u_probability"] if prepared_index else 1
+    (actual,) = (
+        target.select("pow(2, mw_postcode_distinguishing_name)").limit(1).fetchall()
+    )
+    assert actual == pytest.approx((expected_bf,))
     assert not any(column.startswith("lk_") for column in raw.columns)
     improved = duck_con.table(stage.improved_predictions_table)
     assert not any(column.startswith("lk_") for column in improved.columns)
@@ -729,31 +746,43 @@ def test_shared_word_does_not_override_unique_phrase_anchor(duck_con):
 
 
 @pytest.mark.parametrize(
-    "eligible,postcode,entity,evidence_level,expected",
+    "eligible,postcode,entity,evidence_level,expected_level",
     [
         (False, "ZZ1 1ZZ", "002", 6, None),
         (None, "ZZ1 1ZZ", "002", 6, None),
         (True, None, "002", 6, None),
         (True, "ZZ1 2ZZ", "002", 6, None),
-        (True, "ZZ1 1ZZ", "001", None, 1.0),
-        (True, "ZZ1 1ZZ", "001", 6, 16.0),
-        (True, "ZZ1 1ZZ", "001", 5, 8.0),
-        (True, "ZZ1 1ZZ", "001", 4, 4.0),
-        (True, "ZZ1 1ZZ", "001", 3, 2.0),
-        (True, "ZZ1 1ZZ", "001", 2, 2.0),
-        (True, "ZZ1 1ZZ", "001", 0, 1.0),
-        (True, "ZZ1 1ZZ", "001", 1, 1.0),
-        (True, "ZZ1 1ZZ", "002", 6, 0.25),
-        (True, "ZZ1 1ZZ", "002", 2, 0.25),
+        (True, "ZZ1 1ZZ", "001", None, "No supporting postcode-distinguishing name"),
+        (True, "ZZ1 1ZZ", "001", 6, "Unique leading property-name phrase"),
+        (True, "ZZ1 1ZZ", "001", 5, "Unique leading property-name word"),
+        (True, "ZZ1 1ZZ", "001", 4, "Rare property-name phrase in the postcode"),
+        (True, "ZZ1 1ZZ", "001", 3, "Rare property-name word in the postcode"),
+        (True, "ZZ1 1ZZ", "001", 2, "Unique joined split property name in postcode"),
+        (True, "ZZ1 1ZZ", "001", 0, "No supporting postcode-distinguishing name"),
+        (True, "ZZ1 1ZZ", "001", 1, "Context key outside the leading property name"),
+        (
+            True,
+            "ZZ1 1ZZ",
+            "002",
+            6,
+            "Name identifies a different property in the postcode",
+        ),
+        (
+            True,
+            "ZZ1 1ZZ",
+            "002",
+            2,
+            "Name identifies a different property in the postcode",
+        ),
     ],
 )
-def test_postcode_name_comparison_weights(
+def test_postcode_name_comparison_levels(
     duck_con,
     eligible,
     postcode,
     entity,
     evidence_level,
-    expected,
+    expected_level,
 ):
     comparison = next(
         comparison
@@ -782,12 +811,9 @@ def test_postcode_name_comparison_weights(
     for level in comparison["comparison_levels"]:
         condition = level["sql_condition"]
         if condition == "ELSE" or pair.filter(condition).count("*").fetchall()[0][0]:
-            bits = (
-                None
-                if level.get("is_null_level")
-                else (level["m_probability"] / level["u_probability"])
-            )
-            assert bits == expected
+            assert (
+                None if level.get("is_null_level") else level["label_for_charts"]
+            ) == expected_level
             break
 
 
@@ -1223,7 +1249,7 @@ def test_lexical_fallback_relief_requires_anchored_unnumbered_property(
     assert (
         bool(pair.filter(level["sql_condition"]).count("*").fetchall()[0][0]) == expected
     )
-    assert level["m_probability"] / level["u_probability"] == 0.0625
+    assert level["m_probability"] < level["u_probability"]
     assert comparison["comparison_levels"].index(level) < next(
         index
         for index, item in enumerate(comparison["comparison_levels"])
@@ -1327,4 +1353,4 @@ def test_spacing_fallback_relief_requires_an_exact_leading_name(
     assert (
         bool(pair.filter(rule["sql_condition"]).count("*").fetchall()[0][0]) == expected
     )
-    assert rule["m_probability"] / rule["u_probability"] == 0.0625
+    assert rule["m_probability"] < rule["u_probability"]
